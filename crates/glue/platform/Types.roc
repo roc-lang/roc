@@ -45,7 +45,7 @@ shape = \@Types types, id ->
         Err OutOfBounds ->
             idStr = Num.toStr (TypeId.toU64 id)
 
-            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+            crash "TypeId #$(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
 
 alignment : Types, TypeId -> U32
 alignment = \@Types types, id ->
@@ -54,7 +54,7 @@ alignment = \@Types types, id ->
         Err OutOfBounds ->
             idStr = Num.toStr (TypeId.toU64 id)
 
-            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+            crash "TypeId #$(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
 
 size : Types, TypeId -> U32
 size = \@Types types, id ->
@@ -63,4 +63,4 @@ size = \@Types types, id ->
         Err OutOfBounds ->
             idStr = Num.toStr (TypeId.toU64 id)
 
-            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+            crash "TypeId #$(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"

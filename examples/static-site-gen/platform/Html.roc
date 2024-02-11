@@ -208,29 +208,29 @@ renderHelp = \buffer, node ->
             Str.concat buffer content
 
         Element tagName _ attrs children ->
-            withTagName = "\(buffer)<\(tagName)"
+            withTagName = "$(buffer)<$(tagName)"
             withAttrs =
                 if List.isEmpty attrs then
                     withTagName
                 else
-                    List.walk attrs "\(withTagName) " renderAttr
+                    List.walk attrs "$(withTagName) " renderAttr
             withTag = Str.concat withAttrs ">"
             withChildren = List.walk children withTag renderHelp
 
-            "\(withChildren)</\(tagName)>"
+            "$(withChildren)</$(tagName)>"
 
         UnclosedElem tagName _ attrs ->
             if List.isEmpty attrs then
-                "\(buffer)<\(tagName)>"
+                "$(buffer)<$(tagName)>"
             else
                 attrs
-                |> List.walk "\(buffer)<\(tagName) " renderAttr
+                |> List.walk "$(buffer)<$(tagName) " renderAttr
                 |> Str.concat ">"
 
 # internal helper
 renderAttr : Str, Attribute -> Str
 renderAttr = \buffer, Attribute key val ->
-    "\(buffer) \(key)=\"\(val)\""
+    "$(buffer) $(key)=\"$(val)\""
 
 # Main root
 html = element "html"

@@ -533,12 +533,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_COUNT_UTF8_BYTES,
             )
         }
-        StrGetCapacity => {
-            // Str.capacity : Str -> U64
-            arguments!(string);
-
-            call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
-        }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, U64, U64 -> Str
             arguments!(string, start, length);
@@ -2011,6 +2005,54 @@ fn dec_unary_op<'ctx>(
     }
 }
 
+fn dec_binary_op<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    fn_name: &str,
+    dec1: BasicValueEnum<'ctx>,
+    dec2: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
+    use roc_target::OperatingSystem::*;
+
+    let dec1 = dec1.into_int_value();
+    let dec2 = dec2.into_int_value();
+
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
+            let (low1, high1) = dec_split_into_words(env, dec1);
+            let (low2, high2) = dec_split_into_words(env, dec2);
+            let lowr_highr = call_bitcode_fn(
+                env,
+                &[low1.into(), high1.into(), low2.into(), high2.into()],
+                fn_name,
+            );
+
+            let block = env.builder.get_insert_block().expect("to be in a function");
+            let parent = block.get_parent().expect("to be in a function");
+
+            let ptr =
+                create_entry_block_alloca(env, parent, env.context.i128_type().into(), "to_i128");
+            env.builder.build_store(ptr, lowr_highr).unwrap();
+
+            env.builder
+                .build_load(env.context.i128_type(), ptr, "to_i128")
+                .unwrap()
+        }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[dec1.into(), dec2.into()], fn_name),
+        _ => call_bitcode_fn(
+            env,
+            &[dec_alloca(env, dec1), dec_alloca(env, dec2)],
+            fn_name,
+        ),
+    }
+}
+
 fn dec_binop_with_overflow<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
@@ -2229,6 +2271,7 @@ fn build_dec_binop<'a, 'ctx>(
             &[lhs, rhs],
             &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128],
         ),
+        NumPow => dec_binary_op(env, bitcode::DEC_POW, lhs, rhs),
         _ => {
             unreachable!("Unrecognized dec binary operation: {:?}", op);
         }

@@ -38,7 +38,7 @@ logRequest : Request -> Task {} AppError
 logRequest = \req ->
     dateTime <- Utc.now |> Task.map Utc.toIso8601Str |> Task.await
 
-    Stdout.line "\(dateTime) \(Http.methodToStr req.method) \(req.url)"
+    Stdout.line "$(dateTime) $(Http.methodToStr req.method) $(req.url)"
 
 readUrlEnv : Str -> Task Str AppError
 readUrlEnv = \target ->
@@ -60,7 +60,7 @@ handleErr = \err ->
             HttpError _ -> "Http error fetching content"
 
     # Log error to stderr
-    {} <- Stderr.line "Internal Server Error: \(message)" |> Task.await
+    {} <- Stderr.line "Internal Server Error: $(message)" |> Task.await
     _ <- Stderr.flush |> Task.attempt
 
     # Respond with Http 500 Error

@@ -1679,7 +1679,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
                 when val is
                     _ -> ""
 
-        capture2 = \val -> \{} -> "\(val)"
+        capture2 = \val -> \{} -> "$(val)"
 
         x : [A, B, C]
         x = A
@@ -1984,7 +1984,7 @@ fn polymorphic_expression_unification() {
         ]
         parseFunction : Str -> RenderTree
         parseFunction = \name ->
-            last = Indent [Text ".trace(\"\(name)\")" ]
+            last = Indent [Text ".trace(\"$(name)\")" ]
             Indent [last]
 
         values = parseFunction "interface_header"
@@ -2540,7 +2540,7 @@ fn recursively_build_effect() {
             hi = "Hello"
             name = "World"
 
-            "\(hi), \(name)!"
+            "$(hi), $(name)!"
 
         main =
             when nestHelp 4 is
@@ -2856,8 +2856,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
             else \x -> f (g x)
 
          identity = \x -> x
-         exclame = \s -> "\(s)!"
-         whisper = \s -> "(\(s))"
+         exclame = \s -> "$(s)!"
+         whisper = \s -> "($(s))"
 
          main =
              res: Str -> Str
@@ -3461,5 +3461,42 @@ fn issue_6196() {
 
         nth ["a"] 0
         "#
+    )
+}
+
+#[mono_test]
+fn issue_5513() {
+    indoc!(
+        r"
+        f = \state ->
+            { state & a: state.b }
+        f { a: 0, b: 0 }
+        "
+    )
+}
+
+#[mono_test]
+fn issue_6174() {
+    indoc!(
+        r"
+        g = Bool.false
+
+        a = \_ ->
+            if g then
+                Ok 0
+            else
+                Err NoNumber
+
+        b = \_ ->
+            if g then
+                Ok 0
+            else
+                Err NoNumber
+
+        c = \_ ->
+            [a {}, b {}]
+
+        c {}
+        "
     )
 }

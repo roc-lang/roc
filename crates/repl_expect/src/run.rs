@@ -273,7 +273,7 @@ fn run_expect_pure<'a, W: std::io::Write>(
             let mut offset = ExpectSequence::START_OFFSET;
 
             for _ in 0..sequence.count_failures() {
-                offset += render_expect_failure(
+                offset = render_expect_failure(
                     writer,
                     &renderer,
                     arena,
@@ -729,6 +729,10 @@ pub fn expect_mono_module_to_dylib<'a>(
             "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `{:?}`",
             errors.to_string(), path,
         );
+    }
+
+    if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
+        env.module.print_to_file(path).unwrap();
     }
 
     llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, layout_interner))

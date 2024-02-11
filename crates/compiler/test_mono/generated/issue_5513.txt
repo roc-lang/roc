@@ -1,0 +1,11 @@
+procedure Test.1 (Test.2):
+    let Test.7 : I64 = StructAtIndex 1 Test.2;
+    let Test.5 : {I64, I64} = Struct {Test.7, Test.7};
+    ret Test.5;
+
+procedure Test.0 ():
+    let Test.8 : I64 = 0i64;
+    let Test.9 : I64 = 0i64;
+    let Test.4 : {I64, I64} = Struct {Test.8, Test.9};
+    let Test.3 : {I64, I64} = CallByName Test.1 Test.4;
+    ret Test.3;

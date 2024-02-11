@@ -130,10 +130,10 @@ impl IntWidth {
                 // according to https://reviews.llvm.org/D28990#655487
                 //
                 // however, rust does not always think that this is true
+                // Our alignmets here are correct, but they will not match rust/zig/llvm until they update to llvm version 18.
                 match target_info.architecture {
-                    Architecture::X86_64 => 16,
-                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
-                    Architecture::X86_32 => 8,
+                    Architecture::X86_64 | Architecture::Aarch64 | Architecture::X86_32 => 16,
+                    Architecture::Aarch32 | Architecture::Wasm32 => 8,
                 }
             }
         }
@@ -403,6 +403,7 @@ pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_in
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
 pub const DEC_LOG: &str = "roc_builtins.dec.log";
+pub const DEC_POW: &str = "roc_builtins.dec.pow";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";

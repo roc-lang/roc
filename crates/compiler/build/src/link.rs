@@ -1,6 +1,7 @@
 use crate::target::{arch_str, target_zig_str};
 use libloading::{Error, Library};
 use roc_command_utils::{cargo, clang, rustup, zig};
+use roc_debug_flags;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
@@ -613,7 +614,8 @@ pub fn rebuild_host(
 
             // Clean up c_host.o
             if c_host_dest.exists() {
-                std::fs::remove_file(c_host_dest).unwrap();
+                // there can be a race condition on this file cleanup
+                let _ = std::fs::remove_file(c_host_dest);
             }
         }
     } else if rust_host_src.exists() {
@@ -1066,6 +1068,7 @@ fn link_linux(
             "-o",
             output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
         ]);
+    debug_print_command(&command);
 
     let output = command.spawn()?;
 
@@ -1163,14 +1166,18 @@ fn link_macos(
         output_path.to_str().unwrap(), // app
     ]);
 
+    debug_print_command(&ld_command);
+
     let mut ld_child = ld_command.spawn()?;
 
     match target.architecture {
         Architecture::Aarch64(_) => {
             ld_child.wait()?;
-            let codesign_child = Command::new("codesign")
-                .args(["-s", "-", output_path.to_str().unwrap()])
-                .spawn()?;
+
+            let mut codesign_cmd = Command::new("codesign");
+            codesign_cmd.args(["-s", "-", output_path.to_str().unwrap()]);
+            debug_print_command(&codesign_cmd);
+            let codesign_child = codesign_cmd.spawn()?;
 
             Ok((codesign_child, output_path))
         }
@@ -1179,8 +1186,11 @@ fn link_macos(
 }
 
 fn get_macos_version() -> String {
-    let cmd_stdout = Command::new("sw_vers")
-        .arg("-productVersion")
+    let mut cmd = Command::new("sw_vers");
+    cmd.arg("-productVersion");
+    debug_print_command(&cmd);
+
+    let cmd_stdout = cmd
         .output()
         .expect("Failed to execute command 'sw_vers -productVersion'")
         .stdout;
@@ -1383,15 +1393,11 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
-    let mut command_string = std::ffi::OsString::new();
-    command_string.push(command.get_program());
-
-    for arg in command.get_args() {
-        command_string.push(" ");
-        command_string.push(arg);
-    }
-
-    let cmd_str = command_string.to_str().unwrap();
+    let command_string = stringify_command(&command);
+    let cmd_str = &command_string;
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
+        print_command_str(cmd_str);
+    });
     let cmd_output = command.output().unwrap();
     let max_flaky_fail_count = 10;
 
@@ -1428,4 +1434,42 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
             ),
         }
     }
+}
+
+/// Stringify a command for printing
+/// e.g. `HOME=~ zig build-exe foo.zig -o foo`
+fn stringify_command(cmd: &Command) -> String {
+    let mut command_string = std::ffi::OsString::new();
+
+    for (name, opt_val) in cmd.get_envs() {
+        command_string.push(name);
+        command_string.push("=");
+        if let Some(val) = opt_val {
+            command_string.push(val);
+        } else {
+            command_string.push("''");
+        }
+        command_string.push(" ");
+    }
+
+    command_string.push(cmd.get_program());
+
+    for arg in cmd.get_args() {
+        command_string.push(" ");
+        command_string.push(arg);
+    }
+
+    String::from(command_string.to_str().unwrap())
+}
+
+#[cfg(debug_assertions)]
+fn print_command_str(s: &str) {
+    println!("\nRoc build command:\n{}\n", s);
+}
+
+fn debug_print_command(_cmd: &Command) {
+    // This debug macro is compiled out in release mode, so the argument is unused
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
+        print_command_str(&stringify_command(_cmd));
+    });
 }

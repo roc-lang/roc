@@ -1283,7 +1283,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
         DictPseudoSeed => arena.alloc_slice_copy(&[irrelevant]),
-        ListLen | StrIsEmpty | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
+        ListLen | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity => {
             arena.alloc_slice_copy(&[borrowed])
         }
         ListWithCapacity | StrWithCapacity => arena.alloc_slice_copy(&[irrelevant]),

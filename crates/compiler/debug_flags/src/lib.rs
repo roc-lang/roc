@@ -173,4 +173,7 @@ flags! {
 
     /// Don't build and use the subs cache (speeds up compilation of load and previous crates)
     ROC_SKIP_SUBS_CACHE
+
+    /// Print out shell commands used to buid the Roc and host code
+    ROC_PRINT_BUILD_COMMANDS
 }

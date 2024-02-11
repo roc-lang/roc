@@ -5549,7 +5549,7 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if Bool.true then 1 else "\(greeting), World!"
+            if Bool.true then 1 else "$(greeting), World!"
             "#,
             ),
             @r#"
@@ -5557,7 +5557,7 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if Bool.true then 1 else "\(greeting), World!"
+    6│      if Bool.true then 1 else "$(greeting), World!"
                                      ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:

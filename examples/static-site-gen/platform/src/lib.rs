@@ -3,13 +3,11 @@ use libc;
 use pulldown_cmark::{html, Options, Parser};
 use roc_std::{RocBox, RocStr};
 use std::env;
-use std::ffi::CStr;
 use std::fs;
-use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style, ThemeSet};
+use syntect::highlighting::{ThemeSet};
 use syntect::html::{ClassStyle, ClassedHTMLGenerator};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
@@ -244,17 +242,19 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                 pulldown_cmark::CodeBlockKind::Fenced(extention_str),
             )) => {
                 if in_code_block {
-                    match replace_code_with_static_file(&code_to_highlight, input_file) {
-                        None => {}
-                        // Check if the code block is actually just a relative
-                        // path to a static file, if so replace the code with
-                        // the contents of the file.
-                        // ```
-                        // file:myCodeFile.roc
-                        // ```
-                        Some(new_code_to_highlight) => {
-                            code_to_highlight = new_code_to_highlight;
+                    match &code_to_highlight.split(':').collect::<Vec<_>>()[..] {
+                        ["file", replacement_file_name, "snippet", snippet_name] => {
+                            code_to_highlight = read_replacement_snippet(
+                                replacement_file_name.trim(),
+                                snippet_name.trim(),
+                                input_file,
+                            );
                         }
+                        ["file", replacement_file_name] => {
+                            code_to_highlight =
+                                read_replacement_file(replacement_file_name.trim(), input_file);
+                        }
+                        _ => {}
                     }
 
                     // Format the whole multi-line code block as HTML all at once
@@ -355,45 +355,74 @@ pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
 fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
     match cbk {
         pulldown_cmark::CodeBlockKind::Indented => false,
-        pulldown_cmark::CodeBlockKind::Fenced(cow_str) => {
-            if cow_str.contains("roc") {
-                true
-            } else {
-                false
-            }
+        pulldown_cmark::CodeBlockKind::Fenced(cow_str) => cow_str.contains("roc")
+    }
+}
+
+fn read_replacement_file(replacement_file_name: &str, input_file: &Path) -> String {
+    if replacement_file_name.contains("../") {
+        panic!(
+            "ERROR File \"{}\" must be located within the input diretory.",
+            replacement_file_name
+        );
+    }
+
+    let input_dir = input_file.parent().unwrap();
+    let replacement_file_path = input_dir.join(replacement_file_name);
+
+    match fs::read(&replacement_file_path) {
+        Ok(content) => String::from_utf8(content).unwrap(),
+        Err(err) => {
+            panic!(
+                "ERROR File \"{}\" is unreadable:\n\t{}",
+                replacement_file_path.to_str().unwrap(),
+                err
+            );
         }
     }
 }
 
-fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String> {
-    let input_dir = input_file.parent()?;
-    let trimmed_code = code.trim();
+fn remove_snippet_comments(input: &str) -> String {
+    let line_ending = if input.contains("\r\n") { "\r\n" } else { "\n" };
 
-    // Confirm the code block starts with a `file:` tag
-    match trimmed_code.strip_prefix("file:") {
-        None => None,
-        Some(path) => {
-            // File must be located in input folder or sub-directory
-            if path.contains("../") {
-                panic!("ERROR File must be located within the input diretory!");
-            }
+    input
+        .lines()
+        .filter(|line| {
+            !line.contains("### start snippet") && !line.contains("### end snippet")
+        })
+        .collect::<Vec<&str>>()
+        .join(line_ending)
+}
 
-            let file_path = input_dir.join(path);
+fn read_replacement_snippet(
+    replacement_file_name: &str,
+    snippet_name: &str,
+    input_file: &Path,
+) -> String {
+    let start_marker = format!("### start snippet {}", snippet_name);
+    let end_marker = format!("### end snippet {}", snippet_name);
 
-            // Check file exists before opening
-            match file_path.try_exists() {
-                Err(_) | Ok(false) => {
-                    panic!(
-                        "ERROR File does not exist: \"{}\"",
-                        file_path.to_str().unwrap()
-                    );
-                }
-                Ok(true) => {
-                    let vec_u8 = fs::read(file_path).ok()?;
+    let replacement_file_content = read_replacement_file(replacement_file_name.trim(), input_file);
 
-                    String::from_utf8(vec_u8).ok()
-                }
-            }
-        }
+    let start_position = replacement_file_content
+        .find(&start_marker)
+        .expect(format!("ERROR Failed to find snippet start \"{}\". ", &start_marker).as_str());
+
+    let end_position = replacement_file_content
+        .find(&end_marker)
+        .expect(format!("ERROR Failed to find snippet end \"{}\". ", &end_marker).as_str());
+
+    if start_position >= end_position {
+        let start_position_str = start_position.to_string();
+        let end_position_str = end_position.to_string();
+
+        panic!(
+            "ERROR Detected start position ({start_position_str}) of snippet \"{snippet_name}\" was greater than or equal to detected end position ({end_position_str})." 
+        );
+    } else {
+        // We want to remove other snippet comments inside this one if they exist.
+        remove_snippet_comments(
+            &replacement_file_content[start_position + start_marker.len()..end_position]
+        )
     }
 }

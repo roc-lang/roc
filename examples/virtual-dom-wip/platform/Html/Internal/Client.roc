@@ -762,7 +762,7 @@ expect
         # Sizes don't matter, use zero. We are not creating a HTML string so we don't care what size it would be.
         Element "body" 0 [] [
             Element "h1" 0 [] [Text "The app"],
-            Element "div" 0 [onClickAttr] [Text "The answer is \(num)"],
+            Element "div" 0 [onClickAttr] [Text "The answer is $(num)"],
         ]
 
     app : App State State

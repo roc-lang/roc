@@ -3199,7 +3199,7 @@ fn recursively_build_effect() {
                 hi = "Hello"
                 name = "World"
 
-                "\(hi), \(name)!"
+                "$(hi), $(name)!"
 
             main =
                 when nestHelp 4 is
@@ -3955,8 +3955,8 @@ fn compose_recursive_lambda_set_productive_toplevel() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             main =
                 res: Str -> Str
@@ -3978,8 +3978,8 @@ fn compose_recursive_lambda_set_productive_nested() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             res: Str -> Str
             res = List.walk [ exclaim, whisper ] identity compose
@@ -4000,8 +4000,8 @@ fn compose_recursive_lambda_set_productive_inferred() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             res = List.walk [ exclaim, whisper ] identity compose
             res "hello"
@@ -4026,8 +4026,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
                 else \x -> f (g x)
 
              identity = \x -> x
-             exclame = \s -> "\(s)!"
-             whisper = \s -> "(\(s))"
+             exclame = \s -> "$(s)!"
+             whisper = \s -> "($(s))"
 
              main =
                  res: Str -> Str
@@ -4554,7 +4554,7 @@ fn reset_recursive_type_wraps_in_named_type() {
                 Cons x xs ->
                   strX = f x
                   strXs = printLinkedList xs f
-                  "Cons \(strX) (\(strXs))"
+                  "Cons $(strX) ($(strXs))"
             "#
         ),
         RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),

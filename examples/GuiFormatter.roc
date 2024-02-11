@@ -148,7 +148,7 @@ bool = \b ->
 str : Str -> Inspector GuiFormatter
 str = \s ->
     f0 <- Inspect.custom
-    addNode f0 (Text "\"\(s)\"")
+    addNode f0 (Text "\"$(s)\"")
 
 opaque : * -> Inspector GuiFormatter
 opaque = \_ ->

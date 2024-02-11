@@ -26,7 +26,7 @@ showRBTree = \tree, showKey, showValue ->
             sL = nodeInParens left showKey showValue
             sR = nodeInParens right showKey showValue
 
-            "Node \(sColor) \(sKey) \(sValue) \(sL) \(sR)"
+            "Node $(sColor) $(sKey) $(sValue) $(sL) $(sR)"
 
 nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 nodeInParens = \tree, showKey, showValue ->
@@ -37,7 +37,7 @@ nodeInParens = \tree, showKey, showValue ->
         Node _ _ _ _ _ ->
             inner = showRBTree tree showKey showValue
 
-            "(\(inner))"
+            "($(inner))"
 
 showColor : NodeColor -> Str
 showColor = \color ->

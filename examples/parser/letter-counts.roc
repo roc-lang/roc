@@ -21,7 +21,7 @@ main =
             |> List.map \_ -> 1
             |> List.sum
             |> Num.toStr
-            |> \countLetterA -> Stdout.line "I counted \(countLetterA) letter A's!"
+            |> \countLetterA -> Stdout.line "I counted $(countLetterA) letter A's!"
 
         Err _ -> Stderr.line "Ooops, something went wrong parsing letters"
 

@@ -14,7 +14,15 @@ mod glue_cli_run {
     use crate::helpers::fixtures_dir;
     use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TEST_LEGACY_LINKER: bool = true;
+
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    const TEST_LEGACY_LINKER: bool = false;
 
     /// This macro does two things.
     ///
@@ -40,13 +48,8 @@ mod glue_cli_run {
 
                     generate_glue_for(&dir, std::iter::empty());
 
-                    let test_name_str = stringify!($test_name);
-
-                    // TODO after #5924 is fixed; remove this
-                    let skip_on_linux = ["closures", "option", "nullable_wrapped"];
-
-                    if !(cfg!(target_os = "linux") && (skip_on_linux.contains(&test_name_str))) {
-                        let out = run_app(&dir.join("app.roc"), std::iter::empty());
+                    fn validate<'a, I: IntoIterator<Item = &'a str>>(dir: PathBuf, args: I) {
+                        let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
                         let ignorable = "🔨 Rebuilding platform...\n";
@@ -58,6 +61,21 @@ mod glue_cli_run {
                             $ends_with,
                             out.stdout
                         );
+                    }
+
+
+                    let test_name_str = stringify!($test_name);
+
+                    // TODO after #5924 is fixed; remove this
+                    let skip_on_linux_surgical_linker = ["closures", "option", "nullable_wrapped", "enumeration", "nested_record"];
+
+                    // Validate linux with the default linker.
+                    if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
+                        validate(dir.clone(), std::iter::empty());
+                    }
+
+                    if TEST_LEGACY_LINKER {
+                        validate(dir, ["--linker=legacy"]);
                     }
                 }
             )*
@@ -237,7 +255,7 @@ mod glue_cli_run {
         glue_out
     }
 
-    fn run_app<'a, I: IntoIterator<Item = &'a str>>(app_file: &'a Path, args: I) -> Out {
+    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
         // Generate test_glue for this platform
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues
