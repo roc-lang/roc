@@ -349,7 +349,7 @@ pub(super) fn get_upper_case_completion_items(
             vars.clone()
                 .iter()
                 .map(|(sym, var)| {
-                    //TODO! I need to get subs from the module we are completing from
+                    //We need to fetch the subs for the module that is exposing what we are trying to complete because that will have the type info we need
                     modules_info
                         .subs
                         .lock()
@@ -377,8 +377,8 @@ pub(super) fn get_upper_case_completion_items(
     module_completions.collect()
 }
 
-//Provides a list of complteions for Type aliases within the scope.
-//TODO: Use this when we know we are within a type definition
+///Provides a list of completions for Type aliases within the scope.
+///TODO: Use this when we know we are within a type definition
 fn _alias_completions(
     aliases: &MutMap<Symbol, (bool, Alias)>,
     module_id: &ModuleId,

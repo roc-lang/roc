@@ -242,7 +242,6 @@ impl AnalyzedDocument {
                 .unwrap_or(false);
             if is_module_completion {
                 info!("Getting module dot completion");
-                //TODO: this doesn't work with builtins for some reason
                 Some(get_upper_case_completion_items(
                     symbol_prefix,
                     interns,
