@@ -457,6 +457,36 @@ pub enum ValueDef<'a> {
     },
 }
 
+impl ValueDef<'_> {
+    pub fn region(&self) -> Region {
+        match self {
+            ValueDef::Annotation(loc_pat, loc_body) => {
+                Region::span_across(&loc_pat.region, &loc_body.region)
+            }
+            ValueDef::Body(loc_pat, loc_body) => {
+                Region::span_across(&loc_pat.region, &loc_body.region)
+            }
+            ValueDef::AnnotatedBody {
+                ann_pattern,
+                body_expr,
+                ..
+            } => Region::span_across(&ann_pattern.region, &body_expr.region),
+            ValueDef::Dbg {
+                condition,
+                preceding_comment,
+            }
+            | ValueDef::Expect {
+                condition,
+                preceding_comment,
+            }
+            | ValueDef::ExpectFx {
+                condition,
+                preceding_comment,
+            } => Region::span_across(preceding_comment, &condition.region),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,

@@ -124,7 +124,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
 
         for problem in can_probs.into_iter() {
             // Filter out all warnings and errors whose regions end before this,
-            // because they must be part of the defs (excluding the most renently added def,
+            // because they must be part of the defs (excluding the most recently added def,
             // if that's the one being evaluated) and therefore not things we should show.
             // This filters out things like shadowing warnings and unused def warnings.
             if problem.region().unwrap_or_default().end().offset as usize >= bytes_before_expr {

@@ -839,6 +839,24 @@ fn invalid_string_interpolation() {
     );
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn non_identifier_pattern() {
+    expect_failure(
+        "Some x = 42",
+        indoc!(
+            r"
+            ── REPL NOT SUPPORTED ──────────────────────────────────────────────────────────
+
+            1│  Some x = 42
+                ^^^^^^^^^^^
+
+            A non-identifier pattern is not supported in the repl.
+            "
+        ),
+    );
+}
+
 #[test]
 fn issue_2149_i8_ok() {
     expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");

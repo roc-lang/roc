@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use bumpalo::Bump;
 use roc_collections::MutSet;
 use roc_load::MonomorphizedModule;
@@ -9,6 +11,7 @@ use roc_parse::parser::{EWhen, Either};
 use roc_parse::state::State;
 use roc_parse::{join_alias_to_body, join_ann_to_body};
 use roc_region::all::Loc;
+use roc_region::all::Region;
 use roc_repl_eval::gen::{compile_to_mono, Problems};
 use roc_reporting::report::Palette;
 use roc_target::TargetInfo;
@@ -40,6 +43,44 @@ pub enum ReplAction<'a> {
     Exit,
     Help,
     Nothing,
+}
+
+fn fatal_repl_error<'a>(
+    arena: &'a Bump,
+    line: &str,
+    region: Region,
+    problem: &str,
+    palette: Palette,
+) -> ReplAction<'a> {
+    use roc_module::symbol::{Interns, ModuleId};
+    use roc_region::all::LineInfo;
+    use roc_reporting::report::RocDocAllocator;
+
+    let line_info = LineInfo::new(line);
+    let src_lines: Vec<&str> = line.split('\n').collect();
+
+    // Report parsing and canonicalization problems
+    let interns = arena.alloc(Interns::default());
+    let alloc = RocDocAllocator::new(&src_lines, ModuleId::BOOL, interns);
+
+    let report = roc_reporting::error::repl::not_supported(
+        &alloc,
+        &line_info,
+        PathBuf::from("replfile.roc"),
+        problem,
+        region,
+    );
+
+    let mut buf = String::new();
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    ReplAction::Eval {
+        opt_mono: None,
+        problems: Problems {
+            errors: vec![buf],
+            warnings: vec![],
+        },
+    }
 }
 
 impl ReplState {
@@ -120,16 +161,31 @@ impl ReplState {
                     ValueDef::Annotation(_, _)
                     | ValueDef::Body(_, _)
                     | ValueDef::AnnotatedBody { .. } => {
-                        todo!("handle pattern other than identifier (which repl doesn't support)")
+                        return fatal_repl_error(
+                            arena,
+                            line,
+                            value_def.region(),
+                            "A non-identifier pattern",
+                            palette,
+                        );
                     }
                     ValueDef::Dbg { .. } => {
-                        todo!("handle receiving a `dbg` - what should the repl do for that?")
+                        return fatal_repl_error(
+                            arena,
+                            line,
+                            value_def.region(),
+                            "A dbg definition",
+                            palette,
+                        );
                     }
-                    ValueDef::Expect { .. } => {
-                        todo!("handle receiving an `expect` - what should the repl do for that?")
-                    }
-                    ValueDef::ExpectFx { .. } => {
-                        todo!("handle receiving an `expect-fx` - what should the repl do for that?")
+                    ValueDef::Expect { .. } | ValueDef::ExpectFx { .. } => {
+                        return fatal_repl_error(
+                            arena,
+                            line,
+                            value_def.region(),
+                            "An expect",
+                            palette,
+                        );
                     }
                 }
             }
