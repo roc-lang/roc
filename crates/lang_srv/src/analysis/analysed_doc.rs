@@ -13,7 +13,9 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analysis::completion::{field_completion, get_completion_items},
+    analysis::completion::{
+        field_completion, get_completion_items, get_upper_case_completion_items,
+    },
     convert::{ToRange, ToRocPosition},
 };
 
@@ -223,29 +225,67 @@ impl AnalyzedDocument {
             interns,
             subs,
             declarations,
+            exposed_imports,
+            aliases,
+            imports,
             ..
         } = self.module()?;
 
-        let is_field_completion = symbol_prefix.contains('.');
-        if is_field_completion {
-            field_completion(
-                position,
-                symbol_prefix,
-                declarations,
-                interns,
-                &mut subs.clone(),
-                module_id,
-            )
+        let is_field_or_module_completion = symbol_prefix.contains('.');
+
+        if is_field_or_module_completion {
+            //if the second last second is capitalised we know we are completing a module of an import of a module
+            let is_module_completion = symbol_prefix
+                .split('.')
+                .nth_back(1)
+                .map(|a| a.chars().nth(0).unwrap().is_uppercase())
+                .unwrap_or(false);
+            if is_module_completion {
+                Some(get_upper_case_completion_items(
+                    position,
+                    symbol_prefix,
+                    module_id,
+                    interns,
+                    &mut subs.clone(),
+                    imports,
+                    aliases,
+                    true,
+                ))
+            } else {
+                field_completion(
+                    position,
+                    symbol_prefix,
+                    &declarations,
+                    &interns,
+                    &mut subs.clone(),
+                    &module_id,
+                )
+            }
         } else {
-            let completions = get_completion_items(
-                position,
-                symbol_prefix,
-                declarations,
-                &mut subs.clone(),
-                module_id,
-                interns,
-            );
-            Some(completions)
+            let is_module_or_type_completion = symbol_prefix.chars().nth(0).unwrap().is_uppercase();
+            if is_module_or_type_completion {
+                let completions = get_upper_case_completion_items(
+                    position,
+                    symbol_prefix,
+                    module_id,
+                    interns,
+                    &mut subs.clone(),
+                    imports,
+                    aliases,
+                    false,
+                );
+                Some(completions)
+            } else {
+                let completions = get_completion_items(
+                    position,
+                    symbol_prefix,
+                    declarations,
+                    &mut subs.clone(),
+                    module_id,
+                    interns,
+                );
+                Some(completions)
+            }
         }
     }
 }

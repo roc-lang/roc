@@ -1,3 +1,8 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
 use log::{debug, trace, warn};
 use roc_can::{
     def::Def,
@@ -5,9 +10,13 @@ use roc_can::{
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_collections::{MutMap, MutSet};
+use roc_module::symbol::{self, Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Position, Region};
-use roc_types::subs::{Subs, Variable};
+use roc_types::{
+    subs::{Subs, Variable},
+    types::Alias,
+};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use super::utils::format_var_type;
@@ -310,6 +319,53 @@ pub fn get_completion_items(
             .map(|(symb, var)| (symb.as_str(interns).to_string(), var))
             .collect(),
     )
+}
+pub fn get_upper_case_completion_items(
+    position: Position,
+    prefix: String,
+    module_id: &ModuleId,
+    interns: &Interns,
+    subs: &mut Subs,
+    imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    aliases: &MutMap<Symbol, (bool, Alias)>,
+    just_modules: bool,
+) -> Vec<CompletionItem> {
+    //TODO! use a proper completion type instead of simple
+
+    let module_completions = imported_modules.into_iter().flat_map(|(mod_id, vars)| {
+        let mod_name = mod_id.to_ident_str(interns).to_string();
+        if mod_name.starts_with(&prefix) {
+            vec![CompletionItem::new_simple(
+                mod_name.clone(),
+                format!("`{0}` module", mod_name),
+            )]
+        } else if prefix.starts_with(&mod_name) {
+            make_completion_items(
+                subs,
+                module_id,
+                interns,
+                vars.clone()
+                    .iter()
+                    .map(|(sym, vars)| (sym.as_str(interns).to_string(), vars.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            vec![]
+        }
+    });
+    if (just_modules) {
+        return module_completions.collect();
+    }
+    //TODO! use a proper completion type instead of simple
+    let aliases_completions = aliases
+        .iter()
+        .filter(|(symbol, (exposed, alias))| &symbol.module_id() == module_id)
+        .map(|(symbol, (exposed, alias))| {
+            let name = symbol.as_str(interns).to_string();
+            CompletionItem::new_simple(name.clone(), name + "we don't know how to print types ")
+        });
+
+    module_completions.chain(aliases_completions).collect()
 }
 fn make_completion_items(
     subs: &mut Subs,
