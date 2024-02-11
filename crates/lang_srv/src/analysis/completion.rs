@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use roc_can::{
     def::Def,
     expr::{ClosureData, Declarations, Expr, WhenBranch},
+    module::ExposedByModule,
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
@@ -15,9 +16,12 @@ use roc_types::{
     subs::{Subs, Variable},
     types::Alias,
 };
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
+use tower_lsp::lsp_types::{
+    CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind,
+};
 
 use super::utils::format_var_type;
+mod formatting;
 
 pub struct CompletionVisitor<'a> {
     position: Position,
@@ -294,7 +298,6 @@ fn make_completion_item(
         label: str,
         detail: Some(type_str),
         kind: Some(typ),
-
         ..Default::default()
     }
 }
@@ -327,37 +330,47 @@ pub fn get_upper_case_completion_items(
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     all_subs: &Mutex<HashMap<ModuleId, Subs>>,
+    modules_exposed: &Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
-    //TODO! use a proper completion type instead of simple
-
     let module_completions = imported_modules.iter().flat_map(|(mod_id, vars)| {
         let mod_name = mod_id.to_ident_str(interns).to_string();
+
         if mod_name.starts_with(&prefix) {
             let item = CompletionItem {
                 label: mod_name.clone(),
                 kind: Some(CompletionItemKind::MODULE),
-                detail: Some(format!("`{0}` module", mod_name)),
+                documentation: Some(formatting::module_documentation(
+                    formatting::DescripitonType::Exposes,
+                    mod_id,
+                    &mod_name,
+                    interns,
+                    imported_modules,
+                    all_subs,
+                    modules_exposed,
+                )),
                 ..Default::default()
             };
             vec![item]
-        } else if prefix.starts_with(&mod_name) {
+        //Complete dot completions
+        } else if prefix.starts_with(&(mod_name + ".")) {
             vars.clone()
                 .iter()
                 .map(|(sym, var)| {
                     //TODO! I need to get subs from the module we are completing from
-                    let detail = all_subs
+                    all_subs
                         .lock()
                         .get_mut(mod_id)
-                        .map(|subs| format_var_type(*var, subs, module_id, interns))
-                        .unwrap();
-
-                    CompletionItem {
-                        label: sym.as_str(interns).to_string(),
-                        kind: Some(CompletionItemKind::MODULE),
-                        detail: Some(detail),
-                        ..Default::default()
-                    }
+                        .map(|subs| {
+                            make_completion_item(
+                                subs,
+                                mod_id,
+                                interns,
+                                sym.as_str(interns).to_string(),
+                                *var,
+                            )
+                        })
+                        .expect("Couldn't find subs for module during completion.")
                 })
                 .collect::<Vec<_>>()
         } else {

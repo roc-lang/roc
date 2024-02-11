@@ -45,6 +45,7 @@ pub(super) struct AnalyzedModule {
     interns: Interns,
     subs: Subs,
     other_modules_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
+    modules_exposed: Arc<Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>>,
     abilities: AbilitiesStore,
     declarations: Declarations,
     // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
@@ -139,10 +140,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         })
         .collect();
     //Create a list
-    let exposed: HashMap<_, _> = exposes
-        .into_iter()
-        .map(|(id, symbols)| (id, Arc::new(symbols)))
-        .collect();
+    let exposed = Arc::new(Mutex::new(
+        exposes
+            .into_iter()
+            .map(|(id, symbols)| (id, Arc::new(symbols)))
+            .collect::<HashMap<_, _>>(),
+    ));
     //Combine the subs from all modules
     let all_subs = Arc::new(Mutex::new(
         typechecked
@@ -240,7 +243,7 @@ struct AnalyzedDocumentBuilder<'a> {
     root_module: &'a mut Option<RootModule>,
     imports: &'a mut MutMap<ModuleId, MutSet<ModuleId>>,
     exposed_imports: HashMap<ModuleId, Vec<(Symbol, Variable)>>,
-    exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    exposed: Arc<Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>>,
     all_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
 }
 
@@ -266,7 +269,11 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             .map(|id| {
                 (
                     id,
-                    self.exposed.get(&id).unwrap_or(&Arc::new(vec![])).clone(),
+                    self.exposed
+                        .lock()
+                        .get(&id)
+                        .unwrap_or(&Arc::new(vec![]))
+                        .clone(),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -296,6 +303,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             other_modules_subs: self.all_subs.clone(),
             interns: self.interns.clone(),
             module_id_to_url: self.module_id_to_url.clone(),
+            modules_exposed: self.exposed.clone(),
         };
 
         let line_info = LineInfo::new(&source);
