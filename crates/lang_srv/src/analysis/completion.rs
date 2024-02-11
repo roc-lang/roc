@@ -1,11 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use log::{debug, trace, warn};
-use parking_lot::Mutex;
+
 use roc_can::{
     def::Def,
     expr::{ClosureData, Declarations, Expr, WhenBranch},
-    module::ExposedByModule,
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
@@ -16,11 +15,9 @@ use roc_types::{
     subs::{Subs, Variable},
     types::Alias,
 };
-use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind,
-};
+use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
-use super::utils::format_var_type;
+use super::{utils::format_var_type, ModulesInfo};
 mod formatting;
 
 pub struct CompletionVisitor<'a> {
@@ -324,12 +321,11 @@ pub fn get_completion_items(
             .collect(),
     )
 }
-pub fn get_upper_case_completion_items(
+pub(super) fn get_upper_case_completion_items(
     prefix: String,
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    all_subs: &Mutex<HashMap<ModuleId, Subs>>,
-    modules_exposed: &Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>,
+    modules_info: &ModulesInfo,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
     let module_completions = imported_modules.iter().flat_map(|(mod_id, vars)| {
@@ -342,11 +338,8 @@ pub fn get_upper_case_completion_items(
                 documentation: Some(formatting::module_documentation(
                     formatting::DescripitonType::Exposes,
                     mod_id,
-                    &mod_name,
                     interns,
-                    imported_modules,
-                    all_subs,
-                    modules_exposed,
+                    modules_info,
                 )),
                 ..Default::default()
             };
@@ -357,7 +350,8 @@ pub fn get_upper_case_completion_items(
                 .iter()
                 .map(|(sym, var)| {
                     //TODO! I need to get subs from the module we are completing from
-                    all_subs
+                    modules_info
+                        .subs
                         .lock()
                         .get_mut(mod_id)
                         .map(|subs| {

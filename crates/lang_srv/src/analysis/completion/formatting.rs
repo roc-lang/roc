@@ -1,21 +1,16 @@
-use std::{collections::HashMap, sync::Arc};
+use roc_module::symbol::{Interns, ModuleId};
 
-use parking_lot::Mutex;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_types::subs::{Subs, Variable};
 use tower_lsp::lsp_types::{Documentation, MarkupContent, MarkupKind};
 
-use crate::analysis::utils::format_var_type;
+use crate::analysis::{utils::format_var_type, ModulesInfo};
 
 fn module_exposed_list(
     module_id: &ModuleId,
     interns: &Interns,
-    imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    all_subs: &Mutex<HashMap<ModuleId, Subs>>,
-    modules_exposed: &Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>,
+    ModulesInfo { subs, exposed }: &ModulesInfo,
 ) -> Option<std::string::String> {
-    modules_exposed.lock().get(module_id).and_then(|exposed| {
-        all_subs.lock().get_mut(module_id).map(|subs| {
+    exposed.get(module_id).and_then(|exposed| {
+        subs.lock().get_mut(module_id).map(|subs| {
             let items = exposed
                 .iter()
                 .map(|(symb, var)| {
@@ -24,14 +19,12 @@ fn module_exposed_list(
                 })
                 .collect::<Vec<_>>();
 
-            format!("{0}", items.join("\n"))
+            items.join("\n").to_string()
         })
     })
 }
-pub enum DescripitonType {
-    Name,
+pub(super) enum DescripitonType {
     Exposes,
-    NameAndExposes,
 }
 fn md_doc(val: String) -> Documentation {
     Documentation::MarkupContent(MarkupContent {
@@ -40,33 +33,15 @@ fn md_doc(val: String) -> Documentation {
     })
 }
 
-pub fn module_documentation(
+pub(super) fn module_documentation(
     description_type: DescripitonType,
     module_id: &ModuleId,
-    mod_name: &String,
     interns: &Interns,
-    imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    all_subs: &Mutex<HashMap<ModuleId, Subs>>,
-    modules_exposed: &Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>,
+    modules_info: &ModulesInfo,
 ) -> Documentation {
-    let exposed = || {
-        module_exposed_list(
-            module_id,
-            interns,
-            imported_modules,
-            all_subs,
-            modules_exposed,
-        )
-        .unwrap_or_default()
-    };
+    let exposed = || module_exposed_list(module_id, interns, modules_info).unwrap_or_default();
 
     match description_type {
-        DescripitonType::Name => md_doc(format!("`{0}` module", mod_name)),
         DescripitonType::Exposes => md_doc(format!("```roc\n{0}\n```", exposed())),
-        DescripitonType::NameAndExposes => md_doc(format!(
-            "`{0}` module\n```roc\n{1}\n```",
-            mod_name,
-            exposed()
-        )),
     }
 }
