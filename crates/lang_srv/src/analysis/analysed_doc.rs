@@ -282,7 +282,7 @@ impl AnalyzedDocument {
                     imports,
                     aliases,
                     other_subs,
-                    false,
+                    true,
                 );
                 Some(completions)
             } else {
