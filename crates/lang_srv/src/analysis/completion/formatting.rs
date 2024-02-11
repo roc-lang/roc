@@ -20,11 +20,11 @@ fn module_exposed_list(
                 .iter()
                 .map(|(symb, var)| {
                     let var_str = format_var_type(*var, subs, module_id, interns);
-                    format!("    {0}: {1}", symb.as_str(interns), var_str)
+                    format!("{0}: {1}", symb.as_str(interns), var_str)
                 })
                 .collect::<Vec<_>>();
 
-            format!("{{\n{0}\n}}", items.join(",\n"))
+            format!("{0}", items.join("\n"))
         })
     })
 }
@@ -63,8 +63,10 @@ pub fn module_documentation(
     match description_type {
         DescripitonType::Name => md_doc(format!("{0} module", mod_name)),
         DescripitonType::Exposes => md_doc(format!("```roc\n{0}\n```", exposed())),
-        DescripitonType::NameAndExposes => {
-            md_doc(format!("{0}\n```roc\n{1}\n```", mod_name, exposed()))
-        }
+        DescripitonType::NameAndExposes => md_doc(format!(
+            "`{0}` module\n```roc\n{1}\n```",
+            mod_name,
+            exposed()
+        )),
     }
 }
