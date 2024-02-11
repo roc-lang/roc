@@ -226,10 +226,8 @@ impl AnalyzedDocument {
             subs,
             declarations,
             exposed_imports,
-
             imports,
-            other_modules_subs,
-            modules_exposed,
+            modules_info,
             ..
         } = self.module()?;
 
@@ -249,8 +247,7 @@ impl AnalyzedDocument {
                     symbol_prefix,
                     interns,
                     imports,
-                    other_modules_subs,
-                    modules_exposed,
+                    modules_info,
                     true,
                 ))
             } else {
@@ -275,8 +272,7 @@ impl AnalyzedDocument {
                     symbol_prefix,
                     interns,
                     imports,
-                    other_modules_subs,
-                    modules_exposed,
+                    modules_info,
                     true,
                 );
                 Some(completions)

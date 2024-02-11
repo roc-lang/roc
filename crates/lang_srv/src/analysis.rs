@@ -5,7 +5,7 @@ use std::{
 };
 
 use bumpalo::Bump;
-use log::{debug, trace};
+
 use parking_lot::Mutex;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::{MutMap, MutSet};
@@ -36,18 +36,25 @@ use self::{analysed_doc::ModuleIdToUrl, tokens::Token};
 
 pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 
+///Contains maps of info about all modules that were analyved
+#[derive(Debug)]
+pub(super) struct ModulesInfo {
+    subs: Mutex<HashMap<ModuleId, Subs>>,
+    exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzedModule {
     exposed_imports: Vec<(Symbol, Variable)>,
+    ///This modules imports grouped by which module they come from
     imports: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    aliases: MutMap<Symbol, (bool, Alias)>,
+    _aliases: MutMap<Symbol, (bool, Alias)>,
     module_id: ModuleId,
     interns: Interns,
     subs: Subs,
-    other_modules_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
-    modules_exposed: Arc<Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>>,
     abilities: AbilitiesStore,
     declarations: Declarations,
+    modules_info: Arc<ModulesInfo>,
     // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
     // one module may not be true global to the language server.
     module_id_to_url: ModuleIdToUrl,
@@ -106,11 +113,8 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         mut typechecked,
         solved,
         abilities_store,
-        docs_by_module,
-
         exposed_imports,
         mut imports,
-
         exposes,
         ..
     } = module;
@@ -119,9 +123,38 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         subs: solved.into_inner(),
         abilities_store,
     });
-    debug!("exposed_imports: {:#?}", &exposed_imports);
-    //We take the imports from each module, lookup the symbol within that module's list of exposed symbols and then get the type info for that import
-    let exposed_imports: HashMap<_, _> = exposed_imports
+
+    let exposed_imports = resolve_exposed_imports(exposed_imports, &exposes);
+
+    let modules_info = Arc::new(make_modules_info(exposes, &typechecked));
+    let mut builder = AnalyzedDocumentBuilder {
+        interns: &interns,
+        module_id_to_url: module_id_to_url_from_sources(&sources),
+        can_problems: &mut can_problems,
+        type_problems: &mut type_problems,
+        declarations_by_id: &mut declarations_by_id,
+        typechecked: &mut typechecked,
+        root_module: &mut root_module,
+        exposed_imports,
+        imports: &mut imports,
+        modules_info,
+    };
+
+    for (module_id, (path, source)) in sources {
+        let doc = builder.build_document(path, source, module_id, doc_info.version);
+        documents.push(doc);
+    }
+
+    documents
+}
+
+///Take the exposed imports from each module, lookup the symbol within that module's list of exposed symbols and then get the type info for that import
+///eg: `import {Task.{await}}`. `await` is an exposed_import, so we need to lookup its type info
+fn resolve_exposed_imports(
+    exposed_imports: MutMap<ModuleId, MutMap<Symbol, roc_region::all::Region>>,
+    exposes: &MutMap<ModuleId, Vec<(Symbol, Variable)>>,
+) -> HashMap<ModuleId, Vec<(Symbol, Variable)>> {
+    exposed_imports
         .into_iter()
         .map(|(module_id, symbols)| {
             (
@@ -138,59 +171,30 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
                     .collect::<Vec<_>>(),
             )
         })
-        .collect();
-    //Create a list
-    let exposed = Arc::new(Mutex::new(
-        exposes
-            .into_iter()
-            .map(|(id, symbols)| (id, Arc::new(symbols)))
-            .collect::<HashMap<_, _>>(),
-    ));
+        .collect()
+}
+///Transforms some of the raw data from the analysis into a state that is more useful during processes like completion
+fn make_modules_info(
+    exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
+    typechecked: &MutMap<ModuleId, CheckedModule>,
+) -> ModulesInfo {
+    //We wrap this in arc because later we will go through each module's imports and store the full list of symbols that each imported module exposes.
+    //eg: A imports B. B exposes [add, mutiply, divide] and A will store a reference to that list.
+    let exposed = exposes
+        .into_iter()
+        .map(|(id, symbols)| (id, Arc::new(symbols)))
+        .collect::<HashMap<_, _>>();
     //Combine the subs from all modules
-    let all_subs = Arc::new(Mutex::new(
+    let all_subs = Mutex::new(
         typechecked
             .iter()
             .map(|(k, v)| (*k, v.solved_subs.0.clone()))
             .collect::<HashMap<_, _>>(),
-    ));
-    let mut builder = AnalyzedDocumentBuilder {
-        interns: &interns,
-        module_id_to_url: module_id_to_url_from_sources(&sources),
-        can_problems: &mut can_problems,
-        type_problems: &mut type_problems,
-        declarations_by_id: &mut declarations_by_id,
-        typechecked: &mut typechecked,
-        root_module: &mut root_module,
-        exposed_imports,
-        imports: &mut imports,
-        all_subs,
+    );
+    ModulesInfo {
+        subs: all_subs,
         exposed,
-    };
-    trace!("docs: {:#?}", docs_by_module);
-
-    for (module_id, (path, source)) in sources {
-        let doc = builder.build_document(path, source, module_id, doc_info.version);
-        trace!("================");
-        trace!("module:{:?}", module_id);
-
-        // let exposed_imp = exposed_imports.get(&module_id)?;
-        if let Some(modu) = &doc.analysis_result.module {
-            let aliases = &modu.aliases;
-            let imports = &modu.imports;
-            // debug!("interns modules:{:#?}", module.interns.module_ids);
-
-            // debug!("exposed_imports:{:#?}", exposed_imp);
-            // debug!("exposed:{:#?}", );
-            trace!("imports:{:#?}", imports);
-
-            // debug!("docs:{:#?}", docs.1.entries);
-            trace!("alais:{:#?}", aliases);
-            // debug!("decls:{:#?}", module.declarations)
-        }
-        documents.push(doc);
     }
-
-    documents
 }
 
 fn find_src_dir(path: &Path) -> &Path {
@@ -243,8 +247,7 @@ struct AnalyzedDocumentBuilder<'a> {
     root_module: &'a mut Option<RootModule>,
     imports: &'a mut MutMap<ModuleId, MutSet<ModuleId>>,
     exposed_imports: HashMap<ModuleId, Vec<(Symbol, Variable)>>,
-    exposed: Arc<Mutex<HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>>>,
-    all_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
+    modules_info: Arc<ModulesInfo>,
 }
 
 impl<'a> AnalyzedDocumentBuilder<'a> {
@@ -269,8 +272,8 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             .map(|id| {
                 (
                     id,
-                    self.exposed
-                        .lock()
+                    self.modules_info
+                        .exposed
                         .get(&id)
                         .unwrap_or(&Arc::new(vec![]))
                         .clone(),
@@ -295,15 +298,14 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let analyzed_module = AnalyzedModule {
             exposed_imports,
             imports,
-            aliases,
+            _aliases: aliases,
             subs,
             abilities,
             declarations,
             module_id,
-            other_modules_subs: self.all_subs.clone(),
+            modules_info: self.modules_info.clone(),
             interns: self.interns.clone(),
             module_id_to_url: self.module_id_to_url.clone(),
-            modules_exposed: self.exposed.clone(),
         };
 
         let line_info = LineInfo::new(&source);
