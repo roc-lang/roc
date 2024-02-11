@@ -36,7 +36,6 @@ pub(crate) struct ModuleCache<'a> {
     /// Various information
     pub(crate) imports: MutMap<ModuleId, MutSet<ModuleId>>,
     pub(crate) exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
-    pub(crate) imported_modules: MutMap<ModuleId, MutMap<ModuleId, Region>>,
     pub(crate) exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
     pub(crate) top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     pub(crate) documentation: VecMap<ModuleId, ModuleDocumentation>,
@@ -108,7 +107,6 @@ impl Default for ModuleCache<'_> {
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
             imports: Default::default(),
-            imported_modules: Default::default(),
             exposed_imports: Default::default(),
             exposes: Default::default(),
             top_level_thunks: Default::default(),

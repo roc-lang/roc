@@ -2539,10 +2539,6 @@ fn update<'a>(
             report_unused_imported_modules(&mut state, module_id, &constrained_module);
             state
                 .module_cache
-                .imported_modules
-                .insert(module_id, constrained_module.imported_modules.clone());
-            state
-                .module_cache
                 .exposed_imports
                 .insert(module_id, constrained_module.module.exposed_imports.clone());
 
@@ -3413,7 +3409,6 @@ fn finish(
         timings: state.timings,
         docs_by_module,
         abilities_store,
-        imported_modules: state.module_cache.imported_modules,
         exposed_imports: state.module_cache.exposed_imports,
         imports: state.module_cache.imports,
         exposes: state.module_cache.exposes,
