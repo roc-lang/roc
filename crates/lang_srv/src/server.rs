@@ -404,7 +404,7 @@ mod tests {
         INIT.call_once(|| {
             env_logger::builder()
                 .is_test(true)
-                .filter_level(log::LevelFilter::Trace)
+                .filter_level(log::LevelFilter::Debug)
                 .init();
         });
         info!("Doc is:\n{0}", doc);
@@ -415,6 +415,24 @@ mod tests {
         inner.change(&url, doc, 0).await.unwrap();
         (inner, url)
     }
+    ///Runs a basic completion and returns the response
+    async fn completion_test(
+        inital: &str,
+        addition: &str,
+        position: Position,
+    ) -> Option<std::vec::Vec<std::string::String>> {
+        let doc = DOC_LIT.to_string() + inital;
+        let (inner, url) = test_setup(doc.clone()).await;
+        let reg = &inner.registry;
+
+        let change = doc.clone() + addition;
+        info!("doc is:\n{0}", change);
+
+        inner.change(&url, change, 1).await.unwrap();
+        let comp1 = get_completion_labels(reg, &url, position).await;
+        comp1
+    }
+
     ///Test that completion works properly when we apply an "as" pattern to an identifier
     #[tokio::test]
     async fn test_completion_as_identifier() {
@@ -495,6 +513,48 @@ mod tests {
                     ],
                 ),
             ]
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+    ///Test that completion works properly when we apply an "as" pattern to a record
+    #[tokio::test]
+    async fn test_completion_fun_params() {
+        let actual = completion_test(
+            indoc! {r#"
+            main =\param1,param2->
+              "#},
+            "par",
+            Position::new(4, 3),
+        )
+        .await;
+
+        expect![[r#"
+            Some(
+                [
+                    "param1",
+                    "param2",
+                ],
+            )
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+    #[tokio::test]
+    async fn test_completion_closure() {
+        let actual = completion_test(
+            indoc! {r#"
+            main =[]|>List.map\param1,param2->
+              "#},
+            "par",
+            Position::new(4, 3),
+        )
+        .await;
+        expect![[r#"
+            Some(
+                [
+                    "param1",
+                    "param2",
+                ],
+            )
         "#]]
         .assert_debug_eq(&actual);
     }
