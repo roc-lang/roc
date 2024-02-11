@@ -278,9 +278,38 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                 | Err((_, EExpr::Record(_, _)))
                 | Err((_, EExpr::Start(_)))
                 | Err((_, EExpr::IndentStart(_))) => ParseOutcome::Incomplete,
-                Err((_, EExpr::DefMissingFinalExpr(_)))
-                | Err((_, EExpr::DefMissingFinalExpr2(_, _))) => {
+                Err((_, EExpr::DefMissingFinalExpr(_) | EExpr::DefMissingFinalExpr2(_, _))) => {
                     // This indicates that we had an attempted def; re-parse it as a single-line def.
+                    parse_src_as_single_line(arena, line)
+                }
+                Err(_) => ParseOutcome::SyntaxErr,
+            }
+        }
+    }
+}
+
+fn parse_src_as_single_line<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
+    let src_bytes = line.as_bytes();
+
+    match parse_single_def(
+        ExprParseOptions {
+            accept_multi_backpassing: true,
+            check_for_arrow: true,
+        },
+        0,
+        arena,
+        State::new(src_bytes),
+    ) {
+        Ok((_, Some(single_def), state)) => {
+            match single_def.type_or_value {
+                Either::First(TypeDef::Alias { header, ann }) => {
+                    // This *could* be an AnnotatedBody, e.g. in a case like this:
+                    //
+                    //   UserId x : [UserId Int]
+                    //   UserId x = UserId 42
+                    //
+                    // We optimistically parsed the first line as an alias; we might now
+                    // turn it into an annotation.
                     match parse_single_def(
                         ExprParseOptions {
                             accept_multi_backpassing: true,
@@ -288,139 +317,87 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                         },
                         0,
                         arena,
-                        State::new(src_bytes),
+                        state,
                     ) {
                         Ok((
                             _,
                             Some(SingleDef {
-                                type_or_value: Either::First(TypeDef::Alias { header, ann }),
-                                ..
+                                type_or_value:
+                                    Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
+                                region,
+                                spaces_before,
                             }),
-                            state,
-                        )) => {
-                            // This *could* be an AnnotatedBody, e.g. in a case like this:
-                            //
-                            //   UserId x : [UserId Int]
-                            //   UserId x = UserId 42
-                            //
-                            // We optimistically parsed the first line as an alias; we might now
-                            // turn it into an annotation.
-                            match parse_single_def(
-                                ExprParseOptions {
-                                    accept_multi_backpassing: true,
-                                    check_for_arrow: true,
-                                },
-                                0,
+                            _,
+                        )) if spaces_before.len() <= 1 => {
+                            // This was, in fact, an AnnotatedBody! Build and return it.
+                            let (value_def, _) = join_alias_to_body!(
                                 arena,
-                                state,
-                            ) {
-                                Ok((
-                                    _,
-                                    Some(SingleDef {
-                                        type_or_value:
-                                            Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
-                                        region,
-                                        spaces_before,
-                                    }),
-                                    _,
-                                )) if spaces_before.len() <= 1 => {
-                                    // This was, in fact, an AnnotatedBody! Build and return it.
-                                    let (value_def, _) = join_alias_to_body!(
-                                        arena,
-                                        loc_pattern,
-                                        loc_def_expr,
-                                        header,
-                                        &ann,
-                                        spaces_before,
-                                        region
-                                    );
+                                loc_pattern,
+                                loc_def_expr,
+                                header,
+                                &ann,
+                                spaces_before,
+                                region
+                            );
 
-                                    ParseOutcome::ValueDef(value_def)
-                                }
-                                _ => {
-                                    // This was not an AnnotatedBody, so return the alias.
-                                    ParseOutcome::TypeDef(TypeDef::Alias { header, ann })
-                                }
-                            }
+                            ParseOutcome::ValueDef(value_def)
                         }
+                        _ => {
+                            // This was not an AnnotatedBody, so return the alias.
+                            ParseOutcome::TypeDef(TypeDef::Alias { header, ann })
+                        }
+                    }
+                }
+                Either::Second(ValueDef::Annotation(ann_pattern, ann_type)) => {
+                    // This *could* be an AnnotatedBody, if the next line is a body.
+                    match parse_single_def(
+                        ExprParseOptions {
+                            accept_multi_backpassing: true,
+                            check_for_arrow: true,
+                        },
+                        0,
+                        arena,
+                        state,
+                    ) {
                         Ok((
                             _,
                             Some(SingleDef {
                                 type_or_value:
-                                    Either::Second(ValueDef::Annotation(ann_pattern, ann_type)),
-                                ..
+                                    Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
+                                region,
+                                spaces_before,
                             }),
-                            state,
-                        )) => {
-                            // This *could* be an AnnotatedBody, if the next line is a body.
-                            match parse_single_def(
-                                ExprParseOptions {
-                                    accept_multi_backpassing: true,
-                                    check_for_arrow: true,
-                                },
-                                0,
+                            _,
+                        )) if spaces_before.len() <= 1 => {
+                            // Inlining this borrow makes clippy unhappy for some reason.
+                            let ann_pattern = &ann_pattern;
+
+                            // This was, in fact, an AnnotatedBody! Build and return it.
+                            let (value_def, _) = join_ann_to_body!(
                                 arena,
-                                state,
-                            ) {
-                                Ok((
-                                    _,
-                                    Some(SingleDef {
-                                        type_or_value:
-                                            Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
-                                        region,
-                                        spaces_before,
-                                    }),
-                                    _,
-                                )) if spaces_before.len() <= 1 => {
-                                    // Inlining this borrow makes clippy unhappy for some reason.
-                                    let ann_pattern = &ann_pattern;
+                                loc_pattern,
+                                loc_def_expr,
+                                ann_pattern,
+                                &ann_type,
+                                spaces_before,
+                                region
+                            );
 
-                                    // This was, in fact, an AnnotatedBody! Build and return it.
-                                    let (value_def, _) = join_ann_to_body!(
-                                        arena,
-                                        loc_pattern,
-                                        loc_def_expr,
-                                        ann_pattern,
-                                        &ann_type,
-                                        spaces_before,
-                                        region
-                                    );
-
-                                    ParseOutcome::ValueDef(value_def)
-                                }
-                                _ => {
-                                    // This was not an AnnotatedBody, so return the standalone annotation.
-                                    ParseOutcome::ValueDef(ValueDef::Annotation(
-                                        ann_pattern,
-                                        ann_type,
-                                    ))
-                                }
-                            }
+                            ParseOutcome::ValueDef(value_def)
                         }
-                        Ok((
-                            _,
-                            Some(SingleDef {
-                                type_or_value: Either::First(type_def),
-                                ..
-                            }),
-                            _,
-                        )) => ParseOutcome::TypeDef(type_def),
-                        Ok((
-                            _,
-                            Some(SingleDef {
-                                type_or_value: Either::Second(value_def),
-                                ..
-                            }),
-                            _,
-                        )) => ParseOutcome::ValueDef(value_def),
-                        Ok((_, None, _)) => {
-                            todo!("TODO determine appropriate ParseOutcome for Ok(None)")
+                        _ => {
+                            // This was not an AnnotatedBody, so return the standalone annotation.
+                            ParseOutcome::ValueDef(ValueDef::Annotation(ann_pattern, ann_type))
                         }
-                        Err(_) => ParseOutcome::SyntaxErr,
                     }
                 }
-                Err(_) => ParseOutcome::SyntaxErr,
+                Either::First(type_def) => ParseOutcome::TypeDef(type_def),
+                Either::Second(value_def) => ParseOutcome::ValueDef(value_def),
             }
         }
+        Ok((_, None, _)) => {
+            todo!("TODO determine appropriate ParseOutcome for Ok(None)")
+        }
+        Err(_) => ParseOutcome::SyntaxErr,
     }
 }
