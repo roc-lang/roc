@@ -163,7 +163,7 @@ fn resolve_exposed_imports(
                     .into_iter()
                     .filter_map(|(symbol, _)| {
                         exposes.get(&module_id)?.iter().find(|(symb, _)| {
-                            //TODO this seems to not be comparing proprely so we aren't getting any exposed imports
+                            //TODO this seems to not be comparing properly so we aren't getting any exposed imports
                             symb == &symbol
                         })
                     })
@@ -179,7 +179,7 @@ fn make_modules_info(
     typechecked: &MutMap<ModuleId, CheckedModule>,
 ) -> ModulesInfo {
     //We wrap this in arc because later we will go through each module's imports and store the full list of symbols that each imported module exposes.
-    //eg: A imports B. B exposes [add, mutiply, divide] and A will store a reference to that list.
+    //eg: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
     let exposed = exposes
         .into_iter()
         .map(|(id, symbols)| (id, Arc::new(symbols)))
