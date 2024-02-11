@@ -3,9 +3,10 @@ use analysis::HIGHLIGHT_TOKENS_LEGEND;
 use log::{debug, trace};
 use registry::{Registry, RegistryConfig};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
-use tower_lsp::jsonrpc::Result;
+use tower_lsp::jsonrpc::{self, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -138,10 +139,6 @@ impl RocServerState {
         Self { config, registry }
     }
 
-    async fn registry(&self) -> &Registry {
-        &self.registry
-    }
-
     async fn close(&self, _fi: Url) {}
 
     pub async fn change(
@@ -257,14 +254,7 @@ impl LanguageServer for RocServer {
                 },
             work_done_progress_params: _,
         } = params;
-
-        panic_wrapper_async(|| async {
-            self.state
-                .registry
-                .hover(&text_document.uri, position)
-                .await
-        })
-        .await
+        unwind_async(self.state.registry.hover(&text_document.uri, position)).await
     }
 
     async fn goto_definition(
@@ -280,14 +270,11 @@ impl LanguageServer for RocServer {
             work_done_progress_params: _,
             partial_result_params: _,
         } = params;
-
-        panic_wrapper_async(|| async {
+        unwind_async(
             self.state
-                .registry()
-                .await
-                .goto_definition(&text_document.uri, position)
-                .await
-        })
+                .registry
+                .goto_definition(&text_document.uri, position),
+        )
         .await
     }
 
@@ -297,15 +284,7 @@ impl LanguageServer for RocServer {
             options: _,
             work_done_progress_params: _,
         } = params;
-
-        panic_wrapper_async(|| async {
-            self.state
-                .registry()
-                .await
-                .formatting(&text_document.uri)
-                .await
-        })
-        .await
+        unwind_async(self.state.registry.formatting(&text_document.uri)).await
     }
 
     async fn semantic_tokens_full(
@@ -317,40 +296,32 @@ impl LanguageServer for RocServer {
             work_done_progress_params: _,
             partial_result_params: _,
         } = params;
-
-        panic_wrapper_async(|| async {
-            self.state
-                .registry()
-                .await
-                .semantic_tokens(&text_document.uri)
-                .await
-        })
-        .await
+        unwind_async(self.state.registry.semantic_tokens(&text_document.uri)).await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
         trace!("Got completion request");
-
-        panic_wrapper_async(|| async {
+        unwind_async(
             self.state
                 .registry
-                .completion_items(&doc.text_document.uri, doc.position)
-                .await
-        })
+                .completion_items(&doc.text_document.uri, doc.position),
+        )
         .await
     }
 }
-
-async fn panic_wrapper_async<Fut, T>(
-    f: impl FnOnce() -> Fut + std::panic::UnwindSafe,
-) -> Result<Option<T>>
+async fn unwind_async<F, T>(f: F) -> tower_lsp::jsonrpc::Result<T>
 where
-    Fut: Future<Output = Option<T>>,
+    F: Future<Output = T>,
 {
-    match std::panic::catch_unwind(f) {
-        Ok(r) => Ok(r.await),
-        Err(_) => Err(tower_lsp::jsonrpc::Error::internal_error()),
+    let result = { futures::FutureExt::catch_unwind(AssertUnwindSafe(f)).await };
+    match result {
+        Ok(a) => tower_lsp::jsonrpc::Result::Ok(a),
+        Err(err) => tower_lsp::jsonrpc::Result::Err(jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InternalError,
+            message: format!("{:?}", err),
+            data: None,
+        }),
     }
 }
 
