@@ -326,7 +326,6 @@ pub fn get_completion_items(
 }
 pub fn get_upper_case_completion_items(
     prefix: String,
-    module_id: &ModuleId,
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     all_subs: &Mutex<HashMap<ModuleId, Subs>>,

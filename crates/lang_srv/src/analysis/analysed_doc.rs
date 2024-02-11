@@ -247,7 +247,6 @@ impl AnalyzedDocument {
                 //TODO: this doesn't work with builtins for some reason
                 Some(get_upper_case_completion_items(
                     symbol_prefix,
-                    module_id,
                     interns,
                     imports,
                     other_modules_subs,
@@ -274,7 +273,6 @@ impl AnalyzedDocument {
                 info!("Getting module completion");
                 let completions = get_upper_case_completion_items(
                     symbol_prefix,
-                    module_id,
                     interns,
                     imports,
                     other_modules_subs,

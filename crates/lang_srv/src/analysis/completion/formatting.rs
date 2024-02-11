@@ -61,7 +61,7 @@ pub fn module_documentation(
     };
 
     match description_type {
-        DescripitonType::Name => md_doc(format!("{0} module", mod_name)),
+        DescripitonType::Name => md_doc(format!("`{0}` module", mod_name)),
         DescripitonType::Exposes => md_doc(format!("```roc\n{0}\n```", exposed())),
         DescripitonType::NameAndExposes => md_doc(format!(
             "`{0}` module\n```roc\n{1}\n```",
