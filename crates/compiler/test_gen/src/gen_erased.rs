@@ -39,6 +39,6 @@ fn multi_branch_capturing() {
             "#
         ),
         (15, 3),
-        (usize, usize)
+        (u64, u64)
     );
 }

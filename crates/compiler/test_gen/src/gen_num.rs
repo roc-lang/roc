@@ -26,7 +26,7 @@ fn u64_alias() {
             "
         ),
         1,
-        usize
+        u64
     );
 }
 
@@ -3076,7 +3076,7 @@ fn monomorphized_ints() {
             "
         ),
         18,
-        usize
+        u64
     )
 }
 
@@ -3095,7 +3095,7 @@ fn monomorphized_floats() {
             "
         ),
         18,
-        usize
+        u64
     )
 }
 
@@ -3119,7 +3119,7 @@ fn monomorphized_ints_names_dont_conflict() {
             "
         ),
         18,
-        usize
+        u64
     )
 }
 

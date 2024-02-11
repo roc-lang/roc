@@ -1367,6 +1367,8 @@ fn linked_list_is_empty_2() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
+
+    use std::os::raw::c_void;
     assert_evals_to!(
         indoc!(
             r#"
@@ -1379,7 +1381,7 @@ fn linked_list_singleton() {
             "#
         ),
         0,
-        usize,
+        *const c_void,
         |_| 0
     );
 }

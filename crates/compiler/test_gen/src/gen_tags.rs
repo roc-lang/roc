@@ -13,6 +13,9 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
+#[cfg(test)]
+use std::os::raw::c_void;
+
 use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
@@ -1019,7 +1022,7 @@ fn nested_recursive_literal() {
                 #"
         ),
         0,
-        usize,
+        *const c_void,
         |_| 0
     );
 }
@@ -1161,7 +1164,7 @@ fn recursive_tag_union_into_flat_tag_union() {
             "#
         ),
         0,
-        usize,
+        *const c_void,
         |_| 0
     )
 }

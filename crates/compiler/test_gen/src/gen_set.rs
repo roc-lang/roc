@@ -25,7 +25,7 @@ fn empty_len() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -39,7 +39,7 @@ fn single_len() {
             "
         ),
         1,
-        usize
+        u64
     );
 }
 

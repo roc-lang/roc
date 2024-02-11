@@ -23,7 +23,7 @@ fn str_split_empty_delimiter() {
             "#
         ),
         1,
-        usize
+        u64
     );
 }
 
@@ -36,7 +36,7 @@ fn str_split_bigger_delimiter_small_str() {
             "#
         ),
         1,
-        usize
+        u64
     );
 }
 
@@ -176,7 +176,7 @@ fn str_split_small_str_big_delimiter() {
                 "#
         ),
         3,
-        usize
+        u64
     );
 
     assert_evals_to!(
