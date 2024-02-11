@@ -46,6 +46,11 @@ pub struct LoadedModule {
     pub docs_by_module: Vec<(ModuleId, ModuleDocumentation)>,
     pub abilities_store: AbilitiesStore,
     pub typechecked: MutMap<ModuleId, CheckedModule>,
+
+    pub imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    pub imported_modules: MutMap<ModuleId, MutMap<ModuleId, Region>>,
+    pub exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
+    pub exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
 }
 
 impl LoadedModule {
@@ -132,6 +137,10 @@ pub struct TypeCheckedModule<'a> {
 
 #[derive(Debug)]
 pub struct CheckedModule {
+    /// all aliases and their definitions. this has to include non-exposed aliases
+    /// because exposed aliases can depend on non-exposed ones)
+    pub aliases: MutMap<Symbol, (bool, Alias)>,
+
     pub solved_subs: Solved<Subs>,
     pub decls: Declarations,
     pub abilities_store: AbilitiesStore,

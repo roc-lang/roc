@@ -2537,6 +2537,14 @@ fn update<'a>(
             }
 
             report_unused_imported_modules(&mut state, module_id, &constrained_module);
+            state
+                .module_cache
+                .imported_modules
+                .insert(module_id, constrained_module.imported_modules.clone());
+            state
+                .module_cache
+                .exposed_imports
+                .insert(module_id, constrained_module.module.exposed_imports.clone());
 
             state
                 .module_cache
@@ -2583,6 +2591,10 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
+            state
+                .module_cache
+                .exposes
+                .insert(module_id, solved_module.exposed_vars_by_symbol.clone());
 
             let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
                 let modules = state.arc_modules.lock();
@@ -2737,6 +2749,7 @@ fn update<'a>(
                     state.module_cache.checked.insert(
                         module_id,
                         CheckedModule {
+                            aliases: solved_module.aliases,
                             solved_subs,
                             decls,
                             abilities_store,
@@ -3400,6 +3413,10 @@ fn finish(
         timings: state.timings,
         docs_by_module,
         abilities_store,
+        imported_modules: state.module_cache.imported_modules,
+        exposed_imports: state.module_cache.exposed_imports,
+        imports: state.module_cache.imports,
+        exposes: state.module_cache.exposes,
     }
 }
 

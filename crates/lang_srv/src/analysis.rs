@@ -1,15 +1,23 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use bumpalo::Bump;
+use log::debug;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
-use roc_collections::MutMap;
+use roc_collections::{MutMap, MutSet};
 use roc_load::{CheckedModule, LoadedModule};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::LineInfo;
+use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
-use roc_types::subs::Subs;
+use roc_types::{
+    subs::{Subs, Variable},
+    types::Alias,
+};
 
 use tower_lsp::lsp_types::{Diagnostic, SemanticTokenType, Url};
 
@@ -29,6 +37,9 @@ pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzedModule {
+    exposed_imports: Vec<(Symbol, Variable)>,
+    imports: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    aliases: MutMap<Symbol, (bool, Alias)>,
     module_id: ModuleId,
     interns: Interns,
     subs: Subs,
@@ -92,6 +103,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         mut typechecked,
         solved,
         abilities_store,
+        docs_by_module,
+        imported_modules,
+        mut exposed_imports,
+        mut imports,
+        exposed_types_storage,
+        mut exposes,
         ..
     } = module;
 
@@ -99,7 +116,25 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         subs: solved.into_inner(),
         abilities_store,
     });
-
+    let exposed_imports: HashMap<_, _> = exposed_imports
+        .into_iter()
+        .map(|(id, symbols)| {
+            (
+                id,
+                symbols
+                    .into_iter()
+                    .filter_map(|(symbol, _)| {
+                        exposes.get(&id)?.iter().find(|(symb, _)| symb == &symbol)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let exposed: HashMap<_, _> = exposes
+        .into_iter()
+        .map(|(id, symbols)| (id, Arc::new(symbols)))
+        .collect();
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
         module_id_to_url: module_id_to_url_from_sources(&sources),
@@ -108,10 +143,32 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         declarations_by_id: &mut declarations_by_id,
         typechecked: &mut typechecked,
         root_module: &mut root_module,
+        exposed_imports,
+        imports: &mut imports,
+        exposed,
     };
+    debug!("docs: {:#?}", docs_by_module);
 
     for (module_id, (path, source)) in sources {
-        documents.push(builder.build_document(path, source, module_id, doc_info.version));
+        let doc = builder.build_document(path, source, module_id, doc_info.version);
+        debug!("================");
+        debug!("module:{:?}", module_id);
+
+        // let exposed_imp = exposed_imports.get(&module_id)?;
+        if let Some(modu) = &doc.analysis_result.module {
+            let aliases = &modu.aliases;
+            let imports = &modu.imports;
+            // debug!("interns modules:{:#?}", module.interns.module_ids);
+
+            // debug!("exposed_imports:{:#?}", exposed_imp);
+            // debug!("exposed:{:#?}", );
+            debug!("imports:{:#?}", imports);
+
+            // debug!("docs:{:#?}", docs.1.entries);
+            debug!("alais:{:#?}", aliases);
+            // debug!("decls:{:#?}", module.declarations)
+        }
+        documents.push(doc);
     }
 
     documents
@@ -165,6 +222,9 @@ struct AnalyzedDocumentBuilder<'a> {
     declarations_by_id: &'a mut MutMap<ModuleId, Declarations>,
     typechecked: &'a mut MutMap<ModuleId, CheckedModule>,
     root_module: &'a mut Option<RootModule>,
+    imports: &'a mut MutMap<ModuleId, MutSet<ModuleId>>,
+    exposed_imports: HashMap<ModuleId, Vec<(Symbol, Variable)>>,
+    exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
 }
 
 impl<'a> AnalyzedDocumentBuilder<'a> {
@@ -178,19 +238,38 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let subs;
         let abilities;
         let declarations;
+        let aliases;
+        let imports = self
+            .imports
+            .remove(&module_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    self.exposed.get(&id).unwrap_or(&Arc::new(vec![])).clone(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let exposed_imports = self.exposed_imports.remove(&module_id).unwrap_or_default();
 
         if let Some(m) = self.typechecked.remove(&module_id) {
             subs = m.solved_subs.into_inner();
             abilities = m.abilities_store;
             declarations = m.decls;
+            aliases = m.aliases;
         } else {
             let rm = self.root_module.take().unwrap();
             subs = rm.subs;
             abilities = rm.abilities_store;
             declarations = self.declarations_by_id.remove(&module_id).unwrap();
+            aliases = HashMap::default();
         }
 
         let analyzed_module = AnalyzedModule {
+            exposed_imports,
+            imports,
+            aliases,
             subs,
             abilities,
             declarations,
