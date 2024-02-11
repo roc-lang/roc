@@ -151,6 +151,7 @@ pub enum Expr {
         Box<(Variable, Loc<Expr>, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
+        bool,
     ),
     RunLowLevel {
         op: LowLevel,
@@ -315,7 +316,7 @@ impl Expr {
             Self::If { .. } => Category::If,
             Self::LetRec(_, expr, _) => expr.value.category(),
             Self::LetNonRec(_, expr) => expr.value.category(),
-            &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
+            &Self::Call(_, _, called_via, _) => Category::CallResult(None, called_via),
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
             Self::ForeignCall { .. } => Category::ForeignCall,
             Self::Closure(..) => Category::Lambda,
@@ -970,6 +971,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
+                            true,
                         )
                     }
                     RuntimeError(_) => {
@@ -1009,6 +1011,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
+                            false,
                         )
                     }
                 };
@@ -2292,7 +2295,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
-        Call(boxed_tuple, args, called_via) => {
+        Call(boxed_tuple, args, called_via, tail_call) => {
             let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
@@ -2367,6 +2370,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                         Box::new((fn_var, loc_expr, closure_var, expr_var)),
                         args,
                         called_via,
+                        tail_call,
                     )
                 }
             }
@@ -2663,6 +2667,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                 (var_store.fresh(), loc_expr),
             ],
             CalledVia::StringInterpolation,
+            false,
         );
 
         loc_expr = Loc::at(Region::zero(), expr);
@@ -3177,7 +3182,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
                 stack.push(&def.loc_expr.value);
                 stack.push(&expr.value);
             }
-            Expr::Call(boxed_expr, args, _called_via) => {
+            Expr::Call(boxed_expr, args, _called_via, tail_call) => {
                 stack.reserve(1 + args.len());
 
                 match &boxed_expr.1.value {
