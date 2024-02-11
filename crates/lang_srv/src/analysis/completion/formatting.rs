@@ -32,6 +32,7 @@ fn md_doc(val: String) -> Documentation {
         value: val,
     })
 }
+///Generates a nicely formatted block of text for the completionitem documentation field
 
 pub(super) fn module_documentation(
     description_type: DescripitonType,
