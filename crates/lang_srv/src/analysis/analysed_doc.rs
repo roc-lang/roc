@@ -228,7 +228,7 @@ impl AnalyzedDocument {
             exposed_imports,
             aliases,
             imports,
-            other_subs,
+            other_modules_subs,
             ..
         } = self.module()?;
 
@@ -245,14 +245,11 @@ impl AnalyzedDocument {
                 info!("Getting module dot completion");
                 //TODO: this doesn't work with builtins for some reason
                 Some(get_upper_case_completion_items(
-                    position,
                     symbol_prefix,
                     module_id,
                     interns,
-                    &mut subs.clone(),
                     imports,
-                    aliases,
-                    other_subs,
+                    other_modules_subs,
                     true,
                 ))
             } else {
@@ -260,10 +257,10 @@ impl AnalyzedDocument {
                 field_completion(
                     position,
                     symbol_prefix,
-                    &declarations,
-                    &interns,
+                    declarations,
+                    interns,
                     &mut subs.clone(),
-                    &module_id,
+                    module_id,
                 )
             }
         } else {
@@ -274,14 +271,11 @@ impl AnalyzedDocument {
             if is_module_or_type_completion {
                 info!("Getting module completion");
                 let completions = get_upper_case_completion_items(
-                    position,
                     symbol_prefix,
                     module_id,
                     interns,
-                    &mut subs.clone(),
                     imports,
-                    aliases,
-                    other_subs,
+                    other_modules_subs,
                     true,
                 );
                 Some(completions)

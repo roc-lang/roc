@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap},
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,7 +12,7 @@ use roc_collections::{MutMap, MutSet};
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::{LineInfo};
+use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::{
@@ -44,7 +44,7 @@ pub(super) struct AnalyzedModule {
     module_id: ModuleId,
     interns: Interns,
     subs: Subs,
-    other_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
+    other_modules_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
     abilities: AbilitiesStore,
     declarations: Declarations,
     // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
@@ -106,10 +106,10 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         solved,
         abilities_store,
         docs_by_module,
-        
+
         exposed_imports,
         mut imports,
-        
+
         exposes,
         ..
     } = module;
@@ -119,15 +119,16 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         abilities_store,
     });
     debug!("exposed_imports: {:#?}", &exposed_imports);
+    //We take the imports from each module, lookup the symbol within that module's list of exposed symbols and then get the type info for that import
     let exposed_imports: HashMap<_, _> = exposed_imports
         .into_iter()
-        .map(|(id, symbols)| {
+        .map(|(module_id, symbols)| {
             (
-                id,
+                module_id,
                 symbols
                     .into_iter()
                     .filter_map(|(symbol, _)| {
-                        exposes.get(&id)?.iter().find(|(symb, _)| {
+                        exposes.get(&module_id)?.iter().find(|(symb, _)| {
                             //TODO this seems to not be comparing proprely so we aren't getting any exposed imports
                             symb == &symbol
                         })
@@ -137,14 +138,16 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
             )
         })
         .collect();
+    //Create a list
     let exposed: HashMap<_, _> = exposes
         .into_iter()
         .map(|(id, symbols)| (id, Arc::new(symbols)))
         .collect();
+    //Combine the subs from all modules
     let all_subs = Arc::new(Mutex::new(
         typechecked
             .iter()
-            .map(|(k, v)| (k.clone(), v.solved_subs.0.clone()))
+            .map(|(k, v)| (*k, v.solved_subs.0.clone()))
             .collect::<HashMap<_, _>>(),
     ));
     let mut builder = AnalyzedDocumentBuilder {
@@ -253,6 +256,8 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let abilities;
         let declarations;
         let aliases;
+
+        //lookup the type info for each import from the module where it was exposed
         let imports = self
             .imports
             .remove(&module_id)
@@ -288,7 +293,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             abilities,
             declarations,
             module_id,
-            other_subs: self.all_subs.clone(),
+            other_modules_subs: self.all_subs.clone(),
             interns: self.interns.clone(),
             module_id_to_url: self.module_id_to_url.clone(),
         };
