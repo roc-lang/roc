@@ -400,7 +400,7 @@ mod tests {
         info!("doc is:\n{0}", change);
 
         inner.change(&url, change, 1).await.unwrap();
-        
+
         get_completion_labels(reg, &url, position).await
     }
 
@@ -491,8 +491,9 @@ mod tests {
     #[tokio::test]
     async fn test_completion_fun_params() {
         let actual = completion_test(
-            indoc! {r"main =\param1,param2->
-  "},
+            indoc! {r#"
+            main = \param1, param2 ->
+              "#},
             "par",
             Position::new(4, 3),
         )
@@ -511,8 +512,9 @@ mod tests {
     #[tokio::test]
     async fn test_completion_closure() {
         let actual = completion_test(
-            indoc! {r"main =[]|>List.map\param1,param2->
-  "},
+            indoc! {r#"
+            main = [] |> List.map \ param1 , param2-> 
+              "#},
             "par",
             Position::new(4, 3),
         )
