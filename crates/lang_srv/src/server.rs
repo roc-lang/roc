@@ -491,9 +491,9 @@ mod tests {
     #[tokio::test]
     async fn test_completion_fun_params() {
         let actual = completion_test(
-            indoc! {r#"
+            indoc! {r"
             main = \param1, param2 ->
-              "#},
+              "},
             "par",
             Position::new(4, 3),
         )
@@ -512,9 +512,9 @@ mod tests {
     #[tokio::test]
     async fn test_completion_closure() {
         let actual = completion_test(
-            indoc! {r#"
+            indoc! {r"
             main = [] |> List.map \ param1 , param2-> 
-              "#},
+              "},
             "par",
             Position::new(4, 3),
         )
