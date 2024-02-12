@@ -260,13 +260,13 @@ pub struct StyleCodes {
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
-    red: "\u{001b}[31m",
-    green: "\u{001b}[32m",
-    yellow: "\u{001b}[33m",
-    blue: "\u{001b}[34m",
-    magenta: "\u{001b}[35m",
-    cyan: "\u{001b}[36m",
-    white: "\u{001b}[37m",
+    red: "\u{001b}[38;5;9m",
+    green: "\u{001b}[38;5;10m",
+    yellow: "\u{001b}[38;5;11m",
+    blue: "\u{001b}[38;5;14m",
+    magenta: "\u{001b}[38;5;13m",
+    cyan: "\u{001b}[38;5;14m",
+    white: "\u{001b}[38;5;15m",
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
