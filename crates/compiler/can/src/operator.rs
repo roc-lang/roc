@@ -594,7 +594,7 @@ pub fn desugar_expr<'a>(
 
             // line_info is an option so that we can lazily calculate it.
             // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
-            if matches!(line_info, None) {
+            if line_info.is_none() {
                 *line_info = Some(LineInfo::new(src));
             }
             let line_col = line_info.as_ref().unwrap().convert_pos(region.start());
@@ -633,6 +633,22 @@ fn desugar_str_segments<'a>(
         segments.iter().map(|segment| match segment {
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => {
                 *segment
+            }
+            StrSegment::DeprecatedInterpolated(loc_expr) => {
+                let loc_desugared = desugar_expr(
+                    arena,
+                    arena.alloc(Loc {
+                        region: loc_expr.region,
+                        value: *loc_expr.value,
+                    }),
+                    src,
+                    line_info,
+                    module_path,
+                );
+                StrSegment::DeprecatedInterpolated(Loc {
+                    region: loc_desugared.region,
+                    value: arena.alloc(loc_desugared.value),
+                })
             }
             StrSegment::Interpolated(loc_expr) => {
                 let loc_desugared = desugar_expr(

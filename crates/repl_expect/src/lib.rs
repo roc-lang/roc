@@ -4,7 +4,7 @@ use {
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{GlobalLayoutInterner, LayoutCache, Niche},
+        layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner, Niche},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
@@ -57,29 +57,29 @@ pub fn get_values<'a>(
 
         app.offset = start;
 
-        let expr = {
-            // TODO: pass layout_cache to jit_to_ast directly
-            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
-            let layout = layout_cache.from_var(arena, variable, subs).unwrap();
+        // TODO: pass layout_cache to jit_to_ast directly
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+        let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
-            let proc_layout = ProcLayout {
-                arguments: &[],
-                result: layout,
-                niche: Niche::NONE,
-            };
-
-            jit_to_ast(
-                arena,
-                app,
-                "expect_repl_main_fn",
-                proc_layout,
-                variable,
-                subs,
-                interns,
-                layout_interner.fork(),
-                target_info,
-            )
+        let proc_layout = ProcLayout {
+            arguments: &[],
+            result: layout,
+            niche: Niche::NONE,
         };
+
+        let expr = jit_to_ast(
+            arena,
+            app,
+            "expect_repl_main_fn",
+            proc_layout,
+            variable,
+            subs,
+            interns,
+            layout_interner.fork(),
+            target_info,
+        );
+
+        app.offset += layout_cache.interner.stack_size_and_alignment(layout).0 as usize;
 
         result.push(expr);
         result_vars.push(variable);
@@ -238,12 +238,12 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│  expect 1 == 2
                     ^^^^^^^^^^^^^
-                "#
+                "
             ),
         );
     }
@@ -265,7 +265,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│>  expect
@@ -281,7 +281,7 @@ mod test {
 
                 b : Num *
                 b = 2
-                "#
+                "
             ),
         );
     }
@@ -380,7 +380,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  5│>  expect
@@ -397,7 +397,7 @@ mod test {
 
                 expected : Result I64 [OutOfBounds]
                 expected = Ok 42
-                "#
+                "
             ),
         );
     }
@@ -463,7 +463,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│>  expect
@@ -485,7 +485,7 @@ mod test {
                     y : U8,
                 }
                 vec2 = { x: 4, y: 8 }
-                "#
+                "
             ),
         );
     }
@@ -965,22 +965,22 @@ mod test {
     fn issue_i4389() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 expect
                     totalCount = \{} -> 1u8
                     totalCount {} == 96u8
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 3│>  expect
                 4│>      totalCount = \{} -> 1u8
                 5│>      totalCount {} == 96u8
-                "#
+                "
             ),
         );
     }
@@ -989,7 +989,7 @@ mod test {
     fn adjacent_lists() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 expect
@@ -1007,10 +1007,10 @@ mod test {
                         x: [115, 116, 117],
                     }
                     actual == expected
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  3│>  expect
@@ -1044,7 +1044,7 @@ mod test {
                     x : List (Int Unsigned8),
                 }
                 expected = { body: [42, 43, 44], headers: [15, 16, 17], x: [115, 116, 117] }
-                "#
+                "
             ),
         );
     }
@@ -1113,7 +1113,7 @@ mod test {
     fn tag_payloads_of_different_size() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 actual : [Leftover (List U8), TooShort]
@@ -1124,10 +1124,10 @@ mod test {
                     expected = TooShort
 
                     actual == expected
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  6│>  expect
@@ -1143,7 +1143,7 @@ mod test {
                     TooShort,
                 ]
                 expected = TooShort
-                "#
+                "
             ),
         );
     }
@@ -1220,7 +1220,7 @@ mod test {
     fn match_on_opaque_number_type() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 hexToByte : U8, U8 -> U8
@@ -1231,10 +1231,10 @@ mod test {
                     actual = hexToByte 7 4
                     expected = 't'
                     actual == expected
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  7│>  expect
@@ -1249,7 +1249,7 @@ mod test {
 
                 expected : Int Unsigned8
                 expected = 116
-                "#
+                "
             ),
         );
     }

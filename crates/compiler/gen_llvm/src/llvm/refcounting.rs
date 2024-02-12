@@ -1295,14 +1295,24 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
             _ => tag_id,
         };
 
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        env.builder.position_at_end(block);
+
         // if none of the fields are or contain anything refcounted, just move on
         if fields_need_no_refcounting(layout_interner, field_layouts) {
+            // Still make sure to decrement the refcount of the union as a whole.
+            if let DecOrReuse::Dec = decrement_or_reuse {
+                let union_layout = LayoutRepr::Union(union_layout);
+                refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
+            }
+
+            // this function returns void
+            builder.new_build_return(None);
+
+            cases.push((tag_id_int_type.const_int(tag_id as u64, false), block));
+
             continue;
         }
-
-        let block = env.context.append_basic_block(parent, "tag_id_decrement");
-
-        env.builder.position_at_end(block);
 
         let fields_struct = LayoutRepr::struct_(field_layouts);
         let wrapper_type = basic_type_from_layout(env, layout_interner, fields_struct);
@@ -1370,12 +1380,9 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
         // and store them on the stack, then modify (and potentially free) the current cell, then
         // actually inc/dec the fields.
 
-        match decrement_or_reuse {
-            DecOrReuse::Reuse => {}
-            DecOrReuse::Dec => {
-                let union_layout = LayoutRepr::Union(union_layout);
-                refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
-            }
+        if let DecOrReuse::Dec = decrement_or_reuse {
+            let union_layout = LayoutRepr::Union(union_layout);
+            refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
         }
 
         for (field, field_layout) in deferred_nonrec {

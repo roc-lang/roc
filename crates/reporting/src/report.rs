@@ -82,9 +82,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     .to_str()
     .unwrap();
 
+    let additional_path_display = "in";
+    let additional_path_display_width = additional_path_display.len() + 1;
     let title_width = title.len() + 4;
-    let relative_path_width = relative_path.len() + 3;
-    let available_path_width = HEADER_WIDTH - title_width - 1;
+    let relative_path_width = relative_path.len() + 1;
+    let available_path_width = HEADER_WIDTH - title_width - additional_path_display_width - 1;
 
     // If path is too long to fit in 80 characters with everything else then truncate it
     let path_width = relative_path_width.min(available_path_width);
@@ -96,10 +98,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     };
 
     let header = format!(
-        "── {} {} {} ─",
+        "── {} {} {} {}",
         title,
-        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
-        path
+        additional_path_display,
+        path,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width + additional_path_display_width))
     );
 
     header
@@ -163,7 +166,7 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = if self.filename == PathBuf::from("") {
+            let header = if self.filename == PathBuf::from("replfile.roc") {
                 crate::report::pretty_header(&self.title)
             } else {
                 crate::report::pretty_header_with_path(&self.title, &self.filename)
@@ -1646,6 +1649,42 @@ pub fn to_file_problem_report<'b>(
                 filename,
                 doc,
                 title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        io::ErrorKind::Unsupported => {
+            let doc = match filename.extension() {
+                Some(ext) => alloc.concat(vec![
+                    alloc.reflow(r"I expected a file with extension `.roc` or without extension."),
+                    alloc.hardline(),
+                    alloc.reflow(r"Instead I received a file with extension `."),
+                    alloc.as_string(ext.to_string_lossy()),
+                    alloc.as_string("`."),
+                ]),
+                None => {
+                    alloc.stack(vec![
+                        alloc.vcat(vec![
+                            alloc.reflow(r"I expected a file with either:"),
+                            alloc.reflow("- extension `.roc`"),
+                            alloc.intersperse(
+                                "- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"
+                                    .split(char::is_whitespace),
+                                alloc.concat(vec![ alloc.hardline(), alloc.text("  ")]).flat_alt(alloc.space()).group()
+                            ),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("The provided file did not start with a shebang `#!` containing the string `roc`. Is "),
+                            alloc.as_string(filename.to_string_lossy()),
+                            alloc.reflow(" a Roc file?"),
+                        ])
+                    ])
+                }
+            };
+
+            Report {
+                filename,
+                doc,
+                title: "NOT A ROC FILE".to_string(),
                 severity: Severity::Fatal,
             }
         }

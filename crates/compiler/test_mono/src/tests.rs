@@ -252,133 +252,133 @@ fn verify_procedures<'a>(
 
 #[mono_test]
 fn ir_int_literal() {
-    r#"
+    r"
     5
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_int_add() {
-    r#"
+    r"
     x = [1,2]
     5 + 4 + 3 + List.len x
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_assignment() {
-    r#"
+    r"
     x = 5
 
     x
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_when_maybe() {
-    r#"
+    r"
     when Just 3 is
         Just n -> n
         Nothing -> 0
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_when_these() {
-    r#"
+    r"
     when These 1 2 is
         This x -> x
         That y -> y
         These x _ -> x
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_when_record() {
-    r#"
+    r"
     when { x: 1, y: 3.14 } is
         { x } -> x
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_plus() {
-    r#"
+    r"
     1 + 2
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_round() {
-    r#"
+    r"
     Num.round 3.6
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_when_idiv() {
-    r#"
+    r"
     when Num.divTruncChecked 1000 10 is
         Ok val -> val
         Err _ -> -1
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_two_defs() {
-    r#"
+    r"
     x = 3
     y = 4
 
     x + y
-    "#
+    "
 }
 
 #[mono_test]
 fn ir_when_just() {
-    r#"
+    r"
     x : [Nothing, Just I64]
     x = Just 41
 
     when x is
         Just v -> v + 0x1
         Nothing -> 0x1
-    "#
+    "
 }
 
 #[mono_test]
 fn one_element_tag() {
-    r#"
+    r"
     x : [Pair I64]
     x = Pair 2
 
     x
-    "#
+    "
 }
 
 #[mono_test]
 fn guard_pattern_true() {
-    r#"
+    r"
     wrapper = \{} ->
         when 2 is
             2 if Bool.false -> 42
             _ -> 0
 
     wrapper {}
-    "#
+    "
 }
 
 #[mono_test]
 fn when_on_record() {
-    r#"
+    r"
     when { x: 0x2 } is
         { x } -> x + 3
-    "#
+    "
 }
 
 #[mono_test]
 fn when_nested_maybe() {
-    r#"
+    r"
     Maybe a : [Nothing, Just a]
 
     x : Maybe (Maybe I64)
@@ -387,56 +387,56 @@ fn when_nested_maybe() {
     when x is
         Just (Just v) -> v + 0x1
         _ -> 0x1
-    "#
+    "
 }
 
 #[mono_test]
 fn when_on_two_values() {
-    r#"
+    r"
     when Pair 2 3 is
         Pair 4 3 -> 9
         Pair a b -> a + b
-    "#
+    "
 }
 
 #[mono_test]
 fn dict() {
-    r#"
+    r"
     Dict.len (Dict.empty {})
-    "#
+    "
 }
 
 #[mono_test]
 fn list_append_closure() {
-    r#"
+    r"
     myFunction = \l -> List.append l 42
 
     myFunction [1, 2]
-    "#
+    "
 }
 
 #[mono_test]
 fn list_append() {
     // TODO this leaks at the moment
     // ListAppend needs to decrement its arguments
-    r#"
+    r"
     List.append [1] 2
-    "#
+    "
 }
 
 #[mono_test]
 fn list_len() {
-    r#"
+    r"
     x = [1,2,3]
     y = [1.0]
 
     List.len x + List.len y
-    "#
+    "
 }
 
 #[mono_test]
 fn when_joinpoint() {
-    r#"
+    r"
     wrapper = \{} ->
         x : [Red, White, Blue]
         x = Blue
@@ -450,34 +450,34 @@ fn when_joinpoint() {
         y
 
     wrapper {}
-    "#
+    "
 }
 
 #[mono_test]
 fn simple_if() {
-    r#"
+    r"
     if Bool.true then
         1
     else
         2
-    "#
+    "
 }
 
 #[mono_test]
 fn if_multi_branch() {
-    r#"
+    r"
     if Bool.true then
         1
     else if Bool.false then
         2
     else
         3
-    "#
+    "
 }
 
 #[mono_test]
 fn when_on_result() {
-    r#"
+    r"
     wrapper = \{} ->
         x : Result I64 I64
         x = Ok 2
@@ -490,71 +490,71 @@ fn when_on_result() {
         y
 
     wrapper {}
-    "#
+    "
 }
 
 #[mono_test]
 fn let_with_record_pattern() {
-    r#"
+    r"
     { x } = { x: 0x2, y: 3.14 }
 
     x
-    "#
+    "
 }
 
 #[mono_test]
 fn let_with_record_pattern_list() {
-    r#"
+    r"
     { x } = { x: [1, 3, 4], y: 3.14 }
 
     x
-    "#
+    "
 }
 
 #[mono_test]
 fn if_guard_bind_variable_false() {
-    r#"
+    r"
     wrapper = \{} ->
         when 10 is
             x if x == 5 -> 0
             _ -> 42
 
     wrapper {}
-    "#
+    "
 }
 
 #[mono_test]
 fn alias_variable() {
-    r#"
+    r"
     x = 5
     y = x
 
     3
-    "#
+    "
 }
 
 #[mono_test]
 fn alias_variable_and_return_it() {
-    r#"
+    r"
     x = 5
     y = x
 
     y
-    "#
+    "
 }
 
 #[mono_test]
 fn branch_store_variable() {
-    r#"
+    r"
     when 0 is
         1 -> 12
         a -> a
-    "#
+    "
 }
 
 #[mono_test]
 fn list_pass_to_function() {
-    r#"
+    r"
     x : List I64
     x = [1,2,3]
 
@@ -562,57 +562,57 @@ fn list_pass_to_function() {
     id = \y -> List.set y 0 0
 
     id x
-    "#
+    "
 }
 
 #[mono_test]
 fn record_optional_field_let_no_use_default() {
-    r#"
+    r"
     f = \r ->
         { x ? 10, y } = r
         x + y
 
 
     f { x: 4, y: 9 }
-    "#
+    "
 }
 
 #[mono_test]
 fn record_optional_field_let_use_default() {
-    r#"
+    r"
     f = \r ->
         { x ? 10, y } = r
         x + y
 
 
     f { y: 9 }
-    "#
+    "
 }
 
 #[mono_test]
 fn record_optional_field_function_no_use_default() {
-    r#"
+    r"
     f = \{ x ? 10, y } -> x + y
 
 
     f { x: 4, y: 9 }
-    "#
+    "
 }
 
 #[mono_test]
 fn record_optional_field_function_use_default() {
-    r#"
+    r"
     f = \{ x ? 10, y } -> x + y
 
 
     f { y: 9 }
-    "#
+    "
 }
 
 #[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
-    r#"
+    r"
     quicksortHelp : List (Num a), I64, I64 -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
@@ -625,7 +625,7 @@ fn quicksort_help() {
             list
 
     quicksortHelp [] 0 0
-    "#
+    "
 }
 
 #[mono_test]
@@ -745,7 +745,7 @@ fn quicksort_swap() {
 
 #[mono_test]
 fn factorial() {
-    r#"
+    r"
     factorial = \n, accum ->
         when n is
             0 ->
@@ -755,12 +755,12 @@ fn factorial() {
                 factorial (n - 1) (n * accum)
 
     factorial 10 1
-    "#
+    "
 }
 
 #[mono_test]
 fn is_nil() {
-    r#"
+    r"
     ConsList a : [Cons a (ConsList a), Nil]
 
     isNil : ConsList a -> Bool
@@ -770,13 +770,13 @@ fn is_nil() {
             Cons _ _ -> Bool.false
 
     isNil (Cons 0x2 Nil)
-    "#
+    "
 }
 
 #[mono_test]
 #[ignore]
 fn has_none() {
-    r#"
+    r"
     Maybe a : [Just a, Nothing]
     ConsList a : [Cons a (ConsList a), Nil]
 
@@ -788,7 +788,7 @@ fn has_none() {
             Cons (Just _) xs -> hasNone xs
 
     hasNone (Cons (Just 3) Nil)
-    "#
+    "
 }
 
 #[mono_test]
@@ -839,29 +839,29 @@ fn list_cannot_update_inplace() {
 
 #[mono_test]
 fn list_get() {
-    r#"
+    r"
     wrapper = \{} ->
         List.get [1,2,3] 0
 
     wrapper {}
-    "#
+    "
 }
 
 #[mono_test]
 fn peano() {
-    r#"
+    r"
     Peano : [S Peano, Z]
 
     three : Peano
     three = S (S (S Z))
 
     three
-    "#
+    "
 }
 
 #[mono_test]
 fn peano1() {
-    r#"
+    r"
     Peano : [S Peano, Z]
 
     three : Peano
@@ -870,12 +870,12 @@ fn peano1() {
     when three is
         Z -> 0
         S _ -> 1
-    "#
+    "
 }
 
 #[mono_test]
 fn peano2() {
-    r#"
+    r"
     Peano : [S Peano, Z]
 
     three : Peano
@@ -885,12 +885,12 @@ fn peano2() {
         S (S _) -> 1
         S (_) -> 0
         Z -> 0
-    "#
+    "
 }
 
 #[mono_test]
 fn optional_when() {
-    r#"
+    r"
     f = \r ->
         when r is
             { x: Blue, y ? 3 } -> y
@@ -902,15 +902,15 @@ fn optional_when() {
     d = f { x: Red }
 
     a * b * c * d
-    "#
+    "
 }
 
 #[mono_test]
 fn optional_field_with_binary_op() {
-    r#"
+    r"
         { bar ? 1 + 1 } = {}
         bar
-    "#
+    "
 }
 
 #[mono_test]
@@ -924,7 +924,7 @@ fn nested_optional_field_with_binary_op() {
 
 #[mono_test]
 fn multiline_record_pattern() {
-    r#"
+    r"
         x = { a: 1, b: 2, c: 3 }
         {
             a,
@@ -933,12 +933,12 @@ fn multiline_record_pattern() {
         } = x
 
         a + b + c
-    "#
+    "
 }
 
 #[mono_test]
 fn nested_pattern_match() {
-    r#"
+    r"
     Maybe a : [Nothing, Just a]
 
     x : Maybe (Maybe I64)
@@ -947,13 +947,13 @@ fn nested_pattern_match() {
     when x is
         Just (Just v) -> v + 0x1
         _ -> 0x1
-    "#
+    "
 }
 
 #[mono_test]
 #[ignore]
 fn linked_list_length_twice() {
-    r#"
+    r"
     LinkedList a : [Nil, Cons a (LinkedList a)]
 
     nil : LinkedList I64
@@ -966,7 +966,7 @@ fn linked_list_length_twice() {
             Cons _ rest -> 1 + length rest
 
     length nil + length nil
-    "#
+    "
 }
 
 #[mono_test]
@@ -996,7 +996,7 @@ fn rigids() {
 
 #[mono_test]
 fn let_x_in_x() {
-    r#"
+    r"
     x = 5
 
     answer =
@@ -1007,12 +1007,12 @@ fn let_x_in_x() {
         nested
 
     answer
-    "#
+    "
 }
 
 #[mono_test]
 fn let_x_in_x_indirect() {
-    r#"
+    r"
     x = 5
 
     answer =
@@ -1026,7 +1026,7 @@ fn let_x_in_x_indirect() {
         nested
 
     { answer, unused }.answer
-    "#
+    "
 }
 
 #[mono_test]
@@ -1310,13 +1310,13 @@ fn monomorphized_applied_tag() {
 #[ignore = "Cannot compile polymorphic closures yet"]
 fn aliased_polymorphic_closure() {
     indoc!(
-        r#"
+        r"
         n : U8
         n = 1
         f = \{} -> (\a -> n)
         g = f {}
         g {}
-        "#
+        "
     )
 }
 
@@ -1341,11 +1341,11 @@ fn issue_2535_let_weakened_fields_referenced_in_list() {
 #[mono_test]
 fn issue_2725_alias_polymorphic_lambda() {
     indoc!(
-        r#"
+        r"
         wrap = \value -> Tag value
         wrapIt = wrap
         wrapIt 42
-        "#
+        "
     )
 }
 
@@ -1361,7 +1361,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 #[mono_test]
 fn issue_2810() {
     indoc!(
-        r#"
+        r"
         Command : [Command Tool]
 
         Job : [Job Command]
@@ -1371,7 +1371,7 @@ fn issue_2810() {
         a : Job
         a = Job (Command (FromJob (Job (Command SystemTool))))
         a
-        "#
+        "
     )
 }
 
@@ -1608,14 +1608,14 @@ fn choose_correct_recursion_var_under_record() {
 #[mono_test]
 fn tail_call_elimination() {
     indoc!(
-        r#"
+        r"
         sum = \n, accum ->
             when n is
                 0 -> accum
                 _ -> sum (n - 1) (n + accum)
 
         sum 1_000_000 0
-        "#
+        "
     )
 }
 
@@ -1650,7 +1650,7 @@ fn tail_call_with_different_layout() {
 #[mono_test]
 fn lambda_capture_niche_u8_vs_u64() {
     indoc!(
-        r#"
+        r"
         capture : _ -> ({} -> Str)
         capture = \val ->
             \{} ->
@@ -1665,7 +1665,7 @@ fn lambda_capture_niche_u8_vs_u64() {
                 False -> capture 18u8
 
         fun {}
-        "#
+        "
     )
 }
 
@@ -1679,7 +1679,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
                 when val is
                     _ -> ""
 
-        capture2 = \val -> \{} -> "\(val)"
+        capture2 = \val -> \{} -> "$(val)"
 
         x : [A, B, C]
         x = A
@@ -1777,37 +1777,37 @@ fn lambda_set_niche_same_layout_different_constructor() {
 #[mono_test]
 fn choose_u64_layout() {
     indoc!(
-        r#"
+        r"
         9999999999999999999 + 1
-        "#
+        "
     )
 }
 
 #[mono_test]
 fn choose_i128_layout() {
     indoc!(
-        r#"
+        r"
         {
             a: 18446744073709551616 + 1,
             b: -9223372036854775809 + 1,
         }
-        "#
+        "
     )
 }
 
 #[mono_test]
 fn choose_u128_layout() {
     indoc!(
-        r#"
+        r"
         170141183460469231731687303715884105728 + 1
-        "#
+        "
     )
 }
 
 #[mono_test]
 fn recursive_call_capturing_function() {
     indoc!(
-        r#"
+        r"
         a = \b ->
             c : U32 -> U32
             c = \d ->
@@ -1815,28 +1815,28 @@ fn recursive_call_capturing_function() {
             c 0
 
         a 6
-        "#
+        "
     )
 }
 
 #[mono_test]
 fn call_function_in_empty_list() {
     indoc!(
-        r#"
+        r"
         lst : List ({} -> {})
         lst = []
         List.map lst \f -> f {}
-        "#
+        "
     )
 }
 
 #[mono_test]
 fn call_function_in_empty_list_unbound() {
     indoc!(
-        r#"
+        r"
         lst = []
         List.map lst \f -> f {}
-        "#
+        "
     )
 }
 
@@ -1984,7 +1984,7 @@ fn polymorphic_expression_unification() {
         ]
         parseFunction : Str -> RenderTree
         parseFunction = \name ->
-            last = Indent [Text ".trace(\"\(name)\")" ]
+            last = Indent [Text ".trace(\"$(name)\")" ]
             Indent [last]
 
         values = parseFunction "interface_header"
@@ -2048,9 +2048,9 @@ fn issue_3669() {
 #[mono_test]
 fn num_width_gt_u8_layout_as_float() {
     indoc!(
-        r#"
+        r"
         1 / 200
-        "#
+        "
     )
 }
 
@@ -2254,7 +2254,7 @@ fn tuple_pattern_match() {
 #[mono_test(mode = "test")]
 fn issue_4705() {
     indoc!(
-        r###"
+        r"
         interface Test exposes [] imports []
 
         go : {} -> Bool
@@ -2264,28 +2264,28 @@ fn issue_4705() {
             input = {}
             x = go input
             x
-        "###
+        "
     )
 }
 
 #[mono_test(mode = "test", large_stack = "true")]
 fn issue_4749() {
     indoc!(
-        r###"
+        r#"
         interface Test exposes [] imports [TotallyNotJson]
 
         expect
             input = [82, 111, 99]
             got = Decode.fromBytes input TotallyNotJson.json
             got == Ok "Roc"
-        "###
+        "#
     )
 }
 
 #[mono_test(mode = "test")]
 fn lambda_set_with_imported_toplevels_issue_4733() {
     indoc!(
-        r###"
+        r"
         interface Test exposes [] imports []
 
         fn = \{} ->
@@ -2297,28 +2297,28 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
             \a -> op a a
 
         expect ((fn {}) 3) == 9
-        "###
+        "
     )
 }
 
 #[mono_test]
 fn order_list_size_tests_issue_4732() {
     indoc!(
-        r###"
+        r#"
         when [] is
             [1, ..]          -> "B1"
             [2, 1, ..]       -> "B2"
             [3, 2, 1, ..]    -> "B3"
             [4, 3, 2, 1, ..] -> "B4"
             _                -> "Catchall"
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn anonymous_closure_in_polymorphic_expression_issue_4717() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "platform"
 
         chompWhile : (List U8) -> (List U8)
@@ -2331,14 +2331,14 @@ fn anonymous_closure_in_polymorphic_expression_issue_4717() {
                     List.dropFirst input index
 
         main = chompWhile [1u8, 2u8, 3u8]
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn list_map_take_capturing_or_noncapturing() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "platform"
 
         main =
@@ -2355,28 +2355,28 @@ fn list_map_take_capturing_or_noncapturing() {
                     k = \n -> n + n
                     k
             List.map [1u8, 2u8, 3u8] f
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn issue_4557() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         isEqQ = \q1, q2 -> when T q1 q2 is
             T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
 
         main = isEqQ (U \{} -> "a") (U \{} -> "a")
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn nullable_wrapped_with_nullable_not_last_index() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         Parser : [
@@ -2393,14 +2393,14 @@ fn nullable_wrapped_with_nullable_not_last_index() {
                 CharLiteral -> "c"
 
         main = toIdParser CharLiteral == "c"
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn pattern_as_toplevel() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         record = { a: 42i64, b: "foo" }
@@ -2409,14 +2409,14 @@ fn pattern_as_toplevel() {
             when record is
                 { a: 42i64 } as r -> record == r
                 _ -> Bool.false
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn pattern_as_nested() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         record = { a: 42i64, b: "foo" }
@@ -2425,20 +2425,20 @@ fn pattern_as_nested() {
             when Pair {} record is
                 Pair {} ({ a: 42i64 } as r) -> record == r
                 _ -> Bool.false
-        "###
+        "#
     )
 }
 
 #[mono_test]
 fn pattern_as_of_symbol() {
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         main =
             when "foo" is
                 a as b -> a == b
-        "###
+        "#
     )
 }
 
@@ -2447,7 +2447,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
     // https://github.com/roc-lang/roc/issues/4734
     // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         andThen = \{} ->
@@ -2457,7 +2457,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
         between = andThen {}
 
         main = between \{} -> between \{} -> 10
-        "###
+        "#
     )
 }
 
@@ -2466,7 +2466,7 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     // https://github.com/roc-lang/roc/issues/4734
     // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         andThen = \{} ->
@@ -2478,14 +2478,14 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         between2 = andThen {}
 
         main = between1 \{} -> between2 \{} -> 10u8
-        "###
+        "#
     )
 }
 
 #[mono_test(mode = "test", large_stack = "true")]
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
-        r###"
+        r#"
         interface Test exposes [] imports [TotallyNotJson]
 
         getNumber =
@@ -2505,7 +2505,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
         expect
             result = getNumber
             result == Ok {val : -1234i64, input : []}
-        "###
+        "#
     )
 }
 
@@ -2515,7 +2515,7 @@ fn weakening_avoids_overspecialization() {
     // `index` - to `Nat` and the default integer type, `I64`. The test is to ensure only one
     // specialization, that of `Nat`, exists.
     indoc!(
-        r###"
+        r#"
         app "test" provides [main] to "./platform"
 
         main : (List U8) -> (List U8)
@@ -2526,7 +2526,7 @@ fn weakening_avoids_overspecialization() {
                 input
             else
                 List.dropFirst input index
-        "###
+        "#
     )
 }
 
@@ -2540,7 +2540,7 @@ fn recursively_build_effect() {
             hi = "Hello"
             name = "World"
 
-            "\(hi), \(name)!"
+            "$(hi), $(name)!"
 
         main =
             when nestHelp 4 is
@@ -2856,8 +2856,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
             else \x -> f (g x)
 
          identity = \x -> x
-         exclame = \s -> "\(s)!"
-         whisper = \s -> "(\(s))"
+         exclame = \s -> "$(s)!"
+         whisper = \s -> "($(s))"
 
          main =
              res: Str -> Str
@@ -3124,13 +3124,13 @@ fn drop_specialize_after_jump() {
 #[mono_test(mode = "test")]
 fn dbg_in_expect() {
     indoc!(
-        r###"
+        r#"
         interface Test exposes [] imports []
 
         expect
             dbg ""
             Bool.true
-        "###
+        "#
     )
 }
 
@@ -3461,5 +3461,42 @@ fn issue_6196() {
 
         nth ["a"] 0
         "#
+    )
+}
+
+#[mono_test]
+fn issue_5513() {
+    indoc!(
+        r"
+        f = \state ->
+            { state & a: state.b }
+        f { a: 0, b: 0 }
+        "
+    )
+}
+
+#[mono_test]
+fn issue_6174() {
+    indoc!(
+        r"
+        g = Bool.false
+
+        a = \_ ->
+            if g then
+                Ok 0
+            else
+                Err NoNumber
+
+        b = \_ ->
+            if g then
+                Ok 0
+            else
+                Err NoNumber
+
+        c = \_ ->
+            [a {}, b {}]
+
+        c {}
+        "
     )
 }

@@ -1,32 +1,65 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
-use parking_lot::{Mutex, MutexGuard};
-use registry::{DocumentChange, Registry};
+
+use log::{debug, trace};
+use registry::{Registry, RegistryConfig};
+use std::future::Future;
+use std::time::Duration;
+
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+use crate::analysis::{global_analysis, DocInfo};
 
 mod analysis;
 mod convert;
 mod registry;
 
-#[derive(Debug)]
-struct RocLs {
+struct RocServer {
+    pub state: RocServerState,
     client: Client,
-    registry: Mutex<Registry>,
 }
 
-impl std::panic::RefUnwindSafe for RocLs {}
+struct RocServerConfig {
+    pub debounce_ms: Duration,
+}
 
-impl RocLs {
-    pub fn new(client: Client) -> Self {
+impl Default for RocServerConfig {
+    fn default() -> Self {
         Self {
-            client,
-            registry: Mutex::new(Registry::default()),
+            debounce_ms: Duration::from_millis(100),
         }
     }
+}
 
-    fn registry(&self) -> MutexGuard<Registry> {
-        self.registry.lock()
+///This exists so we can test most of RocLs without anything LSP related
+struct RocServerState {
+    registry: Registry,
+    config: RocServerConfig,
+}
+
+impl std::panic::RefUnwindSafe for RocServer {}
+
+fn read_env_num(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|a| str::parse::<u64>(&a).ok())
+}
+
+impl RocServer {
+    pub fn new(client: Client) -> Self {
+        let registry_config = RegistryConfig {
+            latest_document_timeout: Duration::from_millis(
+                read_env_num("ROCLS_LATEST_DOC_TIMEOUT_MS").unwrap_or(5000),
+            ),
+        };
+        let config = RocServerConfig {
+            debounce_ms: Duration::from_millis(read_env_num("ROCLS_DEBOUNCE_MS").unwrap_or(100)),
+        };
+        Self {
+            state: RocServerState::new(config, Registry::new(registry_config)),
+            client,
+        }
     }
 
     pub fn capabilities() -> ServerCapabilities {
@@ -61,39 +94,120 @@ impl RocLs {
                 range: None,
                 full: Some(SemanticTokensFullOptions::Bool(true)),
             });
-
+        let completion_provider = CompletionOptions {
+            resolve_provider: Some(false),
+            trigger_characters: Some(vec![".".to_string()]),
+            all_commit_characters: None,
+            work_done_progress_options: WorkDoneProgressOptions {
+                work_done_progress: None,
+            },
+        };
         ServerCapabilities {
             text_document_sync: Some(text_document_sync),
             hover_provider: Some(hover_provider),
             definition_provider: Some(OneOf::Right(definition_provider)),
             document_formatting_provider: Some(OneOf::Right(document_formatting_provider)),
             semantic_tokens_provider: Some(semantic_tokens_provider),
+            completion_provider: Some(completion_provider),
             ..ServerCapabilities::default()
         }
     }
 
     /// Records a document content change.
     async fn change(&self, fi: Url, text: String, version: i32) {
-        self.registry()
-            .apply_change(DocumentChange::Modified(fi.clone(), text));
+        let updating_result = self.state.change(&fi, text, version).await;
 
-        let diagnostics = match std::panic::catch_unwind(|| self.registry().diagnostics(&fi)) {
-            Ok(ds) => ds,
-            Err(_) => return,
-        };
+        //The analysis task can be cancelled by another change coming in which will update the watched variable
+        if let Err(e) = updating_result {
+            debug!("Cancelled change. Reason:{:?}", e);
+            return;
+        }
+
+        debug!("Applied_changes getting and returning diagnostics");
+
+        let diagnostics = self.state.registry.diagnostics(&fi).await;
 
         self.client
             .publish_diagnostics(fi, diagnostics, Some(version))
             .await;
     }
+}
 
-    async fn close(&self, fi: Url) {
-        self.registry().apply_change(DocumentChange::Closed(fi));
+impl RocServerState {
+    pub fn new(config: RocServerConfig, registry: Registry) -> RocServerState {
+        Self { config, registry }
+    }
+
+    async fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    async fn close(&self, _fi: Url) {}
+
+    pub async fn change(
+        &self,
+        fi: &Url,
+        text: String,
+        version: i32,
+    ) -> std::result::Result<(), String> {
+        debug!("V{:?}:starting change", version);
+        let doc_info = DocInfo::new(fi.clone(), text, version);
+
+        self.registry
+            .apply_doc_info_changes(fi.clone(), doc_info.clone())
+            .await;
+
+        debug!(
+            "V{:?}:finished updating docinfo, starting analysis ",
+            version
+        );
+
+        let inner_ref = self;
+        let updating_result = async {
+            //This reduces wasted computation by waiting to allow a new change to come in and update the version before we check, but does delay the final analysis. Ideally this would be replaced with cancelling the analysis when a new one comes in.
+            tokio::time::sleep(self.config.debounce_ms).await;
+            let is_latest = inner_ref
+                .registry
+                .get_latest_version(fi)
+                .await
+                .map(|latest| latest == version)
+                .unwrap_or(true);
+            if !is_latest {
+                return Err("Not latest version skipping analysis".to_string());
+            }
+
+            let results = match tokio::task::spawn_blocking(|| global_analysis(doc_info)).await {
+                Err(e) => return Err(format!("Document analysis failed. reason:{:?}", e)),
+                Ok(a) => a,
+            };
+            let latest_version = inner_ref.registry.get_latest_version(fi).await;
+
+            //if this version is not the latest another change must have come in and this analysis is useless
+            //if there is no older version we can just proceed with the update
+            if let Some(latest_version) = latest_version {
+                if latest_version != version {
+                    return Err(format!(
+                        "Version {0} doesn't match latest: {1} discarding analysis",
+                        version, latest_version
+                    ));
+                }
+            }
+            debug!(
+                "V{:?}:finished document analysis applying changes ",
+                version
+            );
+
+            inner_ref.registry.apply_changes(results, fi.clone()).await;
+            Ok(())
+        }
+        .await;
+        debug!("V{:?}:finished document change process", version);
+        updating_result
     }
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for RocLs {
+impl LanguageServer for RocServer {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: Self::capabilities(),
@@ -127,7 +241,7 @@ impl LanguageServer for RocLs {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let TextDocumentIdentifier { uri } = params.text_document;
-        self.close(uri).await;
+        self.state.close(uri).await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -144,7 +258,13 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper(|| self.registry().hover(&text_document.uri, position))
+        panic_wrapper_async(|| async {
+            self.state
+                .registry
+                .hover(&text_document.uri, position)
+                .await
+        })
+        .await
     }
 
     async fn goto_definition(
@@ -161,10 +281,14 @@ impl LanguageServer for RocLs {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper(|| {
-            self.registry()
+        panic_wrapper_async(|| async {
+            self.state
+                .registry()
+                .await
                 .goto_definition(&text_document.uri, position)
+                .await
         })
+        .await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -174,7 +298,14 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper(|| self.registry().formatting(&text_document.uri))
+        panic_wrapper_async(|| async {
+            self.state
+                .registry()
+                .await
+                .formatting(&text_document.uri)
+                .await
+        })
+        .await
     }
 
     async fn semantic_tokens_full(
@@ -187,22 +318,184 @@ impl LanguageServer for RocLs {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper(|| self.registry().semantic_tokens(&text_document.uri))
+        panic_wrapper_async(|| async {
+            self.state
+                .registry()
+                .await
+                .semantic_tokens(&text_document.uri)
+                .await
+        })
+        .await
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let doc = params.text_document_position;
+        trace!("Got completion request");
+
+        panic_wrapper_async(|| async {
+            self.state
+                .registry
+                .completion_items(&doc.text_document.uri, doc.position)
+                .await
+        })
+        .await
     }
 }
 
-fn panic_wrapper<T>(f: impl FnOnce() -> Option<T> + std::panic::UnwindSafe) -> Result<Option<T>> {
+async fn panic_wrapper_async<Fut, T>(
+    f: impl FnOnce() -> Fut + std::panic::UnwindSafe,
+) -> Result<Option<T>>
+where
+    Fut: Future<Output = Option<T>>,
+{
     match std::panic::catch_unwind(f) {
-        Ok(r) => Ok(r),
+        Ok(r) => Ok(r.await),
         Err(_) => Err(tower_lsp::jsonrpc::Error::internal_error()),
     }
 }
 
 #[tokio::main]
 async fn main() {
+    env_logger::Builder::from_env("ROCLS_LOG").init();
+
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(RocLs::new);
+    let (service, socket) = LspService::new(RocServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Once;
+
+    use expect_test::expect;
+    use indoc::indoc;
+    use log::info;
+
+    use super::*;
+
+    fn completion_resp_to_labels(resp: CompletionResponse) -> Vec<String> {
+        match resp {
+            CompletionResponse::Array(list) => list.into_iter(),
+            CompletionResponse::List(list) => list.items.into_iter(),
+        }
+        .map(|item| item.label)
+        .collect::<Vec<_>>()
+    }
+    ///Gets completion and returns only the label for each completion
+    async fn get_completion_labels(
+        reg: &Registry,
+        url: &Url,
+        position: Position,
+    ) -> Option<Vec<String>> {
+        reg.completion_items(url, position)
+            .await
+            .map(completion_resp_to_labels)
+    }
+
+    const DOC_LIT: &str = indoc! {r#"
+        interface Test
+          exposes []
+          imports []
+        "#};
+    static INIT: Once = Once::new();
+    async fn test_setup(doc: String) -> (RocServerState, Url) {
+        INIT.call_once(|| {
+            env_logger::builder()
+                .is_test(true)
+                .filter_level(log::LevelFilter::Trace)
+                .init();
+        });
+        info!("Doc is:\n{0}", doc);
+        let url = Url::parse("file:/Test.roc").unwrap();
+
+        let inner = RocServerState::new(RocServerConfig::default(), Registry::default());
+        //setup the file
+        inner.change(&url, doc, 0).await.unwrap();
+        (inner, url)
+    }
+    ///Test that completion works properly when we apply an "as" pattern to an identifier
+    #[tokio::test]
+    async fn test_completion_as_identifier() {
+        let suffix = DOC_LIT.to_string()
+            + indoc! {r#"
+            main =
+              when a is
+                inn as outer -> 
+                  "#};
+        let (inner, url) = test_setup(suffix.clone()).await;
+        let position = Position::new(6, 7);
+        let reg = &inner.registry;
+
+        let change = suffix.clone() + "o";
+        inner.change(&url, change, 1).await.unwrap();
+        let comp1 = get_completion_labels(reg, &url, position).await;
+
+        let c = suffix.clone() + "i";
+        inner.change(&url, c, 2).await.unwrap();
+        let comp2 = get_completion_labels(reg, &url, position).await;
+
+        let actual = [comp1, comp2];
+        expect![[r#"
+            [
+                Some(
+                    [
+                        "outer",
+                    ],
+                ),
+                Some(
+                    [
+                        "inn",
+                        "outer",
+                    ],
+                ),
+            ]
+        "#]]
+        .assert_debug_eq(&actual)
+    }
+
+    ///Test that completion works properly when we apply an "as" pattern to a record
+    #[tokio::test]
+    async fn test_completion_as_record() {
+        let doc = DOC_LIT.to_string()
+            + indoc! {r#"
+            main =
+              when a is
+                {one,two} as outer -> 
+                  "#};
+
+        let (inner, url) = test_setup(doc.clone()).await;
+        let position = Position::new(6, 7);
+        let reg = &inner.registry;
+
+        let change = doc.clone() + "o";
+        inner.change(&url, change, 1).await.unwrap();
+        let comp1 = get_completion_labels(reg, &url, position).await;
+
+        let c = doc.clone() + "t";
+        inner.change(&url, c, 2).await.unwrap();
+        let comp2 = get_completion_labels(reg, &url, position).await;
+        let actual = [comp1, comp2];
+
+        expect![[r#"
+            [
+                Some(
+                    [
+                        "one",
+                        "two",
+                        "outer",
+                    ],
+                ),
+                Some(
+                    [
+                        "one",
+                        "two",
+                        "outer",
+                    ],
+                ),
+            ]
+        "#]]
+        .assert_debug_eq(&actual);
+    }
 }

@@ -5,7 +5,7 @@ app "rocdemo"
 
 interpolateString : Str -> Str
 interpolateString = \name ->
-    "Hello from Roc \(name)!!!🤘🤘🤘"
+    "Hello from Roc $(name)!!!🤘🤘🤘"
 
 # jint is i32
 mulArrByScalar : List I32, I32 -> List I32

@@ -149,7 +149,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
         let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
             panic!(
                 indoc!(
-                    r#"
+                    r"
                     failed to parse the `valgrind` xml output:
 
                         Error was:
@@ -167,7 +167,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                         valgrind stderr was:
 
                             {}
-                    "#
+                    "
                 ),
                 err, raw_xml, valgrind_out.stdout, valgrind_out.stderr
             );
@@ -214,7 +214,7 @@ fn list_concat_consumes_first_argument() {
 #[test]
 fn list_concat_consumes_second_argument() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a : List U8
             a = []
@@ -223,23 +223,13 @@ fn list_concat_consumes_second_argument() {
             |> List.len
             |> Num.toStr
         )
-        "#
+        "
     ));
 }
 
 #[test]
 fn str_capacity_concat() {
     valgrind_test(r#"Str.withCapacity 42 |> Str.concat "foobar""#);
-}
-
-#[test]
-fn append_scalar() {
-    valgrind_test(indoc!(
-        r#"
-        Str.appendScalar "abcd" 'A'
-            |> Result.withDefault ""
-        "#
-    ));
 }
 
 #[test]
@@ -273,7 +263,7 @@ fn str_concat_first_argument_not_unique() {
 #[test]
 fn list_concat_empty_list_zero_sized_type() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a = List.reserve [] 11
             b = []
@@ -281,7 +271,7 @@ fn list_concat_empty_list_zero_sized_type() {
             |> List.len
             |> Num.toStr
         )
-        "#
+        "
     ));
 }
 
@@ -316,7 +306,7 @@ fn str_trim_start_capacity() {
 #[test]
 fn str_concat_later_referencing_empty_list_with_capacity() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a : List U8
             a = List.withCapacity 1
@@ -326,7 +316,7 @@ fn str_concat_later_referencing_empty_list_with_capacity() {
             |> Num.addWrap (List.len a)
             |> Num.toStr
         )
-        "#
+        "
     ));
 }
 
@@ -355,7 +345,7 @@ fn joinpoint_with_closure() {
                 catSound = makeSound Cat
                 dogSound = makeSound Dog
                 gooseSound = makeSound Goose
-                "Cat: \(catSound), Dog: \(dogSound), Goose: \(gooseSound)"
+                "Cat: $(catSound), Dog: $(dogSound), Goose: $(gooseSound)"
 
             test
         )
@@ -384,7 +374,7 @@ fn joinpoint_with_reuse() {
                 Cons x xs ->
                     strX = f x
                     strXs = printLinkedList xs f
-                    "Cons \(strX) (\(strXs))"
+                    "Cons $(strX) ($(strXs))"
 
             test =
                 newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
@@ -471,7 +461,7 @@ fn tree_rebalance() {
                     sL = nodeInParens left showKey showValue
                     sR = nodeInParens right showKey showValue
 
-                    "Node \(sColor) \(sKey) \(sValue) \(sL) \(sR)"
+                    "Node $(sColor) $(sKey) $(sValue) $(sL) $(sR)"
 
         nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
         nodeInParens = \tree, showKey, showValue ->
@@ -482,7 +472,7 @@ fn tree_rebalance() {
                 Node _ _ _ _ _ ->
                     inner = showRBTree tree showKey showValue
 
-                    "(\(inner))"
+                    "($(inner))"
 
         showColor : NodeColor -> Str
         showColor = \color ->
@@ -504,7 +494,7 @@ fn tree_rebalance() {
 #[test]
 fn lowlevel_list_calls() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a = List.map [1,1,1,1,1] (\x -> x + 0)
             b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
@@ -514,7 +504,7 @@ fn lowlevel_list_calls() {
 
             Num.toStr (List.len e)
         )
-        "#
+        "
     ));
 }
 
@@ -531,7 +521,7 @@ fn joinpoint_nullpointer() {
                     Nil -> "Nil"
                     Cons x xs ->
                         strXs = printLinkedList xs
-                        "Cons \(x) (\(strXs))"
+                        "Cons $(x) ($(strXs))"
 
             linkedListHead : LinkedList Str -> LinkedList Str
             linkedListHead = \linkedList ->
@@ -543,9 +533,35 @@ fn joinpoint_nullpointer() {
             test =
                 cons = printLinkedList (linkedListHead (Cons "foo" Nil))
                 nil = printLinkedList (linkedListHead (Nil))
-                "\(cons) - \(nil)"
+                "$(cons) - $(nil)"
 
             test
+        )
+        "#
+    ));
+}
+
+#[test]
+fn freeing_boxes() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            # Without refcounted field
+            a : I32
+            a = 7
+                |> Box.box
+                |> Box.unbox
+
+            # With refcounted field
+            b : Str
+            b =
+                "Testing123. This will definitely be a large string that is on the heap."
+                |> Box.box
+                |> Box.unbox
+
+            a
+            |> Num.toStr
+            |> Str.concat b
         )
         "#
     ));

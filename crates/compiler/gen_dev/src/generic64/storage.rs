@@ -448,17 +448,26 @@ impl<
             }
             Stack(ReferencedPrimitive {
                 base_offset, size, ..
-            }) if base_offset % 8 == 0 && size == 8 => {
-                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
-                let reg = self.get_float_reg(buf);
-                ASM::mov_freg64_base32(buf, reg, base_offset);
-                self.float_used_regs.push((reg, *sym));
-                self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
-                self.free_reference(sym);
-                reg
-            }
-            Stack(ReferencedPrimitive { .. }) => {
-                todo!("loading referenced primitives")
+            }) => {
+                if base_offset % 8 == 0 && size == 8 {
+                    // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+                    let reg = self.get_float_reg(buf);
+                    ASM::mov_freg64_base32(buf, reg, base_offset);
+                    self.float_used_regs.push((reg, *sym));
+                    self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
+                    self.free_reference(sym);
+                    reg
+                } else if base_offset % 4 == 0 && size == 4 {
+                    // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+                    let reg = self.get_float_reg(buf);
+                    ASM::mov_freg32_base32(buf, reg, base_offset);
+                    self.float_used_regs.push((reg, *sym));
+                    self.symbol_storage_map.insert(*sym, Reg(Float(reg)));
+                    self.free_reference(sym);
+                    reg
+                } else {
+                    todo!("loading referenced primitives")
+                }
             }
             Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into float registers: {}", sym)
@@ -570,12 +579,15 @@ impl<
             }
             Stack(ReferencedPrimitive {
                 base_offset, size, ..
-            }) if base_offset % 8 == 0 && *size == 8 => {
-                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
-                ASM::mov_freg64_base32(buf, reg, *base_offset);
-            }
-            Stack(ReferencedPrimitive { .. }) => {
-                todo!("loading referenced primitives")
+            }) => {
+                if base_offset % 8 == 0 && *size == 8 {
+                    // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
+                    ASM::mov_freg64_base32(buf, reg, *base_offset);
+                } else if base_offset % 4 == 0 && *size == 4 {
+                    ASM::mov_freg32_base32(buf, reg, *base_offset);
+                } else {
+                    todo!("loading referenced primitives")
+                }
             }
             Stack(Complex { .. }) => {
                 internal_error!("Cannot load large values into float registers: {}", sym)

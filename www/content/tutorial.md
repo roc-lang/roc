@@ -142,7 +142,7 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
 
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
 
 This is syntax sugar for calling `Str.concat` several times, like so:
 
@@ -152,7 +152,7 @@ Str.concat greeting (Str.concat " there, " (Str.concat audience "!"))
 
 You can put entire single-line expressions inside the parentheses in string interpolation. For example:
 
-<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">\(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">$(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
 
 By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
 
@@ -164,7 +164,7 @@ Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -194,7 +194,7 @@ iguanas = 2
 total = Num.toStr (birds + iguanas)
 
 main =
-    Stdout.line "There are \(total) animals."
+    Stdout.line "There are $(total) animals."
 ```
 
 Now run `roc dev` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
@@ -211,7 +211,7 @@ A definition names an expression.
 - The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 - The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
-Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are \(total) animals."` refers to `total`.
+Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are $(total) animals."` refers to `total`.
 
 You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
@@ -234,7 +234,7 @@ iguanas = 2
 total = addAndStringify birds iguanas
 
 main =
-    Stdout.line "There are \(total) animals."
+    Stdout.line "There are $(total) animals."
 
 addAndStringify = \num1, num2 ->
     Num.toStr (num1 + num2)
@@ -499,7 +499,6 @@ This means you can choose to omit the `title`, `description`, or both fields, wh
 This is also the type that would have been inferred for `table` if no annotation
 had been written. Roc's compiler can tell from the destructuring syntax
 `title ? ""` that `title` is an optional field, and that it has the type `Str`.
-These default values can reference other expressions in the record destructure; if you wanted, you could write `{ height, width, title ? "", description ? Str.concat "A table called " title }`.
 
 Destructuring is the only way to implement a record with optional fields. For example, if you write the expression `config.title` and `title` is an
 optional field, you'll get a compile error.
@@ -849,7 +848,7 @@ Here's how calling `List.get` can look in practice:
 
 ```roc
 when List.get ["a", "b", "c"] index is
-    Ok str -> "I got this string: \(str)"
+    Ok str -> "I got this string: $(str)"
     Err OutOfBounds -> "That index was out of bounds, sorry!"
 ```
 
@@ -980,7 +979,7 @@ Sometimes you may want to document the type of a definition. For example, you mi
 ```roc
 # Takes a firstName string and a lastName string, and returns a string
 fullName = \firstName, lastName ->
-    "\(firstName) \(lastName)"
+    "$(firstName) $(lastName)"
 ```
 
 Comments can be valuable documentation, but they can also get out of date and become misleading. If someone changes this function and forgets to update the comment, it will no longer be accurate.
@@ -992,7 +991,7 @@ Here's another way to document this function's type, which doesn't have that pro
 ```roc
 fullName : Str, Str -> Str
 fullName = \firstName, lastName ->
-    "\(firstName) \(lastName)"
+    "$(firstName) $(lastName)"
 ```
 
 The `fullName :` line is a _type annotation_. It's a strictly optional piece of metadata we can add above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for accuracy. If the annotation ever doesn't fit with the implementation, we'll get a compile-time error.
@@ -1199,7 +1198,7 @@ Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
 - Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
-- Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+- Smaller integer sizes take up less memory. These savings rarely matter in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
 - Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 Here are the different fixed-size integer types that Roc supports:
@@ -1247,7 +1246,7 @@ There are some use cases where `F64` and `F32` can be better choices than `Dec` 
 
 ### [Num, Int, and Frac](#num-int-and-frac) {#num-int-and-frac}
 
-Some operations work on specific numeric types - such as `I64` or `Dec` - but operations support multiple numeric types. For example, the `Num.abs` function works on any number, since you can take the [absolute value](https://en.wikipedia.org/wiki/Absolute_value) of integers and fractions alike. Its type is:
+Some operations work on specific numeric types - such as `I64` or `Dec` - but some operations support multiple numeric types. For example, the `Num.abs` function works on any number, since you can take the [absolute value](https://en.wikipedia.org/wiki/Absolute_value) of integers and fractions alike. Its type is:
 
 ```roc
 abs : Num a -> Num a
@@ -1333,9 +1332,9 @@ pluralize = \singular, plural, count ->
     countStr = Num.toStr count
 
     if count == 1 then
-        "\(countStr) \(singular)"
+        "$(countStr) $(singular)"
     else
-        "\(countStr) \(plural)"
+        "$(countStr) $(plural)"
 
 expect pluralize "cactus" "cacti" 1 == "1 cactus"
 
@@ -1362,17 +1361,37 @@ pluralize = \singular, plural, count ->
     countStr = Num.toStr count
 
     if count == 1 then
-        "\(countStr) \(singular)"
+        "$(countStr) $(singular)"
     else
         expect count > 0
 
-        "\(countStr) \(plural)"
+        "$(countStr) $(plural)"
 ```
 
 This `expect` will fail if you call `pluralize` passing a count of 0.
 
-Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. In fact, if you do `roc build`, they are not even included in the final binary.
-So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
+Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. Different `roc` commands will also handle `expect`s differently:
+- `roc build` discards all `expect`s for optimal runtime performance.
+- `roc dev` only runs inline `expect`s that are encountered during normal execution of the program.
+- `roc test` runs top level `expect`s and inline `expect`s that are encountered because of the running of top level `expect`s.
+
+Let's clear up any confusion with an example:
+```roc
+main =
+    expect 1 == 2
+
+    Stdout.line "Hello, World!"
+
+double = \num ->
+    expect num > -1
+
+    num * 2
+
+expect double 0 == 0
+```
+- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hello, World!`.
+- `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hello, World!`.
+- `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
 
 ## [Modules](#modules) {#modules}
 
@@ -1404,7 +1423,7 @@ These modules are not ordinary `.roc` files that live on your filesystem. Rather
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
 - They are always imported. You never need to add them to `imports`.
-- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module.
+- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module).
 
 ### [App Module Header](#app-module-header) {#app-module-header}
 
@@ -1412,7 +1431,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1424,9 +1443,9 @@ The line `app "hello"` shows that this module is a Roc application. The "hello" 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+imports [pf.Stdout]
+provides [main] to pf
 ```
 
 The `packages { pf: "https://...tar.br" }` part says three things:
@@ -1455,7 +1474,7 @@ imports [pf.Stdout, AdditionalModule, AnotherModule]
 
 You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
 
-### [Package Modules](#interface-modules) {#interface-modules}
+### [Package Modules](#package-modules) {#package-modules}
 
 Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
@@ -1487,7 +1506,7 @@ Including the hash solves a number of problems:
 
 See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
 
-### [Platform Modules](#interface-modules) {#interface-modules}
+### [Platform Modules](#platform-modules) {#platform-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
@@ -1495,7 +1514,7 @@ See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples
 
 ### [Importing Files](#importing-files) {#importing-files}
 
-You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful for when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
+You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
 imports [
@@ -1523,7 +1542,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1557,16 +1576,16 @@ Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
 main =
     Task.await Stdin.line \input ->
-        Stdout.line "Your input was: \(Inspect.toStr input)"
+        Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
-The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value. It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but in a real program we'd run a `when` on `answer` and do something different depending on whether we got an `End` or `Input` tag.
+The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value. It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but in a real program we'd run a `when` on `input` and do something different depending on whether we got an `End` or `Input` tag.
 
 If you run this program, at first it won't do anything. It's waiting for you to type something in and press Enter! Once you do, it should print back out what you entered—either `Your input was: End` or `Your input was: Input <whatever you entered>` depending on whether you pressed Enter or the key combination to close stdin (namely Ctrl+D on UNIX or Ctrl+Z on Windows). Try doing it both ways to watch the output change!
 
@@ -1584,7 +1603,7 @@ The second argument to `Task.await` is a "callback function" which runs after th
 
 ```roc
 \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 Notice that, just like before, we're still building `main` from a single `Task`. This is how we'll always do it! We'll keep building up bigger and bigger `Task`s out of smaller tasks, and then setting `main` to be that one big `Task`.
@@ -1595,21 +1614,21 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 main =
     Task.await (Stdout.line "Type something press Enter:") \_ ->
         Task.await Stdin.line \input ->
-            Stdout.line "Your input was: \(Inspect.toStr input)"
+            Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 This works, but we can make it a little nicer to read. Let's change it to the following:
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
 main =
     await (Stdout.line "Type something press Enter:") \_ ->
         await Stdin.line \input ->
-            Stdout.line "Your input was: \(Inspect.toStr input)"
+            Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 Here we've changed how we're importing the `Task` module. Before it was `pf.Task` and now it's `pf.Task.{ await }`. The difference is that we're importing `await` in an _unqualified_ way, meaning that whenever we write `await` in this module, it will refer to `Task.await`. Now we no longer need to write `Task.` every time we want to use `await`.
@@ -1623,7 +1642,7 @@ main =
     _ <- await (Stdout.line "Type something press Enter:")
     input <- await Stdin.line
 
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 ## [Backpassing](#backpassing) {#backpassing}
@@ -1635,14 +1654,14 @@ Here, we're using backpassing to define two anonymous functions. Here's one of t
 ```roc
 input <-
 
-Stdout.line "Your input was: \(Inspect.toStr input)"
+Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 It may not look like it, but this code is defining an anonymous function! You might remember it as the anonymous function we previously defined like this:
 
 ```roc
 \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 These two anonymous functions are the same, just defined using different syntax.
@@ -1655,7 +1674,7 @@ Here's the original:
 
 ```roc
 await Stdin.line \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 And here's the equivalent expression with backpassing syntax:
@@ -1663,7 +1682,7 @@ And here's the equivalent expression with backpassing syntax:
 ```roc
 input <- await Stdin.line
 
-Stdout.line "Your input was: \(Inspect.toStr input)"
+Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 Here's the other function we're defining with backpassing:
@@ -1672,7 +1691,7 @@ Here's the other function we're defining with backpassing:
 _ <-
 input <- await Stdin.line
 
-Stdout.line "Your input was: \(Inspect.toStr input)"
+Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 We could also have written that function this way if we preferred:
@@ -1681,7 +1700,7 @@ We could also have written that function this way if we preferred:
 _ <-
 
 await Stdin.line \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 This is using a mix of a backpassing function `_ <-` and a normal function `\input ->`, which is totally allowed! Since backpassing is nothing more than syntax sugar for defining a function and passing back as an argument to another function, there's no reason we can't mix and match if we like.
@@ -1693,7 +1712,7 @@ main =
     _ <- await (Stdout.line "Type something press Enter:")
     input <- await Stdin.line
 
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 This way, it reads like a series of instructions:
@@ -1710,7 +1729,7 @@ Some important things to note about backpassing and `await`:
 
 See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
 
-## Examples
+## [Examples](#examples) {#examples}
 
 Well done on making it this far! 
 
@@ -1728,7 +1747,7 @@ Let's say I write a function which takes a record with a `firstName` and `lastNa
 
 ```roc
 fullName = \user ->
-    "\(user.firstName) \(user.lastName)"
+    "$(user.firstName) $(user.lastName)"
 ```
 
 I can pass this function a record that has more fields than just `firstName` and `lastName`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
@@ -1747,14 +1766,14 @@ If we add a type annotation to this `fullName` function, we can choose to have i
 # Closed record
 fullName : { firstName : Str, lastName : Str } -> Str
 fullName = \user ->
-    "\(user.firstName) \(user.lastName)"
+    "$(user.firstName) $(user.lastName)"
 ```
 
 ```roc
 # Open record (because of the `*`)
 fullName : { firstName : Str, lastName : Str }* -> Str
 fullName = \user ->
-    "\(user.firstName) \(user.lastName)"
+    "$(user.firstName) $(user.lastName)"
 ```
 
 The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
@@ -1770,7 +1789,7 @@ The type variable can also be a named type variable, like so:
 ```roc
 addHttps : { url : Str }a -> { url : Str }a
 addHttps = \record ->
-    { record & url: "https://\(record.url)" }
+    { record & url: "https://$(record.url)" }
 ```
 
 This function uses _constrained records_ in its type. The annotation is saying:

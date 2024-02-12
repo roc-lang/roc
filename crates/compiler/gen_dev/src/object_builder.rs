@@ -30,6 +30,28 @@ pub fn build_module<'a, 'r>(
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
+    let module_object = build_module_help(env, interns, layout_interner, target, procedures);
+
+    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
+        let module_out = module_object
+            .write()
+            .expect("failed to build output object");
+
+        let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
+        std::fs::write(&file_path, module_out).expect("failed to write object to file");
+    }
+
+    module_object
+}
+
+fn build_module_help<'a, 'r>(
+    env: &'r Env<'a>,
+    interns: &'r mut Interns,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    target: &Triple,
+    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
+) -> Object<'a> {
     match target {
         Triple {
             architecture: TargetArch::X86_64,
@@ -144,6 +166,30 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
 
     let symbol = Symbol {
         name: b"setlongjmp_buffer".to_vec(),
+        value: 0,
+        size: SIZE as u64,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(bss_section),
+        flags: SymbolFlags::None,
+    };
+
+    let symbol_id = output.add_symbol(symbol);
+    output.add_symbol_data(symbol_id, bss_section, &[0x00; SIZE], 8);
+
+    symbol_id
+}
+
+// needed to implement Crash when setjmp/longjmp is used
+fn define_panic_msg(output: &mut Object) -> SymbolId {
+    let bss_section = output.section_id(StandardSection::Data);
+
+    //  3 words for a RocStr
+    const SIZE: usize = 3 * core::mem::size_of::<u64>();
+
+    let symbol = Symbol {
+        name: b"panic_msg".to_vec(),
         value: 0,
         size: SIZE as u64,
         kind: SymbolKind::Data,
@@ -422,6 +468,7 @@ fn build_object<'a, B: Backend<'a>>(
     */
 
     if backend.env().mode.generate_roc_panic() {
+        define_panic_msg(&mut output);
         define_setlongjmp_buffer(&mut output);
 
         generate_roc_panic(&mut backend, &mut output);

@@ -67,7 +67,7 @@ fn str_split_empty_delimiter() {
             r#"
                     when List.first (Str.split "JJJ" "") is
                         Ok str ->
-                            Str.countGraphemes str
+                            Str.countUtf8Bytes str
 
                         _ ->
                             1729
@@ -97,7 +97,7 @@ fn str_split_bigger_delimiter_small_str() {
             r#"
                     when List.first (Str.split "JJJ" "JJJJ there") is
                         Ok str ->
-                            Str.countGraphemes str
+                            Str.countUtf8Bytes str
 
                         _ ->
                             1729
@@ -530,47 +530,10 @@ fn str_starts_with() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_starts_with_scalar() {
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "foobar" {}"#, 'f' as u32),
-        true,
-        bool
-    );
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "zoobar" {}"#, 'f' as u32),
-        false,
-        bool
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
     assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_count_graphemes_small_str() {
-    assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_count_graphemes_three_js() {
-    assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_count_graphemes_big_str() {
-    assert_evals_to!(
-        r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
-        45,
-        usize
-    );
 }
 
 #[test]
@@ -1627,103 +1590,6 @@ fn issue_2811() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn to_scalar_1_byte() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "R"
-            "#
-        ),
-        RocList::from_slice(&[82u32]),
-        RocList<u32>
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "Roc!"
-            "#
-        ),
-        RocList::from_slice(&[82u32, 111, 99, 33]),
-        RocList<u32>
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn to_scalar_2_byte() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "é"
-            "#
-        ),
-        RocList::from_slice(&[233u32]),
-        RocList<u32>
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "Cäfés"
-            "#
-        ),
-        RocList::from_slice(&[67u32, 228, 102, 233, 115]),
-        RocList<u32>
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn to_scalar_3_byte() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "鹏"
-            "#
-        ),
-        RocList::from_slice(&[40527u32]),
-        RocList<u32>
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "鹏很有趣"
-            "#
-        ),
-        RocList::from_slice(&[40527u32, 24456, 26377, 36259]),
-        RocList<u32>
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn to_scalar_4_byte() {
-    // from https://design215.com/toolbox/utf8-4byte-characters.php
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "𒀀"
-            "#
-        ),
-        RocList::from_slice(&[73728u32]),
-        RocList<u32>
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.toScalars "𒀀𒀁"
-            "#
-        ),
-        RocList::from_slice(&[73728u32, 73729u32]),
-        RocList<u32>
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_first_one_char() {
     assert_evals_to!(
         indoc!(
@@ -1875,11 +1741,11 @@ fn str_walk_utf8() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            Str.walkUtf8 "abcd" [] (\list, byte -> List.prepend list byte)
             "#
         ),
-        RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
-        RocList<(u32, char)>
+        RocList::from_slice(&[b'd', b'c', b'b', b'a']),
+        RocList<u8>
     );
 }
 
@@ -1906,34 +1772,6 @@ fn str_walk_utf8_with_index() {
         ),
         RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
         RocList<(u32, char)>
-    );
-}
-
-#[test]
-#[cfg(feature = "gen-llvm")]
-fn str_append_scalar() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.appendScalar "abcd" 'A'
-            "#
-        ),
-        RocStr::from("abcdA"),
-        RocStr
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_walk_scalars() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.walkScalars "abcd" [] List.append
-            "#
-        ),
-        RocList::from_slice(&['a', 'b', 'c', 'd']),
-        RocList<char>
     );
 }
 

@@ -78,3 +78,21 @@ If you're using coc.nvim and want to use the configuration above, be sure to als
 
 If you want to debug the server, use [debug_server.sh](./debug_server.sh)
 instead of the direct binary.
+
+If you would like to enable debug logging set the `ROCLS_LOG` environment variable to `debug` or `trace` for even more logs. 
+eg: `ROCLS_LOG=debug`  
+
+## Testing
+
+Tests use expect-test, which is a snapshot/expect testing framework.
+If a change is made that requires updating the expect tests run `cargo test` confirm that the diff is correct, then run `UPDATE_EXPECT=1 cargo test` to update the contents of the files with the new output.
+
+## Config
+
+You can set the environment variables below to control the operation of the language.
+
+`ROCLS_DEBOUNCE_MS`: Sets the amount of time to delay starting analysis of the document when a change comes in. This prevents starting pointless analysis while you are typing normally. 
+Default: `100`
+
+`ROCLS_LATEST_DOC_TIMEOUT_MS`: Sets the timeout for waiting for an analysis of the latest document to be complete. If a request is sent that needs the latest version of the document to be analyzed, then it will wait up to this duration before just giving up.
+Default: `5000`  

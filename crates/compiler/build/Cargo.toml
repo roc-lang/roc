@@ -12,6 +12,7 @@ roc_bitcode = { path = "../builtins/bitcode" }
 roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
 roc_constrain = { path = "../constrain" }
+roc_debug_flags = { path = "../debug_flags" }
 roc_error_macros = { path = "../../error_macros" }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_gen_llvm = { path = "../gen_llvm" }

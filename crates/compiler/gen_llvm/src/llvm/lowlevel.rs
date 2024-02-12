@@ -34,8 +34,8 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
-        list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
+        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len,
+        list_map, list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
         list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
         list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
@@ -153,18 +153,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
         }
-        StrToScalars => {
-            // Str.toScalars : Str -> List U32
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_TO_SCALARS,
-            )
-        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             arguments!(string, prefix);
@@ -175,18 +163,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[],
                 BitcodeReturns::Basic,
                 bitcode::STR_STARTS_WITH,
-            )
-        }
-        StrStartsWithScalar => {
-            // Str.startsWithScalar : Str, U32 -> Bool
-            arguments!(string, prefix);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[prefix],
-                BitcodeReturns::Basic,
-                bitcode::STR_STARTS_WITH_SCALAR,
             )
         }
         StrEndsWith => {
@@ -545,102 +521,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             );
             BasicValueEnum::IntValue(is_zero)
         }
-        StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Nat
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::Basic,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
-            )
-        }
-        StrGetScalarUnsafe => {
-            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
-            arguments!(string, index);
-
-            let roc_return_type =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-
-            use roc_target::Architecture::*;
-            use roc_target::OperatingSystem::*;
-            match env.target_info {
-                TargetInfo {
-                    operating_system: Windows,
-                    ..
-                } => {
-                    let result = env.builder.new_build_alloca(roc_return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[result.into(), string, index],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let cast_result = env.builder.new_build_pointer_cast(
-                        result,
-                        roc_return_type.ptr_type(AddressSpace::default()),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(roc_return_type, cast_result, "load_result")
-                }
-                TargetInfo {
-                    architecture: Wasm32,
-                    ..
-                } => {
-                    let result = env.builder.new_build_alloca(roc_return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[
-                            result.into(),
-                            pass_string_to_zig_wasm(env, string).into(),
-                            index,
-                        ],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let cast_result = env.builder.new_build_pointer_cast(
-                        result,
-                        roc_return_type.ptr_type(AddressSpace::default()),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(roc_return_type, cast_result, "load_result")
-                }
-                TargetInfo {
-                    operating_system: Unix,
-                    ..
-                } => {
-                    let result = call_str_bitcode_fn(
-                        env,
-                        &[string],
-                        &[index],
-                        BitcodeReturns::Basic,
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    // zig will pad the struct to the alignment boundary, or bitpack it on 32-bit
-                    // targets. So we have to cast it to the format that the roc code expects
-                    let alloca = env
-                        .builder
-                        .new_build_alloca(result.get_type(), "to_roc_record");
-                    env.builder.new_build_store(alloca, result);
-
-                    env.builder
-                        .new_build_load(roc_return_type, alloca, "to_roc_record")
-                }
-                TargetInfo {
-                    operating_system: Wasi,
-                    ..
-                } => unimplemented!(),
-            }
-        }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
             arguments!(string);
@@ -652,12 +532,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 BitcodeReturns::Basic,
                 bitcode::STR_COUNT_UTF8_BYTES,
             )
-        }
-        StrGetCapacity => {
-            // Str.capacity : Str -> Nat
-            arguments!(string);
-
-            call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
         }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str
@@ -693,18 +567,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[],
                 BitcodeReturns::Str,
                 bitcode::STR_RELEASE_EXCESS_CAPACITY,
-            )
-        }
-        StrAppendScalar => {
-            // Str.appendScalar : Str, U32 -> Str
-            arguments!(string, capacity);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[capacity],
-                BitcodeReturns::Str,
-                bitcode::STR_APPEND_SCALAR,
             )
         }
         StrTrim => {
@@ -747,18 +609,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[str_len],
                 BitcodeReturns::Str,
                 bitcode::STR_WITH_CAPACITY,
-            )
-        }
-        StrGraphemes => {
-            // Str.graphemes : Str -> List Str
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_GRAPHEMES,
             )
         }
         ListLen => {
@@ -961,6 +811,31 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 BitcodeReturns::Basic,
                 bitcode::LIST_IS_UNIQUE,
             )
+        }
+        ListClone => {
+            // List.clone : List a -> List a
+            arguments_with_layouts!((list, list_layout));
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+
+            match update_mode {
+                UpdateMode::Immutable => {
+                    //
+                    call_list_bitcode_fn(
+                        env,
+                        &[list.into_struct_value()],
+                        &[
+                            env.alignment_intvalue(layout_interner, element_layout),
+                            layout_width(env, layout_interner, element_layout),
+                        ],
+                        BitcodeReturns::List,
+                        bitcode::LIST_CLONE,
+                    )
+                }
+                UpdateMode::InPlace => {
+                    // we statically know the list is unique
+                    list
+                }
+            }
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
@@ -1853,6 +1728,11 @@ fn build_float_binop<'ctx>(
 
     let bd = env.builder;
 
+    let float_type = match float_width {
+        FloatWidth::F32 => env.context.f32_type(),
+        FloatWidth::F64 => env.context.f64_type(),
+    };
+
     match op {
         NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
@@ -1865,10 +1745,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1894,10 +1772,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1924,10 +1800,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -2179,6 +2053,54 @@ fn dec_unary_op<'ctx>(
     }
 }
 
+fn dec_binary_op<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    fn_name: &str,
+    dec1: BasicValueEnum<'ctx>,
+    dec2: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
+    use roc_target::OperatingSystem::*;
+
+    let dec1 = dec1.into_int_value();
+    let dec2 = dec2.into_int_value();
+
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
+            let (low1, high1) = dec_split_into_words(env, dec1);
+            let (low2, high2) = dec_split_into_words(env, dec2);
+            let lowr_highr = call_bitcode_fn(
+                env,
+                &[low1.into(), high1.into(), low2.into(), high2.into()],
+                fn_name,
+            );
+
+            let block = env.builder.get_insert_block().expect("to be in a function");
+            let parent = block.get_parent().expect("to be in a function");
+
+            let ptr =
+                create_entry_block_alloca(env, parent, env.context.i128_type().into(), "to_i128");
+            env.builder.build_store(ptr, lowr_highr).unwrap();
+
+            env.builder
+                .build_load(env.context.i128_type(), ptr, "to_i128")
+                .unwrap()
+        }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[dec1.into(), dec2.into()], fn_name),
+        _ => call_bitcode_fn(
+            env,
+            &[dec_alloca(env, dec1), dec_alloca(env, dec2)],
+            fn_name,
+        ),
+    }
+}
+
 fn dec_binop_with_overflow<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
@@ -2309,10 +2231,12 @@ fn build_dec_unary_op<'a, 'ctx>(
     _layout_interner: &STLayoutInterner<'a>,
     _parent: FunctionValue<'ctx>,
     arg: BasicValueEnum<'ctx>,
-    _return_layout: InLayout<'a>,
+    return_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
+
+    let int_width = || return_layout.to_int_width();
 
     match op {
         NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
@@ -2322,6 +2246,10 @@ fn build_dec_unary_op<'a, 'ctx>(
         NumCos => dec_unary_op(env, bitcode::DEC_COS, arg),
         NumSin => dec_unary_op(env, bitcode::DEC_SIN, arg),
         NumTan => dec_unary_op(env, bitcode::DEC_TAN, arg),
+
+        NumRound => dec_unary_op(env, &bitcode::DEC_ROUND[int_width()], arg),
+        NumFloor => dec_unary_op(env, &bitcode::DEC_FLOOR[int_width()], arg),
+        NumCeiling => dec_unary_op(env, &bitcode::DEC_CEILING[int_width()], arg),
 
         _ => {
             unreachable!("Unrecognized dec unary operation: {:?}", op);
@@ -2391,6 +2319,7 @@ fn build_dec_binop<'a, 'ctx>(
             &[lhs, rhs],
             &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128],
         ),
+        NumPow => dec_binary_op(env, bitcode::DEC_POW, lhs, rhs),
         _ => {
             unreachable!("Unrecognized dec binary operation: {:?}", op);
         }
@@ -2804,42 +2733,39 @@ fn build_float_unary_op<'a, 'ctx>(
                 LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
             };
-            match float_width {
-                FloatWidth::F32 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F32[int_width])
-                }
-                FloatWidth::F64 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F64[int_width])
-                }
-            }
+
+            let intrinsic = match float_width {
+                FloatWidth::F32 => &bitcode::NUM_CEILING_F32[int_width],
+                FloatWidth::F64 => &bitcode::NUM_CEILING_F64[int_width],
+            };
+
+            call_bitcode_fn(env, &[arg.into()], intrinsic)
         }
         NumFloor => {
             let int_width = match layout_interner.get_repr(layout) {
                 LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Floor return layout is not int: {:?}", layout),
             };
-            match float_width {
-                FloatWidth::F32 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F32[int_width])
-                }
-                FloatWidth::F64 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F64[int_width])
-                }
-            }
+
+            let intrinsic = match float_width {
+                FloatWidth::F32 => &bitcode::NUM_FLOOR_F32[int_width],
+                FloatWidth::F64 => &bitcode::NUM_FLOOR_F64[int_width],
+            };
+
+            call_bitcode_fn(env, &[arg.into()], intrinsic)
         }
         NumRound => {
             let int_width = match layout_interner.get_repr(layout) {
                 LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Round return layout is not int: {:?}", layout),
             };
-            match float_width {
-                FloatWidth::F32 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F32[int_width])
-                }
-                FloatWidth::F64 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F64[int_width])
-                }
-            }
+
+            let intrinsic = match float_width {
+                FloatWidth::F32 => &bitcode::NUM_ROUND_F32[int_width],
+                FloatWidth::F64 => &bitcode::NUM_ROUND_F64[int_width],
+            };
+
+            call_bitcode_fn(env, &[arg.into()], intrinsic)
         }
         NumIsNan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_NAN[float_width]),
         NumIsInfinite => {

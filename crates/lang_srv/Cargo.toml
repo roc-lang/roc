@@ -7,6 +7,10 @@ edition = "2021"
 name = "roc_language_server"
 path = "src/server.rs"
 
+[dev-dependencies]
+expect-test = "1.4.1"
+
+
 [dependencies]
 roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
@@ -27,3 +31,6 @@ parking_lot.workspace = true
 
 tower-lsp = "0.17.0"
 tokio = { version = "1.20.1", features = [ "rt", "rt-multi-thread", "macros", "io-std" ] }
+log.workspace = true
+indoc.workspace=true
+env_logger = "0.10.1"

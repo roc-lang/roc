@@ -364,7 +364,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LineInfo {
     line_offsets: Vec<u32>,
 }

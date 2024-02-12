@@ -48,6 +48,7 @@ interface Num
         isLte,
         isGt,
         isGte,
+        isApproxEq,
         sin,
         cos,
         tan,
@@ -661,6 +662,22 @@ isLte : Num a, Num a -> Bool
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
 
+## Returns `Bool.true` if the first number and second number are within a specific threshold
+##
+## A specific relative and absolute tolerance can be provided to change the threshold
+##
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
+isApproxEq = \value, refValue, { rtol ? 0.00001, atol ? 0.00000001 } -> value
+    <= refValue
+    && value
+    >= refValue
+    || Num.absDiff value refValue
+    <= atol
+    + rtol
+    * Num.abs refValue
+
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
 
@@ -985,13 +1002,21 @@ divCeilChecked = \a, b ->
 ## Num.divTrunc 8 -3
 ## ```
 divTrunc : Int a, Int a -> Int a
+divTrunc = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.divTruncUnchecked a b
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divTruncChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.divTrunc a b)
+        Ok (Num.divTruncUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+divTruncUnchecked : Int a, Int a -> Int a
 
 ## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
@@ -1006,13 +1031,21 @@ divTruncChecked = \a, b ->
 ## Num.rem -8 -3
 ## ```
 rem : Int a, Int a -> Int a
+rem = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.remUnchecked a b
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]
 remChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.rem a b)
+        Ok (Num.remUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+remUnchecked : Int a, Int a -> Int a
 
 isMultipleOf : Int a, Int a -> Bool
 
