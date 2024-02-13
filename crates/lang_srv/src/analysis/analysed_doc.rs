@@ -13,9 +13,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analysis::completion::{
-        field_completion, get_completion_items, get_upper_case_completion_items,
-    },
+    analysis::completion::{field_completion, get_completion_items, get_module_completion_items},
     convert::{ToRange, ToRocPosition},
 };
 
@@ -242,7 +240,7 @@ impl AnalyzedDocument {
                 .unwrap_or(false);
             if is_module_completion {
                 info!("Getting module dot completion");
-                Some(get_upper_case_completion_items(
+                Some(get_module_completion_items(
                     symbol_prefix,
                     interns,
                     imports,
@@ -267,7 +265,7 @@ impl AnalyzedDocument {
                 .map_or(false, |c| c.is_uppercase());
             if is_module_or_type_completion {
                 info!("Getting module completion");
-                let completions = get_upper_case_completion_items(
+                let completions = get_module_completion_items(
                     symbol_prefix,
                     interns,
                     imports,

@@ -40,6 +40,38 @@ pub(super) struct ModulesInfo {
     exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
 }
 
+impl ModulesInfo {
+    fn with_subs<F, A>(&self, mod_id: &ModuleId, f: F) -> Option<A>
+    where
+        F: FnOnce(&mut Subs) -> A,
+    {
+        self.subs.lock().get_mut(mod_id).map(f)
+    }
+    ///Transforms some of the raw data from the analysis into a state that is more useful during processes like completion
+    fn from_analysis(
+        exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
+        typechecked: &MutMap<ModuleId, CheckedModule>,
+    ) -> ModulesInfo {
+        //We wrap this in arc because later we will go through each module's imports and store the full list of symbols that each imported module exposes.
+        //eg: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
+        let exposed = exposes
+            .into_iter()
+            .map(|(id, symbols)| (id, Arc::new(symbols)))
+            .collect::<HashMap<_, _>>();
+        //Combine the subs from all modules
+        let all_subs = Mutex::new(
+            typechecked
+                .iter()
+                .map(|(k, v)| (*k, v.solved_subs.0.clone()))
+                .collect::<HashMap<_, _>>(),
+        );
+        ModulesInfo {
+            subs: all_subs,
+            exposed,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzedModule {
     exposed_imports: Vec<(Symbol, Variable)>,
@@ -122,7 +154,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
 
     let exposed_imports = resolve_exposed_imports(exposed_imports, &exposes);
 
-    let modules_info = Arc::new(make_modules_info(exposes, &typechecked));
+    let modules_info = Arc::new(ModulesInfo::from_analysis(exposes, &typechecked));
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
         module_id_to_url: module_id_to_url_from_sources(&sources),
@@ -150,6 +182,13 @@ fn resolve_exposed_imports(
     exposed_imports: MutMap<ModuleId, MutMap<Symbol, roc_region::all::Region>>,
     exposes: &MutMap<ModuleId, Vec<(Symbol, Variable)>>,
 ) -> HashMap<ModuleId, Vec<(Symbol, Variable)>> {
+    let get_exposed_symbol_info = |symbol: &Symbol, module_id: &ModuleId| {
+        exposes
+            .get(module_id)?
+            .iter()
+            .find(|(symb, _)| symb == symbol)
+    };
+
     exposed_imports
         .into_iter()
         .map(|(module_id, symbols)| {
@@ -157,40 +196,12 @@ fn resolve_exposed_imports(
                 module_id,
                 symbols
                     .into_iter()
-                    .filter_map(|(symbol, _)| {
-                        exposes.get(&module_id)?.iter().find(|(symb, _)| {
-                            //TODO this seems to not be comparing properly so we aren't getting any exposed imports
-                            symb == &symbol
-                        })
-                    })
+                    .filter_map(|(symbol, _)| get_exposed_symbol_info(&symbol, &module_id))
                     .cloned()
                     .collect::<Vec<_>>(),
             )
         })
         .collect()
-}
-///Transforms some of the raw data from the analysis into a state that is more useful during processes like completion
-fn make_modules_info(
-    exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
-    typechecked: &MutMap<ModuleId, CheckedModule>,
-) -> ModulesInfo {
-    //We wrap this in arc because later we will go through each module's imports and store the full list of symbols that each imported module exposes.
-    //eg: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
-    let exposed = exposes
-        .into_iter()
-        .map(|(id, symbols)| (id, Arc::new(symbols)))
-        .collect::<HashMap<_, _>>();
-    //Combine the subs from all modules
-    let all_subs = Mutex::new(
-        typechecked
-            .iter()
-            .map(|(k, v)| (*k, v.solved_subs.0.clone()))
-            .collect::<HashMap<_, _>>(),
-    );
-    ModulesInfo {
-        subs: all_subs,
-        exposed,
-    }
 }
 
 fn find_src_dir(path: &Path) -> &Path {
@@ -275,6 +286,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
                 )
             })
             .collect::<HashMap<_, _>>();
+
         let exposed_imports = self.exposed_imports.remove(&module_id).unwrap_or_default();
 
         if let Some(m) = self.typechecked.remove(&module_id) {

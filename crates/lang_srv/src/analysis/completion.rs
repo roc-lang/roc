@@ -321,60 +321,68 @@ pub fn get_completion_items(
             .collect(),
     )
 }
-pub(super) fn get_upper_case_completion_items(
+pub(super) fn get_module_completion_items(
     prefix: String,
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     modules_info: &ModulesInfo,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
-    let module_completions = imported_modules.iter().flat_map(|(mod_id, vars)| {
-        let mod_name = mod_id.to_ident_str(interns).to_string();
+    let module_completions = imported_modules
+        .iter()
+        .flat_map(|(mod_id, exposed_symbols)| {
+            let mod_name = mod_id.to_ident_str(interns).to_string();
 
-        if mod_name.starts_with(&prefix) {
-            let item = CompletionItem {
-                label: mod_name.clone(),
-                kind: Some(CompletionItemKind::MODULE),
-                documentation: Some(formatting::module_documentation(
-                    formatting::DescriptionsType::Exposes,
-                    mod_id,
-                    interns,
-                    modules_info,
-                )),
-                ..Default::default()
-            };
-            vec![item]
-        //Complete dot completions
-        } else if prefix.starts_with(&(mod_name + ".")) {
-            vars.clone()
-                .iter()
-                .map(|(sym, var)| {
-                    //We need to fetch the subs for the module that is exposing what we are trying to complete because that will have the type info we need
-                    modules_info
-                        .subs
-                        .lock()
-                        .get_mut(mod_id)
-                        .map(|subs| {
-                            make_completion_item(
-                                subs,
-                                mod_id,
-                                interns,
-                                sym.as_str(interns).to_string(),
-                                *var,
-                            )
-                        })
-                        .expect("Couldn't find subs for module during completion.")
-                })
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        }
-    });
+            if mod_name.starts_with(&prefix) {
+                let item = CompletionItem {
+                    label: mod_name.clone(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    documentation: Some(formatting::module_documentation(
+                        formatting::DescriptionsType::Exposes,
+                        mod_id,
+                        interns,
+                        exposed_symbols,
+                        modules_info,
+                    )),
+                    ..Default::default()
+                };
+                vec![item]
+            //Complete dot completions
+            } else if prefix.starts_with(&(mod_name + ".")) {
+                get_module_exposed_completion(exposed_symbols, modules_info, mod_id, interns)
+            } else {
+                vec![]
+            }
+        });
     if just_modules {
         return module_completions.collect();
     }
-
     module_completions.collect()
+}
+
+fn get_module_exposed_completion(
+    exposed_symbols: &Vec<(Symbol, Variable)>,
+    modules_info: &ModulesInfo,
+    mod_id: &ModuleId,
+    interns: &Interns,
+) -> Vec<CompletionItem> {
+    exposed_symbols
+        .iter()
+        .map(|(sym, var)| {
+            //We need to fetch the subs for the module that is exposing what we are trying to complete because that will have the type info we need
+            modules_info
+                .with_subs(mod_id, |subs| {
+                    make_completion_item(
+                        subs,
+                        mod_id,
+                        interns,
+                        sym.as_str(interns).to_string(),
+                        *var,
+                    )
+                })
+                .expect("Couldn't find subs for module during completion.")
+        })
+        .collect::<Vec<_>>()
 }
 
 ///Provides a list of completions for Type aliases within the scope.
