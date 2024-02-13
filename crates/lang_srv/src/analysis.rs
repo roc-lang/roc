@@ -33,7 +33,7 @@ use self::{analysed_doc::ModuleIdToUrl, tokens::Token};
 
 pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 
-///Contains maps of info about all modules that were analyved
+///Contains maps of info about all modules that were analyzed
 #[derive(Debug)]
 pub(super) struct ModulesInfo {
     subs: Mutex<HashMap<ModuleId, Subs>>,
