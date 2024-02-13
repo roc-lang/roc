@@ -9,7 +9,7 @@ fn module_exposed_list(
     module_id: &ModuleId,
     interns: &Interns,
     modules_info: &ModulesInfo,
-    exposed: &Vec<(Symbol, Variable)>,
+    exposed: &[(Symbol, Variable)],
 ) -> Option<std::string::String> {
     modules_info.with_subs(module_id, |subs| {
         let items = exposed
@@ -38,7 +38,7 @@ pub(super) fn module_documentation(
     description_type: DescriptionsType,
     module_id: &ModuleId,
     interns: &Interns,
-    exposed: &Vec<(Symbol, Variable)>,
+    exposed: &[(Symbol, Variable)],
     modules_info: &ModulesInfo,
 ) -> Documentation {
     let exposed_string =

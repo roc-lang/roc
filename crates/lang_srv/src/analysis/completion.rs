@@ -306,7 +306,7 @@ pub fn get_completion_items(
     subs: &mut Subs,
     module_id: &ModuleId,
     interns: &Interns,
-    exposed_imports: &Vec<(Symbol, Variable)>,
+    exposed_imports: &[(Symbol, Variable)],
 ) -> Vec<CompletionItem> {
     let mut completions = get_completions(position, decls, prefix, interns);
     completions.extend(exposed_imports);
@@ -361,7 +361,7 @@ pub(super) fn get_module_completion_items(
 }
 
 fn get_module_exposed_completion(
-    exposed_symbols: &Vec<(Symbol, Variable)>,
+    exposed_symbols: &[(Symbol, Variable)],
     modules_info: &ModulesInfo,
     mod_id: &ModuleId,
     interns: &Interns,
