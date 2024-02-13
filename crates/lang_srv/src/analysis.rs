@@ -15,10 +15,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
-use roc_types::{
-    subs::{Subs, Variable},
-    types::Alias,
-};
+use roc_types::subs::{Subs, Variable};
 
 use tower_lsp::lsp_types::{Diagnostic, SemanticTokenType, Url};
 
@@ -48,7 +45,6 @@ pub(super) struct AnalyzedModule {
     exposed_imports: Vec<(Symbol, Variable)>,
     ///This modules imports grouped by which module they come from
     imports: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    _aliases: MutMap<Symbol, (bool, Alias)>,
     module_id: ModuleId,
     interns: Interns,
     subs: Subs,
@@ -261,7 +257,6 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let subs;
         let abilities;
         let declarations;
-        let aliases;
 
         //lookup the type info for each import from the module where it was exposed
         let imports = self
@@ -286,19 +281,16 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             subs = m.solved_subs.into_inner();
             abilities = m.abilities_store;
             declarations = m.decls;
-            aliases = m.aliases;
         } else {
             let rm = self.root_module.take().unwrap();
             subs = rm.subs;
             abilities = rm.abilities_store;
             declarations = self.declarations_by_id.remove(&module_id).unwrap();
-            aliases = HashMap::default();
         }
 
         let analyzed_module = AnalyzedModule {
             exposed_imports,
             imports,
-            _aliases: aliases,
             subs,
             abilities,
             declarations,
