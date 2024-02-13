@@ -320,7 +320,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         &mut self,
         imports: MutSet<ModuleId>,
     ) -> HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>> {
-        let imports = imports
+        imports
             .into_iter()
             .map(|id| {
                 (
@@ -332,8 +332,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
                         .clone(),
                 )
             })
-            .collect::<HashMap<_, _>>();
-        imports
+            .collect::<HashMap<_, _>>()
     }
 
     fn build_diagnostics(
