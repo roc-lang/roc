@@ -270,22 +270,8 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let declarations;
 
         //lookup the type info for each import from the module where it was exposed
-        let imports = self
-            .imports
-            .remove(&module_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| {
-                (
-                    id,
-                    self.modules_info
-                        .exposed
-                        .get(&id)
-                        .unwrap_or(&Arc::new(vec![]))
-                        .clone(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+        let this_imports = self.imports.remove(&module_id).unwrap_or_default();
+        let imports = self.get_symbols_for_imports(this_imports);
 
         let exposed_imports = self.exposed_imports.remove(&module_id).unwrap_or_default();
 
@@ -327,6 +313,27 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
                 diagnostics,
             },
         }
+    }
+
+    ///Gets the exposed symbols, and type info for each imported module
+    fn get_symbols_for_imports(
+        &mut self,
+        imports: MutSet<ModuleId>,
+    ) -> HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>> {
+        let imports = imports
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    self.modules_info
+                        .exposed
+                        .get(&id)
+                        .unwrap_or(&Arc::new(vec![]))
+                        .clone(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        imports
     }
 
     fn build_diagnostics(
