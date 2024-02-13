@@ -1146,10 +1146,14 @@ pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
 
-pub fn substringUnsafe(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
+pub fn substringUnsafeC(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
     const start: usize = @intCast(start_u64);
     const length: usize = @intCast(length_u64);
 
+    return substringUnsafe(string, start, length);
+}
+
+fn substringUnsafe(string: RocStr, start: usize, length: usize) RocStr {
     if (string.isSmallStr()) {
         if (start == 0) {
             var output = string;
@@ -1181,7 +1185,7 @@ pub fn substringUnsafe(string: RocStr, start_u64: u64, length_u64: u64) callconv
     return RocStr.empty();
 }
 
-pub fn getUnsafe(string: RocStr, index: u64) callconv(.C) u8 {
+pub fn getUnsafeC(string: RocStr, index: u64) callconv(.C) u8 {
     return string.getUnchecked(@intCast(index));
 }
 
@@ -1245,7 +1249,7 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 }
 
 // Str.repeat
-pub fn repeat(string: RocStr, count_u64: u64) callconv(.C) RocStr {
+pub fn repeatC(string: RocStr, count_u64: u64) callconv(.C) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -1514,17 +1518,24 @@ const CountAndStart = extern struct {
 
 pub fn fromUtf8RangeC(
     list: RocList,
-    start: u64,
-    count: u64,
+    start_u64: u64,
+    count_u64: u64,
     update_mode: UpdateMode,
 ) callconv(.C) FromUtf8Result {
-    return fromUtf8Range(list, start, count, update_mode);
+    return fromUtf8Range(list, @intCast(start_u64), @intCast(count_u64), update_mode);
 }
 
-pub fn fromUtf8Range(arg: RocList, start_u64: u64, count_u64: u64, update_mode: UpdateMode) FromUtf8Result {
-    const start: usize = @intCast(start_u64);
-    const count: usize = @intCast(count_u64);
+test "fromUtf8RangeC(\"hello\", 1, 3)" {
+    const original_bytes = "hello";
+    const list = RocList.fromSlice(u8, original_bytes[0..]);
+    const result = fromUtf8RangeC(list, 1, 3, UpdateMode.Immutable);
 
+    try expectEqual(result.is_ok, true);
+
+    result.string.decref();
+}
+
+pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
     if (arg.len() == 0 or count == 0) {
         arg.decref(RocStr.alignment);
         return FromUtf8Result{
@@ -2374,9 +2385,12 @@ test "capacity: big string" {
     try expect(data.getCapacity() >= data_bytes.len);
 }
 
-pub fn reserve(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
+pub fn reserveC(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
+    return reserve(string, @intCast(spare_u64));
+}
+
+fn reserve(string: RocStr, spare: usize) RocStr {
     const old_length = string.len();
-    const spare: usize = @intCast(spare_u64);
 
     if (string.getCapacity() >= old_length + spare) {
         return string;
@@ -2387,11 +2401,12 @@ pub fn reserve(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
     }
 }
 
-pub fn withCapacity(capacity: u64) callconv(.C) RocStr {
+pub fn withCapacityC(capacity: u64) callconv(.C) RocStr {
     var str = RocStr.allocate(@intCast(capacity));
     str.setLen(0);
     return str;
 }
+
 pub fn strCloneTo(
     string: RocStr,
     ptr: [*]u8,

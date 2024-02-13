@@ -192,17 +192,17 @@ comptime {
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strEqual, "equal");
-    exportStrFn(str.substringUnsafe, "substring_unsafe");
-    exportStrFn(str.getUnsafe, "get_unsafe");
-    exportStrFn(str.reserve, "reserve");
+    exportStrFn(str.substringUnsafeC, "substring_unsafe");
+    exportStrFn(str.getUnsafeC, "get_unsafe");
+    exportStrFn(str.reserveC, "reserve");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
-    exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.repeatC, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimStart, "trim_start");
     exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
-    exportStrFn(str.withCapacity, "with_capacity");
+    exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 

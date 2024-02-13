@@ -965,7 +965,7 @@ fn str_from_utf8_range_order_does_not_matter() {
             bytes = Str.toUtf8 "hello"
             when Str.fromUtf8Range bytes { start: 1,  count: 3 }  is
                    Ok utf8String -> utf8String
-                   _ -> ""
+                   Err _ -> "Str.fromUtf8Range returned Err instead of Ok!"
             "#
         ),
         RocStr::from("ell"),

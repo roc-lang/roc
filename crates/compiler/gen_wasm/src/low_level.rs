@@ -232,8 +232,8 @@ impl<'a> LowLevelCall<'a> {
 
                     output: *FromUtf8Result   i32
                     arg: RocList              i32
-                    start                     i32
-                    count                     i32
+                    start                     i64
+                    count                     i64
                     update_mode: UpdateMode   i32
                 */
 
