@@ -41,9 +41,8 @@ impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
         // Theory: a pattern should only be multiline when it contains a comment
         match self {
-            Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
-                //TODO: This isn't always true, should it be?
-                // debug_assert!(!spaces.is_empty());
+            Pattern::SpaceBefore(a, spaces) | Pattern::SpaceAfter(a, spaces) => {
+                debug_assert!(!spaces.is_empty(), "spaces is empty in pattern {:#?}", a);
 
                 spaces.iter().any(|s| s.is_comment())
             }

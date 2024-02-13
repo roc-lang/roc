@@ -136,10 +136,6 @@ pub struct TypeCheckedModule<'a> {
 
 #[derive(Debug)]
 pub struct CheckedModule {
-    /// all aliases and their definitions. this has to include non-exposed aliases
-    /// because exposed aliases can depend on non-exposed ones)
-    pub aliases: MutMap<Symbol, (bool, Alias)>,
-
     pub solved_subs: Solved<Subs>,
     pub decls: Declarations,
     pub abilities_store: AbilitiesStore,

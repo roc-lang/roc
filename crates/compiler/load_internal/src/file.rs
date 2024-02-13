@@ -2745,7 +2745,6 @@ fn update<'a>(
                     state.module_cache.checked.insert(
                         module_id,
                         CheckedModule {
-                            aliases: solved_module.aliases,
                             solved_subs,
                             decls,
                             abilities_store,
