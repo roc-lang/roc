@@ -1963,7 +1963,7 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
 
             alloca.into()
         }
-        Unix => {
+        Linux | MacOS => {
             if matches!(env.target_info.architecture, X86_32 | X86_64) {
                 internal_error!("X86 unix does not pass with a dec alloc instead it splits into high and low halves");
             }
@@ -1996,7 +1996,7 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
     match env.target_info {
         TargetInfo {
             architecture: X86_64 | X86_32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => {
             let (low, high) = dec_split_into_words(env, dec);
 
@@ -2010,7 +2010,7 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
         }
         TargetInfo {
             architecture: Wasm32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => call_str_bitcode_fn(
             env,
             &[],
@@ -2040,14 +2040,14 @@ fn dec_unary_op<'ctx>(
     match env.target_info {
         TargetInfo {
             architecture: X86_64 | X86_32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => {
             let (low, high) = dec_split_into_words(env, dec);
             call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
         }
         TargetInfo {
             architecture: Wasm32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => call_bitcode_fn(env, &[dec.into()], fn_name),
         _ => call_bitcode_fn(env, &[dec_alloca(env, dec)], fn_name),
     }
@@ -2068,7 +2068,7 @@ fn dec_binary_op<'ctx>(
     match env.target_info {
         TargetInfo {
             architecture: X86_64 | X86_32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => {
             let (low1, high1) = dec_split_into_words(env, dec1);
             let (low2, high2) = dec_split_into_words(env, dec2);
@@ -2091,7 +2091,7 @@ fn dec_binary_op<'ctx>(
         }
         TargetInfo {
             architecture: Wasm32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => call_bitcode_fn(env, &[dec1.into(), dec2.into()], fn_name),
         _ => call_bitcode_fn(
             env,
@@ -2119,7 +2119,7 @@ fn dec_binop_with_overflow<'ctx>(
     match env.target_info {
         TargetInfo {
             architecture: X86_64 | X86_32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
@@ -2137,7 +2137,7 @@ fn dec_binop_with_overflow<'ctx>(
         }
         TargetInfo {
             architecture: Wasm32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => {
             call_void_bitcode_fn(
                 env,
@@ -2178,7 +2178,7 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
     match env.target_info {
         TargetInfo {
             architecture: X86_64 | X86_32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
@@ -2195,7 +2195,7 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
         }
         TargetInfo {
             architecture: Wasm32,
-            operating_system: Unix,
+            operating_system: Linux,
         } => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
         _ => call_bitcode_fn(env, &[dec_alloca(env, lhs), dec_alloca(env, rhs)], fn_name),
     }
