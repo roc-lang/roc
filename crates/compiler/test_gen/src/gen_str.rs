@@ -1752,7 +1752,6 @@ fn str_walk_utf8() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_walk_utf8_with_index() {
-    #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
         indoc!(
             r#"
@@ -1761,17 +1760,6 @@ fn str_walk_utf8_with_index() {
         ),
         RocList::from_slice(&[(0, b'a'), (1, b'b'), (2, b'c'), (3, b'd')]),
         RocList<(u64, u8)>
-    );
-
-    #[cfg(feature = "gen-llvm-wasm")]
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
-            "#
-        ),
-        RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
-        RocList<(u32, char)>
     );
 }
 
