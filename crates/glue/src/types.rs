@@ -930,7 +930,7 @@ impl From<OperatingSystem> for roc_type::OperatingSystem {
     fn from(os: OperatingSystem) -> Self {
         match os {
             OperatingSystem::Windows => roc_type::OperatingSystem::Windows,
-            OperatingSystem::Unix => roc_type::OperatingSystem::Unix,
+            OperatingSystem::Linux | OperatingSystem::MacOS => roc_type::OperatingSystem::Unix,
             OperatingSystem::Wasi => roc_type::OperatingSystem::Wasi,
         }
     }

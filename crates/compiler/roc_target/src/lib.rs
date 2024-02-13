@@ -9,7 +9,8 @@ use target_lexicon::Triple;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OperatingSystem {
     Windows,
-    Unix,
+    Linux,
+    MacOS,
     Wasi,
 }
 
@@ -18,10 +19,10 @@ impl OperatingSystem {
         match target {
             target_lexicon::OperatingSystem::Windows => Some(OperatingSystem::Windows),
             target_lexicon::OperatingSystem::Wasi => Some(OperatingSystem::Wasi),
-            target_lexicon::OperatingSystem::Linux => Some(OperatingSystem::Unix),
-            target_lexicon::OperatingSystem::MacOSX { .. } => Some(OperatingSystem::Unix),
-            target_lexicon::OperatingSystem::Darwin => Some(OperatingSystem::Unix),
-            target_lexicon::OperatingSystem::Unknown => Some(OperatingSystem::Unix),
+            target_lexicon::OperatingSystem::Linux => Some(OperatingSystem::Linux),
+            target_lexicon::OperatingSystem::MacOSX { .. } => Some(OperatingSystem::MacOS),
+            target_lexicon::OperatingSystem::Darwin => Some(OperatingSystem::MacOS),
+            target_lexicon::OperatingSystem::Unknown => Some(OperatingSystem::Linux),
             _ => None,
         }
     }
@@ -29,7 +30,7 @@ impl OperatingSystem {
     pub const fn object_file_ext(&self) -> &str {
         match self {
             OperatingSystem::Windows => "obj",
-            OperatingSystem::Unix => "o",
+            OperatingSystem::Linux | OperatingSystem::MacOS => "o",
             OperatingSystem::Wasi => "wasm",
         }
     }
@@ -37,7 +38,7 @@ impl OperatingSystem {
     pub const fn static_library_file_ext(&self) -> &str {
         match self {
             OperatingSystem::Windows => "lib",
-            OperatingSystem::Unix => "a",
+            OperatingSystem::Linux | OperatingSystem::MacOS => "a",
             OperatingSystem::Wasi => "wasm",
         }
     }
@@ -45,8 +46,17 @@ impl OperatingSystem {
     pub const fn executable_file_ext(&self) -> Option<&str> {
         match self {
             OperatingSystem::Windows => Some("exe"),
-            OperatingSystem::Unix => None,
+            OperatingSystem::Linux | OperatingSystem::MacOS => None,
             OperatingSystem::Wasi => Some("wasm"),
+        }
+    }
+
+    pub const fn dylib_file_ext(&self) -> &str {
+        match self {
+            OperatingSystem::Windows => "dll",
+            OperatingSystem::Linux => "so",
+            OperatingSystem::MacOS => "dylib",
+            OperatingSystem::Wasi => "wasm",
         }
     }
 }
@@ -91,14 +101,14 @@ impl TargetInfo {
     pub const fn default_aarch64() -> Self {
         TargetInfo {
             architecture: Architecture::Aarch64,
-            operating_system: OperatingSystem::Unix,
+            operating_system: OperatingSystem::MacOS,
         }
     }
 
     pub const fn default_x86_64() -> Self {
         TargetInfo {
             architecture: Architecture::X86_64,
-            operating_system: OperatingSystem::Unix,
+            operating_system: OperatingSystem::Linux,
         }
     }
 

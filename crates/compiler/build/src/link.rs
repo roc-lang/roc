@@ -453,7 +453,7 @@ pub fn rebuild_host(
     let os = roc_target::OperatingSystem::from(target.operating_system);
     let executable_extension = match os {
         roc_target::OperatingSystem::Windows => "exe",
-        roc_target::OperatingSystem::Unix => "",
+        roc_target::OperatingSystem::Linux | roc_target::OperatingSystem::MacOS => "",
         roc_target::OperatingSystem::Wasi => "",
     };
 
