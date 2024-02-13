@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [[bin]]
-name = "roc_ls"
+name = "roc_language_server"
 path = "src/server.rs"
 
 [dev-dependencies]
