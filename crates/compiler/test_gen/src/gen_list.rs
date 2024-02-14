@@ -1074,7 +1074,7 @@ fn list_walk_implements_position() {
             Some v -> v
         ",
         2,
-        usize
+        u64
     );
 }
 
@@ -1221,7 +1221,7 @@ fn list_count_if_empty_list() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -1243,7 +1243,7 @@ fn list_count_if_always_true_for_non_empty_list() {
             "
         ),
         8,
-        usize
+        u64
     );
 }
 
@@ -1261,7 +1261,7 @@ fn list_count_if_always_false_for_non_empty_list() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -1279,7 +1279,7 @@ fn list_count_if_condition() {
             "
         ),
         2,
-        usize
+        u64
     );
 }
 
@@ -1293,7 +1293,7 @@ fn list_count_if_str() {
              "#
         ),
         2,
-        usize
+        u64
     );
 }
 
@@ -1943,13 +1943,13 @@ fn list_concat_large() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_len() {
-    assert_evals_to!("List.len []", 0, usize);
+    assert_evals_to!("List.len []", 0, u64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_int_list_len() {
-    assert_evals_to!("List.len [12, 9, 6, 3]", 4, usize);
+    assert_evals_to!("List.len [12, 9, 6, 3]", 4, u64);
 }
 
 #[test]
@@ -1964,7 +1964,7 @@ fn loaded_int_list_len() {
             "
         ),
         3,
-        usize
+        u64
     );
 }
 
@@ -1982,7 +1982,7 @@ fn fn_int_list_len() {
             "
         ),
         4,
-        usize
+        u64
     );
 }
 
@@ -2402,7 +2402,7 @@ fn gen_wrap_len() {
             "
         ),
         RocList::from_slice(&[3]),
-        RocList<usize>
+        RocList<u64>
     );
 }
 
@@ -2715,7 +2715,7 @@ fn empty_list_increment_decrement() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -2732,7 +2732,7 @@ fn list_literal_increment_decrement() {
             "
         ),
         6,
-        usize
+        u64
     );
 }
 
@@ -3319,7 +3319,7 @@ fn list_find_index() {
             "#
         ),
         1,
-        usize
+        u64
     );
 
     assert_evals_to!(
@@ -3331,7 +3331,7 @@ fn list_find_index() {
             "#
         ),
         2,
-        usize
+        u64
     );
 }
 
@@ -3347,7 +3347,7 @@ fn list_find_index_not_found() {
             "#
         ),
         999,
-        usize
+        u64
     );
 
     assert_evals_to!(
@@ -3359,7 +3359,7 @@ fn list_find_index_not_found() {
             "#
         ),
         999,
-        usize
+        u64
     );
 }
 
@@ -3375,7 +3375,7 @@ fn list_find_index_empty_typed_list() {
             "
         ),
         999,
-        usize
+        u64
     );
 
     assert_evals_to!(
@@ -3387,7 +3387,7 @@ fn list_find_index_empty_typed_list() {
             "
         ),
         999,
-        usize
+        u64
     );
 }
 
@@ -3562,7 +3562,7 @@ fn monomorphized_lists() {
             "
         ),
         18,
-        usize
+        u64
     )
 }
 
@@ -3785,7 +3785,7 @@ fn list_infer_usage() {
             "#
         ),
         1,
-        usize
+        u64
     );
 }
 
@@ -3813,7 +3813,7 @@ fn list_walk_backwards_implements_position() {
             Some v -> v
         ",
         0,
-        usize
+        u64
     );
 }
 
