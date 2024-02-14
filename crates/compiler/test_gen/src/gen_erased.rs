@@ -1,6 +1,7 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to_erased;
 
+#[cfg(feature = "gen-llvm")]
 use indoc::indoc;
 
 #[test]
