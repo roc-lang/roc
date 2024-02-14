@@ -4,7 +4,7 @@ pub mod colors;
 pub mod repl_state;
 
 use bumpalo::Bump;
-use colors::{CYAN, GREEN, END_COL};
+use colors::{CYAN, END_COL, GREEN};
 use const_format::concatcp;
 use repl_state::{parse_src, ParseOutcome};
 use roc_parse::ast::{Expr, ValueDef};
