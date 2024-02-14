@@ -641,7 +641,7 @@ pub fn listSublist(
     if (list.bytes) |source_ptr| {
         // This cast is lossless because we would have early-returned already
         // if `start_u64` were greater than `size`, and `size` fits in usize.
-        const start = @as(usize, @intCast(start_u64));
+        const start: usize = @intCast(start_u64);
         const drop_start_len = start;
 
         // (size - start) can't overflow because we would have early-returned already
@@ -721,7 +721,7 @@ pub fn listDropAt(
 
         // This cast must be lossless, because we would have just early-returned if drop_index
         // were >= than `size`, and we know `size` fits in usize.
-        const drop_index = @as(usize, @intCast(drop_index_u64));
+        const drop_index: usize = @intCast(drop_index_u64);
 
         const element = source_ptr + drop_index * element_width;
         dec(element);
