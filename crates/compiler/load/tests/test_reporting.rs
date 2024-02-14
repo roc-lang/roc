@@ -462,11 +462,9 @@ mod test_reporting {
     fn human_readable(str: &str) -> String {
         str.replace(ANSI_STYLE_CODES.red, "<red>")
             .replace(ANSI_STYLE_CODES.white, "<white>")
-            .replace(ANSI_STYLE_CODES.blue, "<blue>")
             .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
             .replace(ANSI_STYLE_CODES.green, "<green>")
             .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
-            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
             .replace(ANSI_STYLE_CODES.reset, "<reset>")
             .replace(ANSI_STYLE_CODES.bold, "<bold>")
             .replace(ANSI_STYLE_CODES.underline, "<underline>")

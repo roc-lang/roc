@@ -104,8 +104,6 @@ pub fn strip_colors(str: &str) -> String {
     str.replace(ANSI_STYLE_CODES.red, "")
         .replace(ANSI_STYLE_CODES.green, "")
         .replace(ANSI_STYLE_CODES.yellow, "")
-        .replace(ANSI_STYLE_CODES.blue, "")
-        .replace(ANSI_STYLE_CODES.magenta, "")
         .replace(ANSI_STYLE_CODES.cyan, "")
         .replace(ANSI_STYLE_CODES.white, "")
         .replace(ANSI_STYLE_CODES.bold, "")
