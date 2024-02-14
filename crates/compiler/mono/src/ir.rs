@@ -1032,9 +1032,7 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
-        let raw_layout = layout_cache
-            .raw_from_var(env.arena, annotation, env.subs)
-            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
+        let raw_layout = layout_cache.raw_from_var(env.arena, annotation, env.subs)?;
 
         let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
@@ -4864,9 +4862,10 @@ pub fn with_hole<'a>(
 
             let mut symbol_exprs = Vec::with_capacity_in(loc_elems.len(), env.arena);
 
-            let elem_layout = layout_cache
-                .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
+            let elem_layout = match layout_cache.from_var(env.arena, elem_var, env.subs) {
+                Ok(elem_layout) => elem_layout,
+                Err(_) => return runtime_error(env, "invalid list element type"),
+            };
 
             for arg_expr in loc_elems.into_iter() {
                 if let Some(literal) =
