@@ -1779,13 +1779,10 @@ fn test_to_comparison<'a>(
                     let real_len = env.unique_symbol();
                     let test_len = env.unique_symbol();
 
-                    // TODO if we make a LowLevel for getting list lenth that returns
-                    // usize, then we could use usize here instead of u64, which
-                    // would be slightly more efficient on 32-bit targets.
-                    // Would let us change Layout::U64 to Layout::usize(env.target_info)
-                    // in here and in various related places that also rely on list length.
-                    stores.push((real_len, Layout::U64, real_len_expr));
-                    stores.push((test_len, Layout::U64, test_len_expr));
+                    let usize_layout = Layout::usize(env.target_info);
+
+                    stores.push((real_len, usize_layout, real_len_expr));
+                    stores.push((test_len, usize_layout, test_len_expr));
 
                     let comparison = match bound {
                         ListLenBound::Exact => (real_len, Comparator::Eq, test_len),
@@ -2340,7 +2337,7 @@ fn decide_to_branching<'a>(
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
-                    cond_layout: Layout::U64,
+                    cond_layout: Layout::usize(env.target_info),
                     cond_symbol: len_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch: (default_branch_info, env.arena.alloc(default_branch)),
@@ -2355,7 +2352,12 @@ fn decide_to_branching<'a>(
                     arguments: env.arena.alloc([inner_cond_symbol]),
                 });
 
-                Stmt::Let(len_symbol, len_expr, Layout::U64, env.arena.alloc(switch))
+                Stmt::Let(
+                    len_symbol,
+                    len_expr,
+                    Layout::usize(env.target_info),
+                    env.arena.alloc(switch),
+                )
             } else {
                 Stmt::Switch {
                     cond_layout: inner_cond_layout,

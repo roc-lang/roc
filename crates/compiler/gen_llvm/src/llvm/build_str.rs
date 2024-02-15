@@ -13,11 +13,12 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     pointer: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let layout =
-        LayoutRepr::Struct(
-            env.arena
-                .alloc([Layout::U64, Layout::STR, Layout::BOOL, Layout::U8]),
-        );
+    let layout = LayoutRepr::Struct(env.arena.alloc([
+        Layout::usize(env.target_info),
+        Layout::STR,
+        Layout::BOOL,
+        Layout::U8,
+    ]));
 
     load_roc_value(
         env,
