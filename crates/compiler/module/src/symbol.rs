@@ -1342,7 +1342,7 @@ define_builtins! {
         3 LIST_SET: "set"
         4 LIST_APPEND: "append"
         5 LIST_MAP: "map"
-        6 LIST_LEN: "len"
+        6 LIST_LEN_U64: "len"
         7 LIST_WALK_BACKWARDS: "walkBackwards"
         8 LIST_CONCAT: "concat"
         9 LIST_FIRST: "first"
@@ -1424,6 +1424,7 @@ define_builtins! {
         85 LIST_PREPEND_IF_OK: "prependIfOk"
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
         87 LIST_CLONE: "clone"
+        88 LIST_LEN_USIZE: "lenUsize"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

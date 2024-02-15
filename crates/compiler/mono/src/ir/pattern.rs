@@ -1412,7 +1412,7 @@ pub(crate) fn build_list_index_probe<'a>(
         let len_sym = env.unique_symbol();
         let len_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::ListLen,
+                op: LowLevel::ListLenUsize,
                 update_mode: env.next_update_mode_id(),
             },
             arguments: env.arena.alloc([list_sym]),
@@ -1570,7 +1570,7 @@ fn store_list_rest<'a>(
         let list_len_sym = env.unique_symbol();
         let list_len_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::ListLen,
+                op: LowLevel::ListLenUsize,
                 update_mode: env.next_update_mode_id(),
             },
             arguments: env.arena.alloc([list_sym]),

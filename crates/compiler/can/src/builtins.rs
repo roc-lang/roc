@@ -129,7 +129,8 @@ map_symbol_to_lowlevel_and_arity! {
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
 
-    ListLen; LIST_LEN; 1,
+    ListLenUsize; LIST_LEN_USIZE; 1,
+    ListLenU64; LIST_LEN_U64; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
     ListReserve; LIST_RESERVE; 2,
     ListIsUnique; LIST_IS_UNIQUE; 1,

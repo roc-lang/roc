@@ -262,28 +262,14 @@ impl<'a> LowLevelCall<'a> {
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
 
             // List
-            ListLen => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // List is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the length is 4 bytes after the start of the struct.
-                    //
-                    // WRAPPER_LEN represents the index of the length field
-                    // (which is 1 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_LEN should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+            ListLenU64 => {
+                self.load_list_len_usize(backend);
 
-                    // Length is stored as 32 bits in memory, but List.len returns U64
-                    backend.code_builder.i64_extend_u_i32();
-                }
-                _ => internal_error!("invalid storage for List"),
-            },
+                // Length is stored as 32 bits in memory on wasm32,
+                // but List.len always returns U64
+                backend.code_builder.i64_extend_u_i32();
+            }
+            ListLenUsize => self.load_list_len_usize(backend),
 
             ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 
@@ -2116,6 +2102,28 @@ impl<'a> LowLevelCall<'a> {
             SetJmp | LongJmp | SetLongJmpBuffer => {
                 unreachable!("only inserted in dev backend codegen")
             }
+        }
+    }
+
+    fn load_list_len_usize(&self, backend: &mut WasmBackend<'_, '_>) {
+        match backend.storage.get(&self.arguments[0]) {
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) =
+                    location.local_and_offset(backend.storage.stack_frame_pointer);
+                backend.code_builder.get_local(local_id);
+                // List is stored as (pointer, length, capacity),
+                // with each of those fields being 4 bytes on wasm.
+                // So the length is 4 bytes after the start of the struct.
+                //
+                // WRAPPER_LEN represents the index of the length field
+                // (which is 1 as of the writing of this comment). If the field order
+                // ever changes, WRAPPER_LEN should be updated and this logic should
+                // continue to work even though this comment may become inaccurate.
+                backend
+                    .code_builder
+                    .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+            }
+            _ => internal_error!("invalid storage for List"),
         }
     }
 
