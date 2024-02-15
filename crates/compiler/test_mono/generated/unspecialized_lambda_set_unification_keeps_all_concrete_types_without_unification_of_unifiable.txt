@@ -81,81 +81,81 @@ procedure Encode.26 (Encode.105, Encode.106):
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
     ret Encode.108;
 
-procedure List.18 (List.158, List.159, List.160):
-    let List.598 : U64 = 0i64;
-    let List.599 : U64 = CallByName List.6 List.158;
-    let List.597 : {List U8, U64} = CallByName List.90 List.158 List.159 List.160 List.598 List.599;
-    ret List.597;
+procedure List.18 (List.159, List.160, List.161):
+    let List.599 : U64 = 0i64;
+    let List.600 : U64 = CallByName List.6 List.159;
+    let List.598 : {List U8, U64} = CallByName List.91 List.159 List.160 List.161 List.599 List.600;
+    ret List.598;
 
-procedure List.18 (List.158, List.159, List.160):
-    let List.638 : U64 = 0i64;
-    let List.639 : U64 = CallByName List.6 List.158;
-    let List.637 : {List U8, U64} = CallByName List.90 List.158 List.159 List.160 List.638 List.639;
-    ret List.637;
+procedure List.18 (List.159, List.160, List.161):
+    let List.639 : U64 = 0i64;
+    let List.640 : U64 = CallByName List.6 List.159;
+    let List.638 : {List U8, U64} = CallByName List.91 List.159 List.160 List.161 List.639 List.640;
+    ret List.638;
 
-procedure List.4 (List.122, List.123):
-    let List.636 : U64 = 1i64;
-    let List.635 : List U8 = CallByName List.70 List.122 List.636;
-    let List.634 : List U8 = CallByName List.71 List.635 List.123;
-    ret List.634;
-
-procedure List.6 (#Attr.2):
-    let List.609 : U64 = lowlevel ListLen #Attr.2;
-    ret List.609;
+procedure List.4 (List.123, List.124):
+    let List.637 : U64 = 1i64;
+    let List.636 : List U8 = CallByName List.70 List.123 List.637;
+    let List.635 : List U8 = CallByName List.71 List.636 List.124;
+    ret List.635;
 
 procedure List.6 (#Attr.2):
-    let List.649 : U64 = lowlevel ListLen #Attr.2;
-    ret List.649;
+    let List.610 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.610;
 
-procedure List.66 (#Attr.2, #Attr.3):
-    let List.607 : [C {}, C {}] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.607;
-
-procedure List.66 (#Attr.2, #Attr.3):
-    let List.647 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.647;
-
-procedure List.70 (#Attr.2, #Attr.3):
-    let List.615 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
-    ret List.615;
-
-procedure List.71 (#Attr.2, #Attr.3):
-    let List.613 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.613;
-
-procedure List.8 (#Attr.2, #Attr.3):
-    let List.650 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+procedure List.6 (#Attr.2):
+    let List.650 : U64 = lowlevel ListLenU64 #Attr.2;
     ret List.650;
 
-procedure List.90 (#Derived_gen.23, #Derived_gen.24, #Derived_gen.25, #Derived_gen.26, #Derived_gen.27):
-    joinpoint List.640 List.161 List.162 List.163 List.164 List.165:
-        let List.642 : Int1 = CallByName Num.22 List.164 List.165;
-        if List.642 then
-            let List.646 : [] = CallByName List.66 List.161 List.164;
-            let List.166 : {List U8, U64} = CallByName TotallyNotJson.230 List.162 List.646;
-            let List.645 : U64 = 1i64;
-            let List.644 : U64 = CallByName Num.51 List.164 List.645;
-            jump List.640 List.161 List.166 List.163 List.644 List.165;
-        else
-            dec List.161;
-            ret List.162;
-    in
-    jump List.640 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26 #Derived_gen.27;
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.608 : [C {}, C {}] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.608;
 
-procedure List.90 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_gen.43, #Derived_gen.44):
-    joinpoint List.600 List.161 List.162 List.163 List.164 List.165:
-        let List.602 : Int1 = CallByName Num.22 List.164 List.165;
-        if List.602 then
-            let List.606 : [C {}, C {}] = CallByName List.66 List.161 List.164;
-            let List.166 : {List U8, U64} = CallByName TotallyNotJson.230 List.162 List.606;
-            let List.605 : U64 = 1i64;
-            let List.604 : U64 = CallByName Num.51 List.164 List.605;
-            jump List.600 List.161 List.166 List.163 List.604 List.165;
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.648 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.648;
+
+procedure List.70 (#Attr.2, #Attr.3):
+    let List.616 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.616;
+
+procedure List.71 (#Attr.2, #Attr.3):
+    let List.614 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.614;
+
+procedure List.8 (#Attr.2, #Attr.3):
+    let List.651 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.651;
+
+procedure List.91 (#Derived_gen.26, #Derived_gen.27, #Derived_gen.28, #Derived_gen.29, #Derived_gen.30):
+    joinpoint List.641 List.162 List.163 List.164 List.165 List.166:
+        let List.643 : Int1 = CallByName Num.22 List.165 List.166;
+        if List.643 then
+            let List.647 : [] = CallByName List.66 List.162 List.165;
+            let List.167 : {List U8, U64} = CallByName TotallyNotJson.230 List.163 List.647;
+            let List.646 : U64 = 1i64;
+            let List.645 : U64 = CallByName Num.51 List.165 List.646;
+            jump List.641 List.162 List.167 List.164 List.645 List.166;
         else
-            dec List.161;
-            ret List.162;
+            dec List.162;
+            ret List.163;
     in
-    jump List.600 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
+    jump List.641 #Derived_gen.26 #Derived_gen.27 #Derived_gen.28 #Derived_gen.29 #Derived_gen.30;
+
+procedure List.91 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_gen.43, #Derived_gen.44):
+    joinpoint List.601 List.162 List.163 List.164 List.165 List.166:
+        let List.603 : Int1 = CallByName Num.22 List.165 List.166;
+        if List.603 then
+            let List.607 : [C {}, C {}] = CallByName List.66 List.162 List.165;
+            let List.167 : {List U8, U64} = CallByName TotallyNotJson.230 List.163 List.607;
+            let List.606 : U64 = 1i64;
+            let List.605 : U64 = CallByName Num.51 List.165 List.606;
+            jump List.601 List.162 List.167 List.164 List.605 List.166;
+        else
+            dec List.162;
+            ret List.163;
+    in
+    jump List.601 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
 
 procedure Num.127 (#Attr.2):
     let Num.286 : U8 = lowlevel NumIntCast #Attr.2;
