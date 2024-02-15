@@ -1779,6 +1779,11 @@ fn test_to_comparison<'a>(
                     let real_len = env.unique_symbol();
                     let test_len = env.unique_symbol();
 
+                    // TODO if we make a LowLevel for getting list lenth that returns
+                    // usize, then we could use usize here instead of u64, which
+                    // would be slightly more efficient on 32-bit targets.
+                    // Would let us change Layout::U64 to Layout::usize(env.target_info)
+                    // in here and in various related places that also rely on list length.
                     stores.push((real_len, Layout::U64, real_len_expr));
                     stores.push((test_len, Layout::U64, test_len_expr));
 
