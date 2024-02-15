@@ -39,6 +39,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
 
     struct Assets<S: AsRef<str>> {
         search_js: S,
+        sort_js: S,
         styles_css: S,
         raw_template_html: S,
     }
@@ -46,11 +47,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     #[cfg(not(debug_assertions))]
     let assets = {
         let search_js = include_str!("./static/search.js");
+        let sort_js = include_str!("./static/sort.js");
         let styles_css = include_str!("./static/styles.css");
         let raw_template_html = include_str!("./static/index.html");
 
         Assets {
             search_js,
+            sort_js,
             styles_css,
             raw_template_html,
         }
@@ -64,11 +67,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
 
         // Read the assets from the filesystem
         let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
+        let sort_js = fs::read_to_string(static_dir.join("sort.js")).unwrap();
         let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
         let raw_template_html = fs::read_to_string(static_dir.join("index.html")).unwrap();
 
         Assets {
             search_js,
+            sort_js,
             styles_css,
             raw_template_html,
         }
@@ -78,6 +83,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     // (The HTML requires more work!)
     for (file, contents) in [
         ("search.js", assets.search_js),
+        ("sort.js", assets.sort_js),
         ("styles.css", assets.styles_css),
     ] {
         let dir = build_dir.join(file);

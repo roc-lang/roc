@@ -470,6 +470,7 @@ pre>samp {
   font-size: 18px;
   line-height: 18px;
   margin-top: 6px;
+  margin-bottom: 6px;
   border: none;
   color: var(--faded-color);
   background-color: var(--code-bg);
@@ -507,6 +508,23 @@ pre>samp {
   padding: 1px 3px 3px;
   font-style: normal;
   line-height: 15px;
+}
+
+#sort-button {
+  border-style: none;
+  font-size: 18px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: start;
+  line-height: 18px;
+  padding: 12px 16px;
+  height: 48px;
+  color: var(--text-color);
+  cursor: pointer;
+  background-color: var(--body-bg-color);
+}
+#sort-button:hover {
+  text-decoration: underline;
 }
 
 .builtins-tip {
