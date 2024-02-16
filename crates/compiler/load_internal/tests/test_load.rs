@@ -26,9 +26,9 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
-use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+use roc_reporting::report::{strip_colors, RenderTarget};
 use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
@@ -1218,11 +1218,9 @@ fn non_roc_file_extension() {
         I expected a file with extension `.roc` or without extension.
         Instead I received a file with extension `.md`."
     );
-    let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
-    let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();
-    let err = multiple_modules("non_roc_file_extension", modules).unwrap_err();
-    let err = err.replace(&color_start, "");
-    let err = err.replace(&color_end, "");
+
+    let err = strip_colors(&multiple_modules("non_roc_file_extension", modules).unwrap_err());
+
     assert_eq!(err, expected, "\n{}", err);
 }
 
@@ -1255,10 +1253,8 @@ fn roc_file_no_extension() {
         The provided file did not start with a shebang `#!` containing the
         string `roc`. Is tmp/roc_file_no_extension/main a Roc file?"
     );
-    let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
-    let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();
-    let err = multiple_modules("roc_file_no_extension", modules).unwrap_err();
-    let err = err.replace(&color_start, "");
-    let err = err.replace(&color_end, "");
+
+    let err = strip_colors(&multiple_modules("roc_file_no_extension", modules).unwrap_err());
+
     assert_eq!(err, expected, "\n{}", err);
 }

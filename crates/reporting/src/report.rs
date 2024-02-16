@@ -287,6 +287,19 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     color_reset: "</span>",
 };
 
+// useful for tests
+pub fn strip_colors(str: &str) -> String {
+    str.replace(ANSI_STYLE_CODES.red, "")
+        .replace(ANSI_STYLE_CODES.green, "")
+        .replace(ANSI_STYLE_CODES.yellow, "")
+        .replace(ANSI_STYLE_CODES.cyan, "")
+        .replace(ANSI_STYLE_CODES.white, "")
+        .replace(ANSI_STYLE_CODES.bold, "")
+        .replace(ANSI_STYLE_CODES.underline, "")
+        .replace(ANSI_STYLE_CODES.reset, "")
+        .replace(ANSI_STYLE_CODES.color_reset, "")
+}
+
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
     upstream: BoxAllocator,

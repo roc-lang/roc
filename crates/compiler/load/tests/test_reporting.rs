@@ -757,7 +757,7 @@ mod test_reporting {
             &DEFAULT_PALETTE,
         );
 
-        assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
+        assert_eq!(human_readable(&buf), "<cyan>activityIndicatorLarge<reset>");
     }
 
     #[test]
