@@ -1002,6 +1002,10 @@ fn link_linux(
             soname = output_path.clone();
             soname.set_extension("so.1");
 
+            let mut output_path = output_path;
+
+            output_path.set_extension("so.1.0");
+
             (
                 // TODO: find a way to avoid using a vec! here - should theoretically be
                 // able to do this somehow using &[] but the borrow checker isn't having it.
@@ -1079,7 +1083,13 @@ fn link_macos(
 ) -> io::Result<(Child, PathBuf)> {
     let (link_type_args, output_path) = match link_type {
         LinkType::Executable => (vec!["-execute"], output_path),
-        LinkType::Dylib => (vec!["-dylib", "-undefined", "dynamic_lookup"], output_path),
+        LinkType::Dylib => {
+            let mut output_path = output_path;
+
+            output_path.set_extension("dylib");
+
+            (vec!["-dylib", "-undefined", "dynamic_lookup"], output_path)
+        }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
 
