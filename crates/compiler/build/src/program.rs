@@ -1344,9 +1344,6 @@ fn with_output_extension(
             // Additive linking and no linking both output the object file type.
             path.with_extension(os.object_file_ext())
         }
-
-        (_, LinkType::Dylib) => path.with_extension(os.dylib_file_ext()),
-
         _ => path.with_extension(os.executable_file_ext().unwrap_or_default()),
     }
 }
