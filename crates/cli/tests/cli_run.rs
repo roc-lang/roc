@@ -87,10 +87,7 @@ mod cli_run {
             &[],
         );
         let err = compile_out.stdout.trim();
-        dbg!(&err);
-        dbg!("- - - - - - -");
         let err = strip_colors(err);
-        dbg!(&err);
 
         // e.g. "1 error and 0 warnings found in 123 ms."
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
