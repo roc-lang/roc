@@ -389,6 +389,13 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
             module.name.as_str(),
         );
 
+        push_html(
+            &mut sidebar_entry_content,
+            "button",
+            vec![("id", "sort-button"), ("href", href)],
+            "Sort",
+        );
+
         let entries = {
             let mut entries_buf = String::new();
 
