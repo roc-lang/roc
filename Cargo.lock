@@ -2196,6 +2196,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
+ "regex",
  "roc_build",
  "roc_cli",
  "roc_repl_cli",
