@@ -607,7 +607,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
-        ListLen => {
+        ListLenU64 => {
             // List.len : List * -> U64
             arguments!(list);
 
@@ -617,6 +617,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             env.builder
                 .new_build_int_cast(len_usize, env.context.i64_type(), "usize_to_u64")
                 .into()
+        }
+        ListLenUsize => {
+            // List.lenUsize : List * -> usize # used internally, not exposed
+            arguments!(list);
+
+            list_len_usize(env.builder, list.into_struct_value()).into()
         }
         ListGetCapacity => {
             // List.capacity: List a -> U64

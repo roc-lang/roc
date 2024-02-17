@@ -260,13 +260,14 @@ impl<'a> LowLevelCall<'a> {
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
 
             // List
-            ListLen => {
+            ListLenU64 => {
                 self.load_list_len_usize(backend);
 
                 // Length is stored as 32 bits in memory on wasm32,
                 // but List.len always returns U64
                 backend.code_builder.i64_extend_u_i32();
             }
+            ListLenUsize => self.load_list_len_usize(backend),
 
             ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 

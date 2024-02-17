@@ -1769,7 +1769,7 @@ fn test_to_comparison<'a>(
                 LayoutRepr::Builtin(Builtin::List(_elem_layout)) => {
                     let real_len_expr = Expr::Call(Call {
                         call_type: CallType::LowLevel {
-                            op: LowLevel::ListLen,
+                            op: LowLevel::ListLenUsize,
                             update_mode: env.next_update_mode_id(),
                         },
                         arguments: env.arena.alloc([list_sym]),
@@ -1779,8 +1779,10 @@ fn test_to_comparison<'a>(
                     let real_len = env.unique_symbol();
                     let test_len = env.unique_symbol();
 
-                    stores.push((real_len, Layout::U64, real_len_expr));
-                    stores.push((test_len, Layout::U64, test_len_expr));
+                    let usize_layout = Layout::usize(env.target_info);
+
+                    stores.push((real_len, usize_layout, real_len_expr));
+                    stores.push((test_len, usize_layout, test_len_expr));
 
                     let comparison = match bound {
                         ListLenBound::Exact => (real_len, Comparator::Eq, test_len),
@@ -2335,7 +2337,7 @@ fn decide_to_branching<'a>(
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
-                    cond_layout: Layout::U64,
+                    cond_layout: Layout::usize(env.target_info),
                     cond_symbol: len_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch: (default_branch_info, env.arena.alloc(default_branch)),
@@ -2344,13 +2346,18 @@ fn decide_to_branching<'a>(
 
                 let len_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
-                        op: LowLevel::ListLen,
+                        op: LowLevel::ListLenUsize,
                         update_mode: env.next_update_mode_id(),
                     },
                     arguments: env.arena.alloc([inner_cond_symbol]),
                 });
 
-                Stmt::Let(len_symbol, len_expr, Layout::U64, env.arena.alloc(switch))
+                Stmt::Let(
+                    len_symbol,
+                    len_expr,
+                    Layout::usize(env.target_info),
+                    env.arena.alloc(switch),
+                )
             } else {
                 Stmt::Switch {
                     cond_layout: inner_cond_layout,

@@ -70,6 +70,7 @@ enum FirstOrder {
     StrRepeat,
     StrFromFloat,
     ListLenU64,
+    ListLenUsize,
     ListGetUnsafe,
     ListSublist,
     ListDropAt,

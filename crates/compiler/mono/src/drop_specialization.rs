@@ -1533,8 +1533,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
     match lowlevel {
         Unreachable => RC::Uknown,
-        ListLen | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity | ListWithCapacity
-        | StrWithCapacity => RC::NoRc,
+        ListLenU64 | ListLenUsize | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity
+        | ListWithCapacity | StrWithCapacity => RC::NoRc,
         ListReplaceUnsafe => RC::Rc,
         StrGetUnsafe | ListGetUnsafe => RC::NoRc,
         ListConcat => RC::Rc,

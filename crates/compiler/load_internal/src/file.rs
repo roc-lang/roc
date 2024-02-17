@@ -4703,7 +4703,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
     );
     let fn_var = synth_import(subs, Content::Error);
-    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN, [])]);
+    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN_U64, [])]);
     let clos_list_len = synth_import(
         subs,
         Content::LambdaSet(LambdaSet {
@@ -4757,7 +4757,7 @@ pub fn add_imports(
         // Num needs List.len, but List imports Num.
         let list_len_type_var = synth_list_len_type(subs);
         let list_len_type_index = constraints.push_variable(list_len_type_var);
-        def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
+        def_types.push((Symbol::LIST_LEN_U64, Loc::at_zero(list_len_type_index)));
         import_variables.push(list_len_type_var);
     }
 
