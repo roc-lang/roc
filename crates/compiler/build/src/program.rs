@@ -801,7 +801,7 @@ fn build_loaded_file<'a>(
         platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target).unwrap())
     };
 
-    let output_exe_path = match out_path {
+    let (output_exe_path, overwrite_extension) = match out_path {
         Some(path) => {
             // true iff the path ends with a directory separator,
             // e.g. '/' on UNIX, '/' or '\\' on Windows
@@ -829,21 +829,27 @@ fn build_loaded_file<'a>(
             if ends_with_sep {
                 let filename = app_module_path.file_name().unwrap_or_default();
 
-                with_output_extension(
-                    &path.join(filename),
-                    operating_system,
-                    linking_strategy,
-                    link_type,
+                (
+                    with_output_extension(
+                        &path.join(filename),
+                        operating_system,
+                        linking_strategy,
+                        link_type,
+                    ),
+                    true,
                 )
             } else {
-                path.to_path_buf()
+                (path.to_path_buf(), false)
             }
         }
-        None => with_output_extension(
-            &app_module_path,
-            operating_system,
-            linking_strategy,
-            link_type,
+        None => (
+            with_output_extension(
+                &app_module_path,
+                operating_system,
+                linking_strategy,
+                link_type,
+            ),
+            true,
         ),
     };
 
@@ -1037,8 +1043,14 @@ fn build_loaded_file<'a>(
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
-            let (mut child, _) = link(target, output_exe_path.clone(), &inputs, link_type)
-                .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
+            let (mut child, _) = link(
+                target,
+                output_exe_path.clone(),
+                &inputs,
+                link_type,
+                overwrite_extension,
+            )
+            .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
 
             let exit_status = child
                 .wait()

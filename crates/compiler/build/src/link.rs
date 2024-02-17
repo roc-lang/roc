@@ -32,6 +32,7 @@ pub fn link(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
+    overwrite_extension: bool,
 ) -> io::Result<(Child, PathBuf)> {
     match target {
         Triple {
@@ -41,11 +42,23 @@ pub fn link(
         Triple {
             operating_system: OperatingSystem::Linux,
             ..
-        } => link_linux(target, output_path, input_paths, link_type),
+        } => link_linux(
+            target,
+            output_path,
+            input_paths,
+            link_type,
+            overwrite_extension,
+        ),
         Triple {
             operating_system: OperatingSystem::Darwin,
             ..
-        } => link_macos(target, output_path, input_paths, link_type),
+        } => link_macos(
+            target,
+            output_path,
+            input_paths,
+            link_type,
+            overwrite_extension,
+        ),
         Triple {
             operating_system: OperatingSystem::Windows,
             ..
@@ -866,6 +879,7 @@ fn link_linux(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
+    overwrite_extension: bool,
 ) -> io::Result<(Child, PathBuf)> {
     let architecture = format!("{}-linux-gnu", target.architecture);
 
@@ -1003,8 +1017,9 @@ fn link_linux(
             soname.set_extension("so.1");
 
             let mut output_path = output_path;
-
-            output_path.set_extension("so.1.0");
+            if overwrite_extension {
+                output_path.set_extension("so.1.0");
+            }
 
             (
                 // TODO: find a way to avoid using a vec! here - should theoretically be
@@ -1080,13 +1095,16 @@ fn link_macos(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
+    overwrite_extension: bool,
 ) -> io::Result<(Child, PathBuf)> {
     let (link_type_args, output_path) = match link_type {
         LinkType::Executable => (vec!["-execute"], output_path),
         LinkType::Dylib => {
             let mut output_path = output_path;
 
-            output_path.set_extension("dylib");
+            if overwrite_extension {
+                output_path.set_extension("dylib");
+            }
 
             (vec!["-dylib", "-undefined", "dynamic_lookup"], output_path)
         }
@@ -1318,6 +1336,7 @@ pub fn llvm_module_to_dylib(
         app_o_file.clone(),
         &[app_o_file.to_str().unwrap()],
         LinkType::Dylib,
+        true,
     )
     .unwrap();
 

@@ -351,6 +351,7 @@ fn mono_module_to_dylib_asm<'a>(
             builtins_host_tempfile.path().to_str().unwrap(),
         ],
         roc_build::link::LinkType::Dylib,
+        true,
     )
     .expect("failed to link dynamic library");
 
