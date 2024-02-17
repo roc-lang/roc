@@ -1410,7 +1410,7 @@ pub(crate) fn build_list_index_probe<'a>(
         let len_sym = env.unique_symbol();
         let len_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::ListLenU64,
+                op: LowLevel::ListLen,
                 update_mode: env.next_update_mode_id(),
             },
             arguments: env.arena.alloc([list_sym]),
@@ -1567,7 +1567,7 @@ fn store_list_rest<'a>(
             call_type: CallType::LowLevel {
                 // Must use ListLenU64 here because we're using it with List.sublist,
                 // which takes U64s for start and len.
-                op: LowLevel::ListLenU64,
+                op: LowLevel::ListLen,
                 update_mode: env.next_update_mode_id(),
             },
             arguments: env.arena.alloc([list_sym]),

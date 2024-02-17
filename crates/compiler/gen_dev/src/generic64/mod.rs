@@ -2830,12 +2830,7 @@ impl<
         }
     }
 
-    fn build_list_len_usize(&mut self, dst: &Symbol, list: &Symbol) {
-        self.storage_manager
-            .list_len_usize(&mut self.buf, dst, list);
-    }
-
-    fn build_list_len_u64(&mut self, dst: &Symbol, list: &Symbol) {
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
         self.storage_manager.list_len_u64(&mut self.buf, dst, list);
     }
 

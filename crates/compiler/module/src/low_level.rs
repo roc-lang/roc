@@ -26,8 +26,7 @@ pub enum LowLevel {
     StrReserve,
     StrWithCapacity,
     StrReleaseExcessCapacity,
-    ListLenUsize,
-    ListLenU64,
+    ListLen,
     ListWithCapacity,
     ListReserve,
     ListReleaseExcessCapacity,
@@ -269,8 +268,7 @@ map_symbol_to_lowlevel! {
     StrToNum <= STR_TO_NUM;
     StrWithCapacity <= STR_WITH_CAPACITY;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
-    ListLenU64 <= LIST_LEN_U64;
-    ListLenUsize <= LIST_LEN_USIZE;
+    ListLen <= LIST_LEN;
     ListGetCapacity <= LIST_CAPACITY;
     ListWithCapacity <= LIST_WITH_CAPACITY;
     ListReserve <= LIST_RESERVE;

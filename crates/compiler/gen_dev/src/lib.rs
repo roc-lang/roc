@@ -1484,21 +1484,13 @@ trait Backend<'a> {
 
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
-            LowLevel::ListLenU64 => {
+            LowLevel::ListLen => {
                 debug_assert_eq!(
                     1,
                     args.len(),
                     "ListLenU64: expected to have exactly one argument"
                 );
-                self.build_list_len_u64(sym, &args[0])
-            }
-            LowLevel::ListLenUsize => {
-                debug_assert_eq!(
-                    1,
-                    args.len(),
-                    "ListLenUsize: expected to have exactly one argument"
-                );
-                self.build_list_len_usize(sym, &args[0])
+                self.build_list_len(sym, &args[0])
             }
             LowLevel::ListWithCapacity => {
                 debug_assert_eq!(
@@ -2382,11 +2374,8 @@ trait Backend<'a> {
     /// build_sqrt stores the result of `sqrt(src)` into dst.
     fn build_num_sqrt(&mut self, dst: Symbol, src: Symbol, float_width: FloatWidth);
 
-    /// build_list_len_usize returns the length of a list as a usize. This is for internal use only.
-    fn build_list_len_usize(&mut self, dst: &Symbol, list: &Symbol);
-
-    /// build_list_len_u64 returns the length of a list and casts it from usize to u64. This is for the public List.len.
-    fn build_list_len_u64(&mut self, dst: &Symbol, list: &Symbol);
+    /// build_list_len returns the length of a list after casting it from usize to u64.
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
 
     /// generate a call to a higher-order lowlevel
     fn build_higher_order_lowlevel(

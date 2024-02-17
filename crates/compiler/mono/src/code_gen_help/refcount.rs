@@ -926,12 +926,12 @@ fn refcount_list<'a>(
     //
 
     let len = root.create_symbol(ident_ids, "len");
-    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLenUsize, &[structure], next);
+    let len_stmt = |next| let_lowlevel(arena, Layout::U64, len, ListLen, &[structure], next);
 
     // let zero = 0
     let zero = root.create_symbol(ident_ids, "zero");
     let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
-    let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
+    let zero_stmt = |next| Stmt::Let(zero, zero_expr, Layout::U64, next);
 
     // let is_empty = lowlevel Eq len zero
     let is_empty = root.create_symbol(ident_ids, "is_empty");

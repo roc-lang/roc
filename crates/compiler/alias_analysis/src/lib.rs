@@ -1121,7 +1121,7 @@ fn lowlevel_spec<'a>(
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
-        ListLenUsize | ListLenU64 => {
+        ListLen => {
             // TODO should this touch the heap cell?
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
