@@ -7,5 +7,5 @@ const STYLE_CODES: StyleCodes = if cfg!(target_family = "wasm") {
 };
 
 pub const GREEN: &str = STYLE_CODES.green;
-pub const CYAN: &str = STYLE_CODES.green;
+pub const CYAN: &str = STYLE_CODES.cyan;
 pub const END_COL: &str = STYLE_CODES.reset;
