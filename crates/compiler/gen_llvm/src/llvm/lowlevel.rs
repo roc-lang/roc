@@ -408,7 +408,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &bitcode::STR_FROM_FLOAT[float_width],
             )
         }
-        StrFromUtf8Range => {
+        StrFromUtf8 => {
             let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
             let result_ptr = env
                 .builder
@@ -417,7 +417,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             use roc_target::Architecture::*;
             match env.target_info.architecture {
                 Aarch32 | X86_32 => {
-                    arguments!(list, start, count);
+                    arguments!(list);
                     let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
 
                     call_void_bitcode_fn(
@@ -426,15 +426,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             result_ptr.into(),
                             a.into(),
                             b.into(),
-                            start,
-                            count,
                             pass_update_mode(env, update_mode),
                         ],
-                        bitcode::STR_FROM_UTF8_RANGE,
+                        bitcode::STR_FROM_UTF8,
                     );
                 }
                 Aarch64 | X86_64 | Wasm32 => {
-                    arguments!(_list, start, count);
+                    arguments!(_list);
 
                     // we use the symbol here instead
                     let list = args[0];
@@ -444,11 +442,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         &[
                             result_ptr.into(),
                             list_symbol_to_c_abi(env, scope, list).into(),
-                            start,
-                            count,
                             pass_update_mode(env, update_mode),
                         ],
-                        bitcode::STR_FROM_UTF8_RANGE,
+                        bitcode::STR_FROM_UTF8,
                     );
                 }
             }

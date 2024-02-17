@@ -196,7 +196,7 @@ comptime {
     exportStrFn(str.getUnsafeC, "get_unsafe");
     exportStrFn(str.reserveC, "reserve");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
+    exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.repeatC, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimStart, "trim_start");

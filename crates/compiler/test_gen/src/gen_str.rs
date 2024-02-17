@@ -907,12 +907,14 @@ fn str_to_utf8() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range() {
+fn str_from_utf8() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { count: 5,  start: 0 }  is
+            bytes =
+                Str.toUtf8 "hello"
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
@@ -924,12 +926,15 @@ fn str_from_utf8_range() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range_slice() {
+fn str_from_utf8_slice() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { count: 4,  start: 1 }  is
+            bytes =
+                Str.toUtf8 "hello"
+                |> List.sublist { start: 1, len: 4 }
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
@@ -941,12 +946,15 @@ fn str_from_utf8_range_slice() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range_slice_not_end() {
+fn str_from_utf8_slice_not_end() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { count: 3,  start: 1 }  is
+            bytes =
+                Str.toUtf8 "hello"
+                |> List.sublist { start: 1, len: 3 }
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
@@ -958,71 +966,20 @@ fn str_from_utf8_range_slice_not_end() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range_order_does_not_matter() {
+fn str_from_utf8_order_does_not_matter() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 1,  count: 3 }  is
+            bytes =
+                Str.toUtf8 "hello"
+                |> List.sublist { start: 1, len: 3 }
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
-                   Err _ -> "Str.fromUtf8Range returned Err instead of Ok!"
+                   Err _ -> "Str.fromUtf8 returned Err instead of Ok!"
             "#
         ),
         RocStr::from("ell"),
-        RocStr
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range_out_of_bounds_start_value() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 7,  count: 3 }  is
-                   Ok _ -> ""
-                   Err (BadUtf8 _ _) -> ""
-                   Err OutOfBounds -> "out of bounds"
-            "#
-        ),
-        RocStr::from("out of bounds"),
-        RocStr
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range_count_too_high() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 0,  count: 6 }  is
-                   Ok _ -> ""
-                   Err (BadUtf8 _ _) -> ""
-                   Err OutOfBounds -> "out of bounds"
-            "#
-        ),
-        RocStr::from("out of bounds"),
-        RocStr
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_from_utf8_range_count_too_high_for_start() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 4,  count: 3 }  is
-                   Ok _ -> ""
-                   Err (BadUtf8 _ _) -> ""
-                   Err OutOfBounds -> "out of bounds"
-            "#
-        ),
-        RocStr::from("out of bounds"),
         RocStr
     );
 }

@@ -225,15 +225,13 @@ impl<'a> LowLevelCall<'a> {
             }
             StrFromInt => self.num_to_str(backend),
             StrFromFloat => self.num_to_str(backend),
-            StrFromUtf8Range => {
+            StrFromUtf8 => {
                 /*
                 Low-level op returns a struct with all the data for both Ok and Err.
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
                     output: *FromUtf8Result   i32
                     arg: RocList              i32
-                    start                     i64
-                    count                     i64
                     update_mode: UpdateMode   i32
                 */
 
@@ -245,7 +243,7 @@ impl<'a> LowLevelCall<'a> {
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8);
             }
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),

@@ -1230,7 +1230,7 @@ fn lowlevel_spec<'a>(
 
             builder.add_make_tuple(block, &[cell, bag])
         }
-        StrFromUtf8Range => {
+        StrFromUtf8 => {
             let list = env.symbols[&arguments[0]];
 
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;

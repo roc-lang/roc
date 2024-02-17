@@ -1328,7 +1328,7 @@ define_builtins! {
         40 STR_WALK_UTF8_WITH_INDEX: "walkUtf8WithIndex"
         41 STR_RESERVE: "reserve"
         42 STR_TO_NUM: "strToNum"
-        43 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
+        43 STR_FROM_UTF8_LOWLEVEL: "fromUtf8Lowlevel"
         44 STR_CAPACITY: "capacity"
         45 STR_REPLACE_EACH: "replaceEach"
         46 STR_REPLACE_FIRST: "replaceFirst"

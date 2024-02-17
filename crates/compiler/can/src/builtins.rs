@@ -116,7 +116,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrEndsWith; STR_ENDS_WITH; 2,
     StrSplit; STR_SPLIT; 2,
     StrCountUtf8Bytes; STR_COUNT_UTF8_BYTES; 1,
-    StrFromUtf8Range; STR_FROM_UTF8_RANGE_LOWLEVEL; 3,
+    StrFromUtf8; STR_FROM_UTF8_LOWLEVEL; 1,
     StrToUtf8; STR_TO_UTF8; 1,
     StrRepeat; STR_REPEAT; 2,
     StrTrim; STR_TRIM; 1,

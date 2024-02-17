@@ -338,7 +338,6 @@ interface Str
         countUtf8Bytes,
         toUtf8,
         fromUtf8,
-        fromUtf8Range,
         startsWith,
         endsWith,
         trim,
@@ -541,7 +540,7 @@ toUtf8 : Str -> List U8
 ## ```
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]
 fromUtf8 = \bytes ->
-    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
+    result = fromUtf8Lowlevel bytes
 
     if result.cIsOk then
         Ok result.bString
@@ -554,29 +553,6 @@ expect (Str.fromUtf8 [240, 159, 144, 166]) == Ok "🐦"
 expect (Str.fromUtf8 []) == Ok ""
 expect (Str.fromUtf8 [255]) |> Result.isErr
 
-## Encode part of a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## into a [Str]
-## ```
-## expect Str.fromUtf8Range [72, 105, 80, 103] { start : 0, count : 2 } == Ok "Hi"
-## ```
-fromUtf8Range : List U8, { start : U64, count : U64 } -> Result Str [BadUtf8 Utf8ByteProblem U64, OutOfBounds]
-fromUtf8Range = \bytes, config ->
-    if Num.addSaturated config.start config.count <= List.len bytes then
-        result = fromUtf8RangeLowlevel bytes config.start config.count
-
-        if result.cIsOk then
-            Ok result.bString
-        else
-            Err (BadUtf8 result.dProblemCode result.aByteIndex)
-    else
-        Err OutOfBounds
-
-expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 0, count: 2 }) == Ok "Hi"
-expect (Str.fromUtf8Range [233, 185, 143, 224, 174, 154, 224, 174, 191] { start: 3, count: 3 }) == Ok "ச"
-expect (Str.fromUtf8Range [240, 159, 144, 166] { start: 0, count: 4 }) == Ok "🐦"
-expect (Str.fromUtf8Range [] { start: 0, count: 0 }) == Ok ""
-expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 2, count: 3 }) |> Result.isErr
-
 FromUtf8Result : {
     aByteIndex : U64,
     bString : Str,
@@ -584,7 +560,7 @@ FromUtf8Result : {
     dProblemCode : Utf8ByteProblem,
 }
 
-fromUtf8RangeLowlevel : List U8, U64, U64 -> FromUtf8Result
+fromUtf8Lowlevel : List U8 -> FromUtf8Result
 
 ## Check if the given [Str] starts with a value.
 ## ```

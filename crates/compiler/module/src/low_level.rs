@@ -13,7 +13,7 @@ pub enum LowLevel {
     StrSplit,
     StrCountUtf8Bytes,
     StrFromInt,
-    StrFromUtf8Range,
+    StrFromUtf8,
     StrToUtf8,
     StrRepeat,
     StrFromFloat,
@@ -257,7 +257,7 @@ map_symbol_to_lowlevel! {
     StrEndsWith <= STR_ENDS_WITH;
     StrSplit <= STR_SPLIT;
     StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
-    StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL;
+    StrFromUtf8 <= STR_FROM_UTF8_LOWLEVEL;
     StrToUtf8 <= STR_TO_UTF8;
     StrRepeat <= STR_REPEAT;
     StrTrim <= STR_TRIM;

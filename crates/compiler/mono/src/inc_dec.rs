@@ -1350,7 +1350,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | NumCountOneBits
         | I128OfDec => arena.alloc_slice_copy(&[irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        StrFromUtf8Range => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),

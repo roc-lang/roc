@@ -1623,15 +1623,17 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrFromUtf8Range => {
+            LowLevel::StrFromUtf8 => {
                 let update_mode = self.debug_symbol("update_mode");
+
+                // In dev builds, always use UpdateMode::Immutable
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 self.build_fn_call(
                     sym,
-                    bitcode::STR_FROM_UTF8_RANGE.to_string(),
-                    &[args[0], args[1], args[2], update_mode],
-                    &[arg_layouts[0], arg_layouts[1], arg_layouts[2], Layout::U8],
+                    bitcode::STR_FROM_UTF8.to_string(),
+                    &[args[0], update_mode],
+                    &[arg_layouts[0], Layout::U8],
                     ret_layout,
                 )
             }

@@ -1511,33 +1511,19 @@ const FromUtf8Result = extern struct {
     problem_code: Utf8ByteProblem,
 };
 
-const CountAndStart = extern struct {
-    count: usize,
-    start: usize,
-};
-
-pub fn fromUtf8RangeC(
+pub fn fromUtf8C(
     list: RocList,
-    start_u64: u64,
-    count_u64: u64,
     update_mode: UpdateMode,
 ) callconv(.C) FromUtf8Result {
-    return fromUtf8Range(list, @intCast(start_u64), @intCast(count_u64), update_mode);
+    return fromUtf8(list, update_mode);
 }
 
-test "fromUtf8RangeC(\"hello\", 1, 3)" {
-    const original_bytes = "hello";
-    const list = RocList.fromSlice(u8, original_bytes[0..]);
-    const result = fromUtf8RangeC(list, 1, 3, UpdateMode.Immutable);
-
-    try expectEqual(result.is_ok, true);
-
-    result.string.decref();
-}
-
-pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
-    if (arg.len() == 0 or count == 0) {
-        arg.decref(RocStr.alignment);
+pub fn fromUtf8(
+    list: RocList,
+    update_mode: UpdateMode,
+) FromUtf8Result {
+    if (list.len() == 0) {
+        list.decref(1); // Alignment 1 for List U8
         return FromUtf8Result{
             .is_ok = true,
             .string = RocStr.empty(),
@@ -1545,11 +1531,11 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     }
-    const bytes = @as([*]const u8, @ptrCast(arg.bytes))[start .. start + count];
+    const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
-        const string = RocStr.fromSubListUnsafe(arg, start, count, update_mode);
+        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode);
         return FromUtf8Result{
             .is_ok = true,
             .string = string,
@@ -1557,10 +1543,9 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     } else {
-        const temp = errorToProblem(@as([*]u8, @ptrCast(arg.bytes)), arg.length);
+        const temp = errorToProblem(bytes);
 
-        // decref the list
-        arg.decref(RocStr.alignment);
+        list.decref(1); // Alignment 1 for List U8
 
         return FromUtf8Result{
             .is_ok = false,
@@ -1571,11 +1556,12 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
     }
 }
 
-fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: Utf8ByteProblem } {
+fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8ByteProblem } {
+    const len = bytes.len;
     var index: usize = 0;
 
-    while (index < length) {
-        const nextNumBytes = numberOfNextCodepointBytes(bytes, length, index) catch |err| {
+    while (index < len) {
+        const nextNumBytes = numberOfNextCodepointBytes(bytes, index) catch |err| {
             switch (err) {
                 error.UnexpectedEof => {
                     return .{ .index = index, .problem = Utf8ByteProblem.UnexpectedEndOfSequence };
@@ -1649,13 +1635,13 @@ const Utf8DecodeError = error{
 // Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
 // but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
 // TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
-pub fn numberOfNextCodepointBytes(ptr: [*]u8, len: usize, index: usize) Utf8DecodeError!usize {
-    const codepoint_len = try unicode.utf8ByteSequenceLength(ptr[index]);
+pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeError!usize {
+    const codepoint_len = try unicode.utf8ByteSequenceLength(bytes[index]);
     const codepoint_end_index = index + codepoint_len;
-    if (codepoint_end_index > len) {
+    if (codepoint_end_index > bytes.len) {
         return error.UnexpectedEof;
     }
-    _ = try unicode.utf8Decode(ptr[index..codepoint_end_index]);
+    _ = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
     return codepoint_end_index - index;
 }
 
@@ -1671,11 +1657,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, 0, length, .Immutable);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8Range(str, 0, str.len(), .Immutable);
+    return fromUtf8(str, .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
@@ -1754,7 +1740,7 @@ fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8Byt
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
 
-    try expectError(err, numberOfNextCodepointBytes(str_ptr, len, index));
+    try expectError(err, numberOfNextCodepointBytes(str_ptr[0..len], index));
     try expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, len));
 }
 
