@@ -1171,12 +1171,12 @@ procedure Num.96 (#Attr.2):
     ret Num.424;
 
 procedure Str.12 (#Attr.2):
-    let Str.251 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.251;
+    let Str.234 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.234;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.252 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.252;
+    let Str.235 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.235;
 
 procedure Test.0 ():
     let Test.8 : Str = "a";
