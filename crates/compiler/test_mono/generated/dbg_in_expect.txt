@@ -42,8 +42,8 @@ procedure Inspect.62 (Inspect.306):
     ret Inspect.306;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.251 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.251;
+    let Str.270 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.270;
 
 procedure Test.1 ():
     let Test.4 : Str = "";

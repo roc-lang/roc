@@ -594,6 +594,13 @@ fromUtf8RangeLowlevel : List U8, Nat, Nat -> FromUtf8Result
 ## ```
 startsWith : Str, Str -> Bool
 
+expect "Roc" |> Str.startsWith "R"
+expect "Roc" |> Str.startsWith "Ro"
+expect "Roc" |> Str.startsWith "Roc"
+expect ("Roc" |> Str.startsWith "roc") == Bool.false
+expect "Roc" |> Str.startsWith ""
+expect ("" |> Str.startsWith "R") == Bool.false
+
 ## Check if the given [Str] ends with a value.
 ## ```
 ## expect Str.endsWith "ABC" "C" == Bool.true
@@ -601,12 +608,27 @@ startsWith : Str, Str -> Bool
 ## ```
 endsWith : Str, Str -> Bool
 
+expect "Roc" |> Str.endsWith "c"
+expect "Roc" |> Str.endsWith "oc"
+expect "Roc" |> Str.endsWith "Roc"
+expect ("Roc" |> Str.endsWith "Oc") == Bool.false
+expect "Roc" |> Str.endsWith ""
+expect ("" |> Str.endsWith "c") == Bool.false
+
 ## Return the [Str] with all whitespace removed from both the beginning
 ## as well as the end.
 ## ```
 ## expect Str.trim "   Hello      \n\n" == "Hello"
 ## ```
 trim : Str -> Str
+
+expect Str.trim " Roc " == "Roc"
+expect Str.trim "  Roc" == "Roc"
+expect Str.trim "Roc  " == "Roc"
+expect Str.trim "  Roc  " == "Roc"
+expect Str.trim "Roc" == "Roc"
+expect Str.trim "" == ""
+expect Str.trim "   " == ""
 
 ## Return the [Str] with all whitespace removed from the beginning.
 ## ```

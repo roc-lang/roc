@@ -40,8 +40,8 @@ procedure Num.51 (#Attr.2, #Attr.3):
     ret Num.303;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.253 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.253;
+    let Str.272 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.272;
 
 procedure Test.1 (Test.5):
     ret Test.5;
