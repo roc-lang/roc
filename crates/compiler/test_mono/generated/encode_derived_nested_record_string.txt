@@ -286,30 +286,30 @@ procedure Num.94 (#Attr.2, #Attr.3):
     ret Num.323;
 
 procedure Str.12 (#Attr.2):
-    let Str.263 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.263;
+    let Str.282 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.282;
 
 procedure Str.43 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.260 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.260;
+    let Str.279 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.279;
 
 procedure Str.9 (Str.68):
-    let Str.258 : U64 = 0i64;
-    let Str.259 : U64 = CallByName List.6 Str.68;
-    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.258 Str.259;
-    let Str.255 : Int1 = StructAtIndex 2 Str.69;
-    if Str.255 then
-        let Str.257 : Str = StructAtIndex 1 Str.69;
-        let Str.256 : [C {U64, U8}, C Str] = TagId(1) Str.257;
-        ret Str.256;
+    let Str.277 : U64 = 0i64;
+    let Str.278 : U64 = CallByName List.6 Str.68;
+    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.277 Str.278;
+    let Str.274 : Int1 = StructAtIndex 2 Str.69;
+    if Str.274 then
+        let Str.276 : Str = StructAtIndex 1 Str.69;
+        let Str.275 : [C {U64, U8}, C Str] = TagId(1) Str.276;
+        ret Str.275;
     else
-        let Str.253 : U8 = StructAtIndex 3 Str.69;
-        let Str.254 : U64 = StructAtIndex 0 Str.69;
+        let Str.272 : U8 = StructAtIndex 3 Str.69;
+        let Str.273 : U64 = StructAtIndex 0 Str.69;
         let #Derived_gen.55 : Str = StructAtIndex 1 Str.69;
         dec #Derived_gen.55;
-        let Str.252 : {U64, U8} = Struct {Str.254, Str.253};
-        let Str.251 : [C {U64, U8}, C Str] = TagId(0) Str.252;
-        ret Str.251;
+        let Str.271 : {U64, U8} = Struct {Str.273, Str.272};
+        let Str.270 : [C {U64, U8}, C Str] = TagId(0) Str.271;
+        ret Str.270;
 
 procedure TotallyNotJson.150 (TotallyNotJson.151, TotallyNotJson.1043, TotallyNotJson.149):
     let TotallyNotJson.1046 : List U8 = CallByName TotallyNotJson.26 TotallyNotJson.149;
