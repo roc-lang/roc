@@ -1,5 +1,4 @@
-interface IngestedFileBytes
-    exposes [str]
+module [str]
 
 import "IngestedFileBytes.roc" as foo : List U8
 

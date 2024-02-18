@@ -337,7 +337,7 @@ fn import_transitive_alias() {
             "RBTree",
             indoc!(
                 r"
-                        interface RBTree exposes [RedBlackTree, empty]
+                        module [RedBlackTree, empty]
 
                         # The color of a node. Leaves are considered Black.
                         NodeColor : [Red, Black]
@@ -355,7 +355,7 @@ fn import_transitive_alias() {
             "Other",
             indoc!(
                 r"
-                        interface Other exposes [empty]
+                        module [empty]
 
                         import RBTree
 
@@ -370,9 +370,9 @@ fn import_transitive_alias() {
 }
 
 #[test]
-fn interface_with_deps() {
+fn module_with_deps() {
     let subs_by_module = Default::default();
-    let src_dir = fixtures_dir().join("interface_with_deps");
+    let src_dir = fixtures_dir().join("module_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
     let loaded = load_and_typecheck(
@@ -439,7 +439,7 @@ fn load_unit() {
 #[test]
 fn import_alias() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "ImportAlias", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "ImportAlias", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -452,7 +452,7 @@ fn import_alias() {
 #[test]
 fn import_inside_def() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "ImportInsideDef", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "ImportInsideDef", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -468,7 +468,7 @@ fn import_inside_def() {
 fn exposed_used_outside_scope() {
     let subs_by_module = Default::default();
     load_fixture(
-        "interface_with_deps",
+        "module_with_deps",
         "ExposedUsedOutsideScope",
         subs_by_module,
     );
@@ -478,17 +478,13 @@ fn exposed_used_outside_scope() {
 #[should_panic(expected = "MODULE NOT IMPORTED")]
 fn import_used_outside_scope() {
     let subs_by_module = Default::default();
-    load_fixture(
-        "interface_with_deps",
-        "ImportUsedOutsideScope",
-        subs_by_module,
-    );
+    load_fixture("module_with_deps", "ImportUsedOutsideScope", subs_by_module);
 }
 
 #[test]
 fn test_load_and_typecheck() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "WithBuiltins", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "WithBuiltins", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -509,7 +505,7 @@ fn test_load_and_typecheck() {
 #[test]
 fn iface_quicksort() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "Quicksort", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "Quicksort", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -558,7 +554,7 @@ fn app_quicksort() {
 #[test]
 fn load_astar() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "AStar", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -590,7 +586,7 @@ fn load_principal_types() {
 #[test]
 fn iface_dep_types() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "Primary", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "Primary", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -634,7 +630,7 @@ fn app_dep_types() {
 #[test]
 fn imported_dep_regression() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "OneDep", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "OneDep", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -647,7 +643,7 @@ fn imported_dep_regression() {
 #[test]
 fn ingested_file() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "IngestedFile", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "IngestedFile", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -662,7 +658,7 @@ fn ingested_file() {
 #[test]
 fn ingested_file_bytes() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "IngestedFileBytes", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "IngestedFileBytes", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -679,7 +675,7 @@ fn parse_problem() {
         "Main",
         indoc!(
             r"
-                interface Main exposes [main]
+                module [main]
 
                 main = [
                 "
@@ -716,7 +712,7 @@ fn parse_problem() {
 #[should_panic(expected = "FILE NOT FOUND")]
 fn file_not_found() {
     let subs_by_module = Default::default();
-    let loaded_module = load_fixture("interface_with_deps", "invalid$name", subs_by_module);
+    let loaded_module = load_fixture("module_with_deps", "invalid$name", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -866,7 +862,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Age",
             indoc!(
                 r"
-                    interface Age exposes [Age]
+                    module [Age]
 
                     Age := U32
                     "
@@ -876,7 +872,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Main",
             indoc!(
                 r"
-                    interface Main exposes [twenty, readAge]
+                    module [twenty, readAge]
 
                     import Age exposing [Age]
 
@@ -944,7 +940,7 @@ fn unused_imports() {
             "Dep1",
             indoc!(
                 r#"
-                interface Dep1 exposes [one]
+                module [one]
                 one = 1
                 "#
             ),
@@ -953,7 +949,7 @@ fn unused_imports() {
             "Dep2",
             indoc!(
                 r#"
-                interface Dep2 exposes [two]
+                module [two]
                 two = 2
                 "#
             ),
@@ -962,7 +958,7 @@ fn unused_imports() {
             "Dep3",
             indoc!(
                 r#"
-                interface Dep3 exposes [Three, three]
+                module [Three, three]
 
                 Three : [Three]
 
@@ -974,7 +970,7 @@ fn unused_imports() {
             "Main",
             indoc!(
                 r#"
-            interface Main exposes [usedModule, unusedModule, unusedExposed, usingThreeValue]
+            module [usedModule, unusedModule, unusedExposed, usingThreeValue]
 
             import Dep1
             import Dep3 exposing [Three]
@@ -1144,47 +1140,12 @@ fn import_builtin_in_platform_and_check_app() {
 }
 
 #[test]
-fn module_doesnt_match_file_path() {
-    let modules = vec![(
-        "Age",
-        indoc!(
-            r"
-                interface NotAge exposes [Age]
-
-                Age := U32
-                "
-        ),
-    )];
-
-    let err = multiple_modules("module_doesnt_match_file_path", modules).unwrap_err();
-    assert_eq!(
-        err,
-        indoc!(
-            r"
-            ── WEIRD MODULE NAME in tmp/module_doesnt_match_file_path/Age ──────────────────
-
-            This module name does not correspond with the file path it is defined
-            in:
-
-            1│  interface NotAge exposes [Age]
-                          ^^^^^^
-
-            Module names must correspond with the file paths they are defined in.
-            For example, I expect to see BigNum defined in BigNum.roc, or Math.Sin
-            defined in Math/Sin.roc."
-        ),
-        "\n{}",
-        err
-    );
-}
-
-#[test]
 fn module_cyclic_import_itself() {
     let modules = vec![(
         "Age",
         indoc!(
             r"
-            interface Age exposes []
+            module []
 
             import Age
             "
@@ -1222,7 +1183,7 @@ fn module_cyclic_import_transitive() {
             "Age",
             indoc!(
                 r"
-                interface Age exposes []
+                module []
                 import Person
                 "
             ),
@@ -1231,7 +1192,7 @@ fn module_cyclic_import_transitive() {
             "Person",
             indoc!(
                 r"
-                interface Person exposes []
+                module []
                 import Age
                 "
             ),

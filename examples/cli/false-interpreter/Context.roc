@@ -1,5 +1,4 @@
-interface Context
-    exposes [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
+module [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
 
 import pf.File
 import pf.Task exposing [Task]

@@ -1,2 +1,1 @@
-interface ExposedNotDefined
-    exposes [bar]
+module [bar]

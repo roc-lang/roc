@@ -1,5 +1,4 @@
-interface Stdout
-    exposes [line, raw]
+module [line, raw]
 
 import pf.Effect
 import Task exposing [Task]

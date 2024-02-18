@@ -1,5 +1,4 @@
-interface Elem
-    exposes [Elem, PressEvent, row, col, text, button, none, translate, list]
+module [Elem, PressEvent, row, col, text, button, none, translate, list]
 
 import Action exposing [Action]
 

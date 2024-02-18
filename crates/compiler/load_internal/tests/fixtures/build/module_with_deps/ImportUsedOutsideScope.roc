@@ -1,4 +1,4 @@
-interface ImportUsedOutsideScope exposes [good, bad]
+module [good, bad]
 
 good =
     import Dep2

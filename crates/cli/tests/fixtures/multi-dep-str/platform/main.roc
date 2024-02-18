@@ -1,5 +1,5 @@
 platform "multi-module"
-    requires {}{ main : Str }
+    requires {} { main : Str }
     exposes []
     packages {}
     provides [mainForHost]

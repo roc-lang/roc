@@ -1,11 +1,10 @@
 ## THIS MODULE IS DEPRECATED AND CURRENTLY IN THE PROCESS OF BEING REMOVED
 ## FROM STD LIBRARY
-interface TotallyNotJson
-    exposes [
-        Json,
-        json,
-        jsonWithOptions,
-    ]
+module [
+    Json,
+    json,
+    jsonWithOptions,
+]
 
 import List
 import Str

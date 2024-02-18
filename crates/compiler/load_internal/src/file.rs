@@ -49,7 +49,7 @@ use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, Defs, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::{
-    ExposedName, HeaderType, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
+    self, ExposedName, HeaderType, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
@@ -647,7 +647,7 @@ struct CanAndCon {
 enum PlatformPath<'a> {
     NotSpecified,
     Valid(To<'a>),
-    RootIsInterface,
+    RootIsModule,
     RootIsHosted,
     RootIsPlatformModule,
 }
@@ -1213,8 +1213,9 @@ fn adjust_header_paths<'a>(
     {
         debug_assert_eq!(*header_id, header_output.module_id);
 
-        if let HeaderType::Interface { name, .. } = header_type {
-            // Interface modules can have names like Foo.Bar.Baz,
+        if let HeaderType::Module { name, .. } = header_type {
+            // [modules-revamp] TODO: Privacy changes
+            // Modules can have names like Foo.Bar.Baz,
             // in which case we need to adjust the src_dir to
             // remove the "Bar/Baz" directories in order to correctly
             // resolve this interface module's imports!
@@ -2340,13 +2341,13 @@ fn update<'a>(
                             state.exposed_modules = exposes_ids;
                         }
                     }
-                    Builtin { .. } | Interface { .. } => {
+                    Builtin { .. } | Module { .. } => {
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,
                                 PlatformPath::NotSpecified
                             ));
-                            state.platform_path = PlatformPath::RootIsInterface;
+                            state.platform_path = PlatformPath::RootIsModule;
                         }
                     }
                     Hosted { .. } => {
@@ -3001,7 +3002,7 @@ fn update<'a>(
                     // This happens due to abilities. In detail, consider
                     //
                     //   # Default module
-                    //   interface Default exposes [default, getDefault]
+                    //   module [default, getDefault]
                     //
                     //   Default implements default : {} -> a where a implements Default
                     //
@@ -3243,7 +3244,7 @@ fn finish_specialization<'a>(
     let module_id = state.root_id;
     let uses_prebuilt_platform = match platform_data {
         Some(data) => data.is_prebuilt,
-        // If there's no platform data (e.g. because we're building an interface module)
+        // If there's no platform data (e.g. because we're building a module)
         // then there's no prebuilt platform either!
         None => false,
     };
@@ -3398,12 +3399,12 @@ fn load_package_from_disk<'a>(
             match parsed {
                 Ok((
                     ast::Module {
-                        header: ast::Header::Interface(header),
+                        header: ast::Header::Module(header),
                         ..
                     },
                     _parse_state,
                 )) => Err(LoadingProblem::UnexpectedHeader(format!(
-                    "expected platform/package module, got Interface with header\n{header:?}"
+                    "expected platform/package module, got Module with header\n{header:?}"
                 ))),
                 Ok((
                     ast::Module {
@@ -3529,19 +3530,21 @@ fn load_builtin_module_help<'a>(
     match parsed {
         Ok((
             ast::Module {
-                header: ast::Header::Interface(header),
+                header: ast::Header::Module(header),
                 comments,
             },
             parse_state,
         )) => {
+            let name_stem = arena.alloc_str(filename.file_stem().unwrap().to_str().unwrap());
+
             let info = HeaderInfo {
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 header_type: HeaderType::Builtin {
-                    name: header.name.value,
-                    exposes: unspace(arena, header.exposes.item.items),
+                    name: header::ModuleName::new(name_stem),
+                    exposes: unspace(arena, header.exposes.items),
                     generates_with: &[],
                 },
                 module_comments: comments,
@@ -3744,45 +3747,6 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
-fn verify_interface_matches_file_path<'a>(
-    interface_name: Loc<roc_parse::header::ModuleName<'a>>,
-    path: &Path,
-    state: &roc_parse::state::State<'a>,
-) -> Result<(), LoadingProblem<'a>> {
-    let module_parts = interface_name.value.as_str().split(MODULE_SEPARATOR).rev();
-
-    let mut is_mismatched = false;
-    let mut opt_path = Some(path);
-    for part in module_parts {
-        match opt_path.and_then(|path| path.file_stem().map(|fi| (path, fi))) {
-            None => {
-                is_mismatched = true;
-                break;
-            }
-            Some((path, fi)) => {
-                if fi != part {
-                    is_mismatched = true;
-                    break;
-                }
-                opt_path = path.parent();
-            }
-        }
-    }
-
-    if !is_mismatched {
-        return Ok(());
-    }
-
-    use roc_parse::parser::EHeader;
-    let syntax_problem =
-        SyntaxError::Header(EHeader::InconsistentModuleName(interface_name.region));
-    let problem = LoadingProblem::ParsingFailed(FileError {
-        problem: SourceError::new(syntax_problem, state),
-        filename: path.to_path_buf(),
-    });
-    Err(problem)
-}
-
 #[derive(Debug)]
 struct HeaderOutput<'a> {
     module_id: ModuleId,
@@ -3818,54 +3782,41 @@ fn parse_header<'a>(
     match parsed {
         Ok((
             ast::Module {
-                header: ast::Header::Interface(header),
+                header: ast::Header::Module(header),
                 comments,
             },
             parse_state,
         )) => {
-            verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
+            let module_name = match opt_expected_module_name {
+                Some(pq_name) => arena.alloc_str(pq_name.as_inner().as_str()),
+                None => {
+                    // [modules-revamp] [privacy-changes] TODO: Support test/check on nested modules
+                    arena.alloc_str(filename.file_stem().unwrap().to_str().unwrap())
+                }
+            };
 
-            let header_name_region = header.name.region;
             let info = HeaderInfo {
                 filename: filename.clone(),
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                header_type: HeaderType::Interface {
-                    name: header.name.value,
-                    exposes: unspace(arena, header.exposes.item.items),
+                header_type: HeaderType::Module {
+                    name: roc_parse::header::ModuleName::new(module_name),
+                    exposes: unspace(arena, header.exposes.items),
                 },
                 module_comments: comments,
             };
 
-            let (module_id, module_name, module_header) =
+            let (module_id, _, module_header) =
                 build_header(info, parse_state.clone(), module_ids, module_timing)?;
 
-            if let Some(imports) = header.imports {
+            if let Some(imports) = header.interface_imports {
                 return Err(LoadingProblem::HeaderImportFound {
                     filename,
                     module_id,
                     region: imports.region,
                     source: src_bytes,
                 });
-            }
-
-            if let Some(expected_module_name) = opt_expected_module_name {
-                if expected_module_name != module_name {
-                    let problem = SourceError::new(
-                        IncorrectModuleName {
-                            module_id,
-                            found: Loc::at(header_name_region, module_name),
-                            expected: expected_module_name,
-                        },
-                        &parse_state,
-                    );
-                    let problem = LoadingProblem::IncorrectModuleName(FileError {
-                        problem,
-                        filename: module_header.module_path,
-                    });
-                    return Err(problem);
-                }
             }
 
             Ok(HeaderOutput {
@@ -4268,14 +4219,9 @@ fn build_header<'a>(
             // Package modules do not have names.
             String::new().into()
         }
-        HeaderType::Interface { name, .. }
+        HeaderType::Module { name, .. }
         | HeaderType::Builtin { name, .. }
-        | HeaderType::Hosted { name, .. } => {
-            // TODO check to see if name is consistent with filename.
-            // If it isn't, report a problem!
-
-            name.as_str().into()
-        }
+        | HeaderType::Hosted { name, .. } => name.as_str().into(),
     };
 
     let (name, home) = {
@@ -4301,7 +4247,7 @@ fn build_header<'a>(
     // and we just have a bunch of definitions with runtime errors in their bodies
     let header_type = {
         match header_type {
-            HeaderType::Interface { name, exposes } if home.is_builtin() => HeaderType::Builtin {
+            HeaderType::Module { name, exposes } if home.is_builtin() => HeaderType::Builtin {
                 name,
                 exposes,
                 generates_with: &[],
@@ -5076,7 +5022,7 @@ fn canonicalize_and_constrain<'a>(
             // TODO: actually generate docs for platform and package modules.
             None
         }
-        HeaderType::Interface { name, .. }
+        HeaderType::Module { name, .. }
         | HeaderType::Builtin { name, .. }
         | HeaderType::Hosted { name, .. }
             if exposed_module_ids.contains(&parsed.module_id) =>
@@ -5096,7 +5042,7 @@ fn canonicalize_and_constrain<'a>(
 
             Some(docs)
         }
-        HeaderType::Interface { .. } | HeaderType::Builtin { .. } | HeaderType::Hosted { .. } => {
+        HeaderType::Module { .. } | HeaderType::Builtin { .. } | HeaderType::Hosted { .. } => {
             // This module isn't exposed by the platform, so don't generate docs for it!
             None
         }
@@ -5243,7 +5189,7 @@ fn parse<'a>(
         }
         HeaderType::App { .. }
         | HeaderType::Package { .. }
-        | HeaderType::Interface { .. }
+        | HeaderType::Module { .. }
         | HeaderType::Builtin { .. }
         | HeaderType::Hosted { .. } => {}
     };
@@ -6541,12 +6487,12 @@ fn report_cannot_run(
                     severity: Severity::RuntimeError,
                 }
             }
-            RootIsInterface => {
+            RootIsModule => {
                 let doc = alloc.stack([
                     alloc.reflow(
-                        r"The input file is an `interface` module, but only `app` modules can be run.",
+                        r"The input file is a module, but only `app` modules can be run.",
                     ),
-                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify an interface module like this one."),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify a module like this one."),
                 ]);
 
                 Report {

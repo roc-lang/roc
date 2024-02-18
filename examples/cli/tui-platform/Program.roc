@@ -1,5 +1,4 @@
-interface Program
-    exposes [Program]
+module [Program]
 
 Program model : {
     init : {} -> model,

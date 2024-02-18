@@ -1,5 +1,4 @@
-interface Principal
-    exposes [identity, intVal]
+module [identity, intVal]
 
 identity = \a -> a
 

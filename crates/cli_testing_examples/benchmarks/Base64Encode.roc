@@ -1,5 +1,4 @@
-interface Base64Encode
-    exposes [toBytes]
+module [toBytes]
 
 import BytesEncode exposing [ByteEncoder]
 

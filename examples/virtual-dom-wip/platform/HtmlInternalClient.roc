@@ -1,9 +1,8 @@
-interface HtmlInternalClient
-    exposes [
-        PlatformState,
-        initClientApp,
-        dispatchEvent,
-    ]
+module [
+    PlatformState,
+    initClientApp,
+    dispatchEvent,
+]
 
 import Effect exposing [
     Effect,

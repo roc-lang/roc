@@ -19,7 +19,7 @@ impl<'a> HeaderType<'a> {
             }
             | HeaderType::Hosted { exposes, .. }
             | HeaderType::Builtin { exposes, .. }
-            | HeaderType::Interface { exposes, .. } => exposes,
+            | HeaderType::Module { exposes, .. } => exposes,
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
         }
     }
@@ -30,7 +30,7 @@ impl<'a> HeaderType<'a> {
             HeaderType::Builtin { .. } => "builtin",
             HeaderType::Package { .. } => "package",
             HeaderType::Platform { .. } => "platform",
-            HeaderType::Interface { .. } => "interface",
+            HeaderType::Module { .. } => "module",
         }
     }
 }
@@ -73,7 +73,7 @@ pub enum HeaderType<'a> {
         /// usually `pf`
         config_shorthand: &'a str,
     },
-    Interface {
+    Module {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
     },
@@ -196,12 +196,12 @@ pub struct KeywordItem<'a, K, V> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct InterfaceHeader<'a> {
-    pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<ModuleName<'a>>,
+pub struct ModuleHeader<'a> {
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
 
-    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    pub imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
+    // Keeping this so we can format old interface header into module headers
+    pub interface_imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -378,7 +378,7 @@ where
     }
 }
 
-impl<'a> Malformed for InterfaceHeader<'a> {
+impl<'a> Malformed for ModuleHeader<'a> {
     fn is_malformed(&self) -> bool {
         false
     }

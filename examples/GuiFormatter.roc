@@ -1,8 +1,7 @@
-interface GuiFormatter
-    exposes [
-        GuiFormatter,
-        toGui,
-    ]
+module [
+    GuiFormatter,
+    toGui,
+]
 
 ## Creates GUI representations of Roc values, for use in inspect-gui.roc
 

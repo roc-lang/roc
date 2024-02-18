@@ -1,5 +1,4 @@
-interface Res
-    exposes [Res, withDefault, map, listMap, andThen, ConsList]
+module [Res, withDefault, map, listMap, andThen, ConsList]
 
 Res ok err : [Ok ok, Err err]
 

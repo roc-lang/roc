@@ -244,7 +244,7 @@ fn verify_procedures<'a>(
                 git add -u
                 git commit -S -m "update mono tests"
                 git push origin YOUR_BRANCH_NAME
-                
+
             "#
         ));
     }

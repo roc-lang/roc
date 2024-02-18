@@ -1,5 +1,4 @@
-interface Quicksort
-    exposes [swap, partition, quicksort]
+module [swap, partition, quicksort]
 
 quicksort : List (Num a), Nat, Nat -> List (Num a)
 quicksort = \list, low, high ->

@@ -1,5 +1,4 @@
-interface MissingDep
-    exposes [unit]
+module [unit]
 
 import ThisFileIsMissing
 

@@ -1,5 +1,4 @@
-interface Primary
-    exposes [blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay]
+module [blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay]
 
 import Dep1
 import Dep2

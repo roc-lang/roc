@@ -1,5 +1,4 @@
-interface File
-    exposes [line, Handle, withOpen, chunk]
+module [line, Handle, withOpen, chunk]
 
 import pf.Effect
 import Task exposing [Task]

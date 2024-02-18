@@ -1,4 +1,4 @@
-interface BytesEncode exposes [ByteEncoder, sequence, u8, u16, bytes, empty, encode]
+module [ByteEncoder, sequence, u8, u16, bytes, empty, encode]
 
 Endianness : [BE, LE]
 

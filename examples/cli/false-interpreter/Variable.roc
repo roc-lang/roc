@@ -1,5 +1,4 @@
-interface Variable
-    exposes [Variable, fromUtf8, toIndex, totalCount, toStr]
+module [Variable, fromUtf8, toIndex, totalCount, toStr]
 
 # Variables in False can only be single letters. Thus, the valid variables are "a" to "z".
 # This opaque type deals with ensure we always have valid variables.

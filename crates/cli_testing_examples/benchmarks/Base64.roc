@@ -1,4 +1,4 @@
-interface Base64 exposes [fromBytes, fromStr, toBytes, toStr]
+module [fromBytes, fromStr, toBytes, toStr]
 
 import Base64Decode
 

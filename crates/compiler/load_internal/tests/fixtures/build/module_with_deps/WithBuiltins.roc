@@ -1,5 +1,4 @@
-interface WithBuiltins
-    exposes [floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2]
+module [floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2]
 
 import Dep1
 import Dep2

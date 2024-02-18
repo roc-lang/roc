@@ -1,5 +1,4 @@
-interface Dep3
-    exposes [one, two, foo, bar]
+module [one, two, foo, bar]
 
 one = 1
 

@@ -30,7 +30,7 @@ As the time of writing this post, the following is the current bare bones tree o
 
 impl.roc is the application where we actually implement our native Roc functions.\
 platform.roc as the name suggests contains platform logic, (but doesn't really have much here, mostly just) exposes functions to the host - bridge.c\
-bridge.c is the JNI bridge, it's the host that implements the Roc functions (e.g roc_alloc) and the JNI functions that act like the bridge between Roc and Java (bridge as in, doing type conversions between the languages, needed jvm boilerplate, etc). 
+bridge.c is the JNI bridge, it's the host that implements the Roc functions (e.g roc_alloc) and the JNI functions that act like the bridge between Roc and Java (bridge as in, doing type conversions between the languages, needed jvm boilerplate, etc).
 
 For each of our native Roc functions, in the application (impl.roc), we have a corresponding `Java_javaSource_Demo_FUNC` C function that handles the "behind the scenes", this includes type conversions between the languages, transforming roc panics into java exceptions and basically all the glue code necessary.
 
@@ -58,7 +58,7 @@ factorial = \n ->
         n * (factorial (n - 1))
 ```
 
-Nothing too crazy. Again, do note how we crash if n < 0, see how this would play out from the Java side. 
+Nothing too crazy. Again, do note how we crash if n < 0, see how this would play out from the Java side.
 
 Now let's take a quick look on the Java side of things;
 

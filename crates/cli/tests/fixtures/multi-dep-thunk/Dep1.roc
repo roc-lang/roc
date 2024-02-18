@@ -1,4 +1,4 @@
-interface Dep1 exposes [value1]
+module [value1]
 
 import Dep2
 

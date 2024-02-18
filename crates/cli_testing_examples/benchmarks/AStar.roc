@@ -1,5 +1,4 @@
-interface AStar
-    exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath]
+module [findPath, Model, initialModel, cheapestOpen, reconstructPath]
 
 import Quicksort
 

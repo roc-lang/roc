@@ -1,23 +1,22 @@
-interface HtmlEvent
-    exposes [
-        Handler,
-        CyclicStructureAccessor,
-        on,
-        custom,
-        onClick,
-        onDoubleClick,
-        onMouseDown,
-        onMouseUp,
-        onMouseEnter,
-        onMouseLeave,
-        onMouseOver,
-        onMouseOut,
-        onCheck,
-        onBlur,
-        onFocus,
-        onInput,
-        onSubmit,
-    ]
+module [
+    Handler,
+    CyclicStructureAccessor,
+    on,
+    custom,
+    onClick,
+    onDoubleClick,
+    onMouseDown,
+    onMouseUp,
+    onMouseEnter,
+    onMouseLeave,
+    onMouseOver,
+    onMouseOut,
+    onCheck,
+    onBlur,
+    onFocus,
+    onInput,
+    onSubmit,
+]
 
 import Action exposing [Action]
 import HtmlInternalShared exposing [Attribute]

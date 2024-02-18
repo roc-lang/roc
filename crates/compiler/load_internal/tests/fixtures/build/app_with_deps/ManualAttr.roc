@@ -1,5 +1,4 @@
-interface ManualAttr
-    exposes []
+module []
 
 # manually replicates the Attr wrapping that uniqueness inference uses, to try and find out why they are different
 # It is very important that there are no signatures here! elm uses an optimization that leads to less copying when

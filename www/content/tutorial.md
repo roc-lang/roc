@@ -36,9 +36,9 @@
 
 ## [REPL](#repl) {#repl}
 
-Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short. 
+Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short.
 
-You can use the online REPL at [roc-lang.org/repl](https://www.roc-lang.org/repl). 
+You can use the online REPL at [roc-lang.org/repl](https://www.roc-lang.org/repl).
 
 Or you can run this in a terminal: <code class="block">roc repl</code>, and if Roc is [installed](/install), you should see this:
 
@@ -1712,7 +1712,7 @@ See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/
 
 ## [Examples](#examples) {#examples}
 
-Well done on making it this far! 
+Well done on making it this far!
 
 We've covered all of the basic syntax and features of Roc in this Tutorial. You should now have a good foundation and be ready to start writing your own applications.
 
@@ -2025,12 +2025,12 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 The record builder syntax sugar is a useful feature which leverages the functional programming concept of [applicative functors](https://lucamug.medium.com/functors-applicatives-and-monads-in-pictures-784c2b5786f7), to provide a flexible method for constructing complex types.
 
-The record builder syntax sugar helps to build up a record by applying a series of functions to it. 
+The record builder syntax sugar helps to build up a record by applying a series of functions to it.
 
 For example, let's say we write a record-builder as follows:
 
 ```roc
-{ aliceID, bobID, trudyID } = 
+{ aliceID, bobID, trudyID } =
     initIDCount {
         aliceID: <- incID,
         bobID: <- incID,

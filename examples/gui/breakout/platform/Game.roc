@@ -1,5 +1,4 @@
-interface Game
-    exposes [Bounds, Elem, Event]
+module [Bounds, Elem, Event]
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }
 

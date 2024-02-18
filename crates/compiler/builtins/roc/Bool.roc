@@ -1,5 +1,4 @@
-interface Bool
-    exposes [Bool, Eq, true, false, and, or, not, isEq, isNotEq]
+module [Bool, Eq, true, false, and, or, not, isEq, isNotEq]
 
 ## Defines a type that can be compared for total equality.
 ##

@@ -1,5 +1,4 @@
-interface AStar
-    exposes [initialModel, reconstructPath, updateCost, cheapestOpen, astar, findPath]
+module [initialModel, reconstructPath, updateCost, cheapestOpen, astar, findPath]
 
 # a port of https://github.com/krisajenkins/elm-astar/blob/2.1.3/src/AStar/Generalised.elm
 

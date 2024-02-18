@@ -1,4 +1,4 @@
-interface Base64Decode exposes [fromBytes]
+module [fromBytes]
 
 import BytesDecode exposing [ByteDecoder, DecodeProblem]
 

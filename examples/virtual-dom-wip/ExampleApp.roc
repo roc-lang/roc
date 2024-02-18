@@ -1,5 +1,4 @@
-interface ExampleApp
-    exposes [exampleApp, State]
+module [exampleApp, State]
 
 import pf.Html exposing [App, Html, html, head, body, div, text, h1]
 

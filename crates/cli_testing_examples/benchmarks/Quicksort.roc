@@ -1,4 +1,4 @@
-interface Quicksort exposes [sortBy, sortWith, show]
+module [sortBy, sortWith, show]
 
 show : List I64 -> Str
 show = \list ->

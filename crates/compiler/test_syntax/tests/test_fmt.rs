@@ -4767,10 +4767,10 @@ mod test_fmt {
     // MODULES
 
     #[test]
-    fn single_line_interface() {
+    fn single_line_module() {
         module_formats_same(indoc!(
             r"
-                interface Foo exposes []"
+                module []"
         ));
     }
 
@@ -4780,12 +4780,12 @@ mod test_fmt {
         module_formats_to(
             indoc!(
                 r"
-            interface Foo exposes []
+            module []
             a = 42 # Yay greetings"
             ),
             indoc!(
                 r"
-            interface Foo exposes []
+            module []
             a = 42 # Yay greetings
             "
             ),
@@ -4793,46 +4793,22 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_interface() {
+    fn module_exposing() {
         module_formats_same(indoc!(
             r"
-                interface Foo
-                    exposes []"
+                module [Bar, Baz, a, b]"
         ));
     }
 
     #[test]
-    fn interface_exposing() {
+    fn module_exposing_multiline() {
         module_formats_same(indoc!(
             r"
-                interface Foo
-                    exposes [Bar, Baz, a, b]"
-        ));
-    }
-
-    #[test]
-    fn interface_importing() {
-        module_formats_same(indoc!(
-            r"
-                interface Foo
-                    exposes [Bar, Baz, a, b]
-
-                import Blah
-                import Thing exposing [foo, bar]
-                import Stuff"
-        ));
-    }
-
-    #[test]
-    fn multi_line_interface() {
-        module_formats_same(indoc!(
-            r"
-                interface Foo
-                    exposes [
-                        Stuff,
-                        Things,
-                        somethingElse,
-                    ]
+                module [
+                    Stuff,
+                    Things,
+                    somethingElse,
+                ]
 
                 import Blah
                 import Baz exposing [stuff, things]"
@@ -4864,8 +4840,7 @@ mod test_fmt {
             &format!(
                 indoc!(
                     r#"
-                    interface Foo
-                        exposes []
+                    module []
 
                     # comment 1{space}
                     def = "" # comment 2{space}
@@ -4876,8 +4851,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                    interface Foo
-                        exposes []
+                    module []
 
                     # comment 1
                     def = "" # comment 2
@@ -5693,7 +5667,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes []
+                module []
 
                 expect x == y
 
@@ -5720,7 +5694,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes []
+                module []
 
                 expect
                     foo bar
@@ -5824,7 +5798,7 @@ mod test_fmt {
     fn ability_member_doc_comments() {
         module_formats_same(indoc!(
             r"
-            interface Foo exposes []
+            module []
 
             A implements
                 ## This is member ab
@@ -5843,8 +5817,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r"
             # hello world
-            interface Foo
-                exposes []
+            module []
             "
         ));
 
@@ -5864,6 +5837,17 @@ mod test_fmt {
                 packages {}
                 provides [mainForHost]
             "#
+        ));
+    }
+
+    #[test]
+    fn comments_before_exposes_preserved() {
+        module_formats_same(indoc!(
+            r"
+            module
+                # comment
+                [a, b]
+            "
         ));
     }
 

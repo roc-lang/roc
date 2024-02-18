@@ -1,5 +1,4 @@
-interface Dep1
-    exposes [three, str, Unit, Identity, one, two]
+module [three, str, Unit, Identity, one, two]
 
 import Dep3 exposing [foo]
 

@@ -1,5 +1,4 @@
-interface Unit
-    exposes [unit]
+module [unit]
 
 Unit : [Unit]
 

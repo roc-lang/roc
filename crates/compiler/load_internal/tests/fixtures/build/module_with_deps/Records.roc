@@ -1,5 +1,4 @@
-interface Records
-    exposes [intVal]
+module [intVal]
 
 intVal =
     foo = \{ x } -> x

@@ -1,5 +1,4 @@
-interface Stdin
-    exposes [char]
+module [char]
 
 import pf.Effect
 import Task

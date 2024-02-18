@@ -1,5 +1,4 @@
-interface OneDep
-    exposes [str]
+module [str]
 
 import Dep3 exposing [foo]
 

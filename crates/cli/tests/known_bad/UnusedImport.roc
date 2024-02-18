@@ -1,5 +1,4 @@
-interface UnusedImport
-    exposes [plainText, emText]
+module [plainText, emText]
 
 import Symbol exposing [Ident]
 

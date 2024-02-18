@@ -1,18 +1,17 @@
-interface HtmlInternalShared
-    exposes [
-        App,
-        Html,
-        Attribute,
-        CyclicStructureAccessor,
-        Handler,
-        Size,
-        element,
-        text,
-        none,
-        translate,
-        translateStatic,
-        nodeSize,
-    ]
+module [
+    App,
+    Html,
+    Attribute,
+    CyclicStructureAccessor,
+    Handler,
+    Size,
+    element,
+    text,
+    none,
+    translate,
+    translateStatic,
+    nodeSize,
+]
 
 import Action exposing [Action]
 

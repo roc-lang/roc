@@ -1,5 +1,4 @@
-interface Action
-    exposes [Action, none, update, map]
+module [Action, none, update, map]
 
 Action state : [None, Update state]
 

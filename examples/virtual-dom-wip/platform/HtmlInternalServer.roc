@@ -1,8 +1,7 @@
-interface HtmlInternalServer
-    exposes [
-        appendRenderedStatic,
-        initServerApp,
-    ]
+module [
+    appendRenderedStatic,
+    initServerApp,
+]
 
 import HtmlInternalShared exposing [Html, Attribute, App, translateStatic, text, element]
 import TotallyNotJson

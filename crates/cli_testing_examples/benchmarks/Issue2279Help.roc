@@ -1,5 +1,4 @@
-interface Issue2279Help
-    exposes [text, asText]
+module [text, asText]
 
 text = "Hello, world!"
 

@@ -1,5 +1,4 @@
-interface Task
-    exposes [Task, succeed, fail, await, map, onFail, attempt, fromResult, loop]
+module [Task, succeed, fail, await, map, onFail, attempt, fromResult, loop]
 
 import pf.Effect
 
