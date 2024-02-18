@@ -1,26 +1,25 @@
-interface Hash
-    exposes [
-        Hash,
-        Hasher,
-        hash,
-        addBytes,
-        addU8,
-        addU16,
-        addU32,
-        addU64,
-        addU128,
-        hashBool,
-        hashI8,
-        hashI16,
-        hashI32,
-        hashI64,
-        hashI128,
-        hashDec,
-        complete,
-        hashStrBytes,
-        hashList,
-        hashUnordered,
-    ] imports []
+module [
+    Hash,
+    Hasher,
+    hash,
+    addBytes,
+    addU8,
+    addU16,
+    addU32,
+    addU64,
+    addU128,
+    hashBool,
+    hashI8,
+    hashI16,
+    hashI32,
+    hashI64,
+    hashI128,
+    hashDec,
+    complete,
+    hashStrBytes,
+    hashList,
+    hashUnordered,
+]
 
 import Bool exposing [Bool]
 import List

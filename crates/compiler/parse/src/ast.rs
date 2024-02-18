@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use crate::header::{
-    self, AppHeader, HostedHeader, InterfaceHeader, ModuleName, PackageHeader, PlatformHeader,
+    self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
 };
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
@@ -99,6 +99,21 @@ pub struct Module<'a> {
 }
 
 impl<'a> Module<'a> {
+    pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
+        let (header, defs) = match self.header {
+            Header::Module(header) => (
+                Header::Module(ModuleHeader {
+                    interface_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.interface_imports),
+            ),
+            header => (header, Defs::default()),
+        };
+
+        (Module { header, ..self }, defs)
+    }
+
     pub fn header_imports_to_defs(
         arena: &'a Bump,
         imports: Option<
@@ -209,7 +224,7 @@ impl<'a> Module<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Header<'a> {
-    Interface(InterfaceHeader<'a>),
+    Module(ModuleHeader<'a>),
     App(AppHeader<'a>),
     Package(PackageHeader<'a>),
     Platform(PlatformHeader<'a>),
@@ -2272,7 +2287,7 @@ impl<'a> Malformed for Module<'a> {
 impl<'a> Malformed for Header<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            Header::Interface(header) => header.is_malformed(),
+            Header::Module(header) => header.is_malformed(),
             Header::App(header) => header.is_malformed(),
             Header::Package(header) => header.is_malformed(),
             Header::Platform(header) => header.is_malformed(),

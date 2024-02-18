@@ -19,7 +19,7 @@ impl<'a> HeaderType<'a> {
             }
             | HeaderType::Hosted { exposes, .. }
             | HeaderType::Builtin { exposes, .. }
-            | HeaderType::Interface { exposes, .. } => exposes,
+            | HeaderType::Module { exposes, .. } => exposes,
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
         }
     }
@@ -30,7 +30,7 @@ impl<'a> HeaderType<'a> {
             HeaderType::Builtin { .. } => "builtin",
             HeaderType::Package { .. } => "package",
             HeaderType::Platform { .. } => "platform",
-            HeaderType::Interface { .. } => "interface",
+            HeaderType::Module { .. } => "module",
         }
     }
 }
@@ -73,7 +73,7 @@ pub enum HeaderType<'a> {
         /// usually `pf`
         config_shorthand: &'a str,
     },
-    Interface {
+    Module {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
     },
@@ -82,9 +82,9 @@ pub enum HeaderType<'a> {
 impl<'a> HeaderType<'a> {
     pub fn get_name(self) -> Option<&'a str> {
         match self {
-            Self::Interface { name, .. }
-            | Self::Builtin { name, .. }
-            | Self::Hosted { name, .. } => Some(name.into()),
+            Self::Module { name, .. } | Self::Builtin { name, .. } | Self::Hosted { name, .. } => {
+                Some(name.into())
+            }
             Self::App {
                 output_name: StrLiteral::PlainLine(name),
                 ..
@@ -106,13 +106,11 @@ impl<'a> HeaderType<'a> {
 
     pub fn to_maybe_builtin(self, module_id: ModuleId) -> Self {
         match self {
-            HeaderType::Interface { name, exposes } if module_id.is_builtin() => {
-                HeaderType::Builtin {
-                    name,
-                    exposes,
-                    generates_with: &[],
-                }
-            }
+            HeaderType::Module { name, exposes } if module_id.is_builtin() => HeaderType::Builtin {
+                name,
+                exposes,
+                generates_with: &[],
+            },
             _ => self,
         }
     }
@@ -246,12 +244,12 @@ pub struct KeywordItem<'a, K, V> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct InterfaceHeader<'a> {
-    pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<ModuleName<'a>>,
+pub struct ModuleHeader<'a> {
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
 
-    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    // Keeping this so we can format old interface header into module headers
+    pub interface_imports: Option<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>,
 }
 
 pub type ImportsKeywordItem<'a> = KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>;
@@ -430,7 +428,7 @@ where
     }
 }
 
-impl<'a> Malformed for InterfaceHeader<'a> {
+impl<'a> Malformed for ModuleHeader<'a> {
     fn is_malformed(&self) -> bool {
         false
     }

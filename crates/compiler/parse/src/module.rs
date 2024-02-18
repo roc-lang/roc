@@ -1,10 +1,11 @@
-use crate::ast::{Collection, Defs, Header, Module, Spaced, Spaces};
+use crate::ast::{Collection, CommentOrNewline, Defs, Header, Module, Spaced, Spaces};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
-    HostedHeader, ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName,
-    PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
-    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    HostedHeader, ImportsEntry, ImportsKeyword, ImportsKeywordItem, Keyword, KeywordItem,
+    ModuleHeader, ModuleName, PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader,
+    PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
+    WithKeyword,
 };
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -62,10 +63,18 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
         header: one_of![
             map!(
                 skip_first!(
+                    keyword("module", EHeader::Start),
+                    increment_min_indent(module_header())
+                ),
+                Header::Module
+            ),
+            // Old headers
+            map!(
+                skip_first!(
                     keyword("interface", EHeader::Start),
                     increment_min_indent(interface_header())
                 ),
-                Header::Interface
+                Header::Module
             ),
             map!(
                 skip_first!(
@@ -100,14 +109,57 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
 }
 
 #[inline(always)]
-fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
-    record!(InterfaceHeader {
-        before_name: space0_e(EHeader::IndentStart),
-        name: loc!(module_name_help(EHeader::ModuleName)),
-        exposes: specialize_err(EHeader::Exposes, exposes_values()),
-        imports: specialize_err(EHeader::Imports, imports()),
+fn module_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
+    record!(ModuleHeader {
+        before_exposes: space0_e(EHeader::IndentStart),
+        exposes: specialize_err(EHeader::Exposes, exposes_list()),
+        interface_imports: succeed!(None)
+    })
+    .trace("module_header")
+}
+
+/// Parse old interface headers so we can format them into module headers
+#[inline(always)]
+fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
+    use bumpalo::collections::Vec;
+
+    let before_exposes = map_with_arena!(
+        and!(
+            skip_second!(
+                space0_e(EHeader::IndentStart),
+                loc!(module_name_help(EHeader::ModuleName))
+            ),
+            specialize_err(EHeader::Exposes, exposes_kw())
+        ),
+        |arena: &'a bumpalo::Bump,
+         (before_name, kw): (&'a [CommentOrNewline<'a>], Spaces<'a, ExposesKeyword>)| {
+            let mut combined: Vec<CommentOrNewline> =
+                Vec::with_capacity_in(before_name.len() + kw.before.len() + kw.after.len(), arena);
+            combined.extend(before_name);
+            combined.extend(kw.before);
+            combined.extend(kw.after);
+            arena.alloc(combined)
+        }
+    );
+
+    record!(ModuleHeader {
+        before_exposes: before_exposes,
+        exposes: specialize_err(EHeader::Exposes, exposes_list()).trace("exposes_list"),
+        interface_imports: map!(
+            specialize_err(EHeader::Imports, imports()),
+            imports_none_if_empty
+        )
+        .trace("imports"),
     })
     .trace("interface_header")
+}
+
+fn imports_none_if_empty(value: ImportsKeywordItem<'_>) -> Option<ImportsKeywordItem<'_>> {
+    if value.item.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 #[inline(always)]
@@ -115,7 +167,7 @@ fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
     record!(HostedHeader {
         before_name: space0_e(EHeader::IndentStart),
         name: loc!(module_name_help(EHeader::ModuleName)),
-        exposes: specialize_err(EHeader::Exposes, exposes_values()),
+        exposes: specialize_err(EHeader::Exposes, exposes_values_kw()),
         imports: specialize_err(EHeader::Imports, imports()),
         generates: specialize_err(EHeader::Generates, generates()),
         generates_with: specialize_err(EHeader::GeneratesWith, generates_with()),
@@ -388,26 +440,37 @@ fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>
 }
 
 #[inline(always)]
-fn exposes_values<'a>() -> impl Parser<
+fn exposes_values_kw<'a>() -> impl Parser<
     'a,
     KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
     EExposes,
 > {
     record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            ExposesKeyword,
-            EExposes::Exposes,
-            EExposes::IndentExposes,
-            EExposes::IndentListStart
-        ),
-        item: collection_trailing_sep_e!(
-            byte(b'[', EExposes::ListStart),
-            exposes_entry(EExposes::Identifier),
-            byte(b',', EExposes::ListEnd),
-            byte(b']', EExposes::ListEnd),
-            Spaced::SpaceBefore
-        )
+        keyword: exposes_kw(),
+        item: exposes_list()
     })
+}
+
+#[inline(always)]
+fn exposes_kw<'a>() -> impl Parser<'a, Spaces<'a, ExposesKeyword>, EExposes> {
+    spaces_around_keyword(
+        ExposesKeyword,
+        EExposes::Exposes,
+        EExposes::IndentExposes,
+        EExposes::IndentListStart,
+    )
+}
+
+#[inline(always)]
+fn exposes_list<'a>() -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>, EExposes>
+{
+    collection_trailing_sep_e!(
+        byte(b'[', EExposes::ListStart),
+        exposes_entry(EExposes::Identifier),
+        byte(b',', EExposes::ListEnd),
+        byte(b']', EExposes::ListEnd),
+        Spaced::SpaceBefore
+    )
 }
 
 pub fn spaces_around_keyword<'a, K: Keyword, E>(

@@ -10,9 +10,9 @@ use roc_parse::{
         StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
-        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
-        ProvidesTo, To, TypedIdent,
+        AppHeader, ExposedName, HostedHeader, ImportsEntry, KeywordItem, ModuleHeader, ModuleName,
+        PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To,
+        TypedIdent,
     },
     ident::{BadIdent, UppercaseIdent},
 };
@@ -283,11 +283,10 @@ impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
 impl<'a> RemoveSpaces<'a> for Module<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let header = match &self.header {
-            Header::Interface(header) => Header::Interface(InterfaceHeader {
-                before_name: &[],
-                name: header.name.remove_spaces(arena),
+            Header::Module(header) => Header::Module(ModuleHeader {
+                before_exposes: &[],
                 exposes: header.exposes.remove_spaces(arena),
-                imports: header.imports.remove_spaces(arena),
+                interface_imports: header.interface_imports.remove_spaces(arena),
             }),
             Header::App(header) => Header::App(AppHeader {
                 before_name: &[],

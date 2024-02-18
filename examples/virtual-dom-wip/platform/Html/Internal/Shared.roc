@@ -1,21 +1,19 @@
-interface Html.Internal.Shared
-    exposes [
-        App,
-        Html,
-        Attribute,
-        CyclicStructureAccessor,
-        Handler,
-        Size,
-        element,
-        text,
-        none,
-        translate,
-        translateStatic,
-        nodeSize,
-    ]
-    imports [
-        Action.{ Action },
-    ]
+module [
+    App,
+    Html,
+    Attribute,
+    CyclicStructureAccessor,
+    Handler,
+    Size,
+    element,
+    text,
+    none,
+    translate,
+    translateStatic,
+    nodeSize,
+]
+
+import Action exposing [Action]
 
 App state initData : {
     init : DecodingResult initData -> state,

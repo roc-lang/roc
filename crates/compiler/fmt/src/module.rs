@@ -8,7 +8,7 @@ use bumpalo::Bump;
 use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-    ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry, PackageHeader,
+    ImportsKeyword, Keyword, KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader,
     PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
     ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
@@ -18,8 +18,8 @@ use roc_region::all::Loc;
 pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
     fmt_comments_only(buf, module.comments.iter(), NewlineAt::Bottom, 0);
     match &module.header {
-        Header::Interface(header) => {
-            fmt_interface_header(buf, header);
+        Header::Module(header) => {
+            fmt_module_header(buf, header);
         }
         Header::App(header) => {
             fmt_app_header(buf, header);
@@ -171,20 +171,19 @@ impl<'a, K: Formattable, V: Formattable> Formattable for KeywordItem<'a, K, V> {
     }
 }
 
-pub fn fmt_interface_header<'a>(buf: &mut Buf, header: &'a InterfaceHeader<'a>) {
+pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
     buf.indent(0);
-    buf.push_str("interface");
-    let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
+    buf.push_str("module");
 
-    // module name
-    buf.indent(indent);
-    buf.push_str(header.name.value.as_str());
+    if header.before_exposes.iter().all(|c| c.is_newline()) {
+        buf.spaces(1);
+        fmt_exposes(buf, header.exposes, 0);
+    } else {
+        let indent = INDENT;
 
-    header.exposes.keyword.format(buf, indent);
-    fmt_exposes(buf, header.exposes.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
+        fmt_default_spaces(buf, header.before_exposes, indent);
+        fmt_exposes(buf, header.exposes, indent);
+    };
 }
 
 pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {

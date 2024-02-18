@@ -4768,10 +4768,10 @@ mod test_fmt {
     // MODULES
 
     #[test]
-    fn single_line_interface() {
+    fn single_line_module() {
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []"
+                module []"
         ));
     }
 
@@ -4781,12 +4781,14 @@ mod test_fmt {
         module_formats_to(
             indoc!(
                 r"
-            interface Foo exposes [] imports []
+            module []
+
             a = 42 # Yay greetings"
             ),
             indoc!(
                 r"
-            interface Foo exposes [] imports []
+            module []
+
             a = 42 # Yay greetings
             "
             ),
@@ -4794,49 +4796,25 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_interface() {
+    fn module_exposing() {
         module_formats_same(indoc!(
             r"
-                interface Foo
-                    exposes []
-                    imports []"
+                module [Bar, Baz, a, b]"
         ));
     }
 
     #[test]
-    fn interface_exposing() {
+    fn module_exposing_multiline() {
         module_formats_same(indoc!(
             r"
-                interface Foo
-                    exposes [Bar, Baz, a, b]
-                    imports []"
-        ));
-    }
+                module [
+                    Stuff,
+                    Things,
+                    somethingElse,
+                ]
 
-    #[test]
-    fn interface_importing() {
-        module_formats_same(indoc!(
-            r"
-                interface Foo
-                    exposes [Bar, Baz, a, b]
-                    imports [Blah, Thing.{ foo, bar }, Stuff]"
-        ));
-    }
-
-    #[test]
-    fn multi_line_interface() {
-        module_formats_same(indoc!(
-            r"
-                interface Foo
-                    exposes [
-                        Stuff,
-                        Things,
-                        somethingElse,
-                    ]
-                    imports [
-                        Blah,
-                        Baz.{ stuff, things },
-                    ]"
+                import Blah
+                import Baz exposing [stuff, things]"
         ));
     }
 
@@ -4866,9 +4844,7 @@ mod test_fmt {
             &format!(
                 indoc!(
                     r#"
-                    interface Foo
-                        exposes []
-                        imports []
+                    module []
 
                     # comment 1{space}
                     def = "" # comment 2{space}
@@ -4879,9 +4855,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                    interface Foo
-                        exposes []
-                        imports []
+                    module []
 
                     # comment 1
                     def = "" # comment 2
@@ -5700,7 +5674,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []
+                module []
 
                 expect x == y
 
@@ -5727,7 +5701,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []
+                module []
 
                 expect
                     foo bar
@@ -5831,7 +5805,7 @@ mod test_fmt {
     fn ability_member_doc_comments() {
         module_formats_same(indoc!(
             r"
-            interface Foo exposes [] imports []
+            module []
 
             A implements
                 ## This is member ab
@@ -5850,9 +5824,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r"
             # hello world
-            interface Foo
-                exposes []
-                imports []
+            module []
             "
         ));
 
@@ -5873,6 +5845,17 @@ mod test_fmt {
                 imports []
                 provides [mainForHost]
             "#
+        ));
+    }
+
+    #[test]
+    fn comments_before_exposes_preserved() {
+        module_formats_same(indoc!(
+            r"
+            module
+                # comment
+                [a, b]
+            "
         ));
     }
 

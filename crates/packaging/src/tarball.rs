@@ -128,7 +128,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
     // TODO use this when finding .roc files by discovering them from the root module.
     // let other_modules: &[Module<'_>] =
     match read_header(&arena, &mut buf, path)?.header {
-        Header::Interface(_) => {
+        Header::Module(_) => {
             todo!();
             // TODO report error
         }

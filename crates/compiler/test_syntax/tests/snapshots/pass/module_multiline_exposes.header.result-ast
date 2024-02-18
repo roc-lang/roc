@@ -1,0 +1,25 @@
+Module {
+    comments: [],
+    header: Module(
+        ModuleHeader {
+            before_exposes: [],
+            exposes: [
+                @8-9 ExposedName(
+                    "a",
+                ),
+                @11-12 ExposedName(
+                    "b",
+                ),
+                @18-19 SpaceBefore(
+                    ExposedName(
+                        "c",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            interface_imports: None,
+        },
+    ),
+}

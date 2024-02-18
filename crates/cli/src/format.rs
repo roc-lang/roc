@@ -8,7 +8,6 @@ use roc_fmt::def::fmt_defs;
 use roc_fmt::module::fmt_module;
 use roc_fmt::spaces::RemoveSpaces;
 use roc_fmt::{Ast, Buf};
-use roc_parse::ast::Defs;
 use roc_parse::module::parse_module_defs;
 use roc_parse::{module, parser::SyntaxError, state::State};
 
@@ -226,7 +225,9 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'
     let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
         .map_err(|e| SyntaxError::Header(e.problem))?;
 
-    let defs = parse_module_defs(arena, state, Defs::default())?;
+    let (module, defs) = module.upgrade_header_imports(arena);
+
+    let defs = parse_module_defs(arena, state, defs)?;
 
     Ok(Ast { module, defs })
 }

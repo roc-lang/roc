@@ -6109,9 +6109,7 @@ In roc, functions are always written as a lambda, like{}
         report_header_problem_as(
             indoc!(
                 r"
-                interface Foobar
-                    exposes [main, @Foo]
-                    imports [pf.Task, Base64]
+                module [main, @Foo]
                 "
             ),
             indoc!(
@@ -6120,39 +6118,12 @@ In roc, functions are always written as a lambda, like{}
 
                 I am partway through parsing an `exposes` list, but I got stuck here:
 
-                1│  interface Foobar
-                2│      exposes [main, @Foo]
-                                       ^
+                1│  module [main, @Foo]
+                                  ^
 
                 I was expecting a type name, value name or function name next, like
 
-                    exposes [Animal, default, tame]
-            "
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_module_name() {
-        report_header_problem_as(
-            indoc!(
-                r"
-                interface foobar
-                    exposes [main, @Foo]
-                    imports [pf.Task, Base64]
-                "
-            ),
-            indoc!(
-                r"
-                ── WEIRD MODULE NAME in /code/proj/Main.roc ────────────────────────────────────
-
-                I am partway through parsing a header, but got stuck here:
-
-                1│  interface foobar
-                              ^
-
-                I am expecting a module name next, like BigNum or Main. Module names
-                must start with an uppercase letter.
+                    [Animal, default, tame]
             "
             ),
         )
