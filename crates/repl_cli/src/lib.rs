@@ -6,7 +6,7 @@ use const_format::concatcp;
 use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
 use roc_repl_eval::gen::Problems;
-use roc_repl_ui::colors::{CYAN, END_COL, GREEN};
+use roc_repl_ui::colors::{CYAN, END_COL};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
 use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
@@ -22,10 +22,7 @@ use crate::cli_gen::eval_llvm;
 pub const WELCOME_MESSAGE: &str = concatcp!(
     "\n  The rockin' ",
     CYAN,
-    "roc repl",
-    END_COL,
-    "\n",
-    GREEN,
+    "roc repl\n",
     "────────────────────────",
     END_COL,
     "\n\n"
