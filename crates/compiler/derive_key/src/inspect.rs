@@ -204,7 +204,6 @@ impl FlatInspectable {
             Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Some(Immediate(Symbol::INSPECT_DEC)),
             Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(Immediate(Symbol::INSPECT_F32)),
             Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(Immediate(Symbol::INSPECT_F64)),
-            Symbol::NUM_NAT | Symbol::NUM_NATURAL => Some(Immediate(Symbol::INSPECT_NAT)),
             _ => None,
         }
     }

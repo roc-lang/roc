@@ -1,6 +1,6 @@
 app "quicksort" provides [quicksort] to "./platform"
 
-quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+quicksortHelp : List (Num a), U64, U64 -> List (Num a)
 quicksortHelp = \list, low, high ->
     if low < high then
         when partition low high list is
@@ -12,7 +12,7 @@ quicksortHelp = \list, low, high ->
         list
 
 
-swap : Nat, Nat, List a -> List a
+swap : U64, U64, List a -> List a
 swap = \i, j, list ->
     when Pair (List.get list i) (List.get list j) is
         Pair (Ok atI) (Ok atJ) ->
@@ -23,7 +23,7 @@ swap = \i, j, list ->
         _ ->
             []
 
-partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
@@ -35,7 +35,7 @@ partition = \low, high, initialList ->
             Pair (low - 1) initialList
 
 
-partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
+partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
 partitionHelp = \i, j, list, high, pivot ->
     if j < high then
         when List.get list j is

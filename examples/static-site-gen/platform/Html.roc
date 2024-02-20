@@ -126,8 +126,8 @@ interface Html
 
 Node : [
     Text Str,
-    Element Str Nat (List Attribute) (List Node),
-    UnclosedElem Str Nat (List Attribute),
+    Element Str U64 (List Attribute) (List Node),
+    UnclosedElem Str U64 (List Attribute),
 ]
 
 Attribute : Html.Attributes.Attribute
@@ -172,7 +172,7 @@ unclosedElem = \tagName ->
         UnclosedElem tagName totalSize attrs
 
 # internal helper
-nodeSize : Node -> Nat
+nodeSize : Node -> U64
 nodeSize = \node ->
     when node is
         Text content ->

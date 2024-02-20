@@ -818,7 +818,7 @@ type NumberSpecializations<'a> = VecMap<InLayout<'a>, (Symbol, UseDepth)>;
 ///  n = 1
 ///  use1 : U8
 ///  use1 = 1
-///  use2 : Nat
+///  use2 : Dec
 ///  use2 = 2
 ///
 /// We keep track of the specializations of `myTag` and create fresh symbols when there is more
@@ -3118,8 +3118,7 @@ fn specialize_host_specializations<'a>(
             let symbol = env.unique_symbol();
             let lambda_name = LambdaName::no_niche(symbol);
 
-            let mut layout_env =
-                layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+            let mut layout_env = layout::Env::from_components(layout_cache, env.subs, env.arena);
             let lambda_set = env.subs.get_lambda_set(var);
             let raw_function_layout =
                 RawFunctionLayout::from_var(&mut layout_env, lambda_set.ambient_function)
@@ -4540,12 +4539,8 @@ pub fn with_hole<'a>(
             tuple_var, elems, ..
         } => {
             let sorted_elems_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_tuple_elems(&mut layout_env, tuple_var)
             };
             let sorted_elems = match sorted_elems_result {
@@ -4575,12 +4570,8 @@ pub fn with_hole<'a>(
             ..
         } => {
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, record_var)
             };
             let sorted_fields = match sorted_fields_result {
@@ -4915,12 +4906,8 @@ pub fn with_hole<'a>(
             ..
         } => {
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, record_var)
             };
             let sorted_fields = match sorted_fields_result {
@@ -5028,12 +5015,8 @@ pub fn with_hole<'a>(
             ..
         } => {
             let sorted_elems_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_tuple_elems(&mut layout_env, tuple_var)
             };
             let sorted_elems = match sorted_elems_result {
@@ -5141,12 +5124,8 @@ pub fn with_hole<'a>(
             // This has the benefit that we don't need to do anything special for reference
             // counting
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, record_var)
             };
 
@@ -6376,8 +6355,7 @@ fn convert_tag_union<'a>(
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
     let res_variant = {
-        let mut layout_env =
-            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+        let mut layout_env = layout::Env::from_components(layout_cache, env.subs, env.arena);
         crate::layout::union_sorted_tags(&mut layout_env, variant_var)
     };
     let variant = match res_variant {
@@ -6875,7 +6853,6 @@ fn register_capturing_closure<'a>(
                         args,
                         closure_var,
                         ret,
-                        env.target_info,
                     )
                 };
 
@@ -8054,12 +8031,8 @@ fn can_reuse_symbol<'a>(
             ..
         } => {
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, *record_var)
             };
 

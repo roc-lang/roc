@@ -957,7 +957,6 @@ fn write_integer<'a>(
         "I32", Symbol::NUM_SIGNED32
         "I64", Symbol::NUM_SIGNED64
         "I128", Symbol::NUM_SIGNED128
-        "Nat", Symbol::NUM_NATURAL
     }
 }
 

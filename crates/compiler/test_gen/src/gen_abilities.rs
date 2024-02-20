@@ -12,8 +12,6 @@ use roc_std::RocList;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocStr;
 
-use crate::helpers::with_larger_debug_stack;
-
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn hash_specialization() {
@@ -937,7 +935,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn specialize_unique_newtype_records() {
-    with_larger_debug_stack(|| {
+    crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -1060,12 +1058,10 @@ mod decode_immediate {
     #[cfg(all(test, feature = "gen-llvm"))]
     use roc_std::RocStr;
 
-    use crate::helpers::with_larger_debug_stack;
-
     #[test]
     #[cfg(feature = "gen-llvm")]
     fn string() {
-        with_larger_debug_stack(|| {
+        crate::helpers::with_larger_debug_stack(|| {
             assert_evals_to!(
                 indoc!(
                     r#"
@@ -1187,7 +1183,7 @@ mod decode_immediate {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_list_of_strings() {
-    with_larger_debug_stack(|| {
+    crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -1208,7 +1204,7 @@ fn decode_list_of_strings() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_then_decode_list_of_strings() {
-    with_larger_debug_stack(|| {
+    crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -1230,7 +1226,7 @@ fn encode_then_decode_list_of_strings() {
 #[cfg(feature = "gen-llvm")]
 #[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_then_decode_list_of_lists_of_strings() {
-    with_larger_debug_stack(|| {
+    crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -2149,7 +2145,7 @@ mod eq {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_4772_weakened_monomorphic_destructure() {
-    with_larger_debug_stack(|| {
+    crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
                 r#"

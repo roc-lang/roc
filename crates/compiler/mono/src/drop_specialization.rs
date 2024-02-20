@@ -1533,8 +1533,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
     match lowlevel {
         Unreachable => RC::Uknown,
-        ListLen | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity | ListWithCapacity
-        | StrWithCapacity => RC::NoRc,
+        ListLenU64 | ListLenUsize | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity
+        | ListWithCapacity | StrWithCapacity => RC::NoRc,
         ListReplaceUnsafe => RC::Rc,
         StrGetUnsafe | ListGetUnsafe => RC::NoRc,
         ListConcat => RC::Rc,
@@ -1593,14 +1593,10 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits => RC::NoRc,
-        NumBytesToU16 => RC::NoRc,
-        NumBytesToU32 => RC::NoRc,
-        NumBytesToU64 => RC::NoRc,
-        NumBytesToU128 => RC::NoRc,
         I128OfDec => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
-        StrFromUtf8Range => RC::Rc,
+        StrFromUtf8 => RC::Rc,
         StrToUtf8 => RC::Rc,
         StrRepeat => RC::NoRc,
         StrFromInt | StrFromFloat => RC::NoRc,

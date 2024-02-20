@@ -1,6 +1,5 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
-use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::CrashTag;
 use roc_mono::ir::SingleEntryPoint;

@@ -569,7 +569,7 @@ fn trmc_candidates_help(
 // ```roc
 // LinkedList a : [ Nil, Cons a (LinkedList a) ]
 //
-// repeat : a, Nat -> LinkedList a
+// repeat : a, U64 -> LinkedList a
 // repeat = \element, n ->
 //     when n is
 //         0 -> Nil
@@ -581,7 +581,7 @@ fn trmc_candidates_help(
 // But there is a trick: TRMC. Using TRMC and join points, we are able to convert this function into a loop, which uses only one stack frame for the whole process.
 //
 // ```pseudo-roc
-// repeat : a, Nat -> LinkedList a
+// repeat : a, U64 -> LinkedList a
 // repeat = \initialElement, initialN ->
 //     joinpoint trmc = \element, n, hole, head ->
 //         when n is

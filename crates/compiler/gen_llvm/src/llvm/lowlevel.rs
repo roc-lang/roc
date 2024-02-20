@@ -34,10 +34,10 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len,
-        list_map, list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
-        list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
-        list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
+        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe,
+        list_len_usize, list_map, list_map2, list_map3, list_map4, list_prepend,
+        list_release_excess_capacity, list_replace_unsafe, list_reserve, list_sort_with,
+        list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
     compare::{generic_eq, generic_neq},
     convert::{
@@ -408,7 +408,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &bitcode::STR_FROM_FLOAT[float_width],
             )
         }
-        StrFromUtf8Range => {
+        StrFromUtf8 => {
             let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
             let result_ptr = env
                 .builder
@@ -417,7 +417,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             use roc_target::Architecture::*;
             match env.target_info.architecture {
                 Aarch32 | X86_32 => {
-                    arguments!(list, start, count);
+                    arguments!(list);
                     let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
 
                     call_void_bitcode_fn(
@@ -426,15 +426,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             result_ptr.into(),
                             a.into(),
                             b.into(),
-                            start,
-                            count,
                             pass_update_mode(env, update_mode),
                         ],
-                        bitcode::STR_FROM_UTF8_RANGE,
+                        bitcode::STR_FROM_UTF8,
                     );
                 }
                 Aarch64 | X86_64 | Wasm32 => {
-                    arguments!(_list, start, count);
+                    arguments!(_list);
 
                     // we use the symbol here instead
                     let list = args[0];
@@ -444,11 +442,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         &[
                             result_ptr.into(),
                             list_symbol_to_c_abi(env, scope, list).into(),
-                            start,
-                            count,
                             pass_update_mode(env, update_mode),
                         ],
-                        bitcode::STR_FROM_UTF8_RANGE,
+                        bitcode::STR_FROM_UTF8,
                     );
                 }
             }
@@ -468,7 +464,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrRepeat => {
-            // Str.repeat : Str, Nat -> Str
+            // Str.repeat : Str, U64 -> Str
             arguments!(string, count);
 
             call_str_bitcode_fn(
@@ -522,7 +518,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             BasicValueEnum::IntValue(is_zero)
         }
         StrCountUtf8Bytes => {
-            // Str.countUtf8Bytes : Str -> Nat
+            // Str.countUtf8Bytes : Str -> U64
             arguments!(string);
 
             call_str_bitcode_fn(
@@ -534,7 +530,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrSubstringUnsafe => {
-            // Str.substringUnsafe : Str, Nat, Nat -> Str
+            // Str.substringUnsafe : Str, U64, U64 -> Str
             arguments!(string, start, length);
 
             call_str_bitcode_fn(
@@ -546,7 +542,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrReserve => {
-            // Str.reserve : Str, Nat -> Str
+            // Str.reserve : Str, U64 -> Str
             arguments!(string, capacity);
 
             call_str_bitcode_fn(
@@ -600,7 +596,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrWithCapacity => {
-            // Str.withCapacity : Nat -> Str
+            // Str.withCapacity : U64 -> Str
             arguments!(str_len);
 
             call_str_bitcode_fn(
@@ -611,14 +607,25 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
-        ListLen => {
-            // List.len : List * -> Nat
+        ListLenU64 => {
+            // List.len : List * -> U64
             arguments!(list);
 
-            list_len(env.builder, list.into_struct_value()).into()
+            let len_usize = list_len_usize(env.builder, list.into_struct_value());
+
+            // List.len returns U64, although length is stored as usize
+            env.builder
+                .new_build_int_cast(len_usize, env.context.i64_type(), "usize_to_u64")
+                .into()
+        }
+        ListLenUsize => {
+            // List.lenUsize : List * -> usize # used internally, not exposed
+            arguments!(list);
+
+            list_len_usize(env.builder, list.into_struct_value()).into()
         }
         ListGetCapacity => {
-            // List.capacity: List a -> Nat
+            // List.capacity: List a -> U64
             arguments!(list);
 
             call_list_bitcode_fn(
@@ -630,7 +637,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListWithCapacity => {
-            // List.withCapacity : Nat -> List a
+            // List.withCapacity : U64 -> List a
             arguments!(list_len);
 
             let result_layout = layout;
@@ -677,7 +684,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
         }
         ListReserve => {
-            // List.reserve : List elem, Nat -> List elem
+            // List.reserve : List elem, U64 -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
@@ -703,7 +710,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
         }
         ListSwap => {
-            // List.swap : List elem, Nat, Nat -> List elem
+            // List.swap : List elem, U64, U64 -> List elem
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
@@ -744,7 +751,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListDropAt => {
-            // List.dropAt : List elem, Nat -> List elem
+            // List.dropAt : List elem, U64 -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
@@ -763,7 +770,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrGetUnsafe => {
-            // Str.getUnsafe : Str, Nat -> u8
+            // Str.getUnsafe : Str, U64 -> u8
             arguments!(wrapper_struct, elem_index);
 
             call_str_bitcode_fn(
@@ -775,7 +782,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListGetUnsafe => {
-            // List.getUnsafe : List elem, Nat -> elem
+            // List.getUnsafe : List elem, U64 -> elem
             arguments_with_layouts!((wrapper_struct, list_layout), (element_index, _l));
 
             list_get_unsafe(
@@ -937,59 +944,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         op, arg_layout
                     );
                 }
-            }
-        }
-        NumBytesToU16 => {
-            arguments!(list, position);
-
-            call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U16,
-            )
-        }
-        NumBytesToU32 => {
-            arguments!(list, position);
-
-            call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U32,
-            )
-        }
-        NumBytesToU64 => {
-            arguments!(list, position);
-
-            call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U64,
-            )
-        }
-        NumBytesToU128 => {
-            arguments!(list, position);
-
-            let ret = call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U128,
-            );
-
-            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
-                // On windows the return type is not a i128, likely due to alignment
-                env.builder
-                    .build_bitcast(ret, env.context.i128_type(), "empty_string")
-                    .unwrap()
-            } else {
-                ret
             }
         }
         NumCompare => {

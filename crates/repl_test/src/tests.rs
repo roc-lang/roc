@@ -781,7 +781,7 @@ fn list_drop_at_negative_index() {
 
             But dropAt needs its 2nd argument to be:
 
-                Nat
+                U64
             "#
         ),
     );
@@ -807,7 +807,7 @@ fn list_get_negative_index() {
 
             But get needs its 2nd argument to be:
 
-                Nat
+                U64
             "#
         ),
     );

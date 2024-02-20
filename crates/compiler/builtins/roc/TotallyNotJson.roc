@@ -34,7 +34,6 @@ interface TotallyNotJson
             I128,
             F32,
             F64,
-            Nat,
             Dec,
         },
         Bool.{ Bool, Eq },
@@ -678,21 +677,21 @@ numberHelp = \state, byte ->
 
 NumberState : [
     Start,
-    Minus Nat,
-    Zero Nat,
-    Integer Nat,
-    FractionA Nat,
-    FractionB Nat,
-    ExponentA Nat,
-    ExponentB Nat,
-    ExponentC Nat,
+    Minus U64,
+    Zero U64,
+    Integer U64,
+    FractionA U64,
+    FractionB U64,
+    ExponentA U64,
+    ExponentB U64,
+    ExponentC U64,
     Invalid,
-    Finish Nat,
+    Finish U64,
 ]
 
 # TODO confirm if we would like to be able to decode
 # "340282366920938463463374607431768211455" which is MAX U128 and 39 bytes
-maxBytes : Nat
+maxBytes : U64
 maxBytes = 21 # Max bytes in a double precision float
 
 isDigit0to9 : U8 -> Bool
@@ -894,13 +893,13 @@ stringHelp = \state, byte ->
 
 StringState : [
     Start,
-    Chars Nat,
-    Escaped Nat,
-    UnicodeA Nat,
-    UnicodeB Nat,
-    UnicodeC Nat,
-    UnicodeD Nat,
-    Finish Nat,
+    Chars U64,
+    Escaped U64,
+    UnicodeA U64,
+    UnicodeB U64,
+    UnicodeC U64,
+    UnicodeD U64,
+    Finish U64,
     InvalidNumber,
 ]
 
@@ -1176,14 +1175,14 @@ expect
     actual == expected
 
 ArrayOpeningState : [
-    BeforeOpeningBracket Nat,
-    AfterOpeningBracket Nat,
+    BeforeOpeningBracket U64,
+    AfterOpeningBracket U64,
 ]
 
 ArrayClosingState : [
-    BeforeNextElemOrClosingBracket Nat,
-    BeforeNextElement Nat,
-    AfterClosingBracket Nat,
+    BeforeNextElemOrClosingBracket U64,
+    BeforeNextElement U64,
+    AfterClosingBracket U64,
 ]
 
 # Test decoding an empty array
@@ -1317,13 +1316,13 @@ objectHelp = \state, byte ->
         _ -> Break InvalidObject
 
 ObjectState : [
-    BeforeOpeningBrace Nat,
-    AfterOpeningBrace Nat,
-    ObjectFieldNameStart Nat,
-    BeforeColon Nat,
-    AfterColon Nat,
-    AfterObjectValue Nat,
-    AfterComma Nat,
-    AfterClosingBrace Nat,
+    BeforeOpeningBrace U64,
+    AfterOpeningBrace U64,
+    ObjectFieldNameStart U64,
+    BeforeColon U64,
+    AfterColon U64,
+    AfterObjectValue U64,
+    AfterComma U64,
+    AfterClosingBrace U64,
     InvalidObject,
 ]

@@ -13,7 +13,7 @@ pub enum LowLevel {
     StrSplit,
     StrCountUtf8Bytes,
     StrFromInt,
-    StrFromUtf8Range,
+    StrFromUtf8,
     StrToUtf8,
     StrRepeat,
     StrFromFloat,
@@ -26,7 +26,8 @@ pub enum LowLevel {
     StrReserve,
     StrWithCapacity,
     StrReleaseExcessCapacity,
-    ListLen,
+    ListLenUsize,
+    ListLenU64,
     ListWithCapacity,
     ListReserve,
     ListReleaseExcessCapacity,
@@ -87,10 +88,6 @@ pub enum LowLevel {
     NumAtan,
     NumAcos,
     NumAsin,
-    NumBytesToU16,
-    NumBytesToU32,
-    NumBytesToU64,
-    NumBytesToU128,
     NumBitwiseAnd,
     NumBitwiseXor,
     NumBitwiseOr,
@@ -260,7 +257,7 @@ map_symbol_to_lowlevel! {
     StrEndsWith <= STR_ENDS_WITH;
     StrSplit <= STR_SPLIT;
     StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
-    StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL;
+    StrFromUtf8 <= STR_FROM_UTF8_LOWLEVEL;
     StrToUtf8 <= STR_TO_UTF8;
     StrRepeat <= STR_REPEAT;
     StrTrim <= STR_TRIM;
@@ -272,7 +269,8 @@ map_symbol_to_lowlevel! {
     StrToNum <= STR_TO_NUM;
     StrWithCapacity <= STR_WITH_CAPACITY;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
-    ListLen <= LIST_LEN;
+    ListLenU64 <= LIST_LEN_U64;
+    ListLenUsize <= LIST_LEN_USIZE;
     ListGetCapacity <= LIST_CAPACITY;
     ListWithCapacity <= LIST_WITH_CAPACITY;
     ListReserve <= LIST_RESERVE;
@@ -328,10 +326,6 @@ map_symbol_to_lowlevel! {
     NumAtan <= NUM_ATAN;
     NumAcos <= NUM_ACOS;
     NumAsin <= NUM_ASIN;
-    NumBytesToU16 <= NUM_BYTES_TO_U16_LOWLEVEL;
-    NumBytesToU32 <= NUM_BYTES_TO_U32_LOWLEVEL;
-    NumBytesToU64 <= NUM_BYTES_TO_U64_LOWLEVEL;
-    NumBytesToU128 <= NUM_BYTES_TO_U128_LOWLEVEL;
     NumBitwiseAnd <= NUM_BITWISE_AND;
     NumBitwiseXor <= NUM_BITWISE_XOR;
     NumBitwiseOr <= NUM_BITWISE_OR;

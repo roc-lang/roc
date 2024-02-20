@@ -926,7 +926,7 @@ fn refcount_list<'a>(
     //
 
     let len = root.create_symbol(ident_ids, "len");
-    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLen, &[structure], next);
+    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLenUsize, &[structure], next);
 
     // let zero = 0
     let zero = root.create_symbol(ident_ids, "zero");

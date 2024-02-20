@@ -15,18 +15,18 @@ use roc_std::{RocDec, RocOrder, RocResult};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-fn nat_alias() {
+fn u64_alias() {
     assert_evals_to!(
         indoc!(
             r"
-            i : Num.Nat
+            i : Num.U64
             i = 1
 
             i
             "
         ),
         1,
-        usize
+        u64
     );
 }
 
@@ -2324,13 +2324,6 @@ fn min_f32() {
     assert_evals_to!("Num.minF32", f32::MIN, f32);
 }
 
-#[test]
-#[cfg(all(feature = "gen-llvm", not(feature = "gen-llvm-wasm")))]
-fn to_nat_truncate_wraps() {
-    let input = "Num.toNat 10_000_000_000_000_000_000_000i128";
-    assert_evals_to!(input, 1864712049423024128, u64)
-}
-
 macro_rules! num_conversion_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [$($support_gen:literal),*])? )*))*) => {$($(
         #[test]
@@ -2404,11 +2397,6 @@ num_conversion_tests! {
         to_u128_extend, "15i8", 15
         to_u128_big, "11562537357600483583u64", 11562537357600483583, ["gen-dev"]
     )
-    "Num.toNat", usize, (
-        to_nat_same_width, "15i64", 15, ["gen-wasm", "gen-dev"]
-        to_nat_extend, "15i8", 15, ["gen-wasm", "gen-dev"]
-        to_nat_truncate, "115i128", 115
-    )
     "Num.toF32", f32, (
         to_f32_from_i8, "15i8", 15.0, ["gen-wasm", "gen-dev"]
         to_f32_from_i16, "15i16", 15.0, ["gen-wasm", "gen-dev"]
@@ -2420,7 +2408,6 @@ num_conversion_tests! {
         to_f32_from_u32, "15u32", 15.0, ["gen-wasm", "gen-dev"]
         to_f32_from_u64, "15u64", 15.0, ["gen-wasm", "gen-dev"]
         to_f32_from_u128, "15u128", 15.0, ["gen-dev"]
-        to_f32_from_nat, "15nat", 15.0, ["gen-wasm", "gen-dev"]
         to_f32_from_f32, "1.5f32", 1.5, ["gen-wasm", "gen-dev"]
         to_f32_from_f64, "1.5f64", 1.5, ["gen-wasm", "gen-dev"]
     )
@@ -2435,7 +2422,6 @@ num_conversion_tests! {
         to_f64_from_u32, "15u32", 15.0, ["gen-wasm", "gen-dev"]
         to_f64_from_u64, "15u64", 15.0, ["gen-wasm", "gen-dev"]
         to_f64_from_u128, "15u128", 15.0, ["gen-dev"]
-        to_f64_from_nat, "15nat", 15.0, ["gen-wasm", "gen-dev"]
         to_f64_from_f32, "1.5f32", 1.5, ["gen-dev"]
         to_f64_from_f64, "1.5f64", 1.5, ["gen-wasm", "gen-dev"]
     )
@@ -2572,18 +2558,6 @@ to_int_checked_tests! {
         to_u128_checked_same_width_signed_fits,        "15i128",   15
         to_u128_checked_same_width_signed_oob,         "-1i128",   None
     )
-    "Num.toNatChecked", usize, (
-        to_nat_checked_smaller_width_pos,              "15i8",     15
-        to_nat_checked_smaller_width_neg_oob,          "-15i8",    None
-        to_nat_checked_same,                           "15u64",    15
-        to_nat_checked_same_width_signed_fits,         "15i64",    15
-        to_nat_checked_same_width_signed_oob,          "-1i64",    None
-        to_nat_checked_larger_width_signed_fits_pos,   "15i128",   15
-        to_nat_checked_larger_width_signed_oob_pos,    "18446744073709551616i128", None
-        to_nat_checked_larger_width_signed_oob_neg,    "-1i128",   None
-        to_nat_checked_larger_width_unsigned_fits_pos, "15u128",   15
-        to_nat_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
-    )
 }
 
 #[test]
@@ -2619,334 +2593,6 @@ fn is_multiple_of_unsigned() {
     // unsigned result is different from signed
     assert_evals_to!("Num.isMultipleOf 5u8 0xFF", false, bool);
     assert_evals_to!("Num.isMultipleOf 0xFCu8 0xFE", false, bool);
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u16_clearly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello"
-                when Num.bytesToU16 bytes 234 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u16
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u16_subtly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello"
-                when Num.bytesToU16 bytes 4 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u16
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u32_clearly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello"
-                when Num.bytesToU32 bytes 234 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u32
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u32_subtly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello"
-                when Num.bytesToU32 bytes 2 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u32
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u64_clearly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello"
-                when Num.bytesToU64 bytes 234 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u64_subtly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello world"
-                when Num.bytesToU64 bytes 4 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u128_clearly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello"
-                when Num.bytesToU128 bytes 234 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u128
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u128_subtly_out_of_bounds() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                bytes = Str.toUtf8 "hello world!!!!!!"
-                when Num.bytesToU128 bytes 2 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "#
-        ),
-        1,
-        u128
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u16_max_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU16 [255, 255] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        65535,
-        u16
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u16_min_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU16 [0, 0] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        0,
-        u16
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u16_random_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU16 [164, 215] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        55_204,
-        u16
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u32_min_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU32 [0, 0, 0, 0] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        0,
-        u32
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u32_max_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU32 [255, 255, 255, 255] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        4_294_967_295,
-        u32
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u32_random_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU32 [252, 124, 128, 121] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        2_038_463_740,
-        u32
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u64_min_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU64 [0, 0, 0, 0, 0, 0, 0, 0] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        0,
-        u64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u64_max_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU64 [255, 255, 255, 255, 255, 255, 255, 255] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        18_446_744_073_709_551_615,
-        u64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u64_random_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU64 [252, 124, 128, 121, 1, 32, 177, 211] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        15_254_008_603_586_100_476,
-        u64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u128_min_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU128 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        0,
-        u128
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u128_max_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU128 [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        340_282_366_920_938_463_463_374_607_431_768_211_455,
-        u128
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn bytes_to_u128_random_u8s() {
-    assert_evals_to!(
-        indoc!(
-            r"
-                when Num.bytesToU128 [252, 124, 128, 121, 1, 32, 177, 211, 3, 57, 203, 122, 95, 164, 23, 145] 0 is
-                    Ok v -> v
-                    Err OutOfBounds -> 1
-                "
-        ),
-        192_860_816_096_412_392_720_639_456_393_488_792_828,
-        u128
-    );
 }
 
 #[test]
@@ -3429,14 +3075,14 @@ fn monomorphized_ints() {
             r"
             x = 100
 
-            f : U8, U32 -> Nat
+            f : U8, U32 -> U64
             f = \_, _ -> 18
 
             f x x
             "
         ),
         18,
-        usize
+        u64
     )
 }
 
@@ -3448,14 +3094,14 @@ fn monomorphized_floats() {
             r"
             x = 100.0
 
-            f : F32, F64 -> Nat
+            f : F32, F64 -> U64
             f = \_, _ -> 18
 
             f x x
             "
         ),
         18,
-        usize
+        u64
     )
 }
 
@@ -3465,7 +3111,7 @@ fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
             r"
-            f : U8 -> Nat
+            f : U8 -> U64
             f = \_ -> 9
             x =
                 n = 100
@@ -3479,7 +3125,7 @@ fn monomorphized_ints_names_dont_conflict() {
             "
         ),
         18,
-        usize
+        u64
     )
 }
 

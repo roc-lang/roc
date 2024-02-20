@@ -335,11 +335,6 @@ pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_trailing_zero_bits");
 pub const NUM_COUNT_ONE_BITS: IntrinsicName = int_intrinsic!("roc_builtins.num.count_one_bits");
 
-pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
-pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
-pub const NUM_BYTES_TO_U64: &str = "roc_builtins.num.bytes_to_u64";
-pub const NUM_BYTES_TO_U128: &str = "roc_builtins.num.bytes_to_u128";
-
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
@@ -359,7 +354,7 @@ pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_SUBSTRING_UNSAFE: &str = "roc_builtins.str.substring_unsafe";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
-pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
+pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
 pub const STR_TRIM: &str = "roc_builtins.str.trim";
 pub const STR_TRIM_START: &str = "roc_builtins.str.trim_start";

@@ -472,7 +472,7 @@ pub fn listMap4(
 }
 
 pub fn listWithCapacity(
-    capacity: usize,
+    capacity: u64,
     alignment: u32,
     element_width: usize,
 ) callconv(.C) RocList {
@@ -482,16 +482,22 @@ pub fn listWithCapacity(
 pub fn listReserve(
     list: RocList,
     alignment: u32,
-    spare: usize,
+    spare: u64,
     element_width: usize,
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
-    const old_length = list.len();
-    if ((update_mode == .InPlace or list.isUnique()) and list.getCapacity() >= list.len() + spare) {
+    const original_len = list.len();
+    const cap = @as(u64, @intCast(list.getCapacity()));
+    const desired_cap = @as(u64, @intCast(original_len)) +| spare;
+
+    if ((update_mode == .InPlace or list.isUnique()) and cap >= desired_cap) {
         return list;
     } else {
-        var output = list.reallocate(alignment, old_length + spare, element_width);
-        output.length = old_length;
+        // Make sure on 32-bit targets we don't accidentally wrap when we cast our U64 desired capacity to U32.
+        const reserve_size: u64 = @min(desired_cap, @as(u64, @intCast(std.math.maxInt(usize))));
+
+        var output = list.reallocate(alignment, @as(usize, @intCast(reserve_size)), element_width);
+        output.length = original_len;
         return output;
     }
 }
@@ -577,13 +583,13 @@ pub fn listSwap(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    index_1: usize,
-    index_2: usize,
+    index_1: u64,
+    index_2: u64,
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
-    const size = list.len();
+    const size = @as(u64, @intCast(list.len()));
     if (index_1 == index_2 or index_1 >= size or index_2 >= size) {
-        // Either index out of bounds so we just return
+        // Either one index was out of bounds, or both indices were the same; just return
         return list;
     }
 
@@ -596,7 +602,11 @@ pub fn listSwap(
     };
 
     const source_ptr = @as([*]u8, @ptrCast(newList.bytes));
-    swapElements(source_ptr, element_width, index_1, index_2);
+
+    swapElements(source_ptr, element_width, @as(usize,
+    // We already verified that both indices are less than the stored list length,
+    // which is usize, so casting them to usize will definitely be lossless.
+    @intCast(index_1)), @as(usize, @intCast(index_2)));
 
     return newList;
 }
@@ -605,12 +615,12 @@ pub fn listSublist(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    start: usize,
-    len: usize,
+    start_u64: u64,
+    len_u64: u64,
     dec: Dec,
 ) callconv(.C) RocList {
     const size = list.len();
-    if (len == 0 or start >= size) {
+    if (size == 0 or start_u64 >= @as(u64, @intCast(size))) {
         // Decrement the reference counts of all elements.
         if (list.bytes) |source_ptr| {
             var i: usize = 0;
@@ -629,9 +639,26 @@ pub fn listSublist(
     }
 
     if (list.bytes) |source_ptr| {
-        const keep_len = @min(len, size - start);
+        // This cast is lossless because we would have early-returned already
+        // if `start_u64` were greater than `size`, and `size` fits in usize.
+        const start: usize = @intCast(start_u64);
         const drop_start_len = start;
-        const drop_end_len = size - (start + keep_len);
+
+        // (size - start) can't overflow because we would have early-returned already
+        // if `start` were greater than `size`.
+        const size_minus_start = size - start;
+
+        // This outer cast to usize is lossless. size, start, and size_minus_start all fit in usize,
+        // and @min guarantees that if `len_u64` gets returned, it's because it was smaller
+        // than something that fit in usize.
+        const keep_len = @as(usize, @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start)))));
+
+        // This can't overflow because if len > size_minus_start,
+        // then keep_len == size_minus_start and this will be 0.
+        // Alternatively, if len <= size_minus_start, then keep_len will
+        // be equal to len, meaning keep_len <= size_minus_start too,
+        // which in turn means this won't overflow.
+        const drop_end_len = size_minus_start - keep_len;
 
         // Decrement the reference counts of elements before `start`.
         var i: usize = 0;
@@ -671,28 +698,33 @@ pub fn listDropAt(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    drop_index: usize,
+    drop_index_u64: u64,
     dec: Dec,
 ) callconv(.C) RocList {
     const size = list.len();
+    const size_u64 = @as(u64, @intCast(size));
     // If droping the first or last element, return a seamless slice.
     // For simplicity, do this by calling listSublist.
     // In the future, we can test if it is faster to manually inline the important parts here.
-    if (drop_index == 0) {
+    if (drop_index_u64 == 0) {
         return listSublist(list, alignment, element_width, 1, size -| 1, dec);
-    } else if (drop_index == size -| 1) {
+    } else if (drop_index_u64 == size_u64 - 1) { // It's fine if (size - 1) wraps on size == 0 here,
+        // because if size is 0 then it's always fine for this branch to be taken; no
+        // matter what drop_index was, we're size == 0, so empty list will always be returned.
         return listSublist(list, alignment, element_width, 0, size -| 1, dec);
     }
 
     if (list.bytes) |source_ptr| {
-        if (drop_index >= size) {
+        if (drop_index_u64 >= size_u64) {
             return list;
         }
 
-        if (drop_index < size) {
-            const element = source_ptr + drop_index * element_width;
-            dec(element);
-        }
+        // This cast must be lossless, because we would have just early-returned if drop_index
+        // were >= than `size`, and we know `size` fits in usize.
+        const drop_index: usize = @intCast(drop_index_u64);
+
+        const element = source_ptr + drop_index * element_width;
+        dec(element);
 
         // NOTE
         // we need to return an empty list explicitly,
@@ -906,7 +938,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 
 pub fn listReplaceInPlace(
     list: RocList,
-    index: usize,
+    index: u64,
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
@@ -916,14 +948,15 @@ pub fn listReplaceInPlace(
     // at the time of writing, the function is implemented roughly as
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
-    // because inserting into an empty list is always out of bounds
-    return listReplaceInPlaceHelp(list, index, element, element_width, out_element);
+    // because inserting into an empty list is always out of bounds,
+    // and it's always safe to cast index to usize.
+    return listReplaceInPlaceHelp(list, @as(usize, @intCast(index)), element, element_width, out_element);
 }
 
 pub fn listReplace(
     list: RocList,
     alignment: u32,
-    index: usize,
+    index: u64,
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
@@ -933,8 +966,9 @@ pub fn listReplace(
     // at the time of writing, the function is implemented roughly as
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
-    // because inserting into an empty list is always out of bounds
-    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), index, element, element_width, out_element);
+    // because inserting into an empty list is always out of bounds,
+    // and it's always safe to cast index to usize.
+    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), @as(usize, @intCast(index)), element, element_width, out_element);
 }
 
 inline fn listReplaceInPlaceHelp(

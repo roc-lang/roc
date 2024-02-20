@@ -338,7 +338,6 @@ interface Str
         countUtf8Bytes,
         toUtf8,
         fromUtf8,
-        fromUtf8Range,
         startsWith,
         endsWith,
         trim,
@@ -347,7 +346,6 @@ interface Str
         toDec,
         toF64,
         toF32,
-        toNat,
         toU128,
         toI128,
         toU64,
@@ -375,7 +373,7 @@ interface Str
         Bool.{ Bool, Eq },
         Result.{ Result },
         List,
-        Num.{ Nat, Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
+        Num.{ Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
     ]
 
 Utf8ByteProblem : [
@@ -387,7 +385,7 @@ Utf8ByteProblem : [
     EncodesSurrogateHalf,
 ]
 
-Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
+Utf8Problem : { byteIndex : U64, problem : Utf8ByteProblem }
 
 ## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
 ## ```
@@ -428,7 +426,7 @@ concat : Str, Str -> Str
 ## the cost of using more memory than is necessary.
 ##
 ## For more details on how the performance optimization works, see [Str.reserve].
-withCapacity : Nat -> Str
+withCapacity : U64 -> Str
 
 ## Increase a string's capacity by at least the given number of additional bytes.
 ##
@@ -486,7 +484,7 @@ withCapacity : Nat -> Str
 ## reallocations but will also waste a lot of memory!
 ##
 ## If you plan to use [Str.reserve] on an empty string, it's generally better to use [Str.withCapacity] instead.
-reserve : Str, Nat -> Str
+reserve : Str, U64 -> Str
 
 ## Combines a [List] of strings into a single string, with a separator
 ## string in between each.
@@ -516,7 +514,7 @@ split : Str, Str -> List Str
 ## expect Str.repeat "" 10 == ""
 ## expect Str.repeat "anything" 0 == ""
 ## ```
-repeat : Str, Nat -> Str
+repeat : Str, U64 -> Str
 
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
@@ -540,9 +538,9 @@ toUtf8 : Str -> List U8
 ## expect Str.fromUtf8 [] == Ok ""
 ## expect Str.fromUtf8 [255] |> Result.isErr
 ## ```
-fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]
+fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]
 fromUtf8 = \bytes ->
-    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
+    result = fromUtf8Lowlevel bytes
 
     if result.cIsOk then
         Ok result.bString
@@ -555,37 +553,14 @@ expect (Str.fromUtf8 [240, 159, 144, 166]) == Ok "🐦"
 expect (Str.fromUtf8 []) == Ok ""
 expect (Str.fromUtf8 [255]) |> Result.isErr
 
-## Encode part of a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## into a [Str]
-## ```
-## expect Str.fromUtf8Range [72, 105, 80, 103] { start : 0, count : 2 } == Ok "Hi"
-## ```
-fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]
-fromUtf8Range = \bytes, config ->
-    if Num.addSaturated config.start config.count <= List.len bytes then
-        result = fromUtf8RangeLowlevel bytes config.start config.count
-
-        if result.cIsOk then
-            Ok result.bString
-        else
-            Err (BadUtf8 result.dProblemCode result.aByteIndex)
-    else
-        Err OutOfBounds
-
-expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 0, count: 2 }) == Ok "Hi"
-expect (Str.fromUtf8Range [233, 185, 143, 224, 174, 154, 224, 174, 191] { start: 3, count: 3 }) == Ok "ச"
-expect (Str.fromUtf8Range [240, 159, 144, 166] { start: 0, count: 4 }) == Ok "🐦"
-expect (Str.fromUtf8Range [] { start: 0, count: 0 }) == Ok ""
-expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 2, count: 3 }) |> Result.isErr
-
 FromUtf8Result : {
-    aByteIndex : Nat,
+    aByteIndex : U64,
     bString : Str,
     cIsOk : Bool,
     dProblemCode : Utf8ByteProblem,
 }
 
-fromUtf8RangeLowlevel : List U8, Nat, Nat -> FromUtf8Result
+fromUtf8Lowlevel : List U8 -> FromUtf8Result
 
 ## Check if the given [Str] starts with a value.
 ## ```
@@ -649,25 +624,6 @@ toF64 = \string -> strToNumHelp string
 ## ```
 toF32 : Str -> Result F32 [InvalidNumStr]
 toF32 = \string -> strToNumHelp string
-
-## Convert a [Str] to a [Nat]. If the given number doesn't fit in [Nat], it will be [truncated](https://www.ualberta.ca/computing-science/media-library/teaching-resources/java/truncation-rounding.html).
-## [Nat] has a different maximum number depending on the system you're building
-## for, so this may give a different answer on different systems.
-##
-## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
-## `Num.maxU32`. This means that calling `Str.toNat "9_000_000_000"` on a 32-bit
-## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
-## larger than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
-##
-## Calling `Str.toNat "9_000_000_000"` on a 64-bit system will return
-## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to `Num.maxU64`, and 9_000_000_000 is smaller than `Num.maxU64`.
-## ```
-## expect Str.toNat "9_000_000_000" == Ok 9000000000
-## expect Str.toNat "not a number" == Err InvalidNumStr
-## ```
-toNat : Str -> Result Nat [InvalidNumStr]
-toNat = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
 ## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
@@ -788,16 +744,16 @@ toI8 : Str -> Result I8 [InvalidNumStr]
 toI8 = \string -> strToNumHelp string
 
 ## Get the byte at the given index, without performing a bounds check.
-getUnsafe : Str, Nat -> U8
+getUnsafe : Str, U64 -> U8
 
 ## Gives the number of bytes in a [Str] value.
 ## ```
 ## expect Str.countUtf8Bytes "Hello World" == 11
 ## ```
-countUtf8Bytes : Str -> Nat
+countUtf8Bytes : Str -> U64
 
 ## string slice that does not do bounds checking or utf-8 verification
-substringUnsafe : Str, Nat, Nat -> Str
+substringUnsafe : Str, U64, U64 -> Str
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
@@ -905,7 +861,7 @@ expect splitFirst "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
 # splitFirst when needle is haystack
 expect splitFirst "foo" "foo" == Ok { before: "", after: "" }
 
-firstMatch : Str, Str -> [Some Nat, None]
+firstMatch : Str, Str -> [Some U64, None]
 firstMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
@@ -913,7 +869,7 @@ firstMatch = \haystack, needle ->
 
     firstMatchHelp haystack needle 0 lastPossible
 
-firstMatchHelp : Str, Str, Nat, Nat -> [Some Nat, None]
+firstMatchHelp : Str, Str, U64, U64 -> [Some U64, None]
 firstMatchHelp = \haystack, needle, index, lastPossible ->
     if index <= lastPossible then
         if matchesAt haystack index needle then
@@ -956,7 +912,7 @@ expect Str.splitLast "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
 # splitLast when needle is haystack
 expect Str.splitLast "foo" "foo" == Ok { before: "", after: "" }
 
-lastMatch : Str, Str -> [Some Nat, None]
+lastMatch : Str, Str -> [Some U64, None]
 lastMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
@@ -964,7 +920,7 @@ lastMatch = \haystack, needle ->
 
     lastMatchHelp haystack needle lastPossibleIndex
 
-lastMatchHelp : Str, Str, Nat -> [Some Nat, None]
+lastMatchHelp : Str, Str, U64 -> [Some U64, None]
 lastMatchHelp = \haystack, needle, index ->
     if matchesAt haystack index needle then
         Some index
@@ -978,7 +934,7 @@ lastMatchHelp = \haystack, needle, index ->
 
 min = \x, y -> if x < y then x else y
 
-matchesAt : Str, Nat, Str -> Bool
+matchesAt : Str, U64, Str -> Bool
 matchesAt = \haystack, haystackIndex, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
@@ -1019,15 +975,15 @@ matchesAtHelp = \state ->
 ## state for each byte. The index for that byte in the string is provided
 ## to the update function.
 ## ```
-## f : List U8, U8, Nat -> List U8
+## f : List U8, U8, U64 -> List U8
 ## f = \state, byte, _ -> List.append state byte
 ## expect Str.walkUtf8WithIndex "ABC" [] f == [65, 66, 67]
 ## ```
-walkUtf8WithIndex : Str, state, (state, U8, Nat -> state) -> state
+walkUtf8WithIndex : Str, state, (state, U8, U64 -> state) -> state
 walkUtf8WithIndex = \string, state, step ->
     walkUtf8WithIndexHelp string state step 0 (Str.countUtf8Bytes string)
 
-walkUtf8WithIndexHelp : Str, state, (state, U8, Nat -> state), Nat, Nat -> state
+walkUtf8WithIndexHelp : Str, state, (state, U8, U64 -> state), U64, U64 -> state
 walkUtf8WithIndexHelp = \string, state, step, index, length ->
     if index < length then
         byte = Str.getUnsafe string index
@@ -1051,7 +1007,7 @@ walkUtf8 : Str, state, (state, U8 -> state) -> state
 walkUtf8 = \str, initial, step ->
     walkUtf8Help str initial step 0 (Str.countUtf8Bytes str)
 
-walkUtf8Help : Str, state, (state, U8 -> state), Nat, Nat -> state
+walkUtf8Help : Str, state, (state, U8 -> state), U64, U64 -> state
 walkUtf8Help = \str, state, step, index, length ->
     if index < length then
         byte = Str.getUnsafe str index

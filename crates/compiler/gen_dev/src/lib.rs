@@ -1484,13 +1484,21 @@ trait Backend<'a> {
 
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
-            LowLevel::ListLen => {
+            LowLevel::ListLenU64 => {
                 debug_assert_eq!(
                     1,
                     args.len(),
-                    "ListLen: expected to have exactly one argument"
+                    "ListLenU64: expected to have exactly one argument"
                 );
-                self.build_list_len(sym, &args[0])
+                self.build_list_len_u64(sym, &args[0])
+            }
+            LowLevel::ListLenUsize => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListLenUsize: expected to have exactly one argument"
+                );
+                self.build_list_len_usize(sym, &args[0])
             }
             LowLevel::ListWithCapacity => {
                 debug_assert_eq!(
@@ -1615,15 +1623,17 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrFromUtf8Range => {
+            LowLevel::StrFromUtf8 => {
                 let update_mode = self.debug_symbol("update_mode");
+
+                // In dev builds, always use UpdateMode::Immutable
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 self.build_fn_call(
                     sym,
-                    bitcode::STR_FROM_UTF8_RANGE.to_string(),
-                    &[args[0], args[1], args[2], update_mode],
-                    &[arg_layouts[0], arg_layouts[1], arg_layouts[2], Layout::U8],
+                    bitcode::STR_FROM_UTF8.to_string(),
+                    &[args[0], update_mode],
+                    &[arg_layouts[0], Layout::U8],
                     ret_layout,
                 )
             }
@@ -1850,8 +1860,8 @@ trait Backend<'a> {
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
-                //    start: usize,
-                //    len: usize,
+                //    start: u64,
+                //    len: u64,
                 //    dec: Dec,
 
                 let list = args[0];
@@ -1877,8 +1887,8 @@ trait Backend<'a> {
                     arg_layouts[0],
                     Layout::U32,
                     layout_usize,
-                    arg_layouts[1],
-                    arg_layouts[2],
+                    Layout::U64,
+                    Layout::U64,
                     layout_usize,
                 ];
 
@@ -1901,8 +1911,8 @@ trait Backend<'a> {
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
-                //    index_1: usize,
-                //    index_2: usize,
+                //    index_1: u64,
+                //    index_2: u64,
                 //    update_mode: UpdateMode,
 
                 self.build_fn_call(
@@ -1920,8 +1930,8 @@ trait Backend<'a> {
                         list_layout,
                         Layout::U32,
                         layout_usize,
-                        layout_usize,
-                        layout_usize,
+                        Layout::U64,
+                        Layout::U64,
                         Layout::U8,
                     ],
                     ret_layout,
@@ -1974,7 +1984,7 @@ trait Backend<'a> {
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
-                //    drop_index: usize,
+                //    drop_index: u64,
                 //    dec: Dec,
 
                 self.build_fn_call(
@@ -1991,7 +2001,7 @@ trait Backend<'a> {
                         list_layout,
                         Layout::U32,
                         layout_usize,
-                        layout_usize,
+                        Layout::U64,
                         layout_usize,
                     ],
                     ret_layout,
@@ -2372,8 +2382,11 @@ trait Backend<'a> {
     /// build_sqrt stores the result of `sqrt(src)` into dst.
     fn build_num_sqrt(&mut self, dst: Symbol, src: Symbol, float_width: FloatWidth);
 
-    /// build_list_len returns the length of a list.
-    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
+    /// build_list_len_usize returns the length of a list as a usize. This is for internal use only.
+    fn build_list_len_usize(&mut self, dst: &Symbol, list: &Symbol);
+
+    /// build_list_len_u64 returns the length of a list and casts it from usize to u64. This is for the public List.len.
+    fn build_list_len_u64(&mut self, dst: &Symbol, list: &Symbol);
 
     /// generate a call to a higher-order lowlevel
     fn build_higher_order_lowlevel(

@@ -1358,14 +1358,20 @@ generateUnionField = \types ->
                 # use unit as the payload
                 Str.concat accum "$(indent)$(escapedFieldName): (),\n"
 
-commaSeparated : Str, List a, (a, Nat -> Str) -> Str
+commaSeparated : Str, List a, (a, U64 -> Str) -> Str
 commaSeparated = \buf, items, step ->
-    length = List.len items
-    List.walk items { buf, count: 0 } \accum, item ->
+
+    length = List.len items |> Num.intCast
+
+    help : { buf : Str, count : U64 }, a -> { buf : Str, count : U64 }
+    help = \accum, item ->
         if accum.count + 1 == length then
             { buf: Str.concat accum.buf (step item accum.count), count: length }
         else
             { buf: Str.concat accum.buf (step item accum.count) |> Str.concat ", ", count: accum.count + 1 }
+
+    items
+    |> List.walk { buf, count: 0 } help
     |> .buf
 
 generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
@@ -2142,7 +2148,7 @@ isUnit = \shape ->
         Unit -> Bool.true
         _ -> Bool.false
 
-toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
+toArgStr : List TypeId, Types, (TypeId, Shape, U64 -> Str) -> Str
 toArgStr = \args, types, fmt ->
     List.walkWithIndex args "" \state, argId, index ->
         shape = Types.shape types argId
