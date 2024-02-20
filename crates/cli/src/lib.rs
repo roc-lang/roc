@@ -440,6 +440,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
     use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
+    use roc_reporting::report::ANSI_STYLE_CODES;
     use roc_target::TargetInfo;
 
     let start_time = Instant::now();
@@ -541,7 +542,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let (failed, passed) = roc_repl_expect::run::run_toplevel_expects(
+    let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
         &mut writer,
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
@@ -555,7 +556,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let total_time = start_time.elapsed();
 
-    if failed == 0 && passed == 0 {
+    if failed_count == 0 && passed_count == 0 {
         // TODO print this in a more nicely formatted way!
         println!("No expectations were found.");
 
@@ -566,18 +567,20 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         // running tests altogether!
         Ok(2)
     } else {
-        let failed_color = if failed == 0 {
-            32 // green
+        let failed_color = if failed_count == 0 {
+            ANSI_STYLE_CODES.green
         } else {
-            31 // red
+            ANSI_STYLE_CODES.red
         };
 
+        let passed_color = ANSI_STYLE_CODES.green;
+
         println!(
-            "\n\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
+            "\n{failed_color}{failed_count}\x1B[39m failed and {passed_color}{passed_count}\x1B[39m passed in {} ms.\n",
             total_time.as_millis(),
         );
 
-        Ok((failed > 0) as i32)
+        Ok((failed_count > 0) as i32)
     }
 }
 

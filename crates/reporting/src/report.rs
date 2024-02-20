@@ -219,7 +219,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         code_block: codes.white,
         keyword: codes.green,
         ellipsis: codes.green,
-        variable: codes.blue,
+        variable: codes.cyan,
         type_variable: codes.yellow,
         structure: codes.green,
         alias: codes.yellow,
@@ -249,8 +249,6 @@ pub struct StyleCodes {
     pub red: &'static str,
     pub green: &'static str,
     pub yellow: &'static str,
-    pub blue: &'static str,
-    pub magenta: &'static str,
     pub cyan: &'static str,
     pub white: &'static str,
     pub bold: &'static str,
@@ -260,12 +258,10 @@ pub struct StyleCodes {
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
-    red: "\u{001b}[31m",
-    green: "\u{001b}[32m",
-    yellow: "\u{001b}[33m",
-    blue: "\u{001b}[34m",
-    magenta: "\u{001b}[35m",
-    cyan: "\u{001b}[36m",
+    red: "\u{001b}[1;31m",
+    green: "\u{001b}[1;32m",
+    yellow: "\u{001b}[1;33m",
+    cyan: "\u{001b}[1;36m",
     white: "\u{001b}[37m",
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
@@ -283,8 +279,6 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     red: html_color!("red"),
     green: html_color!("green"),
     yellow: html_color!("yellow"),
-    blue: html_color!("blue"),
-    magenta: html_color!("magenta"),
     cyan: html_color!("cyan"),
     white: html_color!("white"),
     bold: "<span class='bold'>",
@@ -292,6 +286,19 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     reset: "</span>",
     color_reset: "</span>",
 };
+
+// useful for tests
+pub fn strip_colors(str: &str) -> String {
+    str.replace(ANSI_STYLE_CODES.red, "")
+        .replace(ANSI_STYLE_CODES.green, "")
+        .replace(ANSI_STYLE_CODES.yellow, "")
+        .replace(ANSI_STYLE_CODES.cyan, "")
+        .replace(ANSI_STYLE_CODES.white, "")
+        .replace(ANSI_STYLE_CODES.bold, "")
+        .replace(ANSI_STYLE_CODES.underline, "")
+        .replace(ANSI_STYLE_CODES.reset, "")
+        .replace(ANSI_STYLE_CODES.color_reset, "")
+}
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
