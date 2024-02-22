@@ -93,17 +93,15 @@ appendWith = \lst, @Encoder doEncoding, fmt -> doEncoding lst fmt
 ##
 ## ```
 ## expect
-##     initialList = [1, 2, 3]  # Example initial byte list
-##     valueToAdd = true
-##     actual = Encode.append initialList valueToAdd Json.format
-##     expected = [1, 2, 3, ...]  # Expected byte list after appending the encoded true value
+##     actual = Encode.append [] {foo: "Bar"} Json.format
 ##
-##     List.length actual > List.length initialList  # Check that the list has grown
+##     # Check that the list has grown
+##     List.length actual > 0
 ## ```
 append : List U8, val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
 append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
 
-## Encodes a value into a list of bytes (`List U8`) according to the specified format.
+## Encodes a value to a list of bytes (`List U8`) according to the specified format.
 ##
 ## ```
 ## expect
