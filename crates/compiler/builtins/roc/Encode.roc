@@ -77,9 +77,10 @@ EncoderFormatting implements
 ##
 ## ```
 ## expect
-##     customEncoder = Encode.custom (\bytes, _fmt -> bytes ++ [42])  # Appends the byte 42 to the list
-##     actual = Encode.appendWith [] customEncoder Json.format
-##     expected = [42]  # Expected result is a list with a single byte, 42
+##     customEncoder = Encode.custom (\bytes, _fmt -> List.concat bytes [42]) # Appends the byte 42 to the list
+##
+##     actual = Encode.appendWith [] customEncoder Core.json
+##     expected = [42] # Expected result is a list with a single byte, 42
 ##
 ##     actual == expected
 ## ```
@@ -93,10 +94,10 @@ appendWith = \lst, @Encoder doEncoding, fmt -> doEncoding lst fmt
 ##
 ## ```
 ## expect
-##     actual = Encode.append [] {foo: "Bar"} Json.format
+##     actual = Encode.append [] { foo: "Bar" } Core.json
 ##
 ##     # Check that the list has grown
-##     List.length actual > 0
+##     !(List.isEmpty actual)
 ## ```
 append : List U8, val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
 append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
@@ -106,8 +107,9 @@ append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
 ## ```
 ## expect
 ##     value = 42
-##     actual = Encode.toBytes value Json.format
-##     expected = [34, 52, 50, 34]  # ASCII codes for '"42"'
+##
+##     actual = Encode.toBytes value Core.json
+##     expected = [52, 50] # ASCII codes for 4 and 2
 ##
 ##     actual == expected
 ## ```
