@@ -1597,7 +1597,8 @@ fn canonicalize_closure_body<'a>(
 enum MultiPatternVariables {
     OnePattern,
     MultiPattern {
-        bound_occurrences: VecMap<Symbol, (Region, u8)>,
+        num_patterns: usize,
+        bound_occurrences: VecMap<Symbol, (Region, usize)>,
     },
 }
 
@@ -1606,7 +1607,8 @@ impl MultiPatternVariables {
     fn new(num_patterns: usize) -> Self {
         if num_patterns > 1 {
             Self::MultiPattern {
-                bound_occurrences: VecMap::with_capacity(2),
+                num_patterns,
+                bound_occurrences: VecMap::with_capacity(num_patterns),
             }
         } else {
             Self::OnePattern
@@ -1617,7 +1619,9 @@ impl MultiPatternVariables {
     fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
         match self {
             MultiPatternVariables::OnePattern => {}
-            MultiPatternVariables::MultiPattern { bound_occurrences } => {
+            MultiPatternVariables::MultiPattern {
+                bound_occurrences, ..
+            } => {
                 for (sym, region) in BindingsFromPattern::new(pattern) {
                     if !bound_occurrences.contains_key(&sym) {
                         bound_occurrences.insert(sym, (region, 0));
@@ -1630,15 +1634,18 @@ impl MultiPatternVariables {
 
     #[inline(always)]
     fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
-        let bound_occurrences = match self {
-            MultiPatternVariables::OnePattern => Default::default(),
-            MultiPatternVariables::MultiPattern { bound_occurrences } => bound_occurrences,
+        let (bound_occurrences, num_patterns) = match self {
+            MultiPatternVariables::OnePattern => (Default::default(), 1),
+            MultiPatternVariables::MultiPattern {
+                bound_occurrences,
+                num_patterns,
+            } => (bound_occurrences, num_patterns),
         };
 
         bound_occurrences
             .into_iter()
-            .filter_map(|(sym, (region, occurs))| {
-                if occurs == 1 {
+            .filter_map(move |(sym, (region, occurs))| {
+                if occurs != num_patterns {
                     Some((sym, region))
                 } else {
                     None
