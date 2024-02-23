@@ -94,10 +94,10 @@ appendWith = \lst, @Encoder doEncoding, fmt -> doEncoding lst fmt
 ##
 ## ```
 ## expect
-##     actual = Encode.append [] { foo: "Bar" } Core.json
+##     actual = Encode.append [] { foo: 43 } Core.json
+##     expected = Str.toUtf8 """{"foo":43}"""
 ##
-##     # Check that the list has grown
-##     !(List.isEmpty actual)
+##     actual == expected
 ## ```
 append : List U8, val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
 append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
@@ -106,10 +106,10 @@ append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
 ##
 ## ```
 ## expect
-##     value = 42
+##     fooRec = { foo: 42 }
 ##
-##     actual = Encode.toBytes value Core.json
-##     expected = [52, 50] # ASCII codes for 4 and 2
+##     actual = Encode.toBytes fooRec Core.json
+##     expected = Str.toUtf8 """{"foo":42}"""
 ##
 ##     actual == expected
 ## ```
