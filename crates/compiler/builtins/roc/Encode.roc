@@ -77,7 +77,8 @@ EncoderFormatting implements
 ##
 ## ```
 ## expect
-##     customEncoder = Encode.custom (\bytes, _fmt -> List.concat bytes [42]) # Appends the byte 42 to the list
+##     # Appends the byte 42
+##     customEncoder = Encode.custom (\bytes, _fmt -> List.append bytes 42)
 ##
 ##     actual = Encode.appendWith [] customEncoder Core.json
 ##     expected = [42] # Expected result is a list with a single byte, 42
