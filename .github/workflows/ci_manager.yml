@@ -18,7 +18,7 @@ jobs:
               uses: actions/checkout@v4
 
             - name: Check if only css, html or md files changed
-              id: filecheck_ignored
+              id: check_ignored_files
               run: |
                 git fetch origin ${{ github.base_ref }}
                 if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$)'; then
@@ -27,8 +27,8 @@ jobs:
                     echo "should_run_tests=n" >> $GITHUB_OUTPUT
                 fi
 
-            - name: Check rs files if only comment lines changed
-              id: filecheck_rs
+            - name: Check if only comments changed in rust files
+              id: check_rs_comments
               run: |
                 git fetch origin ${{ github.base_ref }}
                 if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$|\.rs)'; then
@@ -41,11 +41,11 @@ jobs:
                   fi
                 fi
 
-            - name: Determine what subset of tests to run based on file checks
+            - name: Check if tests need to run based on earlier checks
               id: filecheck
               run: |
-                if [ ${{ steps.filecheck_ignored.outputs.should_run_tests }} = "y" ]; then
-                  if [ ${{ steps.filecheck_rs.outputs.should_run_tests }} = "y" ]; then
+                if [ ${{ steps.check_ignored_files.outputs.should_run_tests }} = "y" ]; then
+                  if [ ${{ steps.check_rs_comments.outputs.should_run_tests }} = "y" ]; then
                       echo "run_tests=full" >> $GITHUB_OUTPUT
                   else
                     echo "run_tests=none" >> $GITHUB_OUTPUT
