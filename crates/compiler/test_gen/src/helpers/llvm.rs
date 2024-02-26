@@ -547,6 +547,7 @@ pub fn try_run_lib_function<T>(
 }
 
 // only used in tests
+#[allow(dead_code)]
 pub(crate) fn llvm_evals_to<T, U, F>(
     src: &str,
     expected: U,
@@ -595,6 +596,7 @@ pub(crate) fn llvm_evals_to<T, U, F>(
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
@@ -659,6 +661,7 @@ macro_rules! assert_evals_to {
     }};
 }
 
+#[allow(unused_macros)]
 macro_rules! assert_evals_to_erased {
     ($src:expr, $expected:expr, $ty:ty) => {{
         crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
@@ -671,12 +674,16 @@ macro_rules! assert_evals_to_erased {
     }};
 }
 
+#[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
 }
 
+#[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
 pub(crate) use assert_evals_to_erased;
+#[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[cfg(feature = "gen-llvm-wasm")]
 pub(crate) use assert_wasm_evals_to;
