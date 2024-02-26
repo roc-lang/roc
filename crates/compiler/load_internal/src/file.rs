@@ -5331,7 +5331,6 @@ fn canonicalize_and_constrain<'a>(
     imported_abilities_state: PendingAbilitiesStore,
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
-    exposed_module_ids: &[ModuleId],
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -6399,7 +6398,6 @@ fn run_task<'a>(
                 abilities_store,
                 parsed,
                 skip_constraint_gen,
-                exposed_module_ids,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
