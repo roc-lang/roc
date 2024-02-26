@@ -5,3 +5,27 @@ app "helloWorld"
 
 main =
     Stdout.line "Hello, World!"
+
+filterMap : List a, {
+        map : (a -> b),
+        keepIf ? (b -> Bool),
+        dropIf ? (b -> Bool),
+        take ? [First U64, Last U64, All]
+    } -> List b
+filterMap = \list,
+    {
+        map,
+        keepIf ? (\_ -> Bool.true),
+        dropIf ? (\_ -> Bool.false),
+        take ? All,
+    } ->
+        beforeTake =
+            list
+            |> List.map map
+            |> List.keepIf keepIf
+            |> List.dropIf dropIf
+
+        when take is
+            All -> beforeTake
+            First n -> beforeTake |> List.takeFirst n
+            Last n -> beforeTake |> List.takeLast n
