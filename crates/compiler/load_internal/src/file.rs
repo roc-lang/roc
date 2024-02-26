@@ -637,7 +637,6 @@ enum Msg<'a> {
 struct CanAndCon {
     constrained_module: ConstrainedModule,
     canonicalization_problems: Vec<roc_problem::can::Problem>,
-    module_docs: Option<ModuleDocumentation>,
 }
 
 #[derive(Debug)]
@@ -2523,7 +2522,6 @@ fn update<'a>(
         CanonicalizedAndConstrained(CanAndCon {
             constrained_module,
             canonicalization_problems,
-            module_docs,
         }) => {
             let module_id = constrained_module.module.module_id;
             log!("generated constraints for {:?}", module_id);
@@ -2531,10 +2529,6 @@ fn update<'a>(
                 .module_cache
                 .can_problems
                 .insert(module_id, canonicalization_problems);
-
-            if let Some(docs) = module_docs {
-                state.module_cache.documentation.insert(module_id, docs);
-            }
 
             report_unused_imported_modules(&mut state, module_id, &constrained_module);
 
@@ -5389,40 +5383,6 @@ fn canonicalize_and_constrain<'a>(
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start);
 
-    // Generate documentation information
-    // TODO: store timing information?
-    let module_docs = match header_type {
-        HeaderType::App { .. } => None,
-        HeaderType::Platform { .. } | HeaderType::Package { .. } => {
-            // TODO: actually generate docs for platform and package modules.
-            None
-        }
-        HeaderType::Interface { name, .. }
-        | HeaderType::Builtin { name, .. }
-        | HeaderType::Hosted { name, .. }
-            if exposed_module_ids.contains(&parsed.module_id) =>
-        {
-            let mut scope = module_output.scope.clone();
-            scope.add_docs_imports();
-            let docs = crate::docs::generate_module_docs(
-                scope,
-                module_id,
-                module_ids,
-                name.as_str().into(),
-                &parsed_defs_for_docs,
-                exposed_module_ids,
-                module_output.exposed_symbols.clone(),
-                parsed.header_comments,
-            );
-
-            Some(docs)
-        }
-        HeaderType::Interface { .. } | HeaderType::Builtin { .. } | HeaderType::Hosted { .. } => {
-            // This module isn't exposed by the platform, so don't generate docs for it!
-            None
-        }
-    };
-
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
@@ -5513,7 +5473,6 @@ fn canonicalize_and_constrain<'a>(
     CanAndCon {
         constrained_module,
         canonicalization_problems: module_output.problems,
-        module_docs,
     }
 }
 
