@@ -3955,7 +3955,9 @@ fn to_space_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow("I encountered a tab character:"),
                 alloc.region(region),
-                alloc.reflow("Tab characters are not allowed, use spaces instead."),
+                alloc.reflow(
+                    "Tab characters are not allowed in Roc code. Please use spaces instead!",
+                ),
             ]);
 
             Report {

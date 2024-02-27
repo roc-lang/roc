@@ -1883,7 +1883,7 @@ fn task_always_twice() {
                 @Effect inner
 
             effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = $(@Effect thunk), transform -> transform (thunk {})
+            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
 
             Task a err : Effect (Result a err)
 
@@ -1987,7 +1987,7 @@ fn todo_bad_error_message() {
                 @Effect inner
 
             effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = $(@Effect thunk), transform -> transform (thunk {})
+            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
 
             Task a err : Effect (Result a err)
 
@@ -3220,7 +3220,7 @@ fn recursively_build_effect() {
             always = \x -> @XEffect (\{} -> x)
 
             after : XEffect a, (a -> XEffect b) -> XEffect b
-            after = $(@XEffect e), toB ->
+            after = \(@XEffect e), toB ->
                 @XEffect \{} ->
                     when toB (e {}) is
                         @XEffect e2 ->

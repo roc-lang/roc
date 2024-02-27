@@ -2562,7 +2562,7 @@ fn recursively_build_effect() {
         always = \x -> @XEffect (\{} -> x)
 
         after : XEffect a, (a -> XEffect b) -> XEffect b
-        after = $(@XEffect e), toB ->
+        after = \(@XEffect e), toB ->
             @XEffect \{} ->
                 when toB (e {}) is
                     @XEffect e2 ->
