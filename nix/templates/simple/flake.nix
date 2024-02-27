@@ -30,7 +30,7 @@
 
             # For vscode plugin https://github.com/ivan-demchenko/roc-vscode-unofficial
             shellHook = ''
-              export ROC_LSP_PATH=${rocFull}/bin/roc_ls
+              export ROC_LANGUAGE_SERVER_PATH=${rocFull}/bin/roc_language_server
             '';
           };
         };

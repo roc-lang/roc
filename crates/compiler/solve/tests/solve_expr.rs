@@ -165,7 +165,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "
             ),
-            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]",
+            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]",
         );
     }
 
@@ -3016,7 +3016,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+                partition : U64, U64, List (Int a) -> [Pair U64 (List (Int a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -3028,7 +3028,7 @@ mod solve_expr {
                 partition
                             "
             ),
-            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
+            "U64, U64, List (Int a) -> [Pair U64 (List (Int a))]",
         );
     }
 
@@ -3037,7 +3037,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-            swap : Nat, Nat, List a -> List a
+            swap : U64, U64, List a -> List a
             swap = \i, j, list ->
                 when Pair (List.get list i) (List.get list j) is
                     Pair (Ok atI) (Ok atJ) ->
@@ -3048,7 +3048,7 @@ mod solve_expr {
                     _ ->
                         list
 
-            partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+            partition : U64, U64, List (Int a) -> [Pair U64 (List (Int a))]
             partition = \low, high, initialList ->
                 when List.get initialList high is
                     Ok pivot ->
@@ -3076,7 +3076,7 @@ mod solve_expr {
             partition
         "
             ),
-            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
+            "U64, U64, List (Int a) -> [Pair U64 (List (Int a))]",
         );
     }
 
@@ -3116,7 +3116,7 @@ mod solve_expr {
                     List.get
                 "
             ),
-            "List a, Nat -> Result a [OutOfBounds]",
+            "List a, U64 -> Result a [OutOfBounds]",
         );
     }
 
@@ -3772,7 +3772,7 @@ mod solve_expr {
     fn list_walk_with_index_until() {
         infer_eq_without_problem(
             indoc!(r"List.walkWithIndexUntil"),
-            "List elem, state, (state, elem, Nat -> [Break state, Continue state]) -> state",
+            "List elem, state, (state, elem, U64 -> [Break state, Continue state]) -> state",
         );
     }
 
@@ -3784,7 +3784,7 @@ mod solve_expr {
                 List.dropAt
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -3820,7 +3820,7 @@ mod solve_expr {
                 List.takeFirst
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -3832,7 +3832,7 @@ mod solve_expr {
                 List.takeLast
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -3844,7 +3844,7 @@ mod solve_expr {
                 List.sublist
                 "
             ),
-            "List elem, { len : Nat, start : Nat } -> List elem",
+            "List elem, { len : U64, start : U64 } -> List elem",
         );
     }
 
@@ -3852,7 +3852,7 @@ mod solve_expr {
     fn list_split() {
         infer_eq_without_problem(
             indoc!("List.split"),
-            "List elem, Nat -> { before : List elem, others : List elem }",
+            "List elem, U64 -> { before : List elem, others : List elem }",
         );
     }
 
@@ -3864,7 +3864,7 @@ mod solve_expr {
                 List.dropLast
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -4400,7 +4400,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [partitionHelp] to "./platform"
 
-                swap : Nat, Nat, List a -> List a
+                swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -4411,7 +4411,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
+                partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -4427,7 +4427,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
+            "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
         );
     }
 
@@ -4981,8 +4981,6 @@ mod solve_expr {
                     i64:  123i64,
                     i128: 123i128,
 
-                    nat:  123nat,
-
                     bu8:   0b11u8,
                     bu16:  0b11u16,
                     bu32:  0b11u32,
@@ -4995,8 +4993,6 @@ mod solve_expr {
                     bi64:  0b11i64,
                     bi128: 0b11i128,
 
-                    bnat:  0b11nat,
-
                     dec:  123.0dec,
                     f32:  123.0f32,
                     f64:  123.0f64,
@@ -5007,7 +5003,7 @@ mod solve_expr {
                 }
                 "
             ),
-            r"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bnat : Nat, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, nat : Nat, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }",
+            r"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }",
         )
     }
 
@@ -5059,11 +5055,6 @@ mod solve_expr {
                               123i128 -> n
                               _ -> n),
 
-                    nat:  (\n ->
-                            when n is
-                              123nat -> n
-                              _ -> n),
-
                     bu8:   (\n ->
                             when n is
                               0b11u8 -> n
@@ -5106,11 +5097,6 @@ mod solve_expr {
                               0b11i128 -> n
                               _ -> n),
 
-                    bnat:  (\n ->
-                            when n is
-                              0b11nat -> n
-                              _ -> n),
-
                     dec:  (\n ->
                             when n is
                               123.0dec -> n
@@ -5139,7 +5125,7 @@ mod solve_expr {
                 }
                 "
             ),
-            r"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }",
+            r"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }",
         )
     }
 }

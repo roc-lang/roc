@@ -1,5 +1,11 @@
 interface TypeId
-    exposes [TypeId]
-    imports [InternalTypeId.{ InternalTypeId }]
+    exposes [TypeId, fromU64, toU64]
+    imports []
 
-TypeId : InternalTypeId
+TypeId := U64 implements [Eq, Hash]
+
+toU64 : TypeId -> U64
+toU64 = \@TypeId x -> x
+
+fromU64 : U64 -> TypeId
+fromU64 = @TypeId

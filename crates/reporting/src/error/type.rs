@@ -15,8 +15,7 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
-    UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableEq, TypeError, UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -413,41 +412,17 @@ fn underivable_hint<'b>(
                 ])),
             ])))
         }
-        NotDerivableContext::Encode(reason) => match reason {
-            NotDerivableEncode::Nat => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Encoding a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" is not supported. Consider using a fixed-sized unsigned integer, like a "),
-                    alloc.type_str("U64"),
-                    alloc.reflow(" instead."),
-                ])))
-            }
-        },
-        NotDerivableContext::Decode(reason) => match reason {
-            NotDerivableDecode::Nat => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Decoding to a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" is not supported. Consider decoding to a fixed-sized unsigned integer, like "),
-                    alloc.type_str("U64"),
-                    alloc.reflow(", then converting to a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" if needed."),
-                ])))
-            }
-            NotDerivableDecode::OptionalRecordField(field) => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
-                    alloc.record_field(field),
-                    alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
-                    alloc.reflow("but are not a concept that extends to runtime!"),
-                    alloc.hardline(),
-                    alloc.reflow("Maybe you wanted to use a "),
-                    alloc.symbol_unqualified(Symbol::RESULT_RESULT),
-                    alloc.reflow("?"),
-                ])))
-            }
+        NotDerivableContext::DecodeOptionalRecordField(field) => {
+            Some(alloc.note("").append(alloc.concat([
+                alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
+                alloc.record_field(field),
+                alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
+                alloc.reflow("but are not a concept that extends to runtime!"),
+                alloc.hardline(),
+                alloc.reflow("Maybe you wanted to use a "),
+                alloc.symbol_unqualified(Symbol::RESULT_RESULT),
+                alloc.reflow("?"),
+            ])))
         },
         NotDerivableContext::Eq(reason) => match reason {
             NotDerivableEq::FloatingPoint => {

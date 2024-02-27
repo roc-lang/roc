@@ -26,9 +26,9 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
-use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+use roc_reporting::report::{strip_colors, RenderTarget};
 use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
@@ -323,7 +323,7 @@ fn import_transitive_alias() {
     // with variables in the importee
     let modules = vec![
         (
-            "RBTree",
+            "RBTree.roc",
             indoc!(
                 r"
                         interface RBTree exposes [RedBlackTree, empty] imports []
@@ -341,7 +341,7 @@ fn import_transitive_alias() {
             ),
         ),
         (
-            "Other",
+            "Other.roc",
             indoc!(
                 r"
                         interface Other exposes [empty] imports [RBTree]
@@ -465,10 +465,10 @@ fn iface_quicksort() {
     expect_types(
         loaded_module,
         hashmap! {
-            "swap" => "Nat, Nat, List a -> List a",
-            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
-            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
-            "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
+            "swap" => "U64, U64, List a -> List a",
+            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
+            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
         },
     );
 }
@@ -481,10 +481,10 @@ fn quicksort_one_def() {
     expect_types(
         loaded_module,
         hashmap! {
-            "swap" => "Nat, Nat, List a -> List a",
-            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
-            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
-            "quicksortHelp" => "List (Num a), Nat, Nat -> List (Num a)",
+            "swap" => "U64, U64, List a -> List a",
+            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
+            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "quicksortHelp" => "List (Num a), U64, U64 -> List (Num a)",
             "quicksort" => "List (Num a) -> List (Num a)",
         },
     );
@@ -498,10 +498,10 @@ fn app_quicksort() {
     expect_types(
         loaded_module,
         hashmap! {
-            "swap" => "Nat, Nat, List a -> List a",
-            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
-            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
-            "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
+            "swap" => "U64, U64, List a -> List a",
+            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
+            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
         },
     );
 }
@@ -626,7 +626,7 @@ fn ingested_file_bytes() {
 #[test]
 fn parse_problem() {
     let modules = vec![(
-        "Main",
+        "Main.roc",
         indoc!(
             r"
                 interface Main exposes [main] imports []
@@ -641,7 +641,7 @@ fn parse_problem() {
             report,
             indoc!(
                 "
-                    ── UNFINISHED LIST ──────────────────────────────────── tmp/parse_problem/Main ─
+                    ── UNFINISHED LIST in tmp/parse_problem/Main.roc ───────────────────────────────
 
                     I am partway through started parsing a list, but I got stuck here:
 
@@ -707,7 +707,7 @@ fn ingested_file_not_found() {
 #[test]
 fn platform_does_not_exist() {
     let modules = vec![(
-        "Main",
+        "main.roc",
         indoc!(
             r#"
                 app "example"
@@ -753,7 +753,7 @@ fn platform_parse_error() {
             ),
         ),
         (
-            "Main",
+            "main.roc",
             indoc!(
                 r#"
                         app "hello-world"
@@ -797,7 +797,7 @@ fn platform_exposes_main_return_by_pointer_issue() {
             ),
         ),
         (
-            "Main",
+            "main.roc",
             indoc!(
                 r#"
                     app "hello-world"
@@ -818,7 +818,7 @@ fn platform_exposes_main_return_by_pointer_issue() {
 fn opaque_wrapped_unwrapped_outside_defining_module() {
     let modules = vec![
         (
-            "Age",
+            "Age.roc",
             indoc!(
                 r"
                     interface Age exposes [Age] imports []
@@ -828,7 +828,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             ),
         ),
         (
-            "Main",
+            "Main.roc",
             indoc!(
                 r"
                     interface Main exposes [twenty, readAge] imports [Age.{ Age }]
@@ -847,7 +847,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         err,
         indoc!(
             r"
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE in ...d_outside_defining_module/Main.roc ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -861,7 +861,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE in ...d_outside_defining_module/Main.roc ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -875,7 +875,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
+                ── UNUSED IMPORT in ...aque_wrapped_unwrapped_outside_defining_module/Main.roc ─
 
                 Nothing from Age is used in this module.
 
@@ -910,7 +910,7 @@ fn issue_2863_module_type_does_not_exist() {
             ),
         ),
         (
-            "Main",
+            "main.roc",
             indoc!(
                 r#"
                     app "test"
@@ -930,7 +930,7 @@ fn issue_2863_module_type_does_not_exist() {
                 report,
                 indoc!(
                     "
-                        ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
+                        ── UNRECOGNIZED NAME in tmp/issue_2863_module_type_does_not_exist/main.roc ─────
 
                         Nothing is named `DoesNotExist` in this scope.
 
@@ -971,7 +971,7 @@ fn import_builtin_in_platform_and_check_app() {
             ),
         ),
         (
-            "Main",
+            "main.roc",
             indoc!(
                 r#"
                     app "test"
@@ -991,7 +991,7 @@ fn import_builtin_in_platform_and_check_app() {
 #[test]
 fn module_doesnt_match_file_path() {
     let modules = vec![(
-        "Age",
+        "Age.roc",
         indoc!(
             r"
                 interface NotAge exposes [Age] imports []
@@ -1006,7 +1006,7 @@ fn module_doesnt_match_file_path() {
         err,
         indoc!(
             r"
-            ── WEIRD MODULE NAME ─────────────────── tmp/module_doesnt_match_file_path/Age ─
+            ── WEIRD MODULE NAME in tmp/module_doesnt_match_file_path/Age.roc ──────────────
 
             This module name does not correspond with the file path it is defined
             in:
@@ -1026,7 +1026,7 @@ fn module_doesnt_match_file_path() {
 #[test]
 fn module_cyclic_import_itself() {
     let modules = vec![(
-        "Age",
+        "Age.roc",
         indoc!(
             r"
             interface Age exposes [] imports [Age]
@@ -1039,7 +1039,7 @@ fn module_cyclic_import_itself() {
         err,
         indoc!(
             r"
-            ── IMPORT CYCLE ────────────────────────── tmp/module_cyclic_import_itself/Age ─
+            ── IMPORT CYCLE in tmp/module_cyclic_import_itself/Age.roc ─────────────────────
 
             I can't compile Age because it depends on itself through the following
             chain of module imports:
@@ -1058,12 +1058,11 @@ fn module_cyclic_import_itself() {
         err
     );
 }
-
 #[test]
 fn module_cyclic_import_transitive() {
     let modules = vec![
         (
-            "Age",
+            "Age.roc",
             indoc!(
                 r"
                 interface Age exposes [] imports [Person]
@@ -1071,7 +1070,7 @@ fn module_cyclic_import_transitive() {
             ),
         ),
         (
-            "Person",
+            "Person.roc",
             indoc!(
                 r"
                 interface Person exposes [] imports [Age]
@@ -1085,7 +1084,7 @@ fn module_cyclic_import_transitive() {
         err,
         indoc!(
             r"
-            ── IMPORT CYCLE ────────────────── tmp/module_cyclic_import_transitive/Age.roc ─
+            ── IMPORT CYCLE in tmp/module_cyclic_import_transitive/Age.roc ─────────────────
 
             I can't compile Age because it depends on itself through the following
             chain of module imports:
@@ -1133,7 +1132,7 @@ fn nested_module_has_incorrect_name() {
         err,
         indoc!(
             r"
-            ── INCORRECT MODULE NAME ──── tmp/nested_module_has_incorrect_name/Dep/Foo.roc ─
+            ── INCORRECT MODULE NAME in tmp/nested_module_has_incorrect_name/Dep/Foo.roc ───
 
             This module has a different name than I expected:
 
@@ -1147,4 +1146,115 @@ fn nested_module_has_incorrect_name() {
         "\n{}",
         err
     );
+}
+#[test]
+fn module_interface_with_qualified_import() {
+    let modules = vec![(
+        "A.roc",
+        indoc!(
+            r"
+            interface A exposes [] imports [b.T]
+            "
+        ),
+    )];
+
+    let err = multiple_modules("module_interface_with_qualified_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'b' that you are using in the 'imports' section of the header of module 'tmp/module_interface_with_qualified_import/A.roc' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header.
+            This module is an interface, because of a bug in the compiler we are unable to directly typecheck interface modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file."#
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn app_missing_package_import() {
+    let modules = vec![(
+        "main.roc",
+        indoc!(
+            r#"
+                app "example"
+                    packages { pack: "./package/main.roc" }
+                    imports [notpack.Mod]
+                    provides [] to pack
+
+                main = ""
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("app_missing_package_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'notpack' that you are using in the 'imports' section of the header of module 'tmp/app_missing_package_import/main.roc' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
+        ),
+        "\n{}",
+        err
+    );
+}
+
+#[test]
+fn non_roc_file_extension() {
+    let modules = vec![(
+        "main.md",
+        indoc!(
+            r"
+            # Not a roc file
+            "
+        ),
+    )];
+
+    let expected = indoc!(
+        r"
+        ── NOT A ROC FILE in tmp/non_roc_file_extension/main.md ────────────────────────
+
+        I expected a file with extension `.roc` or without extension.
+        Instead I received a file with extension `.md`."
+    );
+
+    let err = strip_colors(&multiple_modules("non_roc_file_extension", modules).unwrap_err());
+
+    assert_eq!(err, expected, "\n{}", err);
+}
+
+#[test]
+fn roc_file_no_extension() {
+    let modules = vec![(
+        "main",
+        indoc!(
+            r#"
+            app "helloWorld"
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+                imports [pf.Stdout]
+                provides [main] to pf
+
+            main =
+                Stdout.line "Hello, World!"
+            "#
+        ),
+    )];
+
+    let expected = indoc!(
+        r"
+        ── NOT A ROC FILE in tmp/roc_file_no_extension/main ────────────────────────────
+
+        I expected a file with either:
+        - extension `.roc`
+        - no extension and a roc shebang as the first line, e.g.
+          `#!/home/username/bin/roc_nightly/roc`
+
+        The provided file did not start with a shebang `#!` containing the
+        string `roc`. Is tmp/roc_file_no_extension/main a Roc file?"
+    );
+
+    let err = strip_colors(&multiple_modules("roc_file_no_extension", modules).unwrap_err());
+
+    assert_eq!(err, expected, "\n{}", err);
 }

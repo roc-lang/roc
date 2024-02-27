@@ -24,6 +24,9 @@ pub const RocDec = extern struct {
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
 
+    pub const two_point_zero: RocDec = RocDec.add(RocDec.one_point_zero, RocDec.one_point_zero);
+    pub const zero_point_five: RocDec = RocDec.div(RocDec.one_point_zero, RocDec.two_point_zero);
+
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = num * one_point_zero_i128 };
     }
@@ -337,6 +340,77 @@ pub const RocDec = extern struct {
             return .{ .value = RocDec{ .num = -unsigned_answer }, .has_overflowed = false };
         } else {
             return .{ .value = RocDec{ .num = unsigned_answer }, .has_overflowed = false };
+        }
+    }
+
+    fn trunc(self: RocDec) RocDec {
+        return RocDec.sub(self, self.fract());
+    }
+
+    fn fract(self: RocDec) RocDec {
+        const sign = std.math.sign(self.num);
+        const digits = @mod(sign * self.num, RocDec.one_point_zero.num);
+
+        return RocDec{ .num = sign * digits };
+    }
+
+    // Returns the nearest integer to self. If a value is half-way between two integers, round away from 0.0.
+    fn round(arg1: RocDec) RocDec {
+        // this rounds towards zero
+        const tmp = arg1.trunc();
+
+        const sign = std.math.sign(arg1.num);
+        const abs_fract = sign * arg1.fract().num;
+
+        if (abs_fract >= RocDec.zero_point_five.num) {
+            return RocDec.add(tmp, RocDec{ .num = sign * RocDec.one_point_zero.num });
+        } else {
+            return tmp;
+        }
+    }
+
+    // Returns the largest integer less than or equal to itself
+    fn floor(arg1: RocDec) RocDec {
+        const tmp = arg1.trunc();
+
+        if (arg1.num < 0 and arg1.fract().num != 0) {
+            return RocDec.sub(tmp, RocDec.one_point_zero);
+        } else {
+            return tmp;
+        }
+    }
+
+    // Returns the smallest integer greater than or equal to itself
+    fn ceiling(arg1: RocDec) RocDec {
+        const tmp = arg1.trunc();
+
+        if (arg1.num > 0 and arg1.fract().num != 0) {
+            return RocDec.add(tmp, RocDec.one_point_zero);
+        } else {
+            return tmp;
+        }
+    }
+
+    fn powInt(base: RocDec, exponent: i128) RocDec {
+        if (exponent == 0) {
+            return RocDec.one_point_zero;
+        } else if (exponent > 0) {
+            if (@mod(exponent, 2) == 0) {
+                const half_power = RocDec.powInt(base, exponent >> 1); // `>> 1` == `/ 2`
+                return RocDec.mul(half_power, half_power);
+            } else {
+                return RocDec.mul(base, RocDec.powInt(base, exponent - 1));
+            }
+        } else {
+            return RocDec.div(RocDec.one_point_zero, RocDec.powInt(base, -exponent));
+        }
+    }
+
+    fn pow(base: RocDec, exponent: RocDec) RocDec {
+        if (exponent.trunc().num == exponent.num) {
+            return base.powInt(@divTrunc(exponent.num, RocDec.one_point_zero_i128));
+        } else {
+            return fromF64(std.math.pow(f64, base.toF64(), exponent.toF64())).?;
         }
     }
 
@@ -1195,6 +1269,153 @@ test "log: 1" {
     try expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1)));
 }
 
+test "fract: 0" {
+    var roc_str = RocStr.init("0", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.fract());
+}
+
+test "fract: 1" {
+    var roc_str = RocStr.init("1", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.fract());
+}
+
+test "fract: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
+}
+
+test "fract: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -450000000000000000 }, dec.fract());
+}
+
+test "fract: .45" {
+    var roc_str = RocStr.init(".45", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
+}
+
+test "fract: -0.00045" {
+    const dec: RocDec = .{ .num = -450000000000000 };
+    const res = dec.fract();
+
+    try expectEqual(dec.num, res.num);
+}
+
+test "trunc: 0" {
+    var roc_str = RocStr.init("0", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.trunc());
+}
+
+test "trunc: 1" {
+    var roc_str = RocStr.init("1", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec.one_point_zero, dec.trunc());
+}
+
+test "trunc: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.trunc());
+}
+
+test "trunc: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.trunc());
+}
+
+test "trunc: .45" {
+    var roc_str = RocStr.init(".45", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.trunc());
+}
+
+test "trunc: -0.00045" {
+    const dec: RocDec = .{ .num = -450000000000000 };
+    const res = dec.trunc();
+
+    try expectEqual(RocDec{ .num = 0 }, res);
+}
+
+test "round: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.round());
+}
+
+test "round: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.round());
+}
+
+test "round: 0.5" {
+    var roc_str = RocStr.init("0.5", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec.one_point_zero, dec.round());
+}
+
+test "round: -0.5" {
+    var roc_str = RocStr.init("-0.5", 4);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -1000000000000000000 }, dec.round());
+}
+
+test "powInt: 3.1 ^ 0" {
+    var roc_str = RocStr.init("3.1", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec.one_point_zero, dec.powInt(0));
+}
+
+test "powInt: 3.1 ^ 1" {
+    var roc_str = RocStr.init("3.1", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, dec.powInt(1));
+}
+
+test "powInt: 2 ^ 2" {
+    var roc_str = RocStr.init("4", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.two_point_zero.powInt(2));
+}
+
+test "powInt: 0.5 ^ 2" {
+    var roc_str = RocStr.init("0.25", 4);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.zero_point_five.powInt(2));
+}
+
+test "pow: 0.5 ^ 2.0" {
+    var roc_str = RocStr.init("0.25", 4);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.zero_point_five.pow(RocDec.two_point_zero));
+}
+
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
@@ -1295,6 +1516,10 @@ pub fn logC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.log, .{arg}).num;
 }
 
+pub fn powC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+    return @call(.always_inline, RocDec.pow, .{ arg1, arg2 }).num;
+}
+
 pub fn sinC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
@@ -1341,4 +1566,31 @@ pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
+}
+
+pub fn exportRound(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: RocDec) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.round().num, RocDec.one_point_zero_i128)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: RocDec) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.floor().num, RocDec.one_point_zero_i128)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: RocDec) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.ceiling().num, RocDec.one_point_zero_i128)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }

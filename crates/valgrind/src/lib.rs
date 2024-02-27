@@ -233,16 +233,6 @@ fn str_capacity_concat() {
 }
 
 #[test]
-fn append_scalar() {
-    valgrind_test(indoc!(
-        r#"
-        Str.appendScalar "abcd" 'A'
-            |> Result.withDefault ""
-        "#
-    ));
-}
-
-#[test]
 fn split_not_present() {
     valgrind_test(indoc!(
         r#"
@@ -546,6 +536,32 @@ fn joinpoint_nullpointer() {
                 "$(cons) - $(nil)"
 
             test
+        )
+        "#
+    ));
+}
+
+#[test]
+fn freeing_boxes() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            # Without refcounted field
+            a : I32
+            a = 7
+                |> Box.box
+                |> Box.unbox
+
+            # With refcounted field
+            b : Str
+            b =
+                "Testing123. This will definitely be a large string that is on the heap."
+                |> Box.box
+                |> Box.unbox
+
+            a
+            |> Num.toStr
+            |> Str.concat b
         )
         "#
     ));

@@ -2174,6 +2174,38 @@ fn report_unused_imported_modules(
     }
 }
 
+///Generates an errorfor modules that are imported from packages that don't exist
+///TODO. This is temporary. Remove this once module params is implemented
+fn check_for_missing_package_shorthand_in_cache<'a>(
+    header: &ModuleHeader,
+    shorthands: &Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
+) -> Result<(), LoadingProblem<'a>> {
+    header.package_qualified_imported_modules
+            .iter()
+            .find_map(|pqim| match pqim {
+                PackageQualified::Unqualified(_) => None,
+                PackageQualified::Qualified(shorthand, _) => {
+                    if!(shorthands.lock().iter().any(|(short,_)|short==shorthand)){
+                        let module_path=header.module_path.to_str().unwrap_or("");
+                        Some(LoadingProblem::FormattedReport(
+                        match header.header_type {
+                            HeaderType::Hosted { ..} |
+                            HeaderType::Builtin {..} |
+                            HeaderType::Interface {..} =>
+                            {
+                                let mod_type= header.header_type.to_string();
+                                format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.\nThis module is an {mod_type}, because of a bug in the compiler we are unable to directly typecheck {mod_type} modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file.")
+                            },
+                            _=>
+                                format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.")
+                        }))
+                    } else {
+                        None
+                    }
+                }
+            }).map_or(Ok(()),Err)
+}
+
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
         .package_qualified_imported_modules
@@ -2257,7 +2289,9 @@ fn update<'a>(
 
                         #[cfg(target_family = "wasm")]
                         {
-                            panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                            panic!(
+                                "Specifying packages via URLs is currently unsupported in wasm."
+                            );
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
@@ -2387,6 +2421,7 @@ fn update<'a>(
                 }
             }
 
+            check_for_missing_package_shorthand_in_cache(&header, &state.arc_shorthands)?;
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
                 state.module_cache.module_names.insert(*id, name.clone());
@@ -3803,6 +3838,35 @@ struct HeaderOutput<'a> {
     opt_platform_shorthand: Option<&'a str>,
 }
 
+fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
+    match filename.extension() {
+        Some(ext) => {
+            if ext != ROC_FILE_EXTENSION {
+                return Err(LoadingProblem::FileProblem {
+                    filename: filename.to_path_buf(),
+                    error: io::ErrorKind::Unsupported,
+                });
+            }
+        }
+        None => {
+            let index = src_bytes
+                .iter()
+                .position(|a| *a == b'\n')
+                .unwrap_or(src_bytes.len());
+            let frist_line_bytes = src_bytes[0..index].to_vec();
+            if let Ok(first_line) = String::from_utf8(frist_line_bytes) {
+                if !(first_line.starts_with("#!") && first_line.contains("roc")) {
+                    return Err(LoadingProblem::FileProblem {
+                        filename: filename.to_path_buf(),
+                        error: std::io::ErrorKind::Unsupported,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3820,6 +3884,8 @@ fn parse_header<'a>(
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
+
+    ensure_roc_file(&filename, src_bytes)?;
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
@@ -3936,6 +4002,11 @@ fn parse_header<'a>(
             } else {
                 &[]
             };
+            let imports = if let Some(imports) = header.imports {
+                unspace(arena, imports.item.items)
+            } else {
+                &[]
+            };
 
             let mut provides = bumpalo::collections::Vec::new_in(arena);
 
@@ -3955,11 +4026,7 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages,
-                imports: if let Some(imports) = header.imports {
-                    unspace(arena, imports.item.items)
-                } else {
-                    &[]
-                },
+                imports,
                 header_type: HeaderType::App {
                     provides: provides.into_bump_slice(),
                     output_name: header.name.value,
@@ -4143,7 +4210,7 @@ fn load_packages<'a>(
 
             #[cfg(target_family = "wasm")]
             {
-                panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                panic!("Specifying packages via URLs is currently unsupported in wasm.");
             }
         } else {
             cwd.join(src)
@@ -4628,7 +4695,7 @@ fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable 
 fn synth_list_len_type(subs: &mut Subs) -> Variable {
     use roc_types::subs::{Content, FlatType, LambdaSet, OptVariable, SubsSlice, UnionLabels};
 
-    // List.len : List a -> Nat
+    // List.len : List a -> U64
     let a = synth_import(subs, Content::FlexVar(None));
     let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
     let list_a = synth_import(
@@ -4636,7 +4703,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
     );
     let fn_var = synth_import(subs, Content::Error);
-    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN, [])]);
+    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN_U64, [])]);
     let clos_list_len = synth_import(
         subs,
         Content::LambdaSet(LambdaSet {
@@ -4649,7 +4716,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
     let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
     subs.set_content(
         fn_var,
-        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::NAT)),
+        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::U64)),
     );
     fn_var
 }
@@ -4690,7 +4757,7 @@ pub fn add_imports(
         // Num needs List.len, but List imports Num.
         let list_len_type_var = synth_list_len_type(subs);
         let list_len_type_index = constraints.push_variable(list_len_type_var);
-        def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
+        def_types.push((Symbol::LIST_LEN_U64, Loc::at_zero(list_len_type_index)));
         import_variables.push(list_len_type_var);
     }
 
@@ -4828,7 +4895,7 @@ fn import_variable_for_symbol(
                             // Today we define builtins in each module that uses them
                             // so even though they have a different module name from
                             // the surrounding module, they are not technically imported
-                            debug_assert!(symbol.is_builtin());
+                            debug_assert!(symbol.is_builtin(), "The symbol {:?} was not found and was assumed to be a builtin, but it wasn't a builtin.", symbol);
                             return;
                         }
                         AbilityMemberMustBeAvailable => {

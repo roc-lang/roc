@@ -949,6 +949,12 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
+        let debug_metadata_version = module.get_context().i32_type().const_int(3, false);
+        module.add_basic_value_flag(
+            "Debug Info Version",
+            inkwell::module::FlagBehavior::Warning,
+            debug_metadata_version,
+        );
         module.create_debug_info_builder(
             true,
             /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
@@ -1065,17 +1071,19 @@ pub fn module_from_builtins<'ctx>(
     // Anything not depended on by a `roc_builtin.` function could already by DCE'd theoretically.
     // That said, this workaround is good enough and fixes compilations times.
 
-    // Also, must_keep is the functions we depend on that would normally be provide by libc.
+    // Also, must_keep is the functions we depend on that would normally be provide by libc or compiler-rt.
     // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
     let must_keep = [
+        // Windows special required when floats are used
         "_fltused",
+        // From libc
         "floorf",
         "memcpy",
         "memset",
-        // I have no idea why this function is special.
-        // Without it, some tests hang on M1 mac outside of nix.
+        // From compiler-rt
+        "__divti3",
+        "__modti3",
         "__muloti4",
-        // fixes `Undefined Symbol in relocation`
         "__udivti3",
         // Roc special functions
         "__roc_force_longjmp",
@@ -4897,10 +4905,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                             Attribute::get_named_enum_kind_id("byval"),
                             c_abi_type.as_any_type_enum(),
                         );
-                        let nonnull = context.create_type_attribute(
-                            Attribute::get_named_enum_kind_id("nonnull"),
-                            c_abi_type.as_any_type_enum(),
-                        );
+                        let nonnull = context
+                            .create_enum_attribute(Attribute::get_named_enum_kind_id("nonnull"), 0);
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
                         let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
                         let param_index = i as u32 + returns_pointer as u32;
@@ -5066,6 +5072,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
 }
 
 pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
+    let word_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 => env.context.i32_type(),
+        PtrWidth::Bytes8 => env.context.i64_type(),
+    };
+
     // The size of jump_buf is target-dependent.
     //   - AArch64 needs 3 machine-sized words
     //   - LLVM says the following about the SJLJ intrinsic:
@@ -5077,11 +5088,15 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
     //     The following three words are available for use in a target-specific manner.
     //
     // So, let's create a 5-word buffer.
-    let word_type = match env.target_info.ptr_width() {
-        PtrWidth::Bytes4 => env.context.i32_type(),
-        PtrWidth::Bytes8 => env.context.i64_type(),
+    let size = if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // Due to https://github.com/llvm/llvm-project/issues/72908
+        // on windows, we store the register contents into this buffer directly!
+        30
+    } else {
+        5
     };
-    let type_ = word_type.array_type(5);
+
+    let type_ = word_type.array_type(size);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -5099,9 +5114,12 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
 
 pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> {
     let jmp_buf = get_sjlj_buffer(env);
-    if cfg!(target_arch = "aarch64") {
+    if env.target_info.architecture == roc_target::Architecture::Aarch64 {
         // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
+    } else if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // Due to https://github.com/llvm/llvm-project/issues/72908, we use a setjmp defined as asm in Zig
+        call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_WINDOWS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
@@ -6735,9 +6753,7 @@ pub fn to_cc_return<'a>(
 ) -> CCReturn {
     let return_size = layout_interner.stack_size(layout);
     let pass_result_by_pointer = match env.target_info.operating_system {
-        roc_target::OperatingSystem::Windows => {
-            return_size >= 2 * env.target_info.ptr_width() as u32
-        }
+        roc_target::OperatingSystem::Windows => return_size > env.target_info.ptr_width() as u32,
         roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
         roc_target::OperatingSystem::Wasi => return_size > 2 * env.target_info.ptr_width() as u32,
     };

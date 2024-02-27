@@ -10,8 +10,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
-    UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableEq, TypeError, UnderivableReason, Unfulfilled,
 };
 use roc_solve_schema::UnificationMode;
 use roc_types::num::NumericRange;
@@ -492,11 +491,6 @@ fn is_builtin_fixed_int_alias(symbol: Symbol) -> bool {
 }
 
 #[inline(always)]
-fn is_builtin_nat_alias(symbol: Symbol) -> bool {
-    matches!(symbol, Symbol::NUM_NAT | Symbol::NUM_NATURAL)
-}
-
-#[inline(always)]
 #[rustfmt::skip]
 fn is_builtin_float_alias(symbol: Symbol) -> bool {
     matches!(symbol,
@@ -513,7 +507,6 @@ fn is_builtin_dec_alias(symbol: Symbol) -> bool {
 #[inline(always)]
 fn is_builtin_number_alias(symbol: Symbol) -> bool {
     is_builtin_fixed_int_alias(symbol)
-        || is_builtin_nat_alias(symbol)
         || is_builtin_float_alias(symbol)
         || is_builtin_dec_alias(symbol)
 }
@@ -952,8 +945,7 @@ impl DerivableVisitor for DeriveEncoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
-            || is_builtin_bool_alias(symbol)
+        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1020,19 +1012,8 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
-    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
-        if is_builtin_number_alias(symbol) {
-            if is_builtin_nat_alias(symbol) {
-                Err(NotDerivable {
-                    var,
-                    context: NotDerivableContext::Encode(NotDerivableEncode::Nat),
-                })
-            } else {
-                Ok(Descend(false))
-            }
-        } else {
-            Ok(Descend(true))
-        }
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Ok(Descend(!is_builtin_number_alias(symbol)))
     }
 
     #[inline(always)]
@@ -1057,8 +1038,7 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
-            || is_builtin_bool_alias(symbol)
+        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1091,9 +1071,9 @@ impl DerivableVisitor for DeriveDecoding {
             if subs[field].is_optional() {
                 return Err(NotDerivable {
                     var,
-                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                    context: NotDerivableContext::DecodeOptionalRecordField(
                         subs[field_name].clone(),
-                    )),
+                    ),
                 });
             }
         }
@@ -1136,19 +1116,8 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
-    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
-        if is_builtin_number_alias(symbol) {
-            if is_builtin_nat_alias(symbol) {
-                Err(NotDerivable {
-                    var,
-                    context: NotDerivableContext::Decode(NotDerivableDecode::Nat),
-                })
-            } else {
-                Ok(Descend(false))
-            }
-        } else {
-            Ok(Descend(true))
-        }
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Ok(Descend(!is_builtin_number_alias(symbol)))
     }
 
     #[inline(always)]
@@ -1206,9 +1175,9 @@ impl DerivableVisitor for DeriveHash {
             if subs[field].is_optional() {
                 return Err(NotDerivable {
                     var,
-                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                    context: NotDerivableContext::DecodeOptionalRecordField(
                         subs[field_name].clone(),
-                    )),
+                    ),
                 });
             }
         }
@@ -1282,7 +1251,6 @@ impl DerivableVisitor for DeriveEq {
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
         is_builtin_fixed_int_alias(symbol)
-            || is_builtin_nat_alias(symbol)
             || is_builtin_dec_alias(symbol)
             || is_builtin_bool_alias(symbol)
     }
@@ -1321,9 +1289,9 @@ impl DerivableVisitor for DeriveEq {
             if subs[field].is_optional() {
                 return Err(NotDerivable {
                     var,
-                    context: NotDerivableContext::Decode(NotDerivableDecode::OptionalRecordField(
+                    context: NotDerivableContext::DecodeOptionalRecordField(
                         subs[field_name].clone(),
-                    )),
+                    ),
                 });
             }
         }

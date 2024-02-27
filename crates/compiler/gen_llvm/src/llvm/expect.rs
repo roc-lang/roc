@@ -978,22 +978,18 @@ fn build_clone_builtin<'a, 'ctx>(
             cursors.extra_offset
         }
 
-        Builtin::Str => {
-            //
-
-            call_str_bitcode_fn(
-                env,
-                &[value],
-                &[
-                    ptr.into(),
-                    cursors.offset.into(),
-                    cursors.extra_offset.into(),
-                ],
-                crate::llvm::bitcode::BitcodeReturns::Basic,
-                bitcode::STR_CLONE_TO,
-            )
-            .into_int_value()
-        }
+        Builtin::Str => call_str_bitcode_fn(
+            env,
+            &[value],
+            &[
+                ptr.into(),
+                cursors.offset.into(),
+                cursors.extra_offset.into(),
+            ],
+            crate::llvm::bitcode::BitcodeReturns::Basic,
+            bitcode::STR_CLONE_TO,
+        )
+        .into_int_value(),
         Builtin::List(elem) => {
             let bd = env.builder;
 

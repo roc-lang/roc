@@ -18,7 +18,7 @@ encodeChunks = \bytes ->
     List.walk bytes { output: [], accum: None } folder
     |> encodeResidual
 
-coerce : Nat, a -> a
+coerce : U64, a -> a
 coerce = \_, x -> x
 
 # folder : { output : List ByteEncoder, accum : State }, U8 -> { output : List ByteEncoder, accum : State }

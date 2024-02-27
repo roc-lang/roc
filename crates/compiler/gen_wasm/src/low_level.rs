@@ -185,7 +185,6 @@ impl<'a> LowLevelCall<'a> {
         match self.lowlevel {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
-            StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
             StrGetUnsafe => self.load_args_and_call_zig(backend, bitcode::STR_GET_UNSAFE),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
@@ -200,18 +199,11 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for Str"),
             },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
-            StrStartsWithScalar => {
-                self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
-            }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
             StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT),
-            StrCountGraphemes => {
-                self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
-            }
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
-            StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
                 let number_layout = match backend.layout_interner.get_repr(self.ret_layout) {
                     LayoutRepr::Struct(field_layouts) => field_layouts[0],
@@ -233,15 +225,13 @@ impl<'a> LowLevelCall<'a> {
             }
             StrFromInt => self.num_to_str(backend),
             StrFromFloat => self.num_to_str(backend),
-            StrFromUtf8Range => {
+            StrFromUtf8 => {
                 /*
                 Low-level op returns a struct with all the data for both Ok and Err.
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
                     output: *FromUtf8Result   i32
                     arg: RocList              i32
-                    start                     i32
-                    count                     i32
                     update_mode: UpdateMode   i32
                 */
 
@@ -253,7 +243,7 @@ impl<'a> LowLevelCall<'a> {
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8);
             }
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
@@ -263,41 +253,47 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_RELEASE_EXCESS_CAPACITY)
             }
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
-            StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
-            StrGetScalarUnsafe => {
-                self.load_args_and_call_zig(backend, bitcode::STR_GET_SCALAR_UNSAFE)
-            }
             StrSubstringUnsafe => {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
-            StrGraphemes => self.load_args_and_call_zig(backend, bitcode::STR_GRAPHEMES),
 
             // List
-            ListLen => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // List is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the length is 4 bytes after the start of the struct.
-                    //
-                    // WRAPPER_LEN represents the index of the length field
-                    // (which is 1 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_LEN should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
-                }
-                _ => internal_error!("invalid storage for List"),
-            },
+            ListLenU64 => {
+                self.load_list_len_usize(backend);
+
+                // Length is stored as 32 bits in memory on wasm32,
+                // but List.len always returns U64
+                backend.code_builder.i64_extend_u_i32();
+            }
+            ListLenUsize => self.load_list_len_usize(backend),
 
             ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
+
+            ListClone => {
+                let input_list: Symbol = self.arguments[0];
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  input_list: &RocList       i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[self.ret_symbol, input_list]);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CLONE);
+            }
 
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
@@ -311,6 +307,7 @@ impl<'a> LowLevelCall<'a> {
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[index]);
+                backend.code_builder.i32_wrap_i64(); // listGetUnsafe takes a U64, but we do 32-bit indexing on wasm.
                 let elem_size = backend.layout_interner.stack_size(self.ret_layout);
                 backend.code_builder.i32_const(elem_size as i32);
                 backend.code_builder.i32_mul(); // index*size
@@ -347,7 +344,7 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             ListReplaceUnsafe => {
-                // List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+                // List.replace_unsafe : List elem, U64, elem -> { list: List elem, value: elem }
 
                 let list: Symbol = self.arguments[0];
                 let index: Symbol = self.arguments[1];
@@ -435,7 +432,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE);
             }
             ListWithCapacity => {
-                // List.withCapacity : Nat -> List elem
+                // List.withCapacity : U64 -> List elem
 
                 let capacity: Symbol = self.arguments[0];
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
@@ -445,7 +442,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  capacity: usize            i32
+                //  capacity: u64              i64
                 //  alignment: u32             i32
                 //  element_width: usize       i32
 
@@ -486,7 +483,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             ListReserve => {
-                // List.reserve : List elem, Nat -> List elem
+                // List.reserve : List elem, U64 -> List elem
 
                 let list: Symbol = self.arguments[0];
                 let spare: Symbol = self.arguments[1];
@@ -500,7 +497,7 @@ impl<'a> LowLevelCall<'a> {
                 //  (return pointer)           i32
                 //  list: RocList              i32
                 //  alignment: u32             i32
-                //  spare: usize               i32
+                //  spare: u64                 i64
                 //  element_width: usize       i32
                 //  update_mode: UpdateMode    i32
 
@@ -635,7 +632,7 @@ impl<'a> LowLevelCall<'a> {
             }
             ListSublist => {
                 // As a low-level, record is destructured
-                //  List.sublist : List elem, start : Nat, len : Nat -> List elem
+                //  List.sublist : List elem, start : U64, len : U64 -> List elem
 
                 let list: Symbol = self.arguments[0];
                 let start: Symbol = self.arguments[1];
@@ -662,8 +659,8 @@ impl<'a> LowLevelCall<'a> {
                 //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
-                //  start: usize,              i32
-                //  len: usize,                i32
+                //  start: u64,                i64
+                //  len: u64,                  i64
                 //  dec: Dec,                  i32
 
                 backend.storage.load_symbols_for_call(
@@ -683,7 +680,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST);
             }
             ListDropAt => {
-                // List.dropAt : List elem, Nat -> List elem
+                // List.dropAt : List elem, U64 -> List elem
                 let list: Symbol = self.arguments[0];
                 let drop_index: Symbol = self.arguments[1];
 
@@ -708,7 +705,7 @@ impl<'a> LowLevelCall<'a> {
                 //  list: RocList,             i32
                 //  element_width: usize,      i32
                 //  alignment: u32,            i32
-                //  drop_index: usize,         i32
+                //  drop_index: u64,           i64
                 //  dec: Dec,                  i32
 
                 // Load the return pointer and the list
@@ -729,7 +726,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT);
             }
             ListSwap => {
-                // List.swap : List elem, Nat, Nat -> List elem
+                // List.swap : List elem, U64, U64 -> List elem
                 let list: Symbol = self.arguments[0];
                 let index_1: Symbol = self.arguments[1];
                 let index_2: Symbol = self.arguments[2];
@@ -744,8 +741,8 @@ impl<'a> LowLevelCall<'a> {
                 //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
-                //  index_1: usize,            i32
-                //  index_2: usize,            i32
+                //  index_1: u64,              i64
+                //  index_2: u64,              i64
                 //  update_mode: UpdateMode,   i32
 
                 // Load the return pointer and the list
@@ -1575,6 +1572,10 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_POW);
+                }
+
                 _ => panic_ret_type(),
             },
 
@@ -1626,6 +1627,7 @@ impl<'a> LowLevelCall<'a> {
                 match arg_type {
                     F32 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F32[width]),
                     F64 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F64[width]),
+                    Decimal => self.load_args_and_call_zig(backend, &bitcode::DEC_ROUND[width]),
                     _ => internal_error!("Invalid argument type for round: {:?}", arg_type),
                 }
             }
@@ -1633,6 +1635,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for round: {:?}", ret_type),
+                };
+
                 match (arg_type, self.lowlevel) {
                     (F32, NumCeiling) => {
                         backend.code_builder.f32_ceil();
@@ -1640,14 +1650,21 @@ impl<'a> LowLevelCall<'a> {
                     (F64, NumCeiling) => {
                         backend.code_builder.f64_ceil();
                     }
+                    (Decimal, NumCeiling) => {
+                        return self.load_args_and_call_zig(backend, &bitcode::DEC_CEILING[width]);
+                    }
                     (F32, NumFloor) => {
                         backend.code_builder.f32_floor();
                     }
                     (F64, NumFloor) => {
                         backend.code_builder.f64_floor();
                     }
+                    (Decimal, NumFloor) => {
+                        return self.load_args_and_call_zig(backend, &bitcode::DEC_FLOOR[width]);
+                    }
                     _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
                 }
+
                 match (ret_type, arg_type) {
                     // TODO: unsigned truncation
                     (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
@@ -1708,10 +1725,6 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
-            NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
-            NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
-            NumBytesToU64 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U64),
-            NumBytesToU128 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U128),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {
@@ -2087,6 +2100,28 @@ impl<'a> LowLevelCall<'a> {
             SetJmp | LongJmp | SetLongJmpBuffer => {
                 unreachable!("only inserted in dev backend codegen")
             }
+        }
+    }
+
+    fn load_list_len_usize(&self, backend: &mut WasmBackend<'_, '_>) {
+        match backend.storage.get(&self.arguments[0]) {
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) =
+                    location.local_and_offset(backend.storage.stack_frame_pointer);
+                backend.code_builder.get_local(local_id);
+                // List is stored as (pointer, length, capacity),
+                // with each of those fields being 4 bytes on wasm.
+                // So the length is 4 bytes after the start of the struct.
+                //
+                // WRAPPER_LEN represents the index of the length field
+                // (which is 1 as of the writing of this comment). If the field order
+                // ever changes, WRAPPER_LEN should be updated and this logic should
+                // continue to work even though this comment may become inaccurate.
+                backend
+                    .code_builder
+                    .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+            }
+            _ => internal_error!("invalid storage for List"),
         }
     }
 

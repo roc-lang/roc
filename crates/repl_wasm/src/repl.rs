@@ -160,7 +160,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
         _main_fn_name: &str,
         _ret_bytes: usize,
         mut transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
@@ -172,7 +172,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
         let app_result_addr = js_get_result_and_memory(copied_bytes.as_mut_ptr());
         let mem = self.arena.alloc(WasmMemory { copied_bytes });
 
-        transform(mem, app_result_addr)
+        Some(transform(mem, app_result_addr))
     }
 }
 

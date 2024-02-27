@@ -4,10 +4,7 @@
 
 The Roc programming language is named after [a mythical bird](<https://en.wikipedia.org/wiki/Roc_(mythology)>).
 
-<svg viewBox="0 0 52 53" xmlns="http://www.w3.org/2000/svg">
-  <!-- Make this icon look nicer in dark mode. (Only Firefox supports this; others ignore it.) -->
-  <style>@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}</style>
-  <polygon fill="#7d59dd" points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"/>
+<svg aria-labelledby="logo-svg-title logo-svg-desc" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg"><title id="logo-svg-title">The Roc logo</title><desc id="logo-svg-desc">A purple origami bird made of six triangles</desc><path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" class="logo-dark"></path><path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" class="logo-light"></path><path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" class="logo-light"></path><path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" class="logo-light"></path><path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" class="logo-dark"></path><path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" class="logo-dark"></path>
 </svg>
 
 That's why the logo is a bird. It’s specifically an [_origami_ bird](https://youtu.be/9gni1t1k1uY) as an homage
@@ -157,7 +154,7 @@ On a historical note, `Maybe` may have been thought of as a substitute for null 
 
 Like all programming languages, Roc is subject to the limitations of the universe. Almost all numbers in mathematics cannot even be represented in the universe because you'd run out of matter trying to write them down, and therefore Roc must choose what subset of mathematics to support—including which numbers to support.
 
-Roc supports 128-bit integers, 128-bit fixed-point decimal numbers. Here are some approximate ranges for those:
+Roc supports 128-bit integers and 128-bit fixed-point decimal numbers. Here are some approximate ranges for those:
 
 -   `I128`: ±170000000000000000000000000000000000000
 -   `Dec`: ±170000000000000000000.000000000000000000
