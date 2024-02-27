@@ -1232,6 +1232,7 @@ fn link_wasm32(
             "-fstrip",
             "-O",
             "ReleaseSmall",
+            "-rdynamic",
             // useful for debugging
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
         ])
