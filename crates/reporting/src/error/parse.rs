@@ -1098,9 +1098,9 @@ fn to_str_report<'a>(
                 ESingleQuote::InterpolationNotAllowed => {
                     alloc.stack([
                         alloc.concat([
-                            alloc.reflow("I am part way through parsing this scalar literal (character literal), "),
-                            alloc.reflow("but I encountered a string interpolation like \"$(this)\", which is not "),
-                            alloc.reflow("allowed in scalar literals."),
+                            alloc.reflow("I am part way through parsing this single-quote literal, "),
+                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region),
                         alloc.concat([
