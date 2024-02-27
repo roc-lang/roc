@@ -35,6 +35,7 @@ use roc_parse::ast;
 use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
+use roc_parse::ast::TypeAnnotation;
 use roc_parse::ast::TypeHeader;
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType;
@@ -331,7 +332,7 @@ fn sort_type_defs_before_introduction(
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_alias<'a>(
     env: &mut Env<'a>,
-    output: &mut Output,
+    output: &mut Output<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
@@ -680,7 +681,7 @@ struct CanonicalizedOpaque<'a> {
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_opaque<'a>(
     env: &mut Env<'a>,
-    output: &mut Output,
+    output: &mut Output<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
@@ -923,12 +924,12 @@ fn canonicalize_opaque<'a>(
 #[inline(always)]
 pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
-    mut output: Output,
+    mut output: Output<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     loc_defs: &'a mut roc_parse::ast::Defs<'a>,
     pattern_type: PatternType,
-) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+) -> (CanDefs, Output<'a>, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -994,6 +995,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
     let CanonicalizedTypeDefs {
         aliases,
+        alias_ast,
         symbols_introduced,
         derived_defs,
     } = canonicalize_type_defs(
@@ -1009,6 +1011,8 @@ pub(crate) fn canonicalize_defs<'a>(
     // They can go at the end, and derived defs should never reference anything other than builtin
     // ability members.
     pending_value_defs.extend(derived_defs);
+
+    output.alias_ast = alias_ast;
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -1027,14 +1031,14 @@ pub(crate) fn canonicalize_defs<'a>(
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_value_defs<'a>(
     env: &mut Env<'a>,
-    mut output: Output,
+    mut output: Output<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     value_defs: Vec<Loc<PendingValue<'a>>>,
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,
-) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+) -> (CanDefs, Output<'a>, MutMap<Symbol, Region>) {
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
@@ -1176,13 +1180,17 @@ fn canonicalize_value_defs<'a>(
 
 struct CanonicalizedTypeDefs<'a> {
     aliases: VecMap<Symbol, Alias>,
+    /// Docs need to know what the actual AST was, so we can render these in docs according to how they appear
+    /// in the source code. We need to know what Symbol they have for exposed aliases like `Foo : InternalFoo.Foo`;
+    /// we need to be able to go look up the AST for the symbol InternalFoo.Foo from the InternalFoo module.
+    alias_ast: VecMap<Symbol, (Vec<Loc<Lowercase>>, TypeAnnotation<'a>)>,
     symbols_introduced: MutMap<Symbol, Region>,
     derived_defs: Vec<DerivedDef<'a>>,
 }
 
 fn canonicalize_type_defs<'a>(
     env: &mut Env<'a>,
-    output: &mut Output,
+    output: &mut Output<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
@@ -1265,6 +1273,7 @@ fn canonicalize_type_defs<'a>(
 
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
     let mut aliases = VecMap::default();
+    let mut alias_ast = VecMap::default();
     let mut abilities = MutMap::default();
     let mut all_derived_defs = Vec::new();
 
@@ -1284,7 +1293,10 @@ fn canonicalize_type_defs<'a>(
                 );
 
                 if let Ok(alias) = alias {
-                    aliases.insert(name.value, alias);
+                    let symbol = name.value;
+
+                    aliases.insert(symbol, alias);
+                    alias_ast.insert(symbol, (vars, ann.value));
                 }
             }
 
@@ -1347,6 +1359,7 @@ fn canonicalize_type_defs<'a>(
 
     CanonicalizedTypeDefs {
         aliases,
+        alias_ast,
         symbols_introduced,
         derived_defs: all_derived_defs,
     }
@@ -1356,7 +1369,7 @@ fn canonicalize_type_defs<'a>(
 #[allow(clippy::too_many_arguments)]
 fn resolve_abilities(
     env: &mut Env,
-    output: &mut Output,
+    output: &mut Output<'_>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     abilities: MutMap<Symbol, Vec<PendingAbilityMember>>,
@@ -1564,14 +1577,14 @@ impl DefOrdering {
 }
 
 #[inline(always)]
-pub(crate) fn sort_can_defs_new(
+pub(crate) fn sort_can_defs_new<'a>(
     env: &mut Env<'_>,
     scope: &mut Scope,
     var_store: &mut VarStore,
     defs: CanDefs,
-    mut output: Output,
+    mut output: Output<'a>,
     exposed_symbols: &VecSet<Symbol>,
-) -> (Declarations, Output) {
+) -> (Declarations, Output<'a>) {
     let CanDefs {
         defs,
         dbgs: _,
@@ -1847,12 +1860,12 @@ pub(crate) fn sort_can_defs_new(
 }
 
 #[inline(always)]
-pub(crate) fn sort_can_defs(
+pub(crate) fn sort_can_defs<'a>(
     env: &mut Env<'_>,
     var_store: &mut VarStore,
     defs: CanDefs,
-    mut output: Output,
-) -> (Vec<Declaration>, Output) {
+    mut output: Output<'a>,
+) -> (Vec<Declaration>, Output<'a>) {
     let CanDefs {
         mut defs,
         dbgs,
@@ -2132,8 +2145,8 @@ enum DefReferences {
     AnnotationWithoutBody,
 }
 
-struct DefOutput {
-    output: Output,
+struct DefOutput<'a> {
+    output: Output<'a>,
     def: Def,
     references: DefReferences,
 }
@@ -2144,12 +2157,12 @@ struct DefOutput {
 fn canonicalize_pending_value_def<'a>(
     env: &mut Env<'a>,
     pending_def: PendingValueDef<'a>,
-    mut output: Output,
+    mut output: Output<'a>,
     scope: &mut Scope,
     var_store: &mut VarStore,
     pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
-) -> DefOutput {
+) -> DefOutput<'a> {
     use PendingValueDef::*;
 
     // All abilities should be resolved by the time we're canonicalizing value defs.
@@ -2324,7 +2337,7 @@ fn canonicalize_pending_value_def<'a>(
 #[allow(clippy::cognitive_complexity)]
 fn canonicalize_pending_body<'a>(
     env: &mut Env<'a>,
-    mut output: Output,
+    mut output: Output<'a>,
     scope: &mut Scope,
     var_store: &mut VarStore,
 
@@ -2332,7 +2345,7 @@ fn canonicalize_pending_body<'a>(
     loc_expr: &'a Loc<ast::Expr>,
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
-) -> DefOutput {
+) -> DefOutput<'a> {
     let mut loc_value = &loc_expr.value;
 
     while let ast::Expr::ParensAround(value) = loc_value {
@@ -2459,7 +2472,7 @@ pub fn can_defs_with_return<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
-) -> (Expr, Output) {
+) -> (Expr, Output<'a>) {
     let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
@@ -2764,7 +2777,7 @@ fn to_pending_value_def<'a>(
     def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
-    output: &mut Output,
+    output: &mut Output<'a>,
     pattern_type: PatternType,
 ) -> PendingValue<'a> {
     use ast::ValueDef::*;

@@ -571,6 +571,7 @@ enum Msg<'a> {
         abilities_store: AbilitiesStore,
         loc_expects: LocExpects,
         loc_dbgs: LocDbgs,
+        opt_module_docs: Option<ModuleDocumentation>,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -2566,12 +2567,17 @@ fn update<'a>(
             abilities_store,
             loc_expects,
             loc_dbgs,
+            opt_module_docs: module_docs,
 
             #[cfg(debug_assertions)]
             checkmate,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = Instant::now();
+
+            if let Some(docs) = module_docs {
+                state.module_cache.documentation.insert(module_id, docs);
+            }
 
             state
                 .module_cache
@@ -5059,6 +5065,13 @@ fn run_solve_solve(
     }
 }
 
+enum DocsConfig {
+    App,
+    Platform,
+    Package,
+    Module { name: ModuleName },
+}
+
 fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
@@ -5074,6 +5087,7 @@ fn run_solve<'a>(
     dep_idents: IdentIdsByModule,
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
+    docs_config: DocsConfig,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -5168,8 +5182,36 @@ fn run_solve<'a>(
     };
 
     // Record the final timings
-    let solve_end = Instant::now();
-    module_timing.solve = solve_end.duration_since(solve_start);
+    module_timing.solve = solve_start.elapsed();
+
+    let process_docs_start = Instant::now();
+
+    // Generate documentation info
+    let opt_module_docs = match docs_config {
+        DocsConfig::App => None,
+        DocsConfig::Platform | DocsConfig::Package => {
+            // TODO: actually generate docs for platform and package modules.
+            None
+        }
+        DocsConfig::Module { name, .. } => {
+            let mut scope = module_output.scope.clone();
+            scope.add_docs_imports();
+            let docs = crate::docs::generate_module_docs(
+                scope,
+                module_id,
+                module_ids,
+                name.as_str().into(),
+                &parsed_defs_for_docs,
+                exposed_module_ids,
+                module_output.exposed_symbols.clone(),
+                parsed.header_comments,
+            );
+
+            Some(docs)
+        }
+    };
+
+    module_timing.process_docs = process_docs_start.elapsed();
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
@@ -5183,6 +5225,7 @@ fn run_solve<'a>(
         abilities_store,
         loc_expects,
         loc_dbgs,
+        opt_module_docs,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -5345,7 +5388,10 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
-    let parsed_defs_for_docs = parsed_defs.clone();
+    let module_docs = DocsConfig::Module {
+        name: module_name,
+        parsed_defs: parsed_defs.clone(),
+    };
     let parsed_defs = arena.alloc(parsed_defs);
 
     let mut var_store = VarStore::default();
@@ -6394,6 +6440,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            docs_config,
             //
             #[cfg(debug_assertions)]
             checkmate,

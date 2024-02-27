@@ -18,7 +18,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral, TypeAnnotation};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
@@ -37,16 +37,21 @@ use std::{char, u32};
 pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 
 #[derive(Clone, Default, Debug)]
-pub struct Output {
+pub struct Output<'a> {
     pub references: References,
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
     pub pending_derives: PendingDerives,
+
+    /// Docs need to know what the actual AST was, so we can render these in docs according to how they appear
+    /// in the source code. We need to know what Symbol they have for exposed aliases like `Foo : InternalFoo.Foo`;
+    /// we need to be able to go look up the AST for the symbol InternalFoo.Foo from the InternalFoo module.
+    pub alias_ast: VecMap<Symbol, (Vec<Loc<Lowercase>>, TypeAnnotation<'a>)>,
 }
 
-impl Output {
+impl<'a> Output<'a> {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
@@ -57,6 +62,7 @@ impl Output {
         self.introduced_variables
             .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
+        self.alias_ast.extend(other.alias_ast);
         self.non_closures.extend(other.non_closures);
 
         {
@@ -619,7 +625,7 @@ pub fn canonicalize_expr<'a>(
     scope: &mut Scope,
     region: Region,
     expr: &'a ast::Expr<'a>,
-) -> (Loc<Expr>, Output) {
+) -> (Loc<Expr>, Output<'a>) {
     use Expr::*;
 
     let (expr, output) = match expr {
@@ -1466,7 +1472,7 @@ pub fn canonicalize_closure<'a>(
     loc_arg_patterns: &'a [Loc<ast::Pattern<'a>>],
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
-) -> (ClosureData, Output) {
+) -> (ClosureData, Output<'a>) {
     scope.inner_scope(|inner_scope| {
         canonicalize_closure_body(
             env,
@@ -1486,7 +1492,7 @@ fn canonicalize_closure_body<'a>(
     loc_arg_patterns: &'a [Loc<ast::Pattern<'a>>],
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
-) -> (ClosureData, Output) {
+) -> (ClosureData, Output<'a>) {
     // The globally unique symbol that will refer to this closure once it gets converted
     // into a top-level procedure for code gen.
     let (symbol, is_anonymous) = match opt_def_name {
@@ -1661,7 +1667,7 @@ fn canonicalize_when_branch<'a>(
     scope: &mut Scope,
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
-    output: &mut Output,
+    output: &mut Output<'a>,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
@@ -1772,7 +1778,7 @@ fn canonicalize_fields<'a>(
     scope: &mut Scope,
     region: Region,
     fields: &'a [Loc<ast::AssignedField<'a, ast::Expr<'a>>>],
-) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
+) -> Result<(SendMap<Lowercase, Field>, Output<'a>), CanonicalizeRecordProblem> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
 
@@ -1830,7 +1836,7 @@ fn canonicalize_field<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
-) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
+) -> Result<(Lowercase, Loc<Expr>, Output<'a>, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
     match field {
@@ -1868,14 +1874,14 @@ fn canonicalize_field<'a>(
     }
 }
 
-fn canonicalize_var_lookup(
-    env: &mut Env<'_>,
+fn canonicalize_var_lookup<'a>(
+    env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     module_name: &str,
     ident: &str,
     region: Region,
-) -> (Expr, Output) {
+) -> (Expr, Output<'a>) {
     use Expr::*;
 
     let mut output = Output::default();
@@ -2384,7 +2390,7 @@ fn flatten_str_literal<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     literal: &StrLiteral<'a>,
-) -> (Expr, Output) {
+) -> (Expr, Output<'a>) {
     use ast::StrLiteral::*;
 
     match literal {
@@ -2519,7 +2525,7 @@ fn flatten_str_lines<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     lines: &[&[ast::StrSegment<'a>]],
-) -> (Expr, Output) {
+) -> (Expr, Output<'a>) {
     use ast::StrSegment::*;
 
     let mut buf = String::new();
