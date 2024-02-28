@@ -3788,17 +3788,6 @@ trait Label: subs::Label + Ord + Clone + Into<TagOrClosure> {
         Self: 'r;
 }
 
-impl Label for TagOrClosure{
-    fn semantic_repr<'a, 'r>(
-        arena: &'a Bump,
-        labels: impl ExactSizeIterator<Item = &'r Self>,
-    ) -> SemanticRepr<'a> {
-        SemanticRepr::tag_union(
-            arena.alloc_slice_fill_iter(labels.map(|x| &*arena.alloc_str(x.0.as_str()))),
-        )
-    }
-}
-
 impl Label for TagName {
     fn semantic_repr<'a, 'r>(
         arena: &'a Bump,
@@ -4348,17 +4337,48 @@ where
                 NonRecursive {
                     sorted_tag_layouts: tags,
                 } => {
-                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                    tag_layouts.extend(tags.iter().map(|r| r.1));
+                    let mut layouts = Vec::with_capacity_in(tags.len(), env.arena);
 
-                    let tag_names = TagOrClosure::semantic_repr(env.arena, tags.iter());
+                    let semantic = match tags.first() {
+                        Some((tag_or_closure, _)) => match tag_or_closure {
+                            TagOrClosure::Tag(_tag) => TagName::semantic_repr(
+                                env.arena,
+                                tags.iter()
+                                    .map(|(tag_or_closure, layout)| match tag_or_closure {
+                                        TagOrClosure::Tag(tag) => {
+                                            layouts.push(*layout);
+                                            tag
+                                        }
+                                        TagOrClosure::Closure(_symbol) => {
+                                            unreachable!()
+                                        }
+                                    }),
+                            ),
+                            TagOrClosure::Closure(_symbol) => Symbol::semantic_repr(
+                                env.arena,
+                                tags.iter()
+                                    .map(|(tag_or_closure, layout)| match tag_or_closure {
+                                        TagOrClosure::Tag(_tag) => unreachable!(),
+                                        TagOrClosure::Closure(symbol) => {
+                                            layouts.push(*layout);
+                                            symbol
+                                        }
+                                    }),
+                            ),
+                        },
+                        None => {
+                            // This would be a tag union with no tags, which should have hit a
+                            // different case earlier.
+                            unreachable!();
+                        }
+                    };
 
                     let layout = Layout {
                         repr: LayoutRepr::Union(UnionLayout::NonRecursive(
-                            tag_layouts.into_bump_slice(),
+                            layouts.into_bump_slice(),
                         ))
                         .direct(),
-                        semantic: SemanticRepr::tag_union(tag_names.into_bump_slice()),
+                        semantic,
                     };
                     env.cache.put_in(layout)
                 }
