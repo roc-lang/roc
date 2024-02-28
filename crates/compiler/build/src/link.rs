@@ -1401,7 +1401,7 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
-    let command_string = stringify_command(&command);
+    let command_string = stringify_command(&command, false);
     let cmd_str = &command_string;
     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
         print_command_str(cmd_str);
@@ -1446,18 +1446,20 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
 
 /// Stringify a command for printing
 /// e.g. `HOME=~ zig build-exe foo.zig -o foo`
-fn stringify_command(cmd: &Command) -> String {
+fn stringify_command(cmd: &Command, include_env_vars: bool) -> String {
     let mut command_string = std::ffi::OsString::new();
 
-    for (name, opt_val) in cmd.get_envs() {
-        command_string.push(name);
-        command_string.push("=");
-        if let Some(val) = opt_val {
-            command_string.push(val);
-        } else {
-            command_string.push("''");
+    if include_env_vars {
+        for (name, opt_val) in cmd.get_envs() {
+            command_string.push(name);
+            command_string.push("=");
+            if let Some(val) = opt_val {
+                command_string.push(val);
+            } else {
+                command_string.push("''");
+            }
+            command_string.push(" ");
         }
-        command_string.push(" ");
     }
 
     command_string.push(cmd.get_program());
@@ -1477,7 +1479,11 @@ fn print_command_str(s: &str) {
 
 fn debug_print_command(_cmd: &Command) {
     // This debug macro is compiled out in release mode, so the argument is unused
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS_WITH_ENV_VARS, {
+        print_command_str(&stringify_command(_cmd, true));
+    });
+
     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
-        print_command_str(&stringify_command(_cmd));
+        print_command_str(&stringify_command(_cmd, false));
     });
 }
