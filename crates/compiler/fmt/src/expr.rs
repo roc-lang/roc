@@ -612,18 +612,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             buf.push('\\');
             buf.push(escaped.to_parsed_char());
         }
-        DeprecatedInterpolated(loc_expr) => {
-            buf.push_str("\\(");
-            // e.g. (name) in "Hi, $(name)!"
-            loc_expr.value.format_with_options(
-                buf,
-                Parens::NotNeeded, // We already printed parens!
-                Newlines::No,      // Interpolations can never have newlines
-                indent,
-            );
-            buf.push(')');
-        }
-        Interpolated(loc_expr) => {
+        DeprecatedInterpolated(loc_expr) | Interpolated(loc_expr) => {
             buf.push_str("$(");
             // e.g. (name) in "Hi, $(name)!"
             loc_expr.value.format_with_options(

@@ -974,7 +974,7 @@ fn to_str_report<'a>(
                         suggestion("An escaped quote: ", "\\\""),
                         suggestion("An escaped backslash: ", "\\\\"),
                         suggestion("A unicode code point: ", "\\u(00FF)"),
-                        suggestion("An interpolated string: ", "\\(myVariable)"),
+                        suggestion("An interpolated string: ", "$(myVariable)"),
                     ])
                     .indent(4),
             ]);
@@ -1021,7 +1021,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("\"The count is \\(count\\)\""),
+                    alloc.parser_suggestion("\"The count is $(count)\""),
                     alloc.reflow("."),
                 ]),
             ]);
@@ -1098,9 +1098,9 @@ fn to_str_report<'a>(
                 ESingleQuote::InterpolationNotAllowed => {
                     alloc.stack([
                         alloc.concat([
-                            alloc.reflow("I am part way through parsing this scalar literal (character literal), "),
-                            alloc.reflow("but I encountered a string interpolation like \"\\(this)\", which is not "),
-                            alloc.reflow("allowed in scalar literals."),
+                            alloc.reflow("I am part way through parsing this single-quote literal, "),
+                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region),
                         alloc.concat([
@@ -3955,7 +3955,9 @@ fn to_space_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow("I encountered a tab character:"),
                 alloc.region(region),
-                alloc.reflow("Tab characters are not allowed, use spaces instead."),
+                alloc.reflow(
+                    "Tab characters are not allowed in Roc code. Please use spaces instead!",
+                ),
             ]);
 
             Report {
