@@ -113,21 +113,12 @@ pub struct Tag {
 pub fn generate_module_docs(
     scope: Scope,
     home: ModuleId,
-    module_ids: &ModuleIds,
     module_name: ModuleName,
     parsed_defs: &roc_parse::ast::Defs,
-    exposed_module_ids: &[ModuleId],
     exposed_symbols: VecSet<Symbol>,
     header_comments: &[CommentOrNewline<'_>],
 ) -> ModuleDocumentation {
-    let entries = generate_entry_docs(
-        home,
-        &scope.locals.ident_ids,
-        module_ids,
-        parsed_defs,
-        exposed_module_ids,
-        header_comments,
-    );
+    let entries = generate_entry_docs(home, &scope.locals.ident_ids, parsed_defs, header_comments);
 
     ModuleDocumentation {
         name: module_name.as_str().to_string(),
@@ -167,9 +158,7 @@ fn detached_docs_from_comments_and_new_lines<'a>(
 fn generate_entry_docs(
     home: ModuleId,
     ident_ids: &IdentIds,
-    module_ids: &ModuleIds,
     defs: &roc_parse::ast::Defs<'_>,
-    exposed_module_ids: &[ModuleId],
     header_comments: &[CommentOrNewline<'_>],
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;

@@ -20,6 +20,7 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ResolvedImplementations, TypeState,
 };
+use roc_can::scope::Scope;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
@@ -5065,11 +5066,17 @@ fn run_solve_solve(
     }
 }
 
-enum DocsConfig {
+enum DocsConfig<'a> {
     App,
     Platform,
     Package,
-    Module { name: ModuleName },
+    Module {
+        name: ModuleName,
+        scope: Scope,
+        parsed_defs: ast::Defs<'a>,
+        exposed_symbols: VecSet<Symbol>,
+        header_comments: &'a [CommentOrNewline<'a>],
+    },
 }
 
 fn run_solve<'a>(
@@ -5087,7 +5094,7 @@ fn run_solve<'a>(
     dep_idents: IdentIdsByModule,
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
-    docs_config: DocsConfig,
+    docs_config: DocsConfig<'a>,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -5193,18 +5200,20 @@ fn run_solve<'a>(
             // TODO: actually generate docs for platform and package modules.
             None
         }
-        DocsConfig::Module { name, .. } => {
-            let mut scope = module_output.scope.clone();
-            scope.add_docs_imports();
+        DocsConfig::Module {
+            name,
+            scope,
+            parsed_defs,
+            header_comments,
+            exposed_symbols,
+        } => {
             let docs = crate::docs::generate_module_docs(
                 scope,
                 module_id,
-                module_ids,
                 name.as_str().into(),
-                &parsed_defs_for_docs,
-                exposed_module_ids,
-                module_output.exposed_symbols.clone(),
-                parsed.header_comments,
+                &parsed_defs,
+                exposed_symbols,
+                header_comments,
             );
 
             Some(docs)
@@ -5388,10 +5397,7 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
-    let module_docs = DocsConfig::Module {
-        name: module_name,
-        parsed_defs: parsed_defs.clone(),
-    };
+    let parsed_defs_for_docs = parsed_defs.clone();
     let parsed_defs = arena.alloc(parsed_defs);
 
     let mut var_store = VarStore::default();
@@ -5412,6 +5418,20 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
     );
+
+    let module_docs = {
+        let mut scope = module_output.scope.clone();
+        scope.add_docs_imports();
+
+        DocsConfig::Module {
+            name: module_name,
+            scope,
+            parsed_defs: parsed_defs_for_docs,
+            exposed_symbols: module_output.exposed_symbols.clone(),
+            header_comments: parsed.header_comments,
+        }
+    };
+
     let mut types = Types::new();
 
     // _after has an underscore because it's unused in --release builds
