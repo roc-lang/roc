@@ -103,13 +103,109 @@ x =
     things
     |> List.map toNum
     |> List.map Num.abs
+    |> List.indexed
     |> List.keepIf isInterestingNum
-    |> List.walk { count: 0, stuff: 0 } \{ count, stuff }, num ->
-        if num > 0 then
-            { count: count + 1, stuff: stuff - 1 }
-        else
-            { count: count - stuff, stuff: stuff * 2 }
 
+x =
+    things
+    |> List.toIter
+    |> Iter.map toNum
+    |> Iter.map Num.abs
+    |> Iter.indexed
+    |> Iter.keepIf isInterestingNum
+    |> List.fromIter
+
+x =
+    things
+    |> Iter.map toNum
+    |> Iter.map Num.abs
+    |> Iter.indexed
+    |> Iter.keepIf isInterestingNum
+    |> List.fromIter
+
+
+
+
+x =
+    things
+    |> toIter
+    |> Iter.map toNum
+    |> Collect.collect
+    |> toIter
+    |> Iter.map Num.abs
+    |> fromIter
+    |> List.indexed
+    |> List.keepIf isInterestingNum
+
+List.map : List a, (a -> b) -> List b
+List.map = \list, fn ->
+    list
+    |> toIter
+    |> Iter.map fn
+    |> fromIter
+
+toIter : List a -> ListIter a
+toIter = \list ->
+    # Need an actual ToIter ability, not just "detect when an Iterator is constructed"
+    # because, for example, you might return a reverse iterator - which shouldn't
+    # cancel out with FromIter
+    @ListIter { list, index: 0 }
+
+fromIter : ListIter a -> List a
+fromIter = \@ListIter { list, index } ->
+    List.walk list [] \answer, elem ->
+        List.append answer elem
+
+ListIter a := { list : List a, index: U64 }
+    implements Iterator { next }
+
+FromIter implements {
+    collect : i -> t
+        where
+            i implements Iterator,
+            t implements FromIter,
+}
+
+# i where i implements Iter<Elem = Str>
+
+Iter implements {
+    Elem,
+
+    next : i -> (i, Result Elem [ItWasEmpty])
+        where i implements Iter,
+}
+
+# syntax idea:
+
+Iter elem implements {
+    next : i -> (i, Result elem [ItWasEmpty])
+        where i implements Iter,
+}
+
+Dict k v := { ... }
+    implements
+        Iter (k, v) { next }
+
+# note: would need to inline BEFORE mono in order to do this,
+# so in --optimize we might want to do an additional inlining for mono,
+# in order to get things
+
+collectList : ListIter elem -> List elem
+collectList = \@ListIter { list, index } ->
+    List.dropFirst list index
+
+Iterator implements {
+    next : i elem -> (i elem, Result elem [ItWasEmpty])
+        where i implements Iterator,
+}
+
+DictIter k v := { dict : Dict k v, index: U64 }
+    implements Iterator { next }
+
+next : DictIter k v -> (DictIter k v, Result (k, v) [ItWasEmpty])
+next = \{ dict, index } ->
+    getByIndex dict
+    |> Result.mapErr \DictWasEmpty -> ItWasEmpty
 
 x =
     List.walk things { count: 0, stuff: 0 } \{ count, stuff }, thing ->
@@ -132,13 +228,13 @@ x =
 
 
 ## Only implementable as a lowlevel; exposed publicly so you can implement toIter on your custom collection
-fromStartStep : {
+Iter.fromStartStep : {
     start : state,
     step : state -> [Produce state elem, Continue state, Stop],
 } -> Iter elem
 
 ## Only implementable as a lowlevel; exposed publicly so you can implement fromIter on your custom collection
-toStartStep : Iter elem -> {
+Iter.toStartStep : Iter elem -> {
     start : state,
     step : state -> [Produce state elem, Continue state, Stop],
 }
@@ -146,15 +242,8 @@ toStartStep : Iter elem -> {
 List.map = \list, fn ->
     list
     |> toIter
-    |> Iter.map fn
+    |> Iter.map (fn1 . fn2)
     |> fromIter
-
-
-    list
-    |> toIter
-    |> Iter.map fn
-    |> Iter.map fn
-    |> Iter.walk \... ->
 
 Iter.map : Iter a, (a -> b) -> Iter b
 Iter.map = \iter, fn ->
