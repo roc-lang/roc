@@ -2740,14 +2740,19 @@ impl Type {
     /// [A I8]
     /// [A [B [C U8]]]
     /// [A (R a)] as R a
+    /// ({} -> U8)                   # Putting it behind a thunk doesn't change anything
+    /// ({} -> [A (R a)]) as R a
+    /// ([A (R a)] -> {}) as R a     # Narrow types can't take themselves as arguments
     /// ```
     ///
     /// The following are not:
     ///
     /// ```roc
-    /// [A I8, B U8 ]
-    /// [A [B [Result U8 {}]]]         (Result U8 {} is actually [Ok U8, Err {}])
-    /// [A { lst: List (R a) }] as R a     (List a is morally [Cons (List a), Nil] as List a)
+    /// [A I8, B U8]
+    /// [A [B [Result U8 {}]]]           # (Result U8 {} is actually [Ok U8, Err {}])
+    /// [A { lst: List (R a) }] as R a   # (List a is morally [Cons (List a), Nil] as List a)
+    /// ({} -> [A, B (R a)]) as R a      # Putting it behind a thunk is fine
+    /// ([A, B (R a)] -> {}) as R a      # Accepting it as an argument is fine
     /// ```
     pub fn is_narrow(&self) -> bool {
         match self.shallow_dealias() {
