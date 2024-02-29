@@ -977,7 +977,7 @@ pub fn canonicalize_expr_with_tail<'a>(
                         output.references.insert_call(symbol);
 
                         // we're calling a symbol by name, check if it's the tail-callable symbol and if it's in the tail position
-                        output.rec_call = match &env.tailcallable_symbol {
+                        let is_recursive = match &env.tailcallable_symbol {
                             Some(tc_sym) if *tc_sym == symbol => {
                                 if is_tail {
                                     Recursive::TailRecursive
@@ -985,8 +985,9 @@ pub fn canonicalize_expr_with_tail<'a>(
                                     Recursive::Recursive
                                 }
                             }
-                            Some(_) | None => output.rec_call,
+                            Some(_) | None => Recursive::NotRecursive,
                         };
+                        output.rec_call.union_mut(is_recursive.clone());
 
                         Call(
                             Box::new((
@@ -997,7 +998,7 @@ pub fn canonicalize_expr_with_tail<'a>(
                             )),
                             args,
                             *application_style,
-                            output.rec_call.clone(),
+                            is_recursive,
                         )
                     }
                     RuntimeError(_) => {
