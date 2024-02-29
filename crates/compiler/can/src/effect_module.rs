@@ -253,7 +253,12 @@ fn build_effect_map(
         );
 
         let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+        Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        )
     };
 
     // `toEffect (thunk {})`
@@ -266,7 +271,12 @@ fn build_effect_map(
         );
 
         let arguments = vec![(var_store.fresh(), Loc::at_zero(force_thunk_call))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+        Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        )
     };
 
     let inner_closure_symbol = {
@@ -423,7 +433,12 @@ fn force_thunk(expr: Expr, thunk_var: Variable, var_store: &mut VarStore) -> Exp
     );
 
     let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
-    Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+    Expr::Call(
+        Box::new(boxed),
+        arguments,
+        CalledVia::Space,
+        Recursive::NotRecursive,
+    )
 }
 
 fn build_effect_after(
@@ -462,7 +477,12 @@ fn build_effect_after(
         );
 
         let arguments = vec![(var_store.fresh(), Loc::at_zero(force_effect_call))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+        Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        )
     };
 
     // let @Effect thunk = toEffect (effect {}) in thunk {}
@@ -725,7 +745,12 @@ fn force_effect(
         );
 
         let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
-        let call = Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
+        let call = Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        );
 
         Loc::at_zero(call)
     };
@@ -943,7 +968,12 @@ fn build_effect_forever_inner_body(
         );
 
         let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
-        let call = Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
+        let call = Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        );
 
         Loc::at_zero(call)
     };
@@ -968,7 +998,12 @@ fn build_effect_forever_inner_body(
 
         let effect_var = var_store.fresh();
         let arguments = vec![(effect_var, Loc::at_zero(Expr::Var(effect, effect_var)))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+        Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        )
     };
 
     // ```
@@ -1226,7 +1261,12 @@ fn build_effect_loop_inner_body(
 
             let state_var = var_store.fresh();
             let arguments = vec![(state_var, Loc::at_zero(Expr::Var(state_symbol, state_var)))];
-            Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+            Expr::Call(
+                Box::new(boxed),
+                arguments,
+                CalledVia::Space,
+                Recursive::NotRecursive,
+            )
         };
 
         Def {
@@ -1250,7 +1290,12 @@ fn build_effect_loop_inner_body(
         );
 
         let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
-        let call = Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
+        let call = Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        );
 
         Loc::at_zero(call)
     };
@@ -1274,7 +1319,12 @@ fn build_effect_loop_inner_body(
             ),
             (step_var, Loc::at_zero(Expr::Var(step_symbol, step_var))),
         ];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+        Expr::Call(
+            Box::new(boxed),
+            arguments,
+            CalledVia::Space,
+            Recursive::NotRecursive,
+        )
     };
 
     // ```

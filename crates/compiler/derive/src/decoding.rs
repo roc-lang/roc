@@ -100,6 +100,7 @@ fn wrap_in_decode_custom_decode_with(
                 (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
             ],
             CalledVia::Space,
+            Recursive::NotRecursive,
         );
 
         (decode_with_call, this_decode_with_ret_var)
@@ -200,6 +201,7 @@ fn wrap_in_decode_custom_decode_with(
             decode_custom_fn,
             vec![(custom_var, Loc::at_zero(custom_lambda))],
             CalledVia::Space,
+            Recursive::NotRecursive,
         );
 
         (decode_custom_call, this_decode_custom_ret_var)

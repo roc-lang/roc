@@ -258,7 +258,8 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(f.hardline())
             .append(expr(c, Free, f, &body.value))
             .group(),
-        Call(fun, args, _) => {
+        //TODO! add recursive to this
+        Call(fun, args, _, _) => {
             let (_, fun, _, _) = &**fun;
             maybe_paren!(
                 Free,

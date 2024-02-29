@@ -151,7 +151,7 @@ pub enum Expr {
         Box<(Variable, Loc<Expr>, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
-        bool,
+        Recursive,
     ),
     RunLowLevel {
         op: LowLevel,
@@ -961,6 +961,11 @@ pub fn canonicalize_expr<'a>(
                             Some(tc_sym) if *tc_sym == symbol => Some(symbol),
                             Some(_) | None => None,
                         };
+                        let rec = if output.tail_call.is_some() {
+                            Recursive::TailRecursive
+                        } else {
+                            Recursive::NotRecursive
+                        };
 
                         Call(
                             Box::new((
@@ -971,7 +976,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
-                            true,
+                            rec,
                         )
                     }
                     RuntimeError(_) => {
@@ -1011,7 +1016,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
-                            false,
+                            Recursive::NotRecursive,
                         )
                     }
                 };
@@ -2631,6 +2636,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                         (var_store.fresh(), loc_expr),
                     ],
                     CalledVia::StringInterpolation,
+                    Recursive::NotRecursive,
                 );
 
                 Loc::at(Region::zero(), expr)
@@ -2667,7 +2673,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                 (var_store.fresh(), loc_expr),
             ],
             CalledVia::StringInterpolation,
-            false,
+            Recursive::NotRecursive,
         );
 
         loc_expr = Loc::at(Region::zero(), expr);

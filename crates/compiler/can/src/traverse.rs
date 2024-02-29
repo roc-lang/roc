@@ -667,6 +667,28 @@ impl Visitor for TypeAtVisitor {
         walk_pattern(self, pat)
     }
 }
+struct RecursiveCallsVisitor {
+    calls: Vec<(Region, Recursive)>,
+}
+impl Visitor for RecursiveCallsVisitor {
+    fn visit_def(&mut self, def: &Def) {
+        match &def.loc_expr.value {
+            Expr::Call(b, _, _, recursive) => self.calls.push((b.1.region, *recursive)),
+            _ => (),
+        };
+        walk_def(self, def);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+        //reset the decl type because we didn't end on a declaration
+        match expr {
+            Expr::Call(b, _, _, recursive) => self.calls.push((b.1.region, *recursive)),
+            _ => (),
+        }
+
+        walk_expr(self, expr, var);
+    }
+}
 
 struct TypeAtPositionVisitor {
     position: Position,
@@ -697,7 +719,6 @@ impl Visitor for TypeAtPositionVisitor {
         if region.contains_pos(self.position) {
             //reset the decl type because we didn't end on a declaration
             match expr {
-                // Expr::Call(_, _, _) => todo!(),
                 Expr::Closure(ClosureData { recursive, .. }) => self.fun_type = Some(*recursive),
                 _ => self.fun_type = None,
                 // _ => (),
@@ -783,6 +804,12 @@ pub fn find_hover_at(
     };
     visitor.visit_decls(decls);
     (visitor.region_typ, visitor.fun_type)
+}
+
+pub fn find_recursive_calls(decls: &Declarations) -> Vec<(Region, Recursive)> {
+    let mut visitor = RecursiveCallsVisitor { calls: vec![] };
+    visitor.visit_decls(decls);
+    visitor.calls
 }
 
 /// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a

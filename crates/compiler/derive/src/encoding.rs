@@ -154,6 +154,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         to_encoder_fn,
         vec![(elem_var, Loc::at_zero(Var(elem_sym, elem_var)))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // elem -[to_elem_encoder]-> toEncoder elem
@@ -239,6 +240,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             (to_elem_encoder_fn_var, Loc::at_zero(to_elem_encoder)),
         ],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.list ..) fmt
@@ -373,6 +375,7 @@ fn to_encoder_record(
                 to_encoder_fn,
                 vec![(field_var, Loc::at_zero(field_access))],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             );
 
             // value: toEncoder rcd.a
@@ -455,6 +458,7 @@ fn to_encoder_record(
         encode_record_fn,
         vec![(fields_list_var, Loc::at_zero(fields_list))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.record ..) fmt
@@ -576,6 +580,7 @@ fn to_encoder_tuple(
                 to_encoder_fn,
                 vec![(elem_var, Loc::at_zero(tuple_access))],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             );
 
             // NOTE: must be done to unify the lambda sets under `encoder_var`
@@ -638,6 +643,7 @@ fn to_encoder_tuple(
         encode_tuple_fn,
         vec![(elem_encoders_list_var, Loc::at_zero(elem_encoders_list))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.tuple_var ..) fmt
@@ -778,6 +784,7 @@ fn to_encoder_tag_union(
                         to_encoder_fn,
                         vec![(sym_var, Loc::at_zero(Var(sym, sym_var)))],
                         CalledVia::Space,
+                        Recursive::NotRecursive,
                     );
 
                     // NOTE: must be done to unify the lambda sets under `encoder_var`
@@ -847,6 +854,7 @@ fn to_encoder_tag_union(
                     ),
                 ],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             );
 
             // NOTE: must be done to unify the lambda sets under `encoder_var`
@@ -999,6 +1007,7 @@ fn wrap_in_encode_custom(
             (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
         ],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Create fn_var for ambient capture; we fix it up below.
@@ -1083,6 +1092,7 @@ fn wrap_in_encode_custom(
         custom_fn,
         vec![(fn_var, Loc::at_zero(clos))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     (custom_call, this_custom_encoder_var)

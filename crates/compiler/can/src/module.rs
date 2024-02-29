@@ -1171,7 +1171,7 @@ fn fix_values_captured_in_closure_expr(
             );
         }
 
-        Call(function, arguments, _) => {
+        Call(function, arguments, _, _) => {
             fix_values_captured_in_closure_expr(
                 &mut function.1.value,
                 no_capture_symbols,

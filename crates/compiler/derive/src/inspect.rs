@@ -160,6 +160,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         to_inspector_fn,
         vec![(elem_var, Loc::at_zero(Var(elem_sym, elem_var)))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // elem -[to_elem_inspector]-> toInspector elem
@@ -252,6 +253,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             (to_elem_inspector_fn_var, Loc::at_zero(to_elem_inspector)),
         ],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Inspect.custom \fmt -> Inspect.apply (Inspect.list ..) fmt
@@ -387,6 +389,7 @@ fn to_inspector_record(
                 to_inspector_fn,
                 vec![(field_var, Loc::at_zero(field_access))],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             );
 
             // value: toInspector rcd.a
@@ -469,6 +472,7 @@ fn to_inspector_record(
         inspect_record_fn,
         vec![(fields_list_var, Loc::at_zero(fields_list))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Inspect.custom \fmt -> Inspect.apply (Inspect.record ..) fmt
@@ -591,6 +595,7 @@ fn to_inspector_tuple(
                 to_inspector_fn,
                 vec![(elem_var, Loc::at_zero(tuple_access))],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             );
 
             // NOTE: must be done to unify the lambda sets under `inspector_var`
@@ -653,6 +658,7 @@ fn to_inspector_tuple(
         inspect_tuple_fn,
         vec![(elem_inspectors_list_var, Loc::at_zero(elem_inspectors_list))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Inspect.custom \fmt -> Inspect.apply (Inspect.tuple_var ..) fmt
@@ -793,6 +799,7 @@ fn to_inspector_tag_union(
                         to_inspector_fn,
                         vec![(sym_var, Loc::at_zero(Var(sym, sym_var)))],
                         CalledVia::Space,
+                        Recursive::NotRecursive,
                     );
 
                     // NOTE: must be done to unify the lambda sets under `inspector_var`
@@ -865,6 +872,7 @@ fn to_inspector_tag_union(
                     ),
                 ],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             );
 
             // NOTE: must be done to unify the lambda sets under `inspector_var`
@@ -1006,6 +1014,7 @@ fn wrap_in_inspect_custom(
             (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
         ],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     // Create fn_var for ambient capture; we fix it up below.
@@ -1083,6 +1092,7 @@ fn wrap_in_inspect_custom(
         custom_fn,
         vec![(fn_var, Loc::at_zero(clos))],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     (custom_call, this_custom_inspector_var)
