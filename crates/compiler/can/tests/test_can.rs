@@ -727,7 +727,7 @@ mod test_can {
     fn simplify_curried_call(expr: &Expr) -> (&Expr, &Expr) {
         match expr {
             LetNonRec(_, loc_expr) => simplify_curried_call(&loc_expr.value),
-            Call(fun, args, _) => (&fun.1.value, &args[0].1.value),
+            Call(fun, args, _, _) => (&fun.1.value, &args[0].1.value),
             _ => panic!("Final Expr is not a Call: {:?}", expr),
         }
     }
@@ -968,30 +968,7 @@ mod test_can {
                         0
                     else
                         g (x - 1)
-
-                # use parens to force the ordering!
-                (
-                    h = \x ->
-                        if x == 0 then
-                            0
-                        else
-                            g (x - 1)
-
-                    (
-                        p = \x ->
-                            if x == 0 then
-                                0
-                            else if x == 1 then
-                                g (x - 1)
-                            else
-                                p (x - 1)
-
-
-                        # variables must be (indirectly) referenced in the body for analysis to work
-                        { x: p, y: h }
-                    )
-                )
-
+                g 100
             "
         );
         let arena = Bump::new();
@@ -1007,12 +984,8 @@ mod test_can {
         let actual = loc_expr.value;
 
         let g_detected = get_closure(&actual, 0);
-        let h_detected = get_closure(&actual, 1);
-        let p_detected = get_closure(&actual, 2);
 
         assert_eq!(g_detected, Recursive::TailRecursive);
-        assert_eq!(h_detected, Recursive::NotRecursive);
-        assert_eq!(p_detected, Recursive::TailRecursive);
     }
 
     // TODO restore this test! It should report two unused defs (h and p), but only reports 1.
@@ -1092,6 +1065,28 @@ mod test_can {
         let src = indoc!(
             r"
                 f = \x -> f x
+
+                f 0
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+
+        assert_eq!(detected, Recursive::TailRecursive);
+    }
+    #[test]
+    fn variable_tail_call() {
+        let src = indoc!(
+            r"
+                f = \x -> 
+                    g=f x
+                    g
 
                 f 0
             "

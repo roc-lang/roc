@@ -10,6 +10,7 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
+use crate::expr::canonicalize_expr_with_tail;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
@@ -2369,13 +2370,7 @@ fn canonicalize_pending_body<'a>(
                 // reset the tailcallable_symbol
                 env.tailcallable_symbol = outer_tailcallable;
 
-                // The closure is self tail recursive if it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
-                };
-
-                closure_data.recursive = is_recursive;
+                closure_data.recursive = can_output.rec_call;
                 closure_data.name = *defined_symbol;
 
                 let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
@@ -2459,7 +2454,9 @@ pub fn can_defs_with_return<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
+    in_tail: bool,
 ) -> (Expr, Output) {
+    //TODO make it so that if the last def is also the return it's considered tail rec
     let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
@@ -2469,10 +2466,17 @@ pub fn can_defs_with_return<'a>(
         PatternType::DefExpr,
     );
 
-    // The def as a whole is a tail call iff its return expression is a tail call.
+    // The def as a whole is a tail call if its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
-    let (ret_expr, mut output) =
-        canonicalize_expr(env, var_store, scope, loc_ret.region, &loc_ret.value);
+
+    let (ret_expr, mut output) = canonicalize_expr_with_tail(
+        env,
+        var_store,
+        scope,
+        loc_ret.region,
+        &loc_ret.value,
+        in_tail,
+    );
 
     output
         .introduced_variables

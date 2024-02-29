@@ -39,7 +39,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub tail_call: Option<Symbol>,
+    pub rec_call: Recursive,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
@@ -50,8 +50,12 @@ impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
-        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
-            self.tail_call = Some(later);
+        match (self.rec_call, other.rec_call) {
+            //Any recursive calls should mark the whole output recursive, tail recrusive calls shouldn't mark an already recursive output as tail recursive
+            (_, Recursive::Recursive) | (Recursive::NotRecursive, Recursive::TailRecursive) => {
+                self.rec_call = other.rec_call
+            }
+            _ => (),
         }
 
         self.introduced_variables
@@ -556,6 +560,11 @@ pub enum Recursive {
     Recursive = 1,
     TailRecursive = 2,
 }
+impl Default for Recursive {
+    fn default() -> Self {
+        Self::NotRecursive
+    }
+}
 
 impl Recursive {
     pub fn is_recursive(&self) -> bool {
@@ -620,6 +629,16 @@ pub fn canonicalize_expr<'a>(
     scope: &mut Scope,
     region: Region,
     expr: &'a ast::Expr<'a>,
+) -> (Loc<Expr>, Output) {
+    canonicalize_expr_with_tail(env, var_store, scope, region, expr, false)
+}
+pub fn canonicalize_expr_with_tail<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    expr: &'a ast::Expr<'a>,
+    is_tail: bool,
 ) -> (Loc<Expr>, Output) {
     use Expr::*;
 
@@ -725,7 +744,7 @@ pub fn canonicalize_expr<'a>(
 
             let output = Output {
                 references,
-                tail_call: None,
+                rec_call: Recursive::NotRecursive,
                 ..Default::default()
             };
 
@@ -835,7 +854,7 @@ pub fn canonicalize_expr<'a>(
 
                 let output = Output {
                     references,
-                    tail_call: None,
+                    rec_call: Recursive::NotRecursive,
                     ..Default::default()
                 };
 
@@ -950,21 +969,22 @@ pub fn canonicalize_expr<'a>(
                 output.union(fn_expr_output);
 
                 // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_call = None;
+                output.rec_call = Recursive::NotRecursive;
 
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
-                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
-                        };
-                        let rec = if output.tail_call.is_some() {
-                            Recursive::TailRecursive
-                        } else {
-                            Recursive::NotRecursive
+                        // we're calling a symbol by name, check if it's the tail-callable symbol and if it's in the tail position
+                        output.rec_call = match &env.tailcallable_symbol {
+                            Some(tc_sym) if *tc_sym == symbol => {
+                                if is_tail {
+                                    Recursive::TailRecursive
+                                } else {
+                                    Recursive::Recursive
+                                }
+                            }
+                            Some(_) | None => Recursive::NotRecursive,
                         };
 
                         Call(
@@ -976,7 +996,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
-                            rec,
+                            output.rec_call.clone(),
                         )
                     }
                     RuntimeError(_) => {
@@ -1068,7 +1088,14 @@ pub fn canonicalize_expr<'a>(
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
-                can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
+                can_defs_with_return(
+                    env,
+                    var_store,
+                    inner_scope,
+                    env.arena.alloc(defs),
+                    loc_ret,
+                    is_tail,
+                )
             })
         }
         ast::Expr::RecordBuilder(_) => {
@@ -1090,7 +1117,7 @@ pub fn canonicalize_expr<'a>(
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
-            output.tail_call = None;
+            output.rec_call = Recursive::NotRecursive;
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
@@ -1103,6 +1130,7 @@ pub fn canonicalize_expr<'a>(
                         region,
                         branch,
                         &mut output,
+                        is_tail,
                     )
                 });
 
@@ -1115,7 +1143,7 @@ pub fn canonicalize_expr<'a>(
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
-                output.tail_call = None;
+                output.rec_call = Recursive::NotRecursive;
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1304,12 +1332,13 @@ pub fn canonicalize_expr<'a>(
                 let (loc_cond, cond_output) =
                     canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
 
-                let (loc_then, then_output) = canonicalize_expr(
+                let (loc_then, then_output) = canonicalize_expr_with_tail(
                     env,
                     var_store,
                     scope,
                     then_branch.region,
                     &then_branch.value,
+                    is_tail,
                 );
 
                 branches.push((loc_cond, loc_then));
@@ -1319,12 +1348,13 @@ pub fn canonicalize_expr<'a>(
                 output.union(then_output);
             }
 
-            let (loc_else, else_output) = canonicalize_expr(
+            let (loc_else, else_output) = canonicalize_expr_with_tail(
                 env,
                 var_store,
                 scope,
                 final_else_branch.region,
                 &final_else_branch.value,
+                is_tail,
             );
 
             output.references.union_mut(&else_output.references);
@@ -1421,7 +1451,8 @@ pub fn canonicalize_expr<'a>(
             (answer, Output::default())
         }
         &ast::Expr::ParensAround(sub_expr) => {
-            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+            let (loc_expr, output) =
+                canonicalize_expr_with_tail(env, var_store, scope, region, sub_expr, is_tail);
 
             (loc_expr.value, output)
         }
@@ -1529,12 +1560,14 @@ fn canonicalize_closure_body<'a>(
     let bound_by_argument_patterns: Vec<_> =
         BindingsFromPattern::new_many(can_args.iter().map(|x| &x.2)).collect();
 
-    let (loc_body_expr, new_output) = canonicalize_expr(
+    let (loc_body_expr, new_output) = canonicalize_expr_with_tail(
         env,
         var_store,
         scope,
         loc_body_expr.region,
         &loc_body_expr.value,
+        //A closure return is a tail for this closure
+        true,
     );
 
     let mut captured_symbols: Vec<_> = new_output
@@ -1665,6 +1698,7 @@ fn canonicalize_when_branch<'a>(
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
+    is_tail: bool,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
@@ -1700,12 +1734,13 @@ fn canonicalize_when_branch<'a>(
         some_symbols_not_bound_in_all_patterns = true;
     }
 
-    let (value, mut branch_output) = canonicalize_expr(
+    let (value, mut branch_output) = canonicalize_expr_with_tail(
         env,
         var_store,
         scope,
         branch.value.region,
         &branch.value.value,
+        is_tail,
     );
 
     let guard = match &branch.guard {
