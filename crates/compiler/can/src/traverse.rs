@@ -671,14 +671,6 @@ struct RecursiveCallsVisitor {
     calls: Vec<(Region, Recursive)>,
 }
 impl Visitor for RecursiveCallsVisitor {
-    fn visit_def(&mut self, def: &Def) {
-        match &def.loc_expr.value {
-            Expr::Call(b, _, _, recursive) => self.calls.push((b.1.region, *recursive)),
-            _ => (),
-        };
-        walk_def(self, def);
-    }
-
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         //reset the decl type because we didn't end on a declaration
         match expr {
