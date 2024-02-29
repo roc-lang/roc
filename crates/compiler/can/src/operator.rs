@@ -601,7 +601,7 @@ pub fn desugar_expr<'a>(
 
             // line_info is an option so that we can lazily calculate it.
             // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
-            if matches!(line_info, None) {
+            if line_info.is_none() {
                 *line_info = Some(LineInfo::new(src));
             }
             let line_col = line_info.as_ref().unwrap().convert_pos(region.start());

@@ -84,8 +84,8 @@ try = \result, transform ->
 ## function on the value the `Err` holds. Then returns that new result. If the
 ## result is `Ok`, this has no effect. Use `try` to transform an `Ok`.
 ## ```
-## Result.onErr (Ok 10) \errorNum -> Str.toNat errorNum
-## Result.onErr (Err "42") \errorNum -> Str.toNat errorNum
+## Result.onErr (Ok 10) \errorNum -> Str.toU64 errorNum
+## Result.onErr (Err "42") \errorNum -> Str.toU64 errorNum
 ## ```
 onErr : Result a err, (err -> Result a otherErr) -> Result a otherErr
 onErr = \result, transform ->

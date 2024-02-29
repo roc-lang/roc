@@ -24,11 +24,9 @@ module [
     Unsigned32,
     Unsigned16,
     Unsigned8,
-    Nat,
     Dec,
     F64,
     F32,
-    Natural,
     Decimal,
     Binary32,
     Binary64,
@@ -97,10 +95,6 @@ module [
     mulSaturated,
     mulChecked,
     intCast,
-    bytesToU16,
-    bytesToU32,
-    bytesToU64,
-    bytesToU128,
     divCeil,
     divCeilChecked,
     divTrunc,
@@ -151,8 +145,6 @@ module [
     toU64Checked,
     toU128,
     toU128Checked,
-    toNat,
-    toNatChecked,
     toF32,
     toF32Checked,
     toF64,
@@ -191,9 +183,9 @@ import Result exposing [Result]
 ## a more specific type based on how they're used.
 ##
 ## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
-## but because `List.len` returns a `Nat`, the `1` ends up changing from
-## `Num *` to the more specific `Nat`, and the expression as a whole
-## ends up having the type `Nat`.
+## but because `List.len` returns a `U64`, the `1` ends up changing from
+## `Num *` to the more specific `U64`, and the expression as a whole
+## ends up having the type `U64`.
 ##
 ## Sometimes number literals don't become more specific. For example,
 ## the `Num.toStr` function has the type `Num * -> Str`. This means that
@@ -215,7 +207,6 @@ import Result exposing [Result]
 ## * `215u8` is a `215` value of type [U8]
 ## * `76.4f32` is a `76.4` value of type [F32]
 ## * `123.45dec` is a `123.45` value of type [Dec]
-## * `12345nat` is a `12345` value of type [Nat]
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
@@ -325,16 +316,6 @@ Num range := range
 ## | ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
-## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
-## 32-bit system, it's the same as [U32].
-##
-## A common use for [Nat] is to store the length ("len" for short) of a
-## collection like a [List]. 64-bit systems can represent longer
-## lists in memory than 32-bit systems, which is why the length of a list
-## is represented as a [Nat] in Roc.
-##
 ## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Num.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
@@ -424,8 +405,6 @@ Unsigned32 := []
 Unsigned16 := []
 Unsigned8 := []
 
-Natural := []
-
 Integer range := range
 
 I128 : Num (Integer Signed128)
@@ -441,18 +420,6 @@ U64 : Num (Integer Unsigned64)
 U32 : Num (Integer Unsigned32)
 U16 : Num (Integer Unsigned16)
 U8 : Num (Integer Unsigned8)
-
-## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
-## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
-## on 32-bit systems, and so on.
-##
-## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data structures
-## can hold is also system-specific. For example, the maximum number of elements
-## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
-## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
-## good fit for [List.len] regardless of system.
-Nat : Num (Integer Natural)
 
 Decimal := []
 Binary64 := []
@@ -572,51 +539,6 @@ tau = 2 * pi
 ##
 toStr : Num * -> Str
 intCast : Int a -> Int b
-
-bytesToU16Lowlevel : List U8, Nat -> U16
-bytesToU32Lowlevel : List U8, Nat -> U32
-bytesToU64Lowlevel : List U8, Nat -> U64
-bytesToU128Lowlevel : List U8, Nat -> U128
-
-bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
-bytesToU16 = \bytes, index ->
-    # we need at least 1 more byte
-    offset = 1
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU16Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
-bytesToU32 = \bytes, index ->
-    # we need at least 3 more bytes
-    offset = 3
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU32Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU64 : List U8, Nat -> Result U64 [OutOfBounds]
-bytesToU64 = \bytes, index ->
-    # we need at least 7 more bytes
-    offset = 7
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU64Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU128 : List U8, Nat -> Result U128 [OutOfBounds]
-bytesToU128 = \bytes, index ->
-    # we need at least 15 more bytes
-    offset = 15
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU128Lowlevel bytes index)
-    else
-        Err OutOfBounds
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
@@ -1000,13 +922,21 @@ divCeilChecked = \a, b ->
 ## Num.divTrunc 8 -3
 ## ```
 divTrunc : Int a, Int a -> Int a
+divTrunc = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.divTruncUnchecked a b
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divTruncChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.divTrunc a b)
+        Ok (Num.divTruncUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+divTruncUnchecked : Int a, Int a -> Int a
 
 ## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
@@ -1021,13 +951,21 @@ divTruncChecked = \a, b ->
 ## Num.rem -8 -3
 ## ```
 rem : Int a, Int a -> Int a
+rem = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.remUnchecked a b
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]
 remChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.rem a b)
+        Ok (Num.remUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+remUnchecked : Int a, Int a -> Int a
 
 isMultipleOf : Int a, Int a -> Bool
 
@@ -1445,22 +1383,6 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated!
-## Since [Nat] has a different maximum number depending on the system you're building
-## for, this may give a different answer on different systems.
-##
-## For example, on a 32-bit system, calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
-## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
-##
-## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
-## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to `Num.maxU64`, and 9_000_000_000 is lower than `Num.maxU64`.
-##
-## To convert a [Frac] to a [Nat], first call either `Num.round`, `Num.ceil`, or `Num.floor`
-## on it, then call this on the resulting [Int].
-toNat : Int * -> Nat
-
 ## Converts a [Num] to an [F32]. If the given number can't be precisely represented in an [F32],
 ## the returned number may be different from the given number.
 toF32 : Num * -> F32
@@ -1482,6 +1404,5 @@ toU16Checked : Int * -> Result U16 [OutOfBounds]
 toU32Checked : Int * -> Result U32 [OutOfBounds]
 toU64Checked : Int * -> Result U64 [OutOfBounds]
 toU128Checked : Int * -> Result U128 [OutOfBounds]
-toNatChecked : Int * -> Result Nat [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]

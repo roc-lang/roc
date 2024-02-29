@@ -10,7 +10,7 @@ main =
         (Effect.getLine)
         \line ->
             Effect.after
-                (Effect.putLine "You entered: \(line)")
+                (Effect.putLine "You entered: $(line)")
                 \{} ->
                     Effect.after
                         (Effect.putLine "It is known")

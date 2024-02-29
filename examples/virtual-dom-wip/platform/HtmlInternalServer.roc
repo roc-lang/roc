@@ -16,7 +16,7 @@ appendRenderedStatic = \buffer, node ->
             Str.concat buffer content
 
         Element name _ attrs children ->
-            withTagName = "\(buffer)<\(name)"
+            withTagName = "$(buffer)<$(name)"
             withAttrs =
                 if List.isEmpty attrs then
                     withTagName
@@ -28,12 +28,12 @@ appendRenderedStatic = \buffer, node ->
                     if Str.isEmpty styles then
                         attrBuffer
                     else
-                        "\(attrBuffer) style=\"\(styles)\""
+                        "$(attrBuffer) style=\"$(styles)\""
 
             withTag = Str.concat withAttrs ">"
             withChildren = List.walk children withTag appendRenderedStatic
 
-            "\(withChildren)</\(name)>"
+            "$(withChildren)</$(name)>"
 
         None -> buffer
 
@@ -41,12 +41,12 @@ appendRenderedStaticAttr : { buffer : Str, styles : Str }, Attribute [] -> { buf
 appendRenderedStaticAttr = \{ buffer, styles }, attr ->
     when attr is
         HtmlAttr key value ->
-            newBuffer = "\(buffer) \(key)=\"\(value)\""
+            newBuffer = "$(buffer) $(key)=\"$(value)\""
 
             { buffer: newBuffer, styles }
 
         Style key value ->
-            newStyles = "\(styles) \(key): \(value);"
+            newStyles = "$(styles) $(key): $(value);"
 
             { buffer, styles: newStyles }
 
@@ -85,10 +85,10 @@ insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     script = (element "script") [] [
         text
             """
-            \(hostJavaScript)
+            $(hostJavaScript)
             (function(){
-            const initData = \(jsInitData);
-            const wasmUrl = \(jsWasmUrl);
+            const initData = $(jsInitData);
+            const wasmUrl = $(jsWasmUrl);
             window.roc = roc_init(initData, wasmUrl);
             })();
             """,

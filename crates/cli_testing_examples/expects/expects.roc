@@ -2,9 +2,17 @@ app "expects-test"
     packages { pf: "zig-platform/main.roc" }
     provides [main] to pf
 
-expect
+makeA =
     a = 1
-    b = 2
+
+    expect a == 2
+    expect a == 3
+
+    a
+
+expect
+    a = makeA
+    b = 2i64
 
     a == b
 

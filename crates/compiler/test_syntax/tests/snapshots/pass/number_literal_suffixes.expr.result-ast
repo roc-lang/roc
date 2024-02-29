@@ -123,21 +123,9 @@ Record(
             ),
             @164-176 SpaceBefore(
                 RequiredValue(
-                    @164-167 "nat",
+                    @164-167 "dec",
                     [],
                     @170-176 Num(
-                        "123nat",
-                    ),
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            @180-192 SpaceBefore(
-                RequiredValue(
-                    @180-183 "dec",
-                    [],
-                    @186-192 Num(
                         "123dec",
                     ),
                 ),
@@ -145,11 +133,11 @@ Record(
                     Newline,
                 ],
             ),
-            @196-211 SpaceBefore(
+            @180-195 SpaceBefore(
                 RequiredValue(
-                    @196-201 "u8Neg",
+                    @180-185 "u8Neg",
                     [],
-                    @205-211 Num(
+                    @189-195 Num(
                         "-123u8",
                     ),
                 ),
@@ -157,11 +145,11 @@ Record(
                     Newline,
                 ],
             ),
-            @215-231 SpaceBefore(
+            @199-215 SpaceBefore(
                 RequiredValue(
-                    @215-221 "u16Neg",
+                    @199-205 "u16Neg",
                     [],
-                    @224-231 Num(
+                    @208-215 Num(
                         "-123u16",
                     ),
                 ),
@@ -169,11 +157,11 @@ Record(
                     Newline,
                 ],
             ),
-            @235-251 SpaceBefore(
+            @219-235 SpaceBefore(
                 RequiredValue(
-                    @235-241 "u32Neg",
+                    @219-225 "u32Neg",
                     [],
-                    @244-251 Num(
+                    @228-235 Num(
                         "-123u32",
                     ),
                 ),
@@ -181,11 +169,11 @@ Record(
                     Newline,
                 ],
             ),
-            @255-271 SpaceBefore(
+            @239-255 SpaceBefore(
                 RequiredValue(
-                    @255-261 "u64Neg",
+                    @239-245 "u64Neg",
                     [],
-                    @264-271 Num(
+                    @248-255 Num(
                         "-123u64",
                     ),
                 ),
@@ -193,11 +181,11 @@ Record(
                     Newline,
                 ],
             ),
-            @275-292 SpaceBefore(
+            @259-276 SpaceBefore(
                 RequiredValue(
-                    @275-282 "u128Neg",
+                    @259-266 "u128Neg",
                     [],
-                    @284-292 Num(
+                    @268-276 Num(
                         "-123u128",
                     ),
                 ),
@@ -205,11 +193,11 @@ Record(
                     Newline,
                 ],
             ),
-            @296-311 SpaceBefore(
+            @280-295 SpaceBefore(
                 RequiredValue(
-                    @296-301 "i8Neg",
+                    @280-285 "i8Neg",
                     [],
-                    @305-311 Num(
+                    @289-295 Num(
                         "-123i8",
                     ),
                 ),
@@ -217,11 +205,11 @@ Record(
                     Newline,
                 ],
             ),
-            @315-331 SpaceBefore(
+            @299-315 SpaceBefore(
                 RequiredValue(
-                    @315-321 "i16Neg",
+                    @299-305 "i16Neg",
                     [],
-                    @324-331 Num(
+                    @308-315 Num(
                         "-123i16",
                     ),
                 ),
@@ -229,11 +217,11 @@ Record(
                     Newline,
                 ],
             ),
-            @335-351 SpaceBefore(
+            @319-335 SpaceBefore(
                 RequiredValue(
-                    @335-341 "i32Neg",
+                    @319-325 "i32Neg",
                     [],
-                    @344-351 Num(
+                    @328-335 Num(
                         "-123i32",
                     ),
                 ),
@@ -241,11 +229,11 @@ Record(
                     Newline,
                 ],
             ),
-            @355-371 SpaceBefore(
+            @339-355 SpaceBefore(
                 RequiredValue(
-                    @355-361 "i64Neg",
+                    @339-345 "i64Neg",
                     [],
-                    @364-371 Num(
+                    @348-355 Num(
                         "-123i64",
                     ),
                 ),
@@ -253,11 +241,11 @@ Record(
                     Newline,
                 ],
             ),
-            @375-392 SpaceBefore(
+            @359-376 SpaceBefore(
                 RequiredValue(
-                    @375-382 "i128Neg",
+                    @359-366 "i128Neg",
                     [],
-                    @384-392 Num(
+                    @368-376 Num(
                         "-123i128",
                     ),
                 ),
@@ -265,23 +253,11 @@ Record(
                     Newline,
                 ],
             ),
-            @396-412 SpaceBefore(
+            @380-396 SpaceBefore(
                 RequiredValue(
-                    @396-402 "natNeg",
+                    @380-386 "decNeg",
                     [],
-                    @405-412 Num(
-                        "-123nat",
-                    ),
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            @416-432 SpaceBefore(
-                RequiredValue(
-                    @416-422 "decNeg",
-                    [],
-                    @425-432 Num(
+                    @389-396 Num(
                         "-123dec",
                     ),
                 ),
@@ -289,11 +265,11 @@ Record(
                     Newline,
                 ],
             ),
-            @436-452 SpaceBefore(
+            @400-416 SpaceBefore(
                 RequiredValue(
-                    @436-441 "u8Bin",
+                    @400-405 "u8Bin",
                     [],
-                    @445-452 NonBase10Int {
+                    @409-416 NonBase10Int {
                         string: "101u8",
                         base: Binary,
                         is_negative: false,
@@ -303,11 +279,11 @@ Record(
                     Newline,
                 ],
             ),
-            @456-473 SpaceBefore(
+            @420-437 SpaceBefore(
                 RequiredValue(
-                    @456-462 "u16Bin",
+                    @420-426 "u16Bin",
                     [],
-                    @465-473 NonBase10Int {
+                    @429-437 NonBase10Int {
                         string: "101u16",
                         base: Binary,
                         is_negative: false,
@@ -317,11 +293,11 @@ Record(
                     Newline,
                 ],
             ),
-            @477-494 SpaceBefore(
+            @441-458 SpaceBefore(
                 RequiredValue(
-                    @477-483 "u32Bin",
+                    @441-447 "u32Bin",
                     [],
-                    @486-494 NonBase10Int {
+                    @450-458 NonBase10Int {
                         string: "101u32",
                         base: Binary,
                         is_negative: false,
@@ -331,11 +307,11 @@ Record(
                     Newline,
                 ],
             ),
-            @498-515 SpaceBefore(
+            @462-479 SpaceBefore(
                 RequiredValue(
-                    @498-504 "u64Bin",
+                    @462-468 "u64Bin",
                     [],
-                    @507-515 NonBase10Int {
+                    @471-479 NonBase10Int {
                         string: "101u64",
                         base: Binary,
                         is_negative: false,
@@ -345,11 +321,11 @@ Record(
                     Newline,
                 ],
             ),
-            @519-537 SpaceBefore(
+            @483-501 SpaceBefore(
                 RequiredValue(
-                    @519-526 "u128Bin",
+                    @483-490 "u128Bin",
                     [],
-                    @528-537 NonBase10Int {
+                    @492-501 NonBase10Int {
                         string: "101u128",
                         base: Binary,
                         is_negative: false,
@@ -359,11 +335,11 @@ Record(
                     Newline,
                 ],
             ),
-            @541-557 SpaceBefore(
+            @505-521 SpaceBefore(
                 RequiredValue(
-                    @541-546 "i8Bin",
+                    @505-510 "i8Bin",
                     [],
-                    @550-557 NonBase10Int {
+                    @514-521 NonBase10Int {
                         string: "101i8",
                         base: Binary,
                         is_negative: false,
@@ -373,11 +349,11 @@ Record(
                     Newline,
                 ],
             ),
-            @561-578 SpaceBefore(
+            @525-542 SpaceBefore(
                 RequiredValue(
-                    @561-567 "i16Bin",
+                    @525-531 "i16Bin",
                     [],
-                    @570-578 NonBase10Int {
+                    @534-542 NonBase10Int {
                         string: "101i16",
                         base: Binary,
                         is_negative: false,
@@ -387,11 +363,11 @@ Record(
                     Newline,
                 ],
             ),
-            @582-599 SpaceBefore(
+            @546-563 SpaceBefore(
                 RequiredValue(
-                    @582-588 "i32Bin",
+                    @546-552 "i32Bin",
                     [],
-                    @591-599 NonBase10Int {
+                    @555-563 NonBase10Int {
                         string: "101i32",
                         base: Binary,
                         is_negative: false,
@@ -401,11 +377,11 @@ Record(
                     Newline,
                 ],
             ),
-            @603-620 SpaceBefore(
+            @567-584 SpaceBefore(
                 RequiredValue(
-                    @603-609 "i64Bin",
+                    @567-573 "i64Bin",
                     [],
-                    @612-620 NonBase10Int {
+                    @576-584 NonBase10Int {
                         string: "101i64",
                         base: Binary,
                         is_negative: false,
@@ -415,26 +391,12 @@ Record(
                     Newline,
                 ],
             ),
-            @624-642 SpaceBefore(
+            @588-606 SpaceBefore(
                 RequiredValue(
-                    @624-631 "i128Bin",
+                    @588-595 "i128Bin",
                     [],
-                    @633-642 NonBase10Int {
+                    @597-606 NonBase10Int {
                         string: "101i128",
-                        base: Binary,
-                        is_negative: false,
-                    },
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            @646-663 SpaceBefore(
-                RequiredValue(
-                    @646-652 "natBin",
-                    [],
-                    @655-663 NonBase10Int {
-                        string: "101nat",
                         base: Binary,
                         is_negative: false,
                     },

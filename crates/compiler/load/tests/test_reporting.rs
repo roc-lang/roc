@@ -462,11 +462,9 @@ mod test_reporting {
     fn human_readable(str: &str) -> String {
         str.replace(ANSI_STYLE_CODES.red, "<red>")
             .replace(ANSI_STYLE_CODES.white, "<white>")
-            .replace(ANSI_STYLE_CODES.blue, "<blue>")
             .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
             .replace(ANSI_STYLE_CODES.green, "<green>")
             .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
-            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
             .replace(ANSI_STYLE_CODES.reset, "<reset>")
             .replace(ANSI_STYLE_CODES.bold, "<bold>")
             .replace(ANSI_STYLE_CODES.underline, "<underline>")
@@ -759,7 +757,7 @@ mod test_reporting {
             &DEFAULT_PALETTE,
         );
 
-        assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
+        assert_eq!(human_readable(&buf), "<cyan>activityIndicatorLarge<reset>");
     }
 
     #[test]
@@ -4532,7 +4530,7 @@ mod test_reporting {
     test_report!(
         record_type_tab,
         "f : { foo \t }",
-        @r"
+        @r###"
     ── TAB CHARACTER in tmp/record_type_tab/Test.roc ───────────────────────────────
 
     I encountered a tab character:
@@ -4540,14 +4538,14 @@ mod test_reporting {
     4│      f : { foo 	 }
                       ^
 
-    Tab characters are not allowed, use spaces instead.
-    "
+    Tab characters are not allowed in Roc code. Please use spaces instead!
+    "###
     );
 
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        @r"
+        @r###"
     ── TAB CHARACTER in tmp/comment_with_tab/Test.roc ──────────────────────────────
 
     I encountered a tab character:
@@ -4555,8 +4553,8 @@ mod test_reporting {
     4│      # comment with a 	
                              ^
 
-    Tab characters are not allowed, use spaces instead.
-    "
+    Tab characters are not allowed in Roc code. Please use spaces instead!
+    "###
     );
 
     test_report!(
@@ -5413,7 +5411,7 @@ mod test_reporting {
     test_report!(
         weird_escape,
         r#""abc\qdef""#,
-        @r#"
+        @r###"
     ── WEIRD ESCAPE in tmp/weird_escape/Test.roc ───────────────────────────────────
 
     I was partway through parsing a  string literal, but I got stuck here:
@@ -5430,8 +5428,8 @@ mod test_reporting {
         - An escaped quote: \"
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
-        - An interpolated string: \(myVariable)
-    "#
+        - An interpolated string: $(myVariable)
+    "###
     );
 
     test_report!(
@@ -5553,7 +5551,7 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if Bool.true then 1 else "\(greeting), World!"
+            if Bool.true then 1 else "$(greeting), World!"
             "#,
             ),
             @r#"
@@ -5561,7 +5559,7 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if Bool.true then 1 else "\(greeting), World!"
+    6│      if Bool.true then 1 else "$(greeting), World!"
                                      ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:
@@ -5644,7 +5642,7 @@ All branches in an `if` must have the same type!
             Num.if
             "
         ),
-        @r"
+        @r###"
     ── NOT EXPOSED in /code/proj/Main.roc ──────────────────────────────────────────
 
     The Num module does not expose `if`:
@@ -5656,9 +5654,9 @@ All branches in an `if` must have the same type!
 
         Num.sin
         Num.div
-        Num.min
         Num.e
-    "
+        Num.pi
+    "###
     );
 
     test_report!(
@@ -5794,7 +5792,7 @@ All branches in an `if` must have the same type!
             ["foo", bar("")]
             "#
         ),
-        @r#"
+        @r###"
     ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `bar` in this scope.
@@ -5804,11 +5802,11 @@ All branches in an `if` must have the same type!
 
     Did you mean one of these?
 
-        Nat
         Str
         Err
         U8
-    "#
+        F64
+    "###
     );
 
     test_report!(
@@ -6771,7 +6769,7 @@ In roc, functions are always written as a lambda, like{}
             C a b : a -> D a b
             D a b : { a, b }
 
-            f : C a Num.Nat -> D a Num.Nat
+            f : C a U64 -> D a U64
             f = \c -> c 6
             f
             "
@@ -7056,7 +7054,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32
         1, "i64",  mismatched_suffix_i64
         1, "i128", mismatched_suffix_i128
-        1, "nat",  mismatched_suffix_nat
         1, "dec",  mismatched_suffix_dec
         1, "f32",  mismatched_suffix_f32
         1, "f64",  mismatched_suffix_f64
@@ -7126,7 +7123,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32_pattern
         1, "i64",  mismatched_suffix_i64_pattern
         1, "i128", mismatched_suffix_i128_pattern
-        1, "nat",  mismatched_suffix_nat_pattern
         1, "dec",  mismatched_suffix_dec_pattern
         1, "f32",  mismatched_suffix_f32_pattern
         1, "f64",  mismatched_suffix_f64_pattern
@@ -7523,7 +7519,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7549,7 +7545,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7576,7 +7572,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -8166,7 +8162,7 @@ In roc, functions are always written as a lambda, like{}
         invalid_record_extension_type,
         indoc!(
             r"
-            f : { x : Num.Nat }[]
+            f : { x : U64 }[]
             f
             "
         ),
@@ -8175,8 +8171,8 @@ In roc, functions are always written as a lambda, like{}
 
     This record extension type is invalid:
 
-    4│      f : { x : Num.Nat }[]
-                               ^^
+    4│      f : { x : U64 }[]
+                           ^^
 
     Note: A record extension variable can only contain a type variable or
     another record.
@@ -10151,6 +10147,28 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        issue_6279,
+        indoc!(
+            r#"
+            when A "" is
+                A x | B x | C -> x
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
+
+        `x` is not bound in all patterns of this `when` branch
+
+        5│          A x | B x | C -> x
+                      ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+        "###
+    );
+
+    test_report!(
         flip_flop_catch_all_branches_not_exhaustive,
         indoc!(
             r#"
@@ -11247,7 +11265,7 @@ In roc, functions are always written as a lambda, like{}
         custom_type_conflicts_with_builtin,
         indoc!(
             r#"
-            Nat := [ S Nat, Z ]
+            Dec := [ S Dec, Z ]
 
             ""
             "#
@@ -11257,7 +11275,7 @@ In roc, functions are always written as a lambda, like{}
 
     This opaque type has the same name as a builtin:
 
-    4│      Nat := [ S Nat, Z ]
+    4│      Dec := [ S Dec, Z ]
             ^^^^^^^^^^^^^^^^^^^
 
     All builtin opaque types are in scope by default, so I need this
@@ -11693,7 +11711,7 @@ In roc, functions are always written as a lambda, like{}
 
     The argument is a Unicode scalar value of type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     But `contains` needs its 2nd argument to be:
 
@@ -11750,7 +11768,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the branch patterns have type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     The branches must be cases of the `when` condition's type!
     "#
@@ -13574,72 +13592,6 @@ In roc, functions are always written as a lambda, like{}
                         Two -> Two
             "#
         )
-    );
-
-    test_report!(
-        derive_decoding_for_nat,
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            import Decode exposing [decoder]
-
-            main =
-                myDecoder : Decoder Nat fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
-
-                myDecoder
-            "#
-        ),
-        @r"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    7│      myDecoder = decoder
-                        ^^^^^^^
-
-    I can't generate an implementation of the `Decoding` ability for
-
-        Nat
-
-    Note: Decoding to a Nat is not supported. Consider decoding to a
-    fixed-sized unsigned integer, like U64, then converting to a Nat if
-    needed.
-    "
-    );
-
-    test_report!(
-        derive_encoding_for_nat,
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            x : Nat
-
-            main = Encode.toEncoder x
-            "#
-        ),
-        @r"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│  main = Encode.toEncoder x
-                                ^
-
-    I can't generate an implementation of the `Encoding` ability for
-
-        Int Natural
-
-    In particular, an implementation for
-
-        Natural
-
-    cannot be generated.
-
-    Tip: `Natural` does not implement `Encoding`.
-    "
     );
 
     test_no_problem!(

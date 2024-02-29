@@ -36,7 +36,7 @@ view =
             Newline,
             Desc [Ident "user", Kw "&lt;-", Ident "Http.get", Ident "url", Ident "Json.codec", Kw "|>", Ident "Task.await"] "<p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p><p>If the shape of the JSON isn't compatible with the type of <code>user</code> (based on type inference), this will give a decoding error immediately.</p><p>As with all the other lines ending in <code>|> Task.await</code>, if there's an error, nothing else in <code>storeEmail</code> will be run, and <code>handleErr</code> will end up handling the error.</p>",
             Newline,
-            Desc [Ident "dest", Kw "=", Ident "Path.fromStr", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\\(user.name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
+            Desc [Ident "dest", Kw "=", Ident "Path.fromStr", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\$(user.name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
             Newline,
             Desc [Literal "_", Kw "&lt;-", Ident "File.writeUtf8", Ident "dest", Ident "user.email", Kw "|>", Ident "Task.await"] "<p>This writes <code>user.email</code> to the file, encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>We won't be using the output of <code>writeUtf8</code>, so we name it <code>_</code>. The special name <code>_</code> is for when you don't want to use something.</p><p>You can name as many things as you like <code>_</code>, but you can never reference anything named <code>_</code>. So it's only useful for when you don't want to choose a name.</p>",
             Newline,
@@ -89,7 +89,7 @@ tokensToStr = \tokens ->
                 # Don't put spaces after opening parens or before closing parens
                 argsWithCommas =
                     args
-                    |> List.map \ident -> "<span class=\"ident\">\(ident)</span>"
+                    |> List.map \ident -> "<span class=\"ident\">$(ident)</span>"
                     |> Str.joinWith "<span class=\"literal\">,</span> "
 
                 bufWithSpace
@@ -98,32 +98,32 @@ tokensToStr = \tokens ->
                 |> Str.concat "<span class=\"kw\"> -></span>"
 
             Kw str ->
-                Str.concat bufWithSpace "<span class=\"kw\">\(str)</span>"
+                Str.concat bufWithSpace "<span class=\"kw\">$(str)</span>"
 
             Num str | Str str | Literal str -> # We may render these differently in the future
-                Str.concat bufWithSpace "<span class=\"literal\">\(str)</span>"
+                Str.concat bufWithSpace "<span class=\"literal\">$(str)</span>"
 
             Comment str ->
-                Str.concat bufWithSpace "<span class=\"comment\"># \(str)</span>"
+                Str.concat bufWithSpace "<span class=\"comment\"># $(str)</span>"
 
             Ident str ->
                 Str.concat bufWithSpace (identToHtml str)
 
             StrInterpolation before interp after ->
                 bufWithSpace
-                |> Str.concat (if Str.isEmpty before then "" else "<span class=\"literal\">\(before)</span>")
-                |> Str.concat "<span class=\"kw\">\\(</span>\(identToHtml interp)<span class=\"kw\">)</span>"
-                |> Str.concat (if Str.isEmpty after then "" else "<span class=\"literal\">\(after)</span>")
+                |> Str.concat (if Str.isEmpty before then "" else "<span class=\"literal\">$(before)</span>")
+                |> Str.concat "<span class=\"kw\">\$(</span>$(identToHtml interp)<span class=\"kw\">)</span>"
+                |> Str.concat (if Str.isEmpty after then "" else "<span class=\"literal\">$(after)</span>")
 
 identToHtml : Str -> Str
 identToHtml = \str ->
     List.walk (Str.split str ".") "" \accum, ident ->
-        identHtml = "<span class=\"ident\">\(ident)</span>"
+        identHtml = "<span class=\"ident\">$(ident)</span>"
 
         if Str.isEmpty accum then
             identHtml
         else
-            "\(accum)<span class=\"kw\">.</span>\(identHtml)"
+            "$(accum)<span class=\"kw\">.</span>$(identHtml)"
 
 sectionsToStr : List Section -> Str
 sectionsToStr = \sections ->
@@ -168,5 +168,5 @@ radio = \index, labelHtml, descHtml ->
     checkedHtml = if index == 0 then " checked" else ""
 
     """
-    <input class="interactive-radio" type="radio" name="r" id="r\(Num.toStr index)" \(checkedHtml)><label for="r\(Num.toStr index)" title="Tap to learn about this syntax">\(labelHtml)</label><span class="interactive-desc" role="presentation"><button class="close-desc">X</button>\(descHtml)</span>
+    <input class="interactive-radio" type="radio" name="r" id="r$(Num.toStr index)" $(checkedHtml)><label for="r$(Num.toStr index)" title="Tap to learn about this syntax">$(labelHtml)</label><span class="interactive-desc" role="presentation"><button class="close-desc">X</button>$(descHtml)</span>
     """

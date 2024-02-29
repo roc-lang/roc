@@ -2433,7 +2433,7 @@ mod test_fmt {
             r"
                 foo :
                     Str,
-                    Nat
+                    U64
                     -> Bool
 
                 foo
@@ -2443,7 +2443,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
                     foo :
-                        Str, Int, Nat -> Bool
+                        Str, Int, U64 -> Bool
 
                     foo
                 "
@@ -2454,7 +2454,7 @@ mod test_fmt {
                 r"
                     foo :
                         Str,
-                        Nat -> Bool
+                        U64 -> Bool
 
                     foo
                 "
@@ -2463,7 +2463,7 @@ mod test_fmt {
                 r"
                     foo :
                         Str,
-                        Nat
+                        U64
                         -> Bool
 
                     foo
@@ -2477,7 +2477,7 @@ mod test_fmt {
                     foo :
 
                         Str,
-                        Nat
+                        U64
 
                         -> Bool
 
@@ -2488,7 +2488,7 @@ mod test_fmt {
                 r"
                     foo :
                         Str,
-                        Nat
+                        U64
                         -> Bool
 
                     foo
@@ -2501,7 +2501,7 @@ mod test_fmt {
                 r"
                     foo :
 
-                        Str, Nat -> Bool
+                        Str, U64 -> Bool
 
                     foo
                 "
@@ -2509,7 +2509,7 @@ mod test_fmt {
             indoc!(
                 r"
                     foo :
-                        Str, Nat -> Bool
+                        Str, U64 -> Bool
 
                     foo
                 "
@@ -5585,9 +5585,9 @@ mod test_fmt {
             r"
                 Dict k v := {
                     metadata : List I8,
-                    dataIndices : List Nat,
+                    dataIndices : List U64,
                     data : List (T k v),
-                    size : Nat,
+                    size : U64,
                 } where k implements Hash & Eq
 
                 a

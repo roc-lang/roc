@@ -10,7 +10,7 @@ import Effect exposing [Effect]
 
 # Fields sorted by alignment, then alphabetically
 FromHost state initData : {
-    eventHandlerId : Nat,
+    eventHandlerId : U64,
     eventJsonList : List (List U8),
     eventPlatformState : Box (PlatformState state initData),
     initJson : List U8,

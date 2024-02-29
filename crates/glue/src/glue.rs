@@ -2971,20 +2971,7 @@ impl Clone for U4 {
         target_arch = "x86_64"
     ))]
     fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U4::None => core::mem::transmute::<core::mem::MaybeUninit<U4>, U4>(
-                    core::mem::MaybeUninit::uninit(),
-                ),
-                discriminant_U4::Some => Self {
-                    Some: self.Some.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
+        *self
     }
 }
 
@@ -3260,20 +3247,7 @@ impl Clone for U3 {
         target_arch = "x86_64"
     ))]
     fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U3::None => core::mem::transmute::<core::mem::MaybeUninit<U3>, U3>(
-                    core::mem::MaybeUninit::uninit(),
-                ),
-                discriminant_U3::Some => Self {
-                    Some: self.Some.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
+        *self
     }
 }
 
@@ -3549,20 +3523,7 @@ impl Clone for U1 {
         target_arch = "x86_64"
     ))]
     fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U1::None => core::mem::transmute::<core::mem::MaybeUninit<U1>, U1>(
-                    core::mem::MaybeUninit::uninit(),
-                ),
-                discriminant_U1::Some => Self {
-                    Some: self.Some.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
+        *self
     }
 }
 

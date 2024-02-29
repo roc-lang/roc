@@ -4,7 +4,7 @@ use {
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{GlobalLayoutInterner, LayoutCache, Niche},
+        layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner, Niche},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
@@ -57,29 +57,29 @@ pub fn get_values<'a>(
 
         app.offset = start;
 
-        let expr = {
-            // TODO: pass layout_cache to jit_to_ast directly
-            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
-            let layout = layout_cache.from_var(arena, variable, subs).unwrap();
+        // TODO: pass layout_cache to jit_to_ast directly
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+        let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
-            let proc_layout = ProcLayout {
-                arguments: &[],
-                result: layout,
-                niche: Niche::NONE,
-            };
-
-            jit_to_ast(
-                arena,
-                app,
-                "expect_repl_main_fn",
-                proc_layout,
-                variable,
-                subs,
-                interns,
-                layout_interner.fork(),
-                target_info,
-            )
+        let proc_layout = ProcLayout {
+            arguments: &[],
+            result: layout,
+            niche: Niche::NONE,
         };
+
+        let expr = jit_to_ast(
+            arena,
+            app,
+            "expect_repl_main_fn",
+            proc_layout,
+            variable,
+            subs,
+            interns,
+            layout_interner.fork(),
+            target_info,
+        );
+
+        app.offset += layout_cache.interner.stack_size_and_alignment(layout).0 as usize;
 
         result.push(expr);
         result_vars.push(variable);

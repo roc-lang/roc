@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { TextDecoder } = require('util');
 
-const wasmFilename = './roc-app.wasm';
+const wasmFilename = './main.wasm';
 const moduleBytes = fs.readFileSync(wasmFilename);
 const wasmModule = new WebAssembly.Module(moduleBytes);
 

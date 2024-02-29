@@ -2,7 +2,7 @@ module [ByteEncoder, sequence, u8, u16, bytes, empty, encode]
 
 Endianness : [BE, LE]
 
-ByteEncoder : [Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence Nat (List ByteEncoder), Bytes (List U8)]
+ByteEncoder : [Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence U64 (List ByteEncoder), Bytes (List U8)]
 
 u8 : U8 -> ByteEncoder
 u8 = \value -> Unsigned8 value
@@ -24,7 +24,7 @@ sequence : List ByteEncoder -> ByteEncoder
 sequence = \encoders ->
     Sequence (getWidths encoders 0) encoders
 
-getWidth : ByteEncoder -> Nat
+getWidth : ByteEncoder -> U64
 getWidth = \encoder ->
     when encoder is
         Signed8 _ -> 1
@@ -40,7 +40,7 @@ getWidth = \encoder ->
         Sequence w _ -> w
         Bytes bs -> List.len bs
 
-getWidths : List ByteEncoder, Nat -> Nat
+getWidths : List ByteEncoder, U64 -> U64
 getWidths = \encoders, initial ->
     List.walk encoders initial \accum, encoder -> accum + getWidth encoder
 
@@ -51,7 +51,7 @@ encode = \encoder ->
     encodeHelp encoder 0 output
     |> .output
 
-encodeHelp : ByteEncoder, Nat, List U8 -> { output : List U8, offset : Nat }
+encodeHelp : ByteEncoder, U64, List U8 -> { output : List U8, offset : U64 }
 encodeHelp = \encoder, offset, output ->
     when encoder is
         Unsigned8 value ->

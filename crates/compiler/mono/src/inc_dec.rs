@@ -1283,7 +1283,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
         DictPseudoSeed => arena.alloc_slice_copy(&[irrelevant]),
-        ListLen | StrIsEmpty | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
+        ListLenU64 | ListLenUsize | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity => {
             arena.alloc_slice_copy(&[borrowed])
         }
         ListWithCapacity | StrWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
@@ -1349,12 +1349,8 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | NumCountTrailingZeroBits
         | NumCountOneBits
         | I128OfDec => arena.alloc_slice_copy(&[irrelevant]),
-        NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        NumBytesToU64 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        NumBytesToU128 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        StrFromUtf8Range => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),

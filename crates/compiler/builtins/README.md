@@ -6,7 +6,7 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 Edit the appropriate `roc/*.roc` file with your new implementation. All normal rules for writing Roc code apply. Be sure to add a declaration, definition, some documentation and add it to the exposes list it in the module head.
 
-Next, look towards the bottom of the  `compiler/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
+Next, look towards the bottom of the `compiler/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
 
 For each of the builtin modules, there is a file in `compiler/test_gen/src/` like `gen_num.rs`, `gen_str.rs` etc. Add new tests for the module you are changing to the appropriate file here. You can look at the existing test cases for examples and inspiration.
 
@@ -22,14 +22,14 @@ Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a tri
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 
-- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
-- ..writing `List elem, Nat -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
+-   ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, U64 -> elem` in LLVM
+-   ..writing `List elem, U64 -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `U64` index exists.
 
 ### can/src/builtins.rs
 
-Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
+Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to defer to lower-level functions via an if statement.
 
-Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
+Lets look at `List.repeat : elem, U64 -> List elem`, which is more straightforward, and points directly to its lower level implementation:
 
 ```rust
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
@@ -106,7 +106,7 @@ fn atan() {
 
 But replace `Num.atan` and the type signature with the new builtin.
 
-### test_gen/test/*.rs
+### test_gen/test/\*.rs
 
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
 
@@ -123,5 +123,5 @@ But replace `Num.atan`, the return value, and the return type with your new buil
 
 When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things don't work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):
 
-- `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
-- `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.
+-   `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
+-   `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.

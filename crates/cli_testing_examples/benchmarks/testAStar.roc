@@ -16,7 +16,7 @@ main =
 #
 #             _ ->
 #                 ns = Num.toStr n
-#                 Task.putLine "No test \(ns)"
+#                 Task.putLine "No test $(ns)"
 showBool : Bool -> Str
 showBool = \b ->
     if

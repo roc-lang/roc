@@ -5,4 +5,4 @@ app "packages-test"
 import json.JsonParser
 import csv.Csv
 
-main = "Hello, World! \(JsonParser.example) \(Csv.example)"
+main = "Hello, World! $(JsonParser.example) $(Csv.example)"

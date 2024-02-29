@@ -1769,7 +1769,7 @@ fn test_to_comparison<'a>(
                 LayoutRepr::Builtin(Builtin::List(_elem_layout)) => {
                     let real_len_expr = Expr::Call(Call {
                         call_type: CallType::LowLevel {
-                            op: LowLevel::ListLen,
+                            op: LowLevel::ListLenUsize,
                             update_mode: env.next_update_mode_id(),
                         },
                         arguments: env.arena.alloc([list_sym]),
@@ -2346,7 +2346,7 @@ fn decide_to_branching<'a>(
 
                 let len_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
-                        op: LowLevel::ListLen,
+                        op: LowLevel::ListLenUsize,
                         update_mode: env.next_update_mode_id(),
                     },
                     arguments: env.arena.alloc([inner_cond_symbol]),

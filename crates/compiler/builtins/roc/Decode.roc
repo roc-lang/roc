@@ -43,7 +43,6 @@ import Num exposing [
     I32,
     I64,
     I128,
-    Nat,
     F32,
     F64,
     Dec,
@@ -111,7 +110,7 @@ DecoderFormatting implements
     ## index passed to `stepElem` is 0-indexed.
     ##
     ## `finalizer` should produce the tuple value from the decoded `state`.
-    tuple : state, (state, Nat -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
+    tuple : state, (state, U64 -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
 ## Build a custom [Decoder] function. For example the implementation of
 ## `decodeBool` could be defined as follows;

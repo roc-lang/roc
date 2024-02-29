@@ -27,7 +27,7 @@ module [
 import List
 import Bool exposing [Bool, Eq]
 import Dict
-import Num exposing [Nat]
+import Num exposing [U64]
 import Hash exposing [Hash, Hasher]
 import Inspect exposing [Inspect, Inspector, InspectFormatter]
 
@@ -78,12 +78,12 @@ empty = \{} -> @Set (Dict.empty {})
 ## Return a set with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Set *
+withCapacity : U64 -> Set *
 withCapacity = \cap ->
     @Set (Dict.withCapacity cap)
 
 ## Enlarge the set for at least capacity additional elements
-reserve : Set k, Nat -> Set k
+reserve : Set k, U64 -> Set k
 reserve = \@Set dict, requested ->
     @Set (Dict.reserve dict requested)
 
@@ -150,7 +150,7 @@ expect
 ##
 ## expect countValues == 3
 ## ```
-len : Set * -> Nat
+len : Set * -> U64
 len = \@Set dict ->
     Dict.len dict
 
@@ -162,7 +162,7 @@ len = \@Set dict ->
 ##
 ## capacityOfSet = Set.capacity foodSet
 ## ```
-capacity : Set * -> Nat
+capacity : Set * -> U64
 capacity = \@Set dict ->
     Dict.capacity dict
 
@@ -460,22 +460,22 @@ expect
     x == fromList (toList x)
 
 expect
-    orderOne : Set Nat
+    orderOne : Set U64
     orderOne =
         single 1
         |> insert 2
 
-    orderTwo : Set Nat
+    orderTwo : Set U64
     orderTwo =
         single 2
         |> insert 1
 
-    wrapperOne : Set (Set Nat)
+    wrapperOne : Set (Set U64)
     wrapperOne =
         single orderOne
         |> insert orderTwo
 
-    wrapperTwo : Set (Set Nat)
+    wrapperTwo : Set (Set U64)
     wrapperTwo =
         single orderTwo
         |> insert orderOne
