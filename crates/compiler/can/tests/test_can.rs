@@ -1059,6 +1059,27 @@ mod test_can {
         let detected = get_closure(&loc_expr.value, 0);
         assert_eq!(detected, Recursive::TailRecursive);
     }
+    #[test]
+    fn when_not_tail_call() {
+        let src = indoc!(
+            r"
+                g = \x ->
+                    when x is
+                        0 ->  0
+                        _ -> 10 + (g (x + 1))
+
+                g 0
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+        assert_eq!(detected, Recursive::Recursive);
+    }
 
     #[test]
     fn immediate_tail_call() {
@@ -1081,11 +1102,31 @@ mod test_can {
         assert_eq!(detected, Recursive::TailRecursive);
     }
     #[test]
+    fn immediate_not_tail_call() {
+        let src = indoc!(
+            r"
+                f = \x -> 10+(f x)
+
+                f 0
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+
+        assert_eq!(detected, Recursive::Recursive);
+    }
+    #[test]
     fn variable_tail_call() {
         let src = indoc!(
             r"
                 f = \x -> 
-                    g=f x
+                    g = f x
                     g
 
                 f 0

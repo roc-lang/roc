@@ -929,6 +929,7 @@ pub(crate) fn canonicalize_defs<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut roc_parse::ast::Defs<'a>,
     pattern_type: PatternType,
+    last_is_tail: bool,
 ) -> (CanDefs, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
@@ -1022,6 +1023,7 @@ pub(crate) fn canonicalize_defs<'a>(
         pattern_type,
         aliases,
         symbols_introduced,
+        last_is_tail,
     )
 }
 
@@ -1035,6 +1037,7 @@ fn canonicalize_value_defs<'a>(
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,
+    last_is_tail: bool,
 ) -> (CanDefs, Output, MutMap<Symbol, Region>) {
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
@@ -1100,6 +1103,7 @@ fn canonicalize_value_defs<'a>(
     let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
 
     for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
+        let is_tail = last_is_tail && (def_id == capacity - 1);
         let temp_output = canonicalize_pending_value_def(
             env,
             pending_def,
@@ -1108,6 +1112,7 @@ fn canonicalize_value_defs<'a>(
             var_store,
             pattern_type,
             &mut aliases,
+            is_tail,
         );
 
         output = temp_output.output;
@@ -1998,7 +2003,7 @@ pub(crate) fn sort_can_defs(
 
     (declarations, output)
 }
-
+//TODO:ELI Not sure if this is needed now that we have my new system
 fn mark_def_recursive(mut def: Def) -> Def {
     if let Closure(ClosureData {
         recursive: recursive @ Recursive::NotRecursive,
@@ -2150,6 +2155,7 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
+    is_tail: bool,
 ) -> DefOutput {
     use PendingValueDef::*;
 
@@ -2289,6 +2295,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 Some(Loc::at(loc_ann.region, type_annotation)),
+                is_tail,
             )
         }
         Body(loc_can_pattern, loc_expr) => {
@@ -2301,6 +2308,7 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 None,
+                is_tail,
             )
         }
     };
@@ -2333,6 +2341,7 @@ fn canonicalize_pending_body<'a>(
     loc_expr: &'a Loc<ast::Expr>,
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
+    is_tail: bool,
 ) -> DefOutput {
     let mut loc_value = &loc_expr.value;
 
@@ -2416,8 +2425,14 @@ fn canonicalize_pending_body<'a>(
             }
 
             _ => {
-                let (loc_can_expr, can_output) =
-                    canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+                let (loc_can_expr, can_output) = canonicalize_expr_with_tail(
+                    env,
+                    var_store,
+                    scope,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    is_tail,
+                );
 
                 let def_references = DefReferences::Value(can_output.references.clone());
                 output.union(can_output);
@@ -2446,6 +2461,25 @@ fn canonicalize_pending_body<'a>(
         def,
     }
 }
+///checks if we immediately return the last def, for the purposes of being tail recursiive this means the def may as well not be there
+fn check_if_last_def_is_return<'a>(
+    loc_defs: &'a Defs<'a>,
+    loc_ret: &'a Loc<ast::Expr<'a>>,
+) -> bool {
+    match loc_defs.last() {
+        Some(Err(ast::ValueDef::Body(pat, _)))
+        | Some(Err(ast::ValueDef::AnnotatedBody {
+            body_pattern: pat, ..
+        })) => match pat.value {
+            ast::Pattern::Identifier(symb) => match loc_ret.value {
+                ast::Expr::Var { ident, .. } => symb == ident,
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => false,
+    }
+}
 
 #[inline(always)]
 pub fn can_defs_with_return<'a>(
@@ -2456,7 +2490,7 @@ pub fn can_defs_with_return<'a>(
     loc_ret: &'a Loc<ast::Expr<'a>>,
     in_tail: bool,
 ) -> (Expr, Output) {
-    //TODO make it so that if the last def is also the return it's considered tail rec
+    let last_is_tail = check_if_last_def_is_return(loc_defs, loc_ret);
     let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
@@ -2464,6 +2498,7 @@ pub fn can_defs_with_return<'a>(
         scope,
         loc_defs,
         PatternType::DefExpr,
+        last_is_tail,
     );
 
     // The def as a whole is a tail call if its return expression is a tail call.
@@ -2481,6 +2516,8 @@ pub fn can_defs_with_return<'a>(
     output
         .introduced_variables
         .union(&defs_output.introduced_variables);
+
+    output.rec_call.union_mut(defs_output.rec_call);
 
     // Sort the defs with the output of the return expression - we'll use this to catch unused defs
     // due only to recursion.

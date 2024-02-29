@@ -49,14 +49,7 @@ pub struct Output {
 impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
-
-        match (self.rec_call, other.rec_call) {
-            //Any recursive calls should mark the whole output recursive, tail recrusive calls shouldn't mark an already recursive output as tail recursive
-            (_, Recursive::Recursive) | (Recursive::NotRecursive, Recursive::TailRecursive) => {
-                self.rec_call = other.rec_call
-            }
-            _ => (),
-        }
+        self.rec_call.union_mut(other.rec_call);
 
         self.introduced_variables
             .union_owned(other.introduced_variables);
@@ -567,6 +560,15 @@ impl Default for Recursive {
 }
 
 impl Recursive {
+    pub fn union_mut(&mut self, other: Recursive) {
+        match (&self, &other) {
+            //Any recursive calls should mark the whole output recursive, tail recrusive calls shouldn't mark an already recursive output as tail recursive
+            (_, Recursive::Recursive) | (Recursive::NotRecursive, Recursive::TailRecursive) => {
+                *self = other
+            }
+            _ => (),
+        }
+    }
     pub fn is_recursive(&self) -> bool {
         match self {
             Recursive::NotRecursive => false,
@@ -882,6 +884,7 @@ pub fn canonicalize_expr_with_tail<'a>(
 
                 args.push((var_store.fresh(), arg_expr));
                 output.references.union_mut(&arg_out.references);
+                output.rec_call.union_mut(arg_out.rec_call);
             }
 
             if let ast::Expr::OpaqueRef(name) = loc_fn.value {
@@ -934,6 +937,7 @@ pub fn canonicalize_expr_with_tail<'a>(
 
                     args.push(arg_expr);
                     output.references.union_mut(&arg_out.references);
+                    output.rec_call.union_mut(arg_out.rec_call);
                 }
 
                 let crash = if args.len() > 1 {
@@ -968,9 +972,6 @@ pub fn canonicalize_expr_with_tail<'a>(
 
                 output.union(fn_expr_output);
 
-                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.rec_call = Recursive::NotRecursive;
-
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
@@ -984,7 +985,7 @@ pub fn canonicalize_expr_with_tail<'a>(
                                     Recursive::Recursive
                                 }
                             }
-                            Some(_) | None => Recursive::NotRecursive,
+                            Some(_) | None => output.rec_call,
                         };
 
                         Call(
@@ -1116,9 +1117,6 @@ pub fn canonicalize_expr_with_tail<'a>(
             let (can_cond, mut output) =
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
-            // the condition can never be a tail-call
-            output.rec_call = Recursive::NotRecursive;
-
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
@@ -1137,13 +1135,6 @@ pub fn canonicalize_expr_with_tail<'a>(
                 output.references.union_mut(&branch_references);
 
                 can_branches.push(can_when_branch);
-            }
-
-            // A "when" with no branches is a runtime error, but it will mess things up
-            // if code gen mistakenly thinks this is a tail call just because its condition
-            // happened to be one. (The condition gave us our initial output value.)
-            if branches.is_empty() {
-                output.rec_call = Recursive::NotRecursive;
             }
 
             // Incorporate all three expressions into a combined Output value.
