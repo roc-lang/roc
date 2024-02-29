@@ -5,3 +5,5 @@ app "helloWorld"
 
 main =
     Stdout.line "Hello, World!"
+
+Iter a := {} -> [Continue (Iter a) a, Done]
