@@ -10807,7 +10807,7 @@ In roc, functions are always written as a lambda, like{}
     4│      Recursive := [Infinitely Recursive]
             ^^^^^^^^^
 
-    Recursion in opaquees is only allowed if recursion happens behind a
+    Recursion in opaques is only allowed if recursion happens behind a
     tagged union, at least one variant of which is not recursive.
     "
     );
