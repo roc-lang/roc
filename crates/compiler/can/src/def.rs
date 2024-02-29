@@ -3262,6 +3262,16 @@ fn make_tag_union_recursive_help<'a, 'b>(
                 can_report_cyclic_error,
             )
         }
+        Type::Function(args, _closure, ret) => {
+            // It's valid to have a recursive type in a lambda
+            // (either in the arguments or in the return type),
+            // but all the other rules still apply.
+            //
+            // e.g. imagine a valid recursive type and then make it wrap a thunk
+            // instead of whatever it was wrapping before. Thunkifying a valid
+            // type should still result in a valid type!
+            todo!();
+        }
         _ => {
             // take care to report a cyclic alias only once (not once for each alias in the cycle)
             mark_cyclic_alias(
