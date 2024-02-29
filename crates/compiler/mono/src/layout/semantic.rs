@@ -1,5 +1,6 @@
 //! Semantic representations of memory layouts for the purposes of specialization.
 
+use bumpalo::Bump;
 use roc_module::symbol::Symbol;
 
 /// A semantic representation of a memory layout.
@@ -16,6 +17,22 @@ impl<'a> std::fmt::Debug for SemanticRepr<'a> {
 }
 
 impl<'a> SemanticRepr<'a> {
+    fn to_str(&self, arena: &'a Bump) -> &'a str {
+        let todo = (); // TODO do some test cases that start with real code and then we see what
+                       // the reprs are
+        let todo = (); // TODO what do we name the field accessor for .foo or whatever?
+        let todo = (); // TODO we might need to retain aliases, so that e.g. Model doesn't get
+                       // expanded into a giant string with a gazillion fields
+
+        match self.0 {
+            Inner::None => todo!(),
+            Inner::Record(_) => todo!(),
+            Inner::Tuple(_) => todo!(),
+            Inner::TagUnion(_) => todo!(),
+            Inner::Lambdas(_) => todo!(),
+        }
+    }
+
     pub fn fmt_consistent(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt_consistent(f)
     }

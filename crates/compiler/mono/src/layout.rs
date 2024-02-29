@@ -2421,6 +2421,8 @@ impl<'a> Layout<'a> {
     }
 
     pub(crate) const fn no_semantic(repr: LayoutWrapper<'a>) -> Self {
+        let todo = (); // TODO are we calling this anywhere that discards things unnecessarily?
+
         Self {
             repr,
             semantic: SemanticRepr::NONE,
@@ -3303,6 +3305,8 @@ fn layout_from_flat_type<'a>(
                         arena.alloc([inner_layout]),
                     ));
 
+                    let todo = (); // TODO SemanticRepr::Box (unless it doesn't exist, in which
+                                   // case add it)
                     let boxed_layout = env.cache.put_in(Layout {
                         repr: repr.direct(),
                         semantic: SemanticRepr::NONE,
@@ -4485,6 +4489,7 @@ where
     };
 
     let union_layout = if criteria.has_naked_recursion_pointer {
+        let todo = (); // TODO
         env.cache.interner.insert_recursive(
             env.arena,
             Layout {
@@ -4493,7 +4498,8 @@ where
             },
         )
     } else {
-        // There are no naked recursion pointers, so we can insert the layout as-is.
+        let todo = (); // TODO
+                       // There are no naked recursion pointers, so we can insert the layout as-is.
         env.cache.interner.insert(Layout {
             repr: LayoutRepr::Union(union_layout).direct(),
             semantic: SemanticRepr::NONE,
@@ -4621,6 +4627,8 @@ pub(crate) fn list_layout_from_elem<'a>(
         // then some state is not correctly kept, we have to go through from_var
         cached!(Layout::from_var(env, element_var), criteria, env.subs)
     };
+
+    let todo = (); // TODO
 
     let list_layout = env.cache.put_in(Layout {
         repr: LayoutRepr::Builtin(Builtin::List(element_layout)).direct(),
