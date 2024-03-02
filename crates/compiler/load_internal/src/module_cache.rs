@@ -23,7 +23,7 @@ pub(crate) struct ModuleCache<'a> {
     pub(crate) parsed: MutMap<ModuleId, ParsedModule<'a>>,
     pub(crate) aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
     pub(crate) pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
-    pub(crate) constrained: MutMap<ModuleId, ConstrainedModule>,
+    pub(crate) constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
     pub(crate) typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     pub(crate) checked: MutMap<ModuleId, CheckedModule>,
     pub(crate) found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,

@@ -2,7 +2,7 @@
 
 use crate::docs::ModuleDocumentation;
 use crate::module::{
-    CheckedModule, ConstrainedModule, EntryPoint, Expectations, ExposedToHost,
+    CheckedModule, ConstrainedModule, DocsConfig, EntryPoint, Expectations, ExposedToHost,
     FoundSpecializationsModule, LateSpecializationsModule, LoadedModule, ModuleHeader,
     ModuleTiming, MonomorphizedModule, ParsedModule, ToplevelExpects, TypeCheckedModule,
 };
@@ -20,7 +20,6 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ResolvedImplementations, TypeState,
 };
-use roc_can::scope::Scope;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
@@ -322,6 +321,8 @@ fn start_phase<'a>(
                     dep_idents,
                     pending_derives,
                     types,
+                    docs_config,
+                    exposed_module_ids,
                     ..
                 } = constrained;
 
@@ -350,7 +351,8 @@ fn start_phase<'a>(
                     declarations,
                     state.cached_types.clone(),
                     derived_module,
-                    //
+                    docs_config,
+                    exposed_module_ids,
                     #[cfg(debug_assertions)]
                     checkmate,
                 )
@@ -560,7 +562,7 @@ enum Msg<'a> {
     Many(Vec<Msg<'a>>),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
-    CanonicalizedAndConstrained(CanAndCon),
+    CanonicalizedAndConstrained(CanAndCon<'a>),
     SolvedTypes {
         module_id: ModuleId,
         ident_ids: IdentIds,
@@ -636,8 +638,8 @@ enum Msg<'a> {
 }
 
 #[derive(Debug)]
-struct CanAndCon {
-    constrained_module: ConstrainedModule,
+struct CanAndCon<'a> {
+    constrained_module: ConstrainedModule<'a>,
     canonicalization_problems: Vec<roc_problem::can::Problem>,
 }
 
@@ -892,6 +894,8 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        docs_config: DocsConfig<'a>,
+        exposed_module_ids: &'a [ModuleId],
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -3381,7 +3385,12 @@ fn finish(
         docs_by_module.push(docs);
     }
 
-    debug_assert_eq!(documentation.len(), 0);
+    debug_assert_eq!(
+        documentation.len(),
+        0,
+        "documentation was not empty: {:?}",
+        documentation
+    );
 
     LoadedModule {
         module_id: state.root_id,
@@ -4652,6 +4661,8 @@ impl<'a> BuildTask<'a> {
         declarations: Declarations,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        docs_config: DocsConfig<'a>,
+        exposed_module_ids: &'a [ModuleId],
 
         #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
     ) -> Self {
@@ -4676,6 +4687,8 @@ impl<'a> BuildTask<'a> {
             module_timing,
             cached_subs,
             derived_module,
+            docs_config,
+            exposed_module_ids,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -5066,19 +5079,6 @@ fn run_solve_solve(
     }
 }
 
-enum DocsConfig<'a> {
-    App,
-    Platform,
-    Package,
-    Module {
-        name: ModuleName,
-        scope: Scope,
-        parsed_defs: ast::Defs<'a>,
-        exposed_symbols: VecSet<Symbol>,
-        header_comments: &'a [CommentOrNewline<'a>],
-    },
-}
-
 fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
@@ -5095,6 +5095,7 @@ fn run_solve<'a>(
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
     docs_config: DocsConfig<'a>,
+    exposed_module_ids: &[ModuleId],
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -5207,16 +5208,20 @@ fn run_solve<'a>(
             header_comments,
             exposed_symbols,
         } => {
-            let docs = crate::docs::generate_module_docs(
-                scope,
-                module_id,
-                name.as_str().into(),
-                &parsed_defs,
-                exposed_symbols,
-                header_comments,
-            );
+            if exposed_module_ids.contains(&module_id) {
+                let docs = crate::docs::generate_module_docs(
+                    scope,
+                    module_id,
+                    name.as_str().into(),
+                    &parsed_defs,
+                    exposed_symbols,
+                    header_comments,
+                );
 
-            Some(docs)
+                Some(docs)
+            } else {
+                None
+            }
         }
     };
 
@@ -5377,7 +5382,8 @@ fn canonicalize_and_constrain<'a>(
     imported_abilities_state: PendingAbilitiesStore,
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
-) -> CanAndCon {
+    exposed_module_ids: &'a [ModuleId],
+) -> CanAndCon<'a> {
     let canonicalize_start = Instant::now();
 
     let ParsedModule {
@@ -5419,16 +5425,23 @@ fn canonicalize_and_constrain<'a>(
         &mut var_store,
     );
 
-    let module_docs = {
-        let mut scope = module_output.scope.clone();
-        scope.add_docs_imports();
+    let docs_config = match header_type {
+        HeaderType::App { .. } => DocsConfig::App,
+        HeaderType::Package { .. } => DocsConfig::Package,
+        HeaderType::Platform { .. } => DocsConfig::Platform,
+        HeaderType::Hosted { name, .. }
+        | HeaderType::Builtin { name, .. }
+        | HeaderType::Interface { name, .. } => {
+            let mut scope = module_output.scope.clone();
+            scope.add_docs_imports();
 
-        DocsConfig::Module {
-            name: module_name,
-            scope,
-            parsed_defs: parsed_defs_for_docs,
-            exposed_symbols: module_output.exposed_symbols.clone(),
-            header_comments: parsed.header_comments,
+            DocsConfig::Module {
+                name,
+                scope,
+                parsed_defs: parsed_defs_for_docs,
+                exposed_symbols: module_output.exposed_symbols.clone(),
+                header_comments: parsed.header_comments,
+            }
         }
     };
 
@@ -5534,6 +5547,8 @@ fn canonicalize_and_constrain<'a>(
         module_timing,
         types,
         pending_derives: module_output.pending_derives,
+        docs_config,
+        exposed_module_ids,
     };
 
     CanAndCon {
@@ -6423,6 +6438,7 @@ fn run_task<'a>(
                 abilities_store,
                 parsed,
                 skip_constraint_gen,
+                exposed_module_ids,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
@@ -6442,7 +6458,8 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
-
+            docs_config,
+            exposed_module_ids,
             #[cfg(debug_assertions)]
             checkmate,
         } => Ok(run_solve(
@@ -6461,7 +6478,7 @@ fn run_task<'a>(
             cached_subs,
             derived_module,
             docs_config,
-            //
+            exposed_module_ids,
             #[cfg(debug_assertions)]
             checkmate,
         )),

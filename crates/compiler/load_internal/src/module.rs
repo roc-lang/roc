@@ -1,12 +1,13 @@
 use crate::docs::ModuleDocumentation;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::{DbgLookup, ExpectLookup};
+use roc_can::scope::Scope;
 use roc_can::{
     abilities::AbilitiesStore,
     expr::{Declarations, PendingDerives},
     module::{Module, ResolvedImplementations},
 };
-use roc_collections::{MutMap, MutSet, VecMap};
+use roc_collections::{MutMap, MutSet, VecMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, PQModuleName, PackageQualified, Symbol,
@@ -99,7 +100,21 @@ pub(crate) struct ModuleHeader<'a> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ConstrainedModule {
+pub enum DocsConfig<'a> {
+    App,
+    Platform,
+    Package,
+    Module {
+        name: roc_parse::header::ModuleName<'a>,
+        scope: Scope,
+        parsed_defs: roc_parse::ast::Defs<'a>,
+        exposed_symbols: VecSet<Symbol>,
+        header_comments: &'a [CommentOrNewline<'a>],
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct ConstrainedModule<'a> {
     pub(crate) module: Module,
     pub(crate) declarations: Declarations,
     pub(crate) imported_modules: MutMap<ModuleId, Region>,
@@ -110,6 +125,8 @@ pub(crate) struct ConstrainedModule {
     pub(crate) dep_idents: IdentIdsByModule,
     pub(crate) module_timing: ModuleTiming,
     pub(crate) types: Types,
+    pub(crate) docs_config: DocsConfig<'a>,
+    pub(crate) exposed_module_ids: &'a [ModuleId],
     // Rather than adding pending derives as constraints, hand them directly to solve because they
     // must be solved at the end of a module.
     pub(crate) pending_derives: PendingDerives,
@@ -236,6 +253,7 @@ pub struct ModuleTiming {
     pub canonicalize: Duration,
     pub constrain: Duration,
     pub solve: Duration,
+    pub process_docs: Duration,
     pub find_specializations: Duration,
     // indexed by make specializations pass
     pub make_specializations: Vec<Duration>,
@@ -255,6 +273,7 @@ impl ModuleTiming {
             canonicalize: Duration::default(),
             constrain: Duration::default(),
             solve: Duration::default(),
+            process_docs: Duration::default(),
             find_specializations: Duration::default(),
             make_specializations: Vec::with_capacity(2),
             start_time,
@@ -275,6 +294,7 @@ impl ModuleTiming {
             canonicalize,
             constrain,
             solve,
+            process_docs,
             find_specializations,
             make_specializations,
             start_time,
@@ -286,6 +306,7 @@ impl ModuleTiming {
                 .iter()
                 .fold(d, |d, pass_time| d?.checked_sub(*pass_time))?
                 .checked_sub(*find_specializations)?
+                .checked_sub(*process_docs)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
                 .checked_sub(*canonicalize)?

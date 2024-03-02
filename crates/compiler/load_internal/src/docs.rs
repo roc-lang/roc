@@ -3,7 +3,7 @@ use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Rec
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::AssignedField;
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};

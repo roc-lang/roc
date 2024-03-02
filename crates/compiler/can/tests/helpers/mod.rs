@@ -23,9 +23,9 @@ pub fn can_expr(expr_str: &str) -> CanExprOut {
     can_expr_with(&Bump::new(), test_home(), expr_str)
 }
 
-pub struct CanExprOut {
+pub struct CanExprOut<'a> {
     pub loc_expr: Loc<Expr>,
-    pub output: Output,
+    pub output: Output<'a>,
     pub problems: Vec<Problem>,
     pub home: ModuleId,
     pub interns: Interns,
@@ -34,7 +34,7 @@ pub struct CanExprOut {
 }
 
 #[allow(dead_code)]
-pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
+pub fn can_expr_with<'a>(arena: &'a Bump, home: ModuleId, expr_str: &'a str) -> CanExprOut<'a> {
     let loc_expr = roc_parse::test_helpers::parse_loc_with(arena, expr_str).unwrap_or_else(|e| {
         panic!(
             "can_expr_with() got a parse error when attempting to canonicalize:\n\n{expr_str:?} {e:?}"
