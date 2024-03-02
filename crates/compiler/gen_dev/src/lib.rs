@@ -866,13 +866,7 @@ trait Backend<'a> {
                 ..
             } => {
                 debug_assert!(indices.len() >= 2);
-                self.load_union_field_ptr_at_index(
-                    sym,
-                    structure,
-                    indices[0] as u16,
-                    indices[1],
-                    union_layout,
-                );
+                self.load_union_field_ptr_at_index(sym, structure, indices, union_layout);
             }
             Expr::GetTagId {
                 structure,
@@ -2571,8 +2565,7 @@ trait Backend<'a> {
         &mut self,
         sym: &Symbol,
         structure: &Symbol,
-        tag_id: TagIdIntType,
-        index: u64,
+        indices: &[u64],
         union_layout: &UnionLayout<'a>,
     );
 

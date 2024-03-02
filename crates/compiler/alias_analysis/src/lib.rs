@@ -1452,7 +1452,14 @@ fn expr_spec<'a>(
             union_layout,
             ..
         } => {
-            debug_assert!(indices.len() >= 2);
+            //TODO: indices can have > 2 values. The first 2 is tag_id and index,
+            //and after that, it depends on the layout of the element at index.
+            //If it is a struct, the next index
+            //denotes which field we are targeting. If it is a tag union (only non recursive), than
+            //there is at least 2 more "indices".
+            //1st is the tag_id, 2nd is the
+            //index and so on recursively for arbitrary length.
+            debug_assert!(indices.len() == 2);
             let tag_id = indices[0] as u32;
             let index = indices[1];
             let tag_value_id = env.symbols[structure];

@@ -24,11 +24,11 @@ procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
             let Test.8 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.5;
             joinpoint #Derived_gen.12 #Derived_gen.14:
                 let Test.20 : I64 = CallByName Test.10 Test.7;
-                let #Derived_gen.9 : [<rnu><null>, C I64 *self] = NullPointer;
-                let Test.19 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.20 #Derived_gen.9;
-                let #Derived_gen.10 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.19;
+                let #Derived_gen.10 : [<rnu><null>, C I64 *self] = NullPointer;
+                let Test.19 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.20 #Derived_gen.10;
+                let #Derived_gen.9 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.19;
                 let #Derived_gen.11 : {} = lowlevel PtrStore #Derived_gen.5 Test.19;
-                jump #Derived_gen.4 Test.4 Test.8 #Derived_gen.10 #Derived_gen.6;
+                jump #Derived_gen.4 Test.4 Test.8 #Derived_gen.9 #Derived_gen.6;
             in
             let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique Test.5;
             if #Derived_gen.13 then
