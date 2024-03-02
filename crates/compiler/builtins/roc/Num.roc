@@ -588,17 +588,15 @@ isGte : Num a, Num a -> Bool
 ##
 ## A specific relative and absolute tolerance can be provided to change the threshold
 ##
+## This function is symmetric: `Num.isApproxEq a b == Num.isApproxEq b a`
+##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
-isApproxEq = \value, refValue, { rtol ? 0.00001, atol ? 0.00000001 } -> value
-    <= refValue
-    && value
-    >= refValue
-    || Num.absDiff value refValue
-    <= atol
-    + rtol
-    * Num.abs refValue
+isApproxEq = \x, y, { rtol ? 0.00001, atol ? 0.00000001 } ->
+    eq = x <= y && x >= y
+    meetsTolerance = Num.absDiff x y <= Num.max atol (rtol * Num.max (Num.abs x) (Num.abs y))
+    eq || meetsTolerance
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
