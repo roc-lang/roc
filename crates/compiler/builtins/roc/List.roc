@@ -944,15 +944,13 @@ expect
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
 
-## Sorts a list in ascending order (lowest to highest), using a function which
-## specifies a way to represent each element as a number.
+## Sorts a list of numbers in ascending order (lowest to highest).
 ##
 ## To sort in descending order (highest to lowest), use [List.sortDesc] instead.
 sortAsc : List (Num a) -> List (Num a)
 sortAsc = \list -> List.sortWith list Num.compare
 
-## Sorts a list in descending order (highest to lowest), using a function which
-## specifies a way to represent each element as a number.
+## Sorts a list of numbers in descending order (highest to lowest).
 ##
 ## To sort in ascending order (lowest to highest), use [List.sortAsc] instead.
 sortDesc : List (Num a) -> List (Num a)
