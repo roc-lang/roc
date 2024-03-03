@@ -834,6 +834,48 @@ where
     }
 }
 
+/// Creates a parser from two other parser.
+/// However, the second parser is created based on the results of the first parser
+///
+/// # Examples
+///
+/// ## Success Case
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser = and_then(parser1, move |p,b| word(", ", Problem::NotFound));
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+///
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(7));
+/// ```
+/// ## Failure Case
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser = and_then(parser1, move |p,b| word("!! ", Problem::NotFound));
+/// let (progress, problem) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+///
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::new(5)));
+/// ```
 pub fn and_then<'a, P1, P2, F, Before, After, Error>(
     parser: P1,
     transform: F,
