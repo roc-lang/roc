@@ -1830,7 +1830,52 @@ macro_rules! between {
     };
 }
 
+/// Creates a new parser that returns the results of two parsers applied sequentially.
+/// It returns any partial progress made by the first parser.
+///
 /// For some reason, some usages won't compile unless they use this instead of the macro version
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser2 = word(", ", Problem::NotFound);
+/// let parser = and(parser1, parser2);
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ((),()));
+/// assert_eq!(state.pos(), Position::new(7));
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser2 = word("!! ", Problem::NotFound);
+/// let parser = and(parser1, parser2);
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::MadeProgress, Problem::NotFound(Position::new(5))),
+/// );
+/// ```
 #[inline(always)]
 pub fn and<'a, P1, P2, A, B, E>(p1: P1, p2: P2) -> impl Parser<'a, (A, B), E>
 where
