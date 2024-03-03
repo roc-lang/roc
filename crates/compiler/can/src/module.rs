@@ -20,7 +20,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{AbilitySet, Alias, AliasKind, AliasVar, Type};
+use roc_types::types::{AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -158,6 +158,12 @@ pub struct ModuleOutput {
     pub scope: Scope,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
     pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+
+    /// The symbols where documentation generation will need ASTs
+    /// (because we have a type alias which references the types
+    /// associated with those symbols), so that the types
+    /// from the other module can be rendered.
+    pub ann_asts_needed: Vec<Symbol>,
 }
 
 fn validate_generate_with<'a>(
@@ -650,6 +656,12 @@ pub fn canonicalize_module_defs<'a>(
         aliases.insert(effect_symbol, hosted_alias);
     }
 
+    let mut ann_asts_needed = Vec::new();
+
+    // if !home.is_builtin() {
+    //     dbg!(&output.aliases);
+    // }
+
     for (symbol, alias) in output.aliases {
         // Remove this from exposed_symbols,
         // so that at the end of the process,
@@ -657,6 +669,22 @@ pub fn canonicalize_module_defs<'a>(
         // exposed symbols which did not have
         // corresponding defs.
         exposed_but_not_defined.remove(&symbol);
+
+        // Whenever we have an alias that contains an alias to a type defined
+        // in another module, record that we need that symbol's AST nodes
+        // so that loading will provide it from that other module. (We need
+        // the AST nodes so that documentation generation can render the type,
+        // since our module doesn't know things like what type variable names
+        // were chosen for that type.)
+        if alias.kind == AliasKind::Structural {
+            if let Type::Alias { symbol, .. } | Type::DelayedAlias(AliasCommon { symbol, .. }) =
+                alias.typ
+            {
+                if symbol.module_id() != home {
+                    ann_asts_needed.push(symbol);
+                }
+            }
+        }
 
         aliases.insert(symbol, alias);
     }
@@ -810,6 +838,7 @@ pub fn canonicalize_module_defs<'a>(
         loc_expects: collected.expects,
         loc_dbgs: collected.dbgs,
         exposed_symbols,
+        ann_asts_needed,
     }
 }
 

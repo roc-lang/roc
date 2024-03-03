@@ -32,7 +32,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -66,7 +66,7 @@ use roc_solve::FunctionKind;
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, Types};
+use roc_types::types::{Alias, Type, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
@@ -323,9 +323,11 @@ fn start_phase<'a>(
                     types,
                     docs_config,
                     exposed_module_ids,
+                    ann_asts_needed,
                     ..
                 } = constrained;
 
+                let home = dbg!(module.module_id);
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 #[cfg(debug_assertions)]
@@ -334,6 +336,88 @@ fn start_phase<'a>(
                 } else {
                     None
                 };
+
+                let mut other_ann_asts = VecMap::with_capacity(ann_asts_needed.len());
+
+                let State {
+                    alias_asts_by_module,
+                    ..
+                } = &state;
+
+                {
+                    let mut alias_asts_by_module = (*alias_asts_by_module).lock();
+
+                    if let DocsConfig::Module { parsed_defs, .. } = &docs_config {
+                        debug_assert!(alias_asts_by_module.get(&home).is_none());
+
+                        let mut entries = VecMap::with_capacity(parsed_defs.len());
+                        let mut ann_index = 0; // Idea: "zip" with the can decls but only the
+                                               // actual anntoations,
+
+                        for (symbol, (is_exposed, alias)) in module.aliases.iter() {
+                            if *is_exposed {
+                                let var_names = alias
+                                    .type_variables
+                                    .iter()
+                                    .map(|loc_var| Loc {
+                                        region: loc_var.region,
+                                        value: loc_var.value.name.clone(),
+                                    })
+                                    .collect();
+
+                                entries.insert(dbg!(*symbol), (var_names, alias.typ.clone()));
+                            }
+                        }
+
+                        for (loc_symbol, opt_ann) in declarations
+                            .symbols
+                            .iter()
+                            .zip(declarations.annotations.iter())
+                        {
+                            if let Some(ann) = opt_ann {
+                                let todo = (); // TODO I think if we want the original var
+                                               // names we need the parse AST nodes here
+                                               // instead of canonical, because I think
+                                               // canonical only has them as Symbol at this
+                                               // point. Maybe there was some point where we
+                                               // had them as Lowercase? But in that case I'm
+                                               // not sure how we'd map them to the canonical
+                                               // annotation because those are all using
+                                               // Symbol. So we'd need like a mapping between
+                                               // Lowercase and Symbol.
+                                               // Another option would be to just get the
+                                               // Region of the pattern and also the Region of
+                                               // the definition, but then we could basically
+                                               // never have proper links in docs.
+                                               // If we want links, I guess we need canonical.
+                                               // Oh maybe one option is that if the symbols
+                                               // have Loc then maybe we can use that to get
+                                               // the original text to display? Also, need to do
+                                               // this above with the `types` too.
+                                let var_names = Vec::new();
+                                entries.insert(
+                                    dbg!(loc_symbol.value),
+                                    (var_names, ann.signature.clone()),
+                                );
+                            }
+                        }
+
+                        alias_asts_by_module.insert(home, entries);
+                    }
+
+                    for symbol in ann_asts_needed {
+                        let alias_asts = alias_asts_by_module
+                            .get(&symbol.module_id())
+                            .unwrap()
+                            .get(&symbol)
+                            .unwrap();
+
+                        // Copy references to the needed alias ASTs in. We only
+                        // need references, and we don't want to have to deep
+                        // copy these!
+                        other_ann_asts.insert(symbol, alias_asts);
+                    }
+                }
 
                 BuildTask::solve_module(
                     module,
@@ -701,6 +785,12 @@ struct State<'a> {
     /// for all others, this will be empty.
     pub exposed_modules: &'a [ModuleId],
 
+    /// Needed for documentation in the specific case where one module exposes a type alias which
+    /// aliases a type defined in a different module. Without access to this, there's no way for
+    /// that module's docs to know what the other type is, so that it can render it!
+    pub alias_asts_by_module:
+        Arc<Mutex<VecMap<ModuleId, VecMap<Symbol, (Vec<Loc<Lowercase>>, Type)>>>>,
+
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -801,6 +891,7 @@ impl<'a> State<'a> {
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_types: Arc::new(Mutex::new(cached_types)),
+            alias_asts_by_module: Arc::new(Mutex::new(VecMap::default())),
             render,
             palette,
             exec_mode,
@@ -5549,6 +5640,7 @@ fn canonicalize_and_constrain<'a>(
         pending_derives: module_output.pending_derives,
         docs_config,
         exposed_module_ids,
+        ann_asts_needed: module_output.ann_asts_needed,
     };
 
     CanAndCon {

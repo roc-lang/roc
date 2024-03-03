@@ -254,6 +254,14 @@ fn generate_entry_docs(
                         }
                     }
 
+                    let todo = (); // TODO next step: in type_to_docs, we need to:
+                                   // - pass in the symbol info (right now it only sees
+                                   //   `Apply(String, ...)` which is insufficient info to do this)
+                                   // - whenever we encounter an Apply whose symbol is another module...
+                                   // - ...and that module is unexposed from the package
+                                   // - ...and that symbol resolves to a type alias
+                                   // - then we inline the alias and recursively do this again on
+                                   //   the alias's contents
                     let type_annotation = type_to_docs(false, ann.value);
 
                     let ident_id = ident_ids.get_id(name.value).unwrap();

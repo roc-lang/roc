@@ -127,6 +127,10 @@ pub(crate) struct ConstrainedModule<'a> {
     pub(crate) types: Types,
     pub(crate) docs_config: DocsConfig<'a>,
     pub(crate) exposed_module_ids: &'a [ModuleId],
+    /// Documentation generation will need the parsed ASTs of these symbols; we will need to look
+    /// them up in a later step.
+    pub(crate) ann_asts_needed: Vec<Symbol>,
+
     // Rather than adding pending derives as constraints, hand them directly to solve because they
     // must be solved at the end of a module.
     pub(crate) pending_derives: PendingDerives,
