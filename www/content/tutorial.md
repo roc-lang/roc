@@ -1482,7 +1482,7 @@ You can find documentation for the `Stdout.line` function in the [Stdout](https:
 
 Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
-See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/package) for an example.
+See [Parser Package](https://github.com/lukewilliamboswell/roc-parser/tree/main/package) for an example.
 
 Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
 
