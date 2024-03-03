@@ -1532,14 +1532,12 @@ where
 /// # enum Problem {
 /// #     NotFound(Position),
 /// # }
-/// # fn foo() {
-/// #   let arena = Bump::new();
+/// # let arena = Bump::new();
 /// let parser = word("hello", Problem::NotFound);
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, ());
 /// assert_eq!(state.pos(), Position::new(5));
-/// # }
 /// ```
 ///
 /// ## Failure case
@@ -1552,15 +1550,13 @@ where
 /// # enum Problem {
 /// #     NotFound(Position),
 /// # }
-/// # fn foo() {
-/// #   let arena = Bump::new();
+/// # let arena = Bump::new();
 /// let parser = word("bye", Problem::NotFound);
 /// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
 /// assert_eq!(
 ///     actual,
 ///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
 /// );
-/// # }
 /// ```
 pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
 where
