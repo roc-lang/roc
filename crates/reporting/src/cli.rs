@@ -32,7 +32,7 @@ impl Problems {
         const YELLOW: &str = ANSI_STYLE_CODES.yellow;
 
         print!(
-            "{}{}\x1B[39m {} and {}{}\x1B[39m {} found in {} ms",
+            "{}{}\x1B[39m {} and {}{}\x1B[39m {} found in {} ms\n",
             match self.errors {
                 0 => GREEN,
                 _ => YELLOW,
