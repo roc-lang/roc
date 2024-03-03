@@ -1519,7 +1519,10 @@ where
     }
 }
 
+/// Matches an entire `str` and moves the state's position forward if it succeeds
+///
 /// # Example
+/// ## Success case
 /// ```rust
 /// # use roc_parse::state::{State};
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
@@ -1531,14 +1534,15 @@ where
 /// # }
 /// # fn foo() {
 /// #   let arena = Bump::new();
-///     let parser = word("hello", Problem::NotFound);
-///     let (progress, m, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-///     assert_eq!(progress, Progress::MadeProgress);
-///     assert_eq!(m, ());
-///     assert_eq!(state.pos(), Position::new(5));
+/// let parser = word("hello", Problem::NotFound);
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(5));
 /// # }
 /// ```
 ///
+/// ## Failure case
 /// ```rust
 /// # use roc_parse::state::{State};
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
@@ -1550,12 +1554,12 @@ where
 /// # }
 /// # fn foo() {
 /// #   let arena = Bump::new();
-///     let parser = word("bye", Problem::NotFound);
-///     let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).map(|(a,b,_)| (a,b));
-///     assert_eq!(
-///         actual,
-///         Err((Progress::NoProgress, Problem::NotFound(Position::zero()))),
-///     );
+/// let parser = word("bye", Problem::NotFound);
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
 /// # }
 /// ```
 pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
