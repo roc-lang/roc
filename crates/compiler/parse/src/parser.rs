@@ -821,6 +821,48 @@ where
     }
 }
 
+/// Creates a parser that allocates its output and returns a reference to it
+/// The new parser acts the same if its inner parser fails
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("hello", Problem::NotFound);
+/// let parser = allocated(parser_inner);
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+///
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, &());
+/// assert_eq!(state.pos(), Position::new(5));
+/// ```
+///
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("bye", Problem::NotFound);
+/// let parser_error = parser_inner.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// let alloc_parser = allocated(parser_inner);
+///
+/// assert_eq!(
+///     parser_error,
+///     alloc_parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err()
+/// );
+/// ```
 pub fn allocated<'a, P, Val, Error>(parser: P) -> impl Parser<'a, &'a Val, Error>
 where
     Error: 'a,
