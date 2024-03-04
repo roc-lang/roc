@@ -244,12 +244,10 @@ pub struct ProvidesTo<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageHeader<'a> {
-    pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<PackageName<'a>>,
-
-    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
-    pub packages:
-        KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub exposes: Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>,
+    pub before_packages: &'a [CommentOrNewline<'a>],
+    pub packages: Loc<Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

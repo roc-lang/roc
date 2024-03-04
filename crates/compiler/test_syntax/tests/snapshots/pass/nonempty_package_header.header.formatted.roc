@@ -1,3 +1,3 @@
-package "foo/barbaz"
-    exposes [Foo, Bar]
-    packages { foo: "./foo" }
+package [Foo, Bar] {
+    foo: "./foo",
+}
