@@ -1901,7 +1901,7 @@ fn load_multi_threaded<'a>(
             //     &mut can_problems_recorded,
             //     &mut type_problems_recorded,
             // )
-            // .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
+            // .print_error_warning_count(Duration::default()); // TODO determine total elapsed time and use it here
 
             Err(LoadingProblem::FormattedReport(
                 concat!(

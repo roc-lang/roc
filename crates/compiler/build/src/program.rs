@@ -649,7 +649,7 @@ pub fn handle_error_module(
 
     let problems = report_problems_typechecked(&mut module);
 
-    problems.print_to_stdout(total_time);
+    problems.print_error_warning_count(total_time);
 
     if print_run_anyway_hint {
         // If you're running "main.roc" then you can just do `roc run`

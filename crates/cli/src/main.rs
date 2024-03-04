@@ -210,7 +210,7 @@ fn main() -> io::Result<()> {
                 threading,
             ) {
                 Ok((problems, total_time)) => {
-                    problems.print_to_stdout(total_time);
+                    problems.print_error_warning_count(total_time);
                     Ok(problems.exit_code())
                 }
 

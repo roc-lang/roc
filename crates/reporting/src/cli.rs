@@ -27,12 +27,13 @@ impl Problems {
         }
     }
 
-    pub fn print_to_stdout(&self, total_time: std::time::Duration) {
+    // prints e.g. `1 error and 0 warnings found in 63 ms.`
+    pub fn print_error_warning_count(&self, total_time: std::time::Duration) {
         const GREEN: &str = ANSI_STYLE_CODES.green;
         const YELLOW: &str = ANSI_STYLE_CODES.yellow;
 
-        print!(
-            "{}{}\x1B[39m {} and {}{}\x1B[39m {} found in {} ms\n",
+        println!(
+            "{}{}\x1B[39m {} and {}{}\x1B[39m {} found in {} ms",
             match self.errors {
                 0 => GREEN,
                 _ => YELLOW,
@@ -54,39 +55,6 @@ impl Problems {
             total_time.as_millis()
         );
     }
-}
-
-// prints e.g. `1 error and 0 warnings found in 63 ms.`
-pub fn print_error_warning_count(
-    error_count: usize,
-    warning_count: usize,
-    total_time: std::time::Duration,
-) {
-    const GREEN: &str = ANSI_STYLE_CODES.green;
-    const YELLOW: &str = ANSI_STYLE_CODES.yellow;
-
-    print!(
-        "{}{}\x1B[39m {} and {}{}\x1B[39m {} found in {} ms",
-        match error_count {
-            0 => GREEN,
-            _ => YELLOW,
-        },
-        error_count,
-        match error_count {
-            1 => "error",
-            _ => "errors",
-        },
-        match warning_count {
-            0 => GREEN,
-            _ => YELLOW,
-        },
-        warning_count,
-        match warning_count {
-            1 => "warning",
-            _ => "warnings",
-        },
-        total_time.as_millis()
-    );
 }
 
 pub fn report_problems(
