@@ -2,63 +2,36 @@ Module {
     comments: [],
     header: App(
         AppHeader {
-            before_name: [],
-            name: @4-10 PlainLine(
-                "test",
-            ),
-            packages: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: PackagesKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @26-42 PackageEntry {
-                            shorthand: "pf",
-                            spaces_after_shorthand: [],
-                            package_name: @30-42 PackageName(
-                                "./platform",
-                            ),
-                        },
-                    ],
-                },
-            ),
-            imports: None,
-            provides: ProvidesTo {
-                provides_keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ProvidesKeyword,
-                    after: [],
-                },
-                entries: [
-                    @60-69 ExposedName(
-                        "quicksort",
+            before_provides: [
+                Newline,
+            ],
+            provides: [
+                @69-78 ExposedName(
+                    "quicksort",
+                ),
+                @83-88 ExposedName(
+                    "Flags",
+                ),
+                @90-95 ExposedName(
+                    "Model",
+                ),
+            ],
+            before_packages: [
+                Newline,
+            ],
+            packages: @10-53 [
+                @26-51 PackageEntry {
+                    shorthand: "pf",
+                    spaces_after_shorthand: [],
+                    platform_marker: Some(
+                        [],
                     ),
-                ],
-                types: Some(
-                    [
-                        @74-79 UppercaseIdent(
-                            "Flags",
-                        ),
-                        @81-86 UppercaseIdent(
-                            "Model",
-                        ),
-                    ],
-                ),
-                to_keyword: Spaces {
-                    before: [],
-                    item: ToKeyword,
-                    after: [],
+                    package_name: @39-51 PackageName(
+                        "./platform",
+                    ),
                 },
-                to: @93-95 ExistingPackage(
-                    "pf",
-                ),
-            },
+            ],
+            old_imports: None,
         },
     ),
 }

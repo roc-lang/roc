@@ -1,3 +1,1 @@
-app "quicksort"
-    packages { pf: "./platform" }
-    provides [ quicksort ] to pf
+app [ quicksort ] { pf: platform "./platform" }

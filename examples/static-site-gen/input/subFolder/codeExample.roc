@@ -1,8 +1,6 @@
 ## This is a documentation comment
 # This is a comment
-app "static-site"
-    packages { pf: "platform/main.roc" }
-    provides [transformFileContent] to pf
+app [transformFileContent] { pf: platform "platform/main.roc" }
 
 import pf.Html exposing [html, head, body, div, text, a, ul, li, link, meta]
 import pf.HtmlAttributes exposing [httpEquiv, content, href, rel, lang, class, title]

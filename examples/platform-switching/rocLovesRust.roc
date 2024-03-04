@@ -1,5 +1,3 @@
-app "rocLovesRust"
-    packages { pf: "rust-platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "rust-platform/main.roc" }
 
 main = "Roc <3 Rust!\n"

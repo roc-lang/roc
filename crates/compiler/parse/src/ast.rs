@@ -45,6 +45,18 @@ impl<'a, T> Spaced<'a, T> {
             Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
         }
     }
+
+    pub fn map<U, F: Fn(&T) -> U>(&self, arena: &'a Bump, f: F) -> Spaced<'a, U> {
+        match self {
+            Spaced::Item(item) => Spaced::Item(f(item)),
+            Spaced::SpaceBefore(next, spaces) => {
+                Spaced::SpaceBefore(arena.alloc(next.map(arena, f)), spaces)
+            }
+            Spaced::SpaceAfter(next, spaces) => {
+                Spaced::SpaceAfter(arena.alloc(next.map(arena, f)), spaces)
+            }
+        }
+    }
 }
 
 impl<'a, T: Debug> Debug for Spaced<'a, T> {
@@ -99,12 +111,12 @@ impl<'a> Module<'a> {
     pub fn upgrade_imports(&self, arena: &'a Bump) -> (Self, Defs<'a>) {
         let (header, defs) = match &self.header {
             Header::App(app) => {
-                let defs = header_import_to_defs(arena, app.imports);
+                let defs = header_import_to_defs(arena, app.old_imports);
 
                 (
                     Header::App(AppHeader {
-                        imports: None,
-                        provides: app.provides.clone(),
+                        old_imports: None,
+                        provides: app.provides,
                         ..*app
                     }),
                     defs,

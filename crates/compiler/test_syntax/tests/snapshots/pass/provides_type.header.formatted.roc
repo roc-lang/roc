@@ -1,3 +1,1 @@
-app "test"
-    packages { pf: "./platform" }
-    provides [quicksort] { Flags, Model } to pf
+app [quicksort, Flags, Model] { pf: platform "./platform" }

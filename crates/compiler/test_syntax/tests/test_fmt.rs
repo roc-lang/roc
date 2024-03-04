@@ -4816,10 +4816,32 @@ mod test_fmt {
     }
 
     #[test]
+    fn old_style_app_header_is_upgraded() {
+        module_formats_to(
+            indoc!(
+                "
+                app \"test\"
+                    packages {
+                        pf: \"platform/main.roc\"
+                    }
+                    provides [main] to pf
+                "
+            ),
+            indoc!(
+                "
+                app [main] {
+                    pf: platform \"platform/main.roc\",
+                }
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform/main.roc" } provides [main] to pf"#
+                app [main] { pf: platform "platform/main.roc" }"#
         ));
     }
 
@@ -5824,7 +5846,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
             # hello world
-            app "test" packages {} provides [] to "./platform"
+            app [] { pf: platform "./platform" }
             "#
         ));
 

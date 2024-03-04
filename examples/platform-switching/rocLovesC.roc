@@ -1,5 +1,3 @@
-app "rocLovesC"
-    packages { pf: "c-platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "c-platform/main.roc" }
 
 main = "Roc <3 C!\n"

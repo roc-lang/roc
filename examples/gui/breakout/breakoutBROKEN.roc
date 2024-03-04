@@ -1,6 +1,4 @@
-app "breakout"
-    packages { pf: "platform/main.roc" }
-    provides [program] { Model } to pf
+app [program, Model] { pf: platform "platform/main.roc" }
 
 import pf.Game exposing [Bounds, Elem, Event]
 

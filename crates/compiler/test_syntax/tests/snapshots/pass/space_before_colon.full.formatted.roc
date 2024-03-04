@@ -1,6 +1,4 @@
-app "example"
-    packages { pf: "path" }
-    provides [main] to pf
+app [main] { pf: platform "path" }
 
 import pf.Stdout
 

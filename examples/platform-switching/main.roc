@@ -1,5 +1,3 @@
-app "rocLovesPlatforms"
-    packages { pf: "c-platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "c-platform/main.roc" }
 
 main = "Which platform am I running on now?\n"

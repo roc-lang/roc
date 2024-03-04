@@ -1,5 +1,3 @@
-app "rocLovesSwift"
-    packages { pf: "swift-platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "swift-platform/main.roc" }
 
 main = "Roc <3 Swift!\n"

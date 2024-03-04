@@ -3,54 +3,26 @@ Full {
         comments: [],
         header: App(
             AppHeader {
-                before_name: [],
-                name: @4-13 PlainLine(
-                    "example",
-                ),
-                packages: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: PackagesKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @29-40 PackageEntry {
-                                shorthand: "pf",
-                                spaces_after_shorthand: [],
-                                package_name: @34-40 PackageName(
-                                    "path",
-                                ),
-                            },
-                        ],
-                    },
-                ),
-                imports: None,
-                provides: ProvidesTo {
-                    provides_keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ProvidesKeyword,
-                        after: [],
-                    },
-                    entries: [
-                        @58-62 ExposedName(
-                            "main",
-                        ),
-                    ],
-                    types: None,
-                    to_keyword: Spaces {
-                        before: [],
-                        item: ToKeyword,
-                        after: [],
-                    },
-                    to: @68-70 ExistingPackage(
-                        "pf",
+                before_provides: [],
+                provides: [
+                    @6-10 ExposedName(
+                        "main",
                     ),
-                },
+                ],
+                before_packages: [],
+                packages: @13-37 [
+                    @15-35 PackageEntry {
+                        shorthand: "pf",
+                        spaces_after_shorthand: [],
+                        platform_marker: Some(
+                            [],
+                        ),
+                        package_name: @29-35 PackageName(
+                            "path",
+                        ),
+                    },
+                ],
+                old_imports: None,
             },
         ),
     },
@@ -60,8 +32,8 @@ Full {
             Index(2147483649),
         ],
         regions: [
-            @72-88,
-            @90-116,
+            @39-55,
+            @57-83,
         ],
         space_before: [
             Slice(start = 0, length = 2),
@@ -82,7 +54,7 @@ Full {
             ModuleImport(
                 ModuleImport {
                     before_name: [],
-                    name: @79-88 ImportedModuleName {
+                    name: @46-55 ImportedModuleName {
                         package: Some(
                             "pf",
                         ),
@@ -93,16 +65,16 @@ Full {
                 },
             ),
             Body(
-                @90-94 Identifier(
+                @57-61 Identifier(
                     "main",
                 ),
-                @97-116 Apply(
-                    @97-108 Var {
+                @64-83 Apply(
+                    @64-75 Var {
                         module_name: "Stdout",
                         ident: "line",
                     },
                     [
-                        @109-116 Str(
+                        @76-83 Str(
                             PlainLine(
                                 "Hello",
                             ),

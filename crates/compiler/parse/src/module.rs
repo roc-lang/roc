@@ -1,10 +1,12 @@
 use crate::ast::{Collection, CommentOrNewline, Defs, Header, Module, Spaced, Spaces};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::expr::merge_spaces;
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
-    HostedHeader, ImportsEntry, ImportsKeyword, Keyword, KeywordItem, ModuleHeader, ModuleName,
-    PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
-    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    HostedHeader, ImportsCollection, ImportsEntry, ImportsKeyword, Keyword, KeywordItem,
+    ModuleHeader, ModuleName, PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader,
+    PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
+    WithKeyword,
 };
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -16,7 +18,7 @@ use crate::parser::{
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
-use roc_region::all::{Loc, Position};
+use roc_region::all::{Loc, Position, Region};
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     |_arena, state: State<'a>, _min_indent: u32| {
@@ -67,7 +69,6 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                 ),
                 Header::Module
             ),
-            // Old headers
             map!(
                 skip_first!(
                     keyword_e("interface", EHeader::Start),
@@ -78,7 +79,7 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
             map!(
                 skip_first!(
                     keyword_e("app", EHeader::Start),
-                    increment_min_indent(app_header())
+                    increment_min_indent(one_of![app_header(), old_app_header()])
                 ),
                 Header::App
             ),
@@ -117,11 +118,19 @@ fn module_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
     .trace("module_header")
 }
 
+macro_rules! merge_n_spaces {
+    ($arena:expr, $($slice:expr),*) => {
+        {
+            let mut merged = bumpalo::collections::Vec::with_capacity_in(0 $(+ $slice.len())*, $arena);
+            $(merged.extend_from_slice($slice);)*
+            merged.into_bump_slice()
+        }
+    };
+}
+
 /// Parse old interface headers so we can format them into module headers
 #[inline(always)]
 fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
-    use bumpalo::collections::Vec;
-
     let before_exposes = map_with_arena!(
         and!(
             skip_second!(
@@ -132,12 +141,7 @@ fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
         ),
         |arena: &'a bumpalo::Bump,
          (before_name, kw): (&'a [CommentOrNewline<'a>], Spaces<'a, ExposesKeyword>)| {
-            let mut combined: Vec<CommentOrNewline> =
-                Vec::with_capacity_in(before_name.len() + kw.before.len() + kw.after.len(), arena);
-            combined.extend(before_name);
-            combined.extend(kw.before);
-            combined.extend(kw.after);
-            arena.alloc(combined)
+            merge_n_spaces!(arena, before_name, kw.before, kw.after)
         }
     );
 
@@ -224,16 +228,195 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
 #[inline(always)]
 fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
     record!(AppHeader {
-        before_name: space0_e(EHeader::IndentStart),
-        name: loc!(crate::parser::specialize(
-            EHeader::AppName,
-            string_literal::parse_str_literal()
-        )),
-        packages: optional(specialize(EHeader::Packages, packages())),
-        imports: specialize(EHeader::Imports, imports()),
-        provides: specialize(EHeader::Provides, provides_to()),
+        before_provides: space0_e(EHeader::IndentStart),
+        provides: specialize(EHeader::Exposes, exposes_list()),
+        before_packages: space0_e(EHeader::IndentStart),
+        packages: specialize(EHeader::Packages, loc!(packages_collection())),
+        old_imports: succeed!(None),
     })
     .trace("app_header")
+}
+
+struct OldAppHeader<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
+    pub packages: Option<Loc<OldAppPackages<'a>>>,
+    pub imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
+    pub provides: ProvidesTo<'a>,
+}
+
+type OldAppPackages<'a> =
+    KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>;
+
+#[inline(always)]
+fn old_app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
+    let old = record!(OldAppHeader {
+        before_name: skip_second!(
+            space0_e(EHeader::IndentStart),
+            loc!(crate::parser::specialize(
+                EHeader::AppName,
+                string_literal::parse_str_literal()
+            ))
+        ),
+        packages: optional(specialize(EHeader::Packages, loc!(packages()))),
+        imports: specialize(EHeader::Imports, imports()),
+        provides: specialize(EHeader::Provides, provides_to()),
+    });
+
+    map_with_arena!(old, |arena: &'a bumpalo::Bump, old: OldAppHeader<'a>| {
+        let mut before_packages: &'a [CommentOrNewline] = &[];
+
+        let packages = match (old.packages, old.provides.to.value) {
+            (Some(packages), To::ExistingPackage(platform_shorthand)) => {
+                before_packages = merge_spaces(
+                    arena,
+                    packages.value.keyword.before,
+                    packages.value.keyword.after,
+                );
+
+                packages.map(|coll| {
+                    coll.item.map_items(arena, |loc_spaced_pkg| {
+                        if loc_spaced_pkg.value.item().shorthand == platform_shorthand {
+                            loc_spaced_pkg.map(|spaced_pkg| {
+                                spaced_pkg.map(arena, |pkg| {
+                                    let mut new_pkg = *pkg;
+                                    new_pkg.platform_marker = Some(merge_spaces(
+                                        arena,
+                                        old.provides.to_keyword.before,
+                                        old.provides.to_keyword.after,
+                                    ));
+                                    new_pkg
+                                })
+                            })
+                        } else {
+                            *loc_spaced_pkg
+                        }
+                    })
+                })
+            }
+            (None, To::ExistingPackage(_)) => Loc {
+                region: Region::zero(),
+                value: Collection::empty(),
+            },
+            (Some(packages), To::NewPackage(new_pkg_name)) => {
+                before_packages = merge_spaces(
+                    arena,
+                    packages.value.keyword.before,
+                    packages.value.keyword.after,
+                );
+
+                let new_pkg = PackageEntry {
+                    shorthand: "pf",
+                    spaces_after_shorthand: &[],
+                    platform_marker: Some(merge_spaces(
+                        arena,
+                        old.provides.to_keyword.before,
+                        old.provides.to_keyword.after,
+                    )),
+                    package_name: Loc {
+                        region: old.provides.to.region,
+                        value: new_pkg_name,
+                    },
+                };
+
+                let loc_spaced_new_pkg = Loc {
+                    region: old.provides.to.region,
+                    value: Spaced::Item(new_pkg),
+                };
+
+                let mut combined = bumpalo::collections::Vec::with_capacity_in(
+                    1 + packages.value.item.len(),
+                    arena,
+                );
+                combined.push(loc_spaced_new_pkg);
+                combined.extend_from_slice(packages.value.item.items);
+
+                Loc {
+                    region: packages.region,
+                    value: packages
+                        .value
+                        .item
+                        .replace_items(combined.into_bump_slice()),
+                }
+            }
+            (None, To::NewPackage(new_pkg_name)) => {
+                let new_pkg = PackageEntry {
+                    shorthand: "pf",
+                    spaces_after_shorthand: &[],
+                    platform_marker: Some(merge_spaces(
+                        arena,
+                        old.provides.to_keyword.before,
+                        old.provides.to_keyword.after,
+                    )),
+                    package_name: Loc {
+                        region: old.provides.to.region,
+                        value: new_pkg_name,
+                    },
+                };
+
+                let loc_spaced_new_pkg = arena.alloc(Loc {
+                    region: old.provides.to.region,
+                    value: Spaced::Item(new_pkg),
+                });
+
+                Loc {
+                    region: old.provides.to.region,
+                    value: Collection::with_items(std::slice::from_ref(loc_spaced_new_pkg)),
+                }
+            }
+        };
+
+        let provides = match old.provides.types {
+            Some(types) => {
+                let mut combined_items = bumpalo::collections::Vec::with_capacity_in(
+                    old.provides.entries.items.len() + types.items.len(),
+                    arena,
+                );
+
+                combined_items.extend_from_slice(old.provides.entries.items);
+
+                for loc_spaced_type_ident in types.items {
+                    combined_items.push(loc_spaced_type_ident.map(|spaced_type_ident| {
+                        spaced_type_ident.map(arena, |type_ident| {
+                            ExposedName::new(From::from(*type_ident))
+                        })
+                    }));
+                }
+
+                let value_comments = old.provides.entries.final_comments();
+                let type_comments = types.final_comments();
+
+                let mut combined_comments = bumpalo::collections::Vec::with_capacity_in(
+                    value_comments.len() + type_comments.len(),
+                    arena,
+                );
+                combined_comments.extend_from_slice(value_comments);
+                combined_comments.extend_from_slice(type_comments);
+
+                Collection::with_items_and_comments(
+                    arena,
+                    combined_items.into_bump_slice(),
+                    combined_comments.into_bump_slice(),
+                )
+            }
+            None => old.provides.entries,
+        };
+
+        AppHeader {
+            before_provides: merge_spaces(
+                arena,
+                old.before_name,
+                old.provides.provides_keyword.before,
+            ),
+            provides,
+            before_packages: merge_spaces(
+                arena,
+                before_packages,
+                old.provides.provides_keyword.after,
+            ),
+            packages,
+            old_imports: old.imports,
+        }
+    })
 }
 
 #[inline(always)]
@@ -321,6 +504,7 @@ fn provides_exposed<'a>() -> impl Parser<
     })
 }
 
+// [modules-revamp] TODO: Types?
 #[inline(always)]
 fn provides_types<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, EProvides<'a>> {
@@ -531,20 +715,31 @@ fn packages<'a>() -> impl Parser<
     EPackages<'a>,
 > {
     record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            PackagesKeyword,
-            EPackages::Packages,
-            EPackages::IndentPackages,
-            EPackages::IndentListStart
-        ),
-        item: collection_trailing_sep_e!(
-            word1(b'{', EPackages::ListStart),
-            specialize(EPackages::PackageEntry, loc!(package_entry())),
-            word1(b',', EPackages::ListEnd),
-            word1(b'}', EPackages::ListEnd),
-            Spaced::SpaceBefore
-        )
+        keyword: packages_kw(),
+        item: packages_collection()
     })
+}
+
+#[inline(always)]
+fn packages_kw<'a>() -> impl Parser<'a, Spaces<'a, PackagesKeyword>, EPackages<'a>> {
+    spaces_around_keyword(
+        PackagesKeyword,
+        EPackages::Packages,
+        EPackages::IndentPackages,
+        EPackages::IndentListStart,
+    )
+}
+
+#[inline(always)]
+fn packages_collection<'a>(
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>, EPackages<'a>> {
+    collection_trailing_sep_e!(
+        word1(b'{', EPackages::ListStart),
+        specialize(EPackages::PackageEntry, loc!(package_entry())),
+        word1(b',', EPackages::ListEnd),
+        word1(b'}', EPackages::ListEnd),
+        Spaced::SpaceBefore
+    )
 }
 
 #[inline(always)]

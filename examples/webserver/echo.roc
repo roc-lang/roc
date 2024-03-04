@@ -1,6 +1,4 @@
-app "echo"
-    packages { pf: "https://github.com/roc-lang/basic-webserver/releases/download/0.1/dCL3KsovvV-8A5D_W_0X_abynkcRcoAngsgF0xtvQsk.tar.br" }
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.1/dCL3KsovvV-8A5D_W_0X_abynkcRcoAngsgF0xtvQsk.tar.br" }
 
 import pf.Stdout
 import pf.Task exposing [Task]

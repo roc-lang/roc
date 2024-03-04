@@ -224,15 +224,15 @@ impl IterTokens for ModuleHeader<'_> {
 impl IterTokens for AppHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
-            packages,
-            imports: _,
+            before_provides: _,
             provides,
+            before_packages: _,
+            packages,
+            old_imports: _,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(packages.iter().flat_map(|p| p.item.iter_tokens(arena)))
+        (provides.iter_tokens(arena).into_iter())
+            .chain(packages.value.iter_tokens(arena))
             .chain(provides.iter_tokens(arena))
             .collect_in(arena)
     }
@@ -308,6 +308,7 @@ impl IterTokens for Loc<Spaced<'_, PackageEntry<'_>>> {
         let PackageEntry {
             shorthand: _,
             spaces_after_shorthand: _,
+            platform_marker: _,
             package_name,
         } = self.value.item();
 

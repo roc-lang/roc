@@ -48,7 +48,8 @@ mod test_reporting {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
+        let mut buffer =
+            String::from("app [main] { pf: platform \"../../tests/platform.roc\" }\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -3377,7 +3378,7 @@ mod test_reporting {
 
     I am partway through parsing a definition, but I got stuck here:
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      f x y = x
@@ -3813,7 +3814,7 @@ mod test_reporting {
             Foo.test
             "
         ),
-        @r"
+        @r###"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Foo` module is not imported:
@@ -3826,9 +3827,9 @@ mod test_reporting {
 
         Box
         Bool
+        
         Num
-        Set
-    "
+    "###
     );
 
     test_report!(
@@ -4291,7 +4292,7 @@ mod test_reporting {
 
     This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      f :: I64
@@ -4560,7 +4561,7 @@ mod test_reporting {
     test_report!(
         comment_with_control_character,
         "# comment with a \x07\n",
-        @r"
+        @r###"
     ── ASCII CONTROL CHARACTER in tmp/comment_with_control_character/Test.roc ──────
 
     I encountered an ASCII control character:
@@ -4569,7 +4570,7 @@ mod test_reporting {
                              ^
 
     ASCII control characters are not allowed.
-    "
+    "###
     );
 
     test_report!(
@@ -4779,7 +4780,7 @@ mod test_reporting {
 
     I am partway through parsing a definition, but I got stuck here:
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      f : Foo.foo
@@ -4807,7 +4808,7 @@ mod test_reporting {
 
     I am partway through parsing an expression, but I got stuck here:
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      f <- Foo.foo
@@ -4913,7 +4914,7 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            app "dict" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Dict
 
@@ -4946,7 +4947,7 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Set
 
@@ -5764,7 +5765,7 @@ All branches in an `if` must have the same type!
 
     This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      case 1 of
@@ -5822,7 +5823,7 @@ All branches in an `if` must have the same type!
 
     This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      main =
@@ -5847,7 +5848,7 @@ All branches in an `if` must have the same type!
 
     This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      main =
@@ -5874,7 +5875,7 @@ All branches in an `if` must have the same type!
 
     This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      main =
@@ -5905,7 +5906,7 @@ All branches in an `if` must have the same type!
 
 This looks like an operator, but it's not one I recognize!
 
-1│  app "test" provides [main] to "./platform"
+1│  app [main] {{ pf: platform "../../tests/platform.roc" }}
 2│
 3│  main =
 4│      main = 5 -> 3
@@ -7843,7 +7844,7 @@ In roc, functions are always written as a lambda, like{}
             alt
             "#
         ),
-        @r"
+        @r###"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Task` module is not imported:
@@ -7856,9 +7857,9 @@ In roc, functions are always written as a lambda, like{}
 
         Hash
         List
+        
         Num
-        Box
-    "
+    "###
     );
 
     test_report!(
@@ -8457,7 +8458,7 @@ In roc, functions are always written as a lambda, like{}
         ability_bad_type_parameter,
         indoc!(
             r#"
-            app "test" provides [] to "./platform"
+            app [] { pf: platform "../../tests/platform.roc" }
 
             MHash a b c implements
               hash : a -> U64 where a implements MHash
@@ -8490,7 +8491,7 @@ In roc, functions are always written as a lambda, like{}
         alias_in_implements_clause,
         indoc!(
             r#"
-            app "test" provides [hash] to "./platform"
+            app [hash] { pf: platform "../../tests/platform.roc" }
 
             MHash implements hash : a, b -> Num.U64 where a implements MHash, b implements Bool.Bool
             "#
@@ -8509,7 +8510,7 @@ In roc, functions are always written as a lambda, like{}
         shadowed_type_variable_in_has_clause,
         indoc!(
             r#"
-            app "test" provides [ab1] to "./platform"
+            app [ab1] { pf: platform "../../tests/platform.roc" }
 
             Ab1 implements ab1 : a -> {} where a implements Ab1, a implements Ab1
             "#
@@ -8536,7 +8537,7 @@ In roc, functions are always written as a lambda, like{}
         ability_shadows_ability,
         indoc!(
             r#"
-            app "test" provides [ab] to "./platform"
+            app [ab] { pf: platform "../../tests/platform.roc" }
 
             Ability implements ab : a -> U64 where a implements Ability
 
@@ -8565,7 +8566,7 @@ In roc, functions are always written as a lambda, like{}
         ability_member_does_not_bind_ability,
         indoc!(
             r#"
-            app "test" provides [] to "./platform"
+            app [] { pf: platform "../../tests/platform.roc" }
 
             Ability implements ab : {} -> {}
             "#
@@ -8602,7 +8603,7 @@ In roc, functions are always written as a lambda, like{}
         ability_member_binds_parent_twice,
         indoc!(
             r#"
-            app "test" provides [] to "./platform"
+            app [] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, b -> Bool.Bool where a implements MEq, b implements MEq
             "#
@@ -8628,7 +8629,7 @@ In roc, functions are always written as a lambda, like{}
         has_clause_not_on_toplevel,
         indoc!(
             r#"
-            app "test" provides [f] to "./platform"
+            app [f] { pf: platform "../../tests/platform.roc" }
 
             MHash implements hash : (a where a implements MHash) -> Num.U64
 
@@ -8667,13 +8668,14 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_does_not_match_type,
         indoc!(
             r#"
-            app "test" provides [hash] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             MHash implements hash : a -> U64 where a implements MHash
 
             Id := U32 implements [MHash {hash}]
 
             hash = \@Id n -> n
+            main = hash
             "#
         ),
         @r"
@@ -8698,7 +8700,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_is_incomplete,
         indoc!(
             r#"
-            app "test" provides [eq, le] to "./platform"
+            app [eq, le] { pf: platform "../../tests/platform.roc" }
 
             MEq implements
                 eq : a, a -> Bool where a implements MEq
@@ -8727,7 +8729,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_is_unused,
         indoc!(
             r#"
-            app "test" provides [hash] to "./platform"
+            app [hash] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -8752,7 +8754,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_is_duplicated,
         indoc!(
             r#"
-            app "test" provides [hash, One, Two] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -8761,6 +8763,9 @@ In roc, functions are always written as a lambda, like{}
             Two := {} implements [MHash {hash}]
 
             hash = \_ -> 0u64
+
+            main =
+                { hash, one: @One {}, two: @Two {} }
             "#
         ),
         // TODO: the error message here could be seriously improved!
@@ -8806,7 +8811,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_is_duplicated_with_type_mismatch,
         indoc!(
             r#"
-            app "test" provides [hash, One, Two] to "./platform"
+            app [hash, One, Two] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -8837,7 +8842,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_conflicting_specialization_types,
         indoc!(
             r#"
-            app "test" provides [eq] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             MEq implements
                 eq : a, a -> Bool where a implements MEq
@@ -8846,6 +8851,7 @@ In roc, functions are always written as a lambda, like{}
             AndI := {}
 
             eq = \@You {}, @AndI {} -> False
+            main = eq
             "#
         ),
         @r"
@@ -8872,7 +8878,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_checked_against_annotation,
         indoc!(
             r#"
-            app "test" provides [hash] to "./platform"
+            app [hash] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -8906,7 +8912,7 @@ In roc, functions are always written as a lambda, like{}
         ability_specialization_called_with_non_specializing,
         indoc!(
             r#"
-            app "test" provides [noGoodVeryBadTerrible] to "./platform"
+            app [noGoodVeryBadTerrible] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -8953,7 +8959,7 @@ In roc, functions are always written as a lambda, like{}
         ability_not_on_toplevel,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main =
                 MHash implements
@@ -8978,7 +8984,7 @@ In roc, functions are always written as a lambda, like{}
         expression_generalization_to_ability_is_an_error,
         indoc!(
             r#"
-            app "test" provides [hash, hashable] to "./platform"
+            app [hash, hashable] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -9019,7 +9025,7 @@ In roc, functions are always written as a lambda, like{}
         ability_value_annotations_are_an_error,
         indoc!(
             r#"
-            app "test" provides [result] to "./platform"
+            app [result] { pf: platform "../../tests/platform.roc" }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -9171,7 +9177,7 @@ In roc, functions are always written as a lambda, like{}
         nested_specialization,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             Default implements default : {} -> a where a implements Default
 
@@ -9229,7 +9235,7 @@ In roc, functions are always written as a lambda, like{}
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" provides [go] to "./platform"
+            app [go] { pf: platform "../../tests/platform.roc" }
 
             import Set
 
@@ -9331,7 +9337,7 @@ In roc, functions are always written as a lambda, like{}
         function_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main = Encode.toEncoder \x -> x
             "#
@@ -9356,7 +9362,7 @@ In roc, functions are always written as a lambda, like{}
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             A := {}
             main = Encode.toEncoder { x: @A {} }
@@ -9391,7 +9397,7 @@ In roc, functions are always written as a lambda, like{}
         cycle_through_non_function_top_level,
         indoc!(
             r#"
-                app "test" provides [t2] to "./platform"
+                app [t2] { pf: platform "../../tests/platform.roc" }
 
                 force : ({} -> I64) -> I64
                 force = \eval -> eval {}
@@ -9424,7 +9430,7 @@ In roc, functions are always written as a lambda, like{}
         opaque_ability_impl_not_found_shorthand_syntax,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, a -> U64 where a implements MEq
 
@@ -9460,7 +9466,7 @@ In roc, functions are always written as a lambda, like{}
         opaque_ability_impl_not_found,
         indoc!(
             r#"
-            app "test" provides [A, myMEq] to "./platform"
+            app [A, myMEq] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, a -> Bool where a implements MEq
 
@@ -9501,7 +9507,7 @@ In roc, functions are always written as a lambda, like{}
         opaque_ability_impl_optional,
         indoc!(
             r#"
-            app "test" provides [A, myMEq] to "./platform"
+            app [A, myMEq] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, a -> Bool where a implements MEq
 
@@ -9539,8 +9545,9 @@ In roc, functions are always written as a lambda, like{}
         opaque_builtin_ability_impl_optional,
         indoc!(
             r#"
-            app "test"
-                provides [A, myEncoder] to "./platform"
+            app [A, myEncoder] {
+                pf: platform "../../tests/platform.roc"
+            }
 
             A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
 
@@ -9552,7 +9559,7 @@ In roc, functions are always written as a lambda, like{}
 
     Ability implementations cannot be optional:
 
-    4│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
+    5│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
                                        ^^^^^^^^^^^^^^^^^^^^^
 
     Custom implementations must be supplied fully.
@@ -9565,7 +9572,7 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `Encoding` ability:
 
-    4│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
+    5│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
@@ -9578,7 +9585,7 @@ In roc, functions are always written as a lambda, like{}
         opaque_ability_impl_qualified,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, a -> Bool where a implements MEq
 
@@ -9613,7 +9620,7 @@ In roc, functions are always written as a lambda, like{}
         opaque_ability_impl_not_identifier,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, a -> Bool where a implements MEq
 
@@ -9650,7 +9657,7 @@ In roc, functions are always written as a lambda, like{}
         opaque_ability_impl_duplicate,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             MEq implements eq : a, a -> Bool where a implements MEq
 
@@ -9680,7 +9687,7 @@ In roc, functions are always written as a lambda, like{}
         implements_type_not_ability,
         indoc!(
             r#"
-            app "test" provides [A, Foo] to "./platform"
+            app [A, Foo] { pf: platform "../../tests/platform.roc" }
 
             Foo := {}
 
@@ -9703,7 +9710,7 @@ In roc, functions are always written as a lambda, like{}
         derive_non_builtin_ability,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             Ab implements ab : a -> a where a implements Ab
 
@@ -9728,7 +9735,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_function,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             A a := a -> a implements [Encode.Encoding]
             "#
@@ -9751,7 +9758,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_non_encoding_alias,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             A := B implements [Encode.Encoding]
 
@@ -9777,7 +9784,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_other_has_encoding,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             A := B implements [Encode.Encoding]
 
@@ -9791,7 +9798,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" provides [MyNat] to "./platform"
+            app [MyNat] { pf: platform "../../tests/platform.roc" }
 
             MyNat := [S MyNat, Z] implements [Encode.Encoding]
             "#
@@ -9803,7 +9810,7 @@ In roc, functions are always written as a lambda, like{}
         shadowing_top_level_scope,
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app [ main ] { pf: platform "../../tests/platform.roc" }
 
             main = 1
 
@@ -9964,7 +9971,7 @@ In roc, functions are always written as a lambda, like{}
         phantom_type_bound_to_ability_not_implementing,
         indoc!(
             r#"
-            app "test" provides [x] to "./platform"
+            app [x] { pf: platform "../../tests/platform.roc" }
 
             Foo implements foo : a -> a where a implements Foo
 
@@ -10359,7 +10366,7 @@ In roc, functions are always written as a lambda, like{}
     I am partway through parsing a record builder, and I found an optional
     field:
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      {
@@ -10388,7 +10395,7 @@ In roc, functions are always written as a lambda, like{}
     I am partway through parsing a record update, and I found a record
     builder field:
 
-    1│  app "test" provides [main] to "./platform"
+    1│  app [main] { pf: platform "../../tests/platform.roc" }
     2│
     3│  main =
     4│      { rec &
@@ -10570,7 +10577,7 @@ In roc, functions are always written as a lambda, like{}
         destructure_assignment_introduces_no_variables_nested_toplevel,
         indoc!(
             r#"
-            app "test" provides [] to "./platform"
+            app [] { pf: platform "../../tests/platform.roc" }
 
             Pair _ _ = Pair 0 1
 
@@ -10636,7 +10643,7 @@ In roc, functions are always written as a lambda, like{}
         unused_shadow_specialization,
         indoc!(
             r#"
-            app "test" provides [hash, Id] to "./platform"
+            app [hash, Id] { pf: platform "../../tests/platform.roc" }
 
             MHash implements hash : a -> U64 where a implements MHash
 
@@ -10662,7 +10669,7 @@ In roc, functions are always written as a lambda, like{}
         specialization_for_wrong_type,
         indoc!(
             r#"
-            app "test" provides [hash, Id, Id2] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             MHash implements hash : a -> U64 where a implements MHash
 
@@ -10670,6 +10677,9 @@ In roc, functions are always written as a lambda, like{}
             Id2 := {}
 
             hash = \@Id2 _ -> 0
+
+            main =
+                { hash, id: @Id {}, id2: @Id2 {} }
             "#
         ),
         @r"
@@ -10742,7 +10752,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_function,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             A a := a -> a implements [Decode.Decoding]
             "#
@@ -10765,7 +10775,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_non_decoding_opaque,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             A := B implements [Decode.Decoding]
 
@@ -10792,7 +10802,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_other_has_decoding,
         indoc!(
             r#"
-            app "test" provides [A] to "./platform"
+            app [A] { pf: platform "../../tests/platform.roc" }
 
             A := B implements [Decode.Decoding]
 
@@ -10806,7 +10816,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" provides [MyNat] to "./platform"
+            app [MyNat] { pf: platform "../../tests/platform.roc" }
 
             MyNat := [S MyNat, Z] implements [Decode.Decoding]
             "#
@@ -10818,7 +10828,7 @@ In roc, functions are always written as a lambda, like{}
         function_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Decode exposing [decoder]
 
@@ -10849,7 +10859,7 @@ In roc, functions are always written as a lambda, like{}
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Decode exposing [decoder]
 
@@ -10911,7 +10921,7 @@ In roc, functions are always written as a lambda, like{}
         expected_tag_has_too_many_args,
         indoc!(
             r#"
-            app "test" provides [fromBytes] to "./platform"
+            app [fromBytes] { pf: platform "../../tests/platform.roc" }
 
             u8 : [Good (List U8), Bad [DecodeProblem]]
 
@@ -11043,7 +11053,7 @@ In roc, functions are always written as a lambda, like{}
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import TotallyNotJson
 
@@ -11074,7 +11084,7 @@ In roc, functions are always written as a lambda, like{}
         record_with_optional_field_types_cannot_derive_decoding,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              import Decode exposing [decoder]
 
@@ -11287,7 +11297,7 @@ In roc, functions are always written as a lambda, like{}
         unused_value_import,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import List exposing [concat]
 
@@ -11311,7 +11321,7 @@ In roc, functions are always written as a lambda, like{}
         unnecessary_builtin_module_import,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Str
 
@@ -11327,7 +11337,7 @@ In roc, functions are always written as a lambda, like{}
         unnecessary_builtin_type_import,
         indoc!(
             r#"
-            app "test" provides [main, E] to "./platform"
+            app [main, E] { pf: platform "../../tests/platform.roc" }
 
             import Decode exposing [DecodeError]
 
@@ -11344,7 +11354,7 @@ In roc, functions are always written as a lambda, like{}
         invalid_toplevel_cycle,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main =
                 if Bool.true then {} else main
@@ -11421,7 +11431,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_function,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A a := a -> a implements [Hash]
              "#
@@ -11444,7 +11454,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_non_hash_opaque,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A := B implements [Hash]
 
@@ -11471,7 +11481,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_other_has_hash,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A := B implements [Hash]
 
@@ -11485,7 +11495,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_recursive_deriving,
         indoc!(
             r#"
-             app "test" provides [MyNat] to "./platform"
+             app [MyNat] { pf: platform "../../tests/platform.roc" }
 
              MyNat := [S MyNat, Z] implements [Hash]
              "#
@@ -11497,7 +11507,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_record,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Hash
 
@@ -11511,7 +11521,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_tag,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Hash
 
@@ -11527,7 +11537,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_derive_hash_for_function,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Hash
 
@@ -11554,7 +11564,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_derive_hash_for_structure_containing_function,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Hash
 
@@ -11587,7 +11597,7 @@ In roc, functions are always written as a lambda, like{}
         derive_hash_for_tuple,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Hash
 
@@ -11600,7 +11610,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_hash_tuple_with_non_hash_element,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Hash
 
@@ -11723,7 +11733,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_function,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A a := a -> a implements [Eq]
              "#
@@ -11778,7 +11788,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_f32,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A := F32 implements [Eq]
              "#
@@ -11804,7 +11814,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_f64,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A := F64 implements [Eq]
              "#
@@ -11830,7 +11840,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_non_eq_opaque,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A := B implements [Eq]
 
@@ -11857,7 +11867,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_other_has_eq,
         indoc!(
             r#"
-             app "test" provides [A] to "./platform"
+             app [A] { pf: platform "../../tests/platform.roc" }
 
              A := B implements [Eq]
 
@@ -11871,7 +11881,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_recursive_deriving,
         indoc!(
             r#"
-             app "test" provides [MyNat] to "./platform"
+             app [MyNat] { pf: platform "../../tests/platform.roc" }
 
              MyNat := [S MyNat, Z] implements [Eq]
              "#
@@ -11883,7 +11893,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_record,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Eq
 
@@ -11897,7 +11907,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_tag,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Eq
 
@@ -11913,7 +11923,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_derive_eq_for_function,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Eq
 
@@ -11940,7 +11950,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_derive_eq_for_structure_containing_function,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Eq
 
@@ -12019,7 +12029,7 @@ In roc, functions are always written as a lambda, like{}
         derive_eq_for_tuple,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Eq
 
@@ -12032,7 +12042,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_eq_tuple_with_non_eq_element,
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "../../tests/platform.roc" }
 
              foo : a -> {} where a implements Eq
 
@@ -12112,7 +12122,7 @@ In roc, functions are always written as a lambda, like{}
         expand_ability_from_type_alias_mismatch,
         indoc!(
             r#"
-            app "test" provides [f] to "./platform"
+            app [f] { pf: platform "../../tests/platform.roc" }
 
             F a : a where a implements Hash
 
@@ -12166,7 +12176,7 @@ In roc, functions are always written as a lambda, like{}
         underivable_opaque_doesnt_error_for_derived_bodies,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             F := U8 -> U8 implements [Hash, Eq, Encoding]
 
@@ -12236,7 +12246,7 @@ In roc, functions are always written as a lambda, like{}
         rigid_able_bounds_must_be_a_superset_of_flex_bounds,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             g : x -> x where x implements Decoding & Encoding
 
@@ -12273,7 +12283,7 @@ In roc, functions are always written as a lambda, like{}
         rigid_able_bounds_must_be_a_superset_of_flex_bounds_multiple,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             g : x -> x where x implements Decoding & Encoding & Hash
 
@@ -12310,7 +12320,7 @@ In roc, functions are always written as a lambda, like{}
         rigid_able_bounds_must_be_a_superset_of_flex_bounds_with_indirection,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             f : x -> x where x implements Hash
             g : x -> x where x implements Decoding & Encoding
@@ -13109,10 +13119,10 @@ In roc, functions are always written as a lambda, like{}
         suggest_binding_rigid_var_to_ability,
         indoc!(
             r#"
-            app "test" provides [f] to "./p"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
-            f : List e -> List e
-            f = \l -> if l == l then l else l
+            main : List e -> List e
+            main = \l -> if l == l then l else l
             "#
         ),
     @r"
@@ -13120,8 +13130,8 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    4│  f = \l -> if l == l then l else l
-                     ^
+    4│  main = \l -> if l == l then l else l
+                        ^
 
     I can't generate an implementation of the `Eq` ability for
 
@@ -13208,7 +13218,7 @@ In roc, functions are always written as a lambda, like{}
         resolve_eq_for_unbound_num,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             n : Num *
 
@@ -13221,7 +13231,7 @@ In roc, functions are always written as a lambda, like{}
         resolve_eq_for_unbound_num_float,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             n : Num *
 
@@ -13251,7 +13261,7 @@ In roc, functions are always written as a lambda, like{}
         resolve_hash_for_unbound_num,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             n : Num *
 
@@ -13264,7 +13274,7 @@ In roc, functions are always written as a lambda, like{}
         self_recursive_not_reached,
         indoc!(
             r#"
-            app "test" provides [f] to "./platform"
+            app [f] { pf: platform "../../tests/platform.roc" }
             f = h {}
             h = \{} -> 1
             g = \{} -> if Bool.true then "" else g {}
@@ -13287,7 +13297,7 @@ In roc, functions are always written as a lambda, like{}
         self_recursive_not_reached_but_exposed,
         indoc!(
             r#"
-            app "test" provides [g] to "./platform"
+            app [g] { pf: platform "../../tests/platform.roc" }
             g = \{} -> if Bool.true then "" else g {}
             "#
         )
@@ -13297,7 +13307,7 @@ In roc, functions are always written as a lambda, like{}
         mutual_recursion_not_reached,
         indoc!(
             r#"
-            app "test" provides [h] to "./platform"
+            app [h] { pf: platform "../../tests/platform.roc" }
             h = ""
             f = \{} -> if Bool.true then "" else g {}
             g = \{} -> if Bool.true then "" else f {}
@@ -13320,7 +13330,7 @@ In roc, functions are always written as a lambda, like{}
         mutual_recursion_not_reached_but_exposed,
         indoc!(
             r#"
-            app "test" provides [f] to "./platform"
+            app [f] { pf: platform "../../tests/platform.roc" }
             f = \{} -> if Bool.true then "" else g {}
             g = \{} -> if Bool.true then "" else f {}
             "#
@@ -13333,7 +13343,7 @@ In roc, functions are always written as a lambda, like{}
         self_recursive_not_reached_nested,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
             main =
                 g = \{} -> if Bool.true then "" else g {}
                 ""
@@ -13356,7 +13366,7 @@ In roc, functions are always written as a lambda, like{}
         self_recursive_not_reached_but_exposed_nested,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
             main =
                 g = \{} -> if Bool.true then "" else g {}
                 g
@@ -13368,7 +13378,7 @@ In roc, functions are always written as a lambda, like{}
         mutual_recursion_not_reached_nested,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
             main =
                 f = \{} -> if Bool.true then "" else g {}
                 g = \{} -> if Bool.true then "" else f {}
@@ -13392,7 +13402,7 @@ In roc, functions are always written as a lambda, like{}
         mutual_recursion_not_reached_but_exposed_nested,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
             main =
                 f = \{} -> if Bool.true then "" else g {}
                 g = \{} -> if Bool.true then "" else f {}
@@ -13436,7 +13446,7 @@ In roc, functions are always written as a lambda, like{}
         implicit_inferred_open_in_output_position_cannot_grow,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main : {} -> [One]
             main = \{} ->
@@ -13471,7 +13481,7 @@ In roc, functions are always written as a lambda, like{}
         implicit_inferred_open_in_output_position_cannot_grow_alias,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             R : [One]
 
@@ -13508,7 +13518,7 @@ In roc, functions are always written as a lambda, like{}
         implicit_inferred_open_in_output_position_cannot_grow_nested,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main : List [One, Two] -> List [One]
             main = \tags ->
@@ -13544,7 +13554,7 @@ In roc, functions are always written as a lambda, like{}
         implicit_inferred_open_in_output_position_cannot_grow_nested_alias,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             R : [One]
 
@@ -13582,7 +13592,7 @@ In roc, functions are always written as a lambda, like{}
         explicit_inferred_open_in_output_position_can_grow,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main : List [One, Two] -> List [One]_
             main = \tags ->
@@ -13598,7 +13608,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_tuple,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Decode exposing [decoder]
 
@@ -13615,7 +13625,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_decode_tuple_with_non_decode_element,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             import Decode exposing [decoder]
 
@@ -13646,7 +13656,7 @@ In roc, functions are always written as a lambda, like{}
         derive_encoding_for_tuple,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             x : (U32, Str)
 
@@ -13659,7 +13669,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_encode_tuple_with_non_encode_element,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             x : (U32, {} -> {})
 
@@ -13686,7 +13696,7 @@ In roc, functions are always written as a lambda, like{}
         exhaustiveness_check_function_or_tag_union_issue_4994,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             x : U8
 
@@ -13743,7 +13753,7 @@ In roc, functions are always written as a lambda, like{}
         apply_opaque_as_function,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             Parser a := Str -> a
 
@@ -13772,7 +13782,7 @@ In roc, functions are always written as a lambda, like{}
         function_arity_mismatch_too_few,
         indoc!(
             r#"
-            app "test" provides [f] to "./platform"
+            app [f] { pf: platform "../../tests/platform.roc" }
 
             f : U8, U8 -> U8
             f = \x -> x
@@ -13803,7 +13813,7 @@ In roc, functions are always written as a lambda, like{}
         function_arity_mismatch_too_many,
         indoc!(
             r#"
-            app "test" provides [f] to "./platform"
+            app [f] { pf: platform "../../tests/platform.roc" }
 
             f : U8, U8 -> U8
             f = \x, y, z -> x + y + z
@@ -13834,7 +13844,7 @@ In roc, functions are always written as a lambda, like{}
         function_arity_mismatch_nested_too_few,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main =
                 f : U8, U8 -> U8
@@ -13868,7 +13878,7 @@ In roc, functions are always written as a lambda, like{}
         function_arity_mismatch_nested_too_many,
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "../../tests/platform.roc" }
 
             main =
                 f : U8, U8 -> U8
@@ -13936,5 +13946,65 @@ In roc, functions are always written as a lambda, like{}
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
+    );
+
+    test_report!(
+        no_platform_specified,
+        indoc!(
+            r#"
+            app [main] {
+                json: "../json/main.roc"
+            }
+
+            import json.Value
+
+            main = Value.null
+            "#
+        ),
+        @r###"
+    ── UNSPECIFIED PLATFORM in tmp/no_platform_specified/Test.roc ──────────────────
+
+    This app does not specify a platform:
+
+    1│>  app [main] {
+    2│>      json: "../json/main.roc"
+    3│>  }
+
+    Make sure you have exactly one package specified as `platform`:
+
+        app [main] {
+            pf: platform "…path or URL to platform…"
+                ^^^^^^^^
+        }
+
+    Tip: See an example in the tutorial: 
+    <https://www.roc-lang.org/tutorial#building-an-application>
+    "###
+    );
+
+    test_report!(
+        multiple_platforms_specified,
+        indoc!(
+            r#"
+                app [main] {
+                    cli: platform "../cli/main.roc",
+                    web: platform "../web/main.roc",
+                }
+
+                main = 0
+                "#
+        ),
+        @r###"
+    ── MULTIPLE PLATFORMS in tmp/multiple_platforms_specified/Test.roc ─────────────
+
+    This app specifies multiple packages as `platform`:
+
+    1│>  app [main] {
+    2│>      cli: platform "../cli/main.roc",
+    3│>      web: platform "../web/main.roc",
+    4│>  }
+
+    Roc apps must specify exactly one platform.
+    "###
     );
 }

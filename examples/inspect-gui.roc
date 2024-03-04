@@ -1,9 +1,7 @@
 #
 # Visualizes Roc values in a basic GUI
 #
-app "inspect-gui"
-    packages { pf: "gui/platform/main.roc" }
-    provides [render] to pf
+app [render] { pf: platform "gui/platform/main.roc" }
 
 import Community
 import GuiFormatter

@@ -18,6 +18,9 @@ pub const EXPOSING: &str = "exposing";
 pub const IMPLEMENTS: &str = "implements";
 pub const WHERE: &str = "where";
 
+// These keywords are valid in headers
+pub const PLATFORM: &str = "platform";
+
 pub const KEYWORDS: [&str; 11] = [
     IF, THEN, ELSE, WHEN, AS, IS, DBG, IMPORT, EXPECT, EXPECT_FX, CRASH,
 ];

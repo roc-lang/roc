@@ -3,61 +3,37 @@ Full {
         comments: [],
         header: App(
             AppHeader {
-                before_name: [],
-                name: @4-11 PlainLine(
-                    "hello",
-                ),
-                packages: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
+                before_provides: [
+                    Newline,
+                ],
+                provides: [
+                    @162-166 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [
+                    Newline,
+                ],
+                packages: @11-147 [
+                    @27-145 SpaceAfter(
+                        PackageEntry {
+                            shorthand: "pf",
+                            spaces_after_shorthand: [
                                 Newline,
                             ],
-                            item: PackagesKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @27-145 SpaceAfter(
-                                PackageEntry {
-                                    shorthand: "pf",
-                                    spaces_after_shorthand: [
-                                        Newline,
-                                    ],
-                                    package_name: @31-145 PackageName(
-                                        "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br",
-                                    ),
-                                },
-                                [
-                                    Newline,
-                                ],
+                            platform_marker: Some(
+                                [],
                             ),
-                        ],
-                    },
-                ),
-                imports: None,
-                provides: ProvidesTo {
-                    provides_keyword: Spaces {
-                        before: [
+                            package_name: @31-145 PackageName(
+                                "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br",
+                            ),
+                        },
+                        [
                             Newline,
                         ],
-                        item: ProvidesKeyword,
-                        after: [],
-                    },
-                    entries: [
-                        @162-166 ExposedName(
-                            "main",
-                        ),
-                    ],
-                    types: None,
-                    to_keyword: Spaces {
-                        before: [],
-                        item: ToKeyword,
-                        after: [],
-                    },
-                    to: @171-173 ExistingPackage(
-                        "pf",
                     ),
-                },
+                ],
+                old_imports: None,
             },
         ),
     },

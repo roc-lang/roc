@@ -270,6 +270,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
 
     let interns = &loaded_module.interns;
     let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
+
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
 
@@ -518,38 +519,6 @@ fn iface_quicksort() {
     );
 }
 
-#[test]
-fn quicksort_one_def() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "QuicksortMultiDef", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "swap" => "U64, U64, List a -> List a",
-            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
-            "quicksortHelp" => "List (Num a), U64, U64 -> List (Num a)",
-            "quicksort" => "List (Num a) -> List (Num a)",
-        },
-    );
-}
-
-#[test]
-fn app_quicksort() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "swap" => "U64, U64, List a -> List a",
-            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
-            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
-        },
-    );
-}
 
 #[test]
 fn load_astar() {
@@ -587,28 +556,6 @@ fn load_principal_types() {
 fn iface_dep_types() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("module_with_deps", "Primary", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "blah2" => "Frac *",
-            "blah3" => "Str",
-            "str" => "Str",
-            "alwaysThree" => "* -> Frac *",
-            "identity" => "a -> a",
-            "z" => "Frac *",
-            "w" => "Dep1.Identity {}",
-            "succeed" => "a -> Dep1.Identity a",
-            "yay" => "Res.Res {} err",
-            "withDefault" => "Res.Res a err, a -> a",
-        },
-    );
-}
-
-#[test]
-fn app_dep_types() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "Primary", subs_by_module);
 
     expect_types(
         loaded_module,

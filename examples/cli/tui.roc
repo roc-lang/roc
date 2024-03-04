@@ -1,6 +1,4 @@
-app "tui"
-    packages { pf: "tui-platform/main.roc" }
-    provides [main] { Model } to pf
+app [main, Model] { pf: platform "tui-platform/main.roc" }
 
 import pf.Program exposing [Program]
 
