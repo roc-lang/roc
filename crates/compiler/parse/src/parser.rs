@@ -211,6 +211,8 @@ pub enum EPackageEntry<'a> {
     Shorthand(Position),
     Colon(Position),
     IndentPackage(Position),
+    IndentPlatform(Position),
+    Platform(Position),
     Space(BadInputError, Position),
 }
 

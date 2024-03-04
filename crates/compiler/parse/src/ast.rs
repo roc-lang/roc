@@ -48,6 +48,18 @@ impl<'a, T> Spaced<'a, T> {
             Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
         }
     }
+
+    pub fn map<U, F: Fn(&T) -> U>(&self, arena: &'a Bump, f: F) -> Spaced<'a, U> {
+        match self {
+            Spaced::Item(item) => Spaced::Item(f(item)),
+            Spaced::SpaceBefore(next, spaces) => {
+                Spaced::SpaceBefore(arena.alloc(next.map(arena, f)), spaces)
+            }
+            Spaced::SpaceAfter(next, spaces) => {
+                Spaced::SpaceAfter(arena.alloc(next.map(arena, f)), spaces)
+            }
+        }
+    }
 }
 
 impl<'a, T: Debug> Debug for Spaced<'a, T> {
@@ -108,7 +120,16 @@ impl<'a> Module<'a> {
                 }),
                 Self::header_imports_to_defs(arena, header.interface_imports),
             ),
-            header => (header, Defs::default()),
+            Header::App(header) => (
+                Header::App(AppHeader {
+                    old_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.old_imports),
+            ),
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => {
+                (self.header, Defs::default())
+            }
         };
 
         (Module { header, ..self }, defs)
@@ -174,6 +195,7 @@ impl<'a> Module<'a> {
                     },
                     if index == len - 1 {
                         let mut after = spaced.after.to_vec();
+                        after.extend_from_slice(imports.item.final_comments());
                         after.push(CommentOrNewline::Newline);
                         after.push(CommentOrNewline::Newline);
                         arena.alloc(after)

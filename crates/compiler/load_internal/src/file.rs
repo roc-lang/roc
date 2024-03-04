@@ -948,6 +948,18 @@ pub enum LoadingProblem<'a> {
     },
     ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
+    MultiplePlatformPackages {
+        filename: PathBuf,
+        module_id: ModuleId,
+        source: &'a [u8],
+        region: Region,
+    },
+    NoPlatformPackage {
+        filename: PathBuf,
+        module_id: ModuleId,
+        source: &'a [u8],
+        region: Region,
+    },
 
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -1667,6 +1679,34 @@ pub fn report_loading_problem(
         LoadingProblem::FileProblem { filename, error } => {
             to_file_problem_report_string(filename, error)
         }
+        LoadingProblem::NoPlatformPackage {
+            filename,
+            module_id,
+            source,
+            region,
+        } => to_no_platform_package_report(
+            module_ids,
+            IdentIds::exposed_builtins(0),
+            module_id,
+            filename,
+            region,
+            source,
+            render,
+        ),
+        LoadingProblem::MultiplePlatformPackages {
+            filename,
+            module_id,
+            source,
+            region,
+        } => to_multiple_platform_packages_report(
+            module_ids,
+            IdentIds::exposed_builtins(0),
+            module_id,
+            filename,
+            region,
+            source,
+            render,
+        ),
         err => todo!("Loading error: {:?}", err),
     }
 }
@@ -3838,24 +3878,60 @@ fn parse_header<'a>(
             let mut app_file_dir = filename.clone();
             app_file_dir.pop();
 
-            let packages = if let Some(packages) = header.packages {
-                unspace(arena, packages.item.items)
-            } else {
-                &[]
+            let packages = unspace(arena, header.packages.value.items);
+
+            let mut platform_shorthand = None;
+
+            for package in packages.iter() {
+                if package.value.platform_marker.is_some() {
+                    if platform_shorthand.is_some() {
+                        let mut module_ids = (*module_ids).lock();
+
+                        let module_id = module_ids.get_or_insert(
+                            arena.alloc(PQModuleName::Unqualified(ModuleName::APP.into())),
+                        );
+
+                        return Err(LoadingProblem::MultiplePlatformPackages {
+                            module_id,
+                            filename,
+                            source: src_bytes,
+                            region: header.packages.region,
+                        });
+                    }
+
+                    platform_shorthand = Some(package.value.shorthand);
+                }
+            }
+
+            let to_platform = match platform_shorthand {
+                Some(shorthand) => To::ExistingPackage(shorthand),
+                None => {
+                    if let Some(new_pkg) = header.old_provides_to_new_package {
+                        // This is a piece of old syntax that's used by the REPL and a number of
+                        // tests where an ephemeral platform package is specified that is never
+                        // loaded.
+                        // We can remove this when we have upgraded everything to the new syntax.
+                        To::NewPackage(new_pkg)
+                    } else {
+                        let mut module_ids = (*module_ids).lock();
+
+                        let module_id = module_ids.get_or_insert(
+                            arena.alloc(PQModuleName::Unqualified(ModuleName::APP.into())),
+                        );
+
+                        return Err(LoadingProblem::NoPlatformPackage {
+                            module_id,
+                            filename,
+                            region: header.packages.region,
+                            source: src_bytes,
+                        });
+                    }
+                }
             };
 
             let mut provides = bumpalo::collections::Vec::new_in(arena);
 
-            provides.extend(unspace(arena, header.provides.entries.items));
-
-            if let Some(provided_types) = header.provides.types {
-                for provided_type in unspace(arena, provided_types.items) {
-                    let string: &str = provided_type.value.into();
-                    let exposed_name = ExposedName::new(string);
-
-                    provides.push(Loc::at(provided_type.region, exposed_name));
-                }
-            }
+            provides.extend(unspace(arena, header.provides.items));
 
             let info = HeaderInfo {
                 filename,
@@ -3864,11 +3940,10 @@ fn parse_header<'a>(
                 packages,
                 header_type: HeaderType::App {
                     provides: provides.into_bump_slice(),
-                    output_name: header.name.value,
-                    to_platform: header.provides.to.value,
+                    to_platform,
                 },
                 module_comments: comments,
-                header_imports: header.imports,
+                header_imports: header.old_imports,
             };
 
             let (module_id, _, resolved_header) =
@@ -3892,28 +3967,11 @@ fn parse_header<'a>(
                 filename,
             );
 
-            // Look at the app module's `to` keyword to determine which package was the platform.
-            match header.provides.to.value {
-                To::ExistingPackage(shorthand) => {
-                    if !packages
-                        .iter()
-                        .any(|loc_package_entry| loc_package_entry.value.shorthand == shorthand)
-                    {
-                        todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`");
-                    }
-
-                    Ok(HeaderOutput {
-                        module_id,
-                        msg: Msg::Many(messages),
-                        opt_platform_shorthand: Some(shorthand),
-                    })
-                }
-                To::NewPackage(_package_name) => Ok(HeaderOutput {
-                    module_id,
-                    msg: Msg::Many(messages),
-                    opt_platform_shorthand: None,
-                }),
-            }
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Many(messages),
+                opt_platform_shorthand: platform_shorthand,
+            })
         }
         Ok((
             ast::Module {
@@ -6277,6 +6335,96 @@ fn to_incorrect_module_name_report<'a>(
     buf
 }
 
+fn to_no_platform_package_report(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    module_id: ModuleId,
+    filename: PathBuf,
+    region: Region,
+    src: &[u8],
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
+    // than an incorrect module name problem (the latter can happen only after parsing).
+    let src = unsafe { from_utf8_unchecked(src) };
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let doc = alloc.stack([
+        alloc.reflow("This app does not specify a platform:"),
+        alloc.region(lines.convert_region(region)),
+        alloc.reflow("Make sure you have exactly one package specified as `platform`:"),
+        alloc
+            .parser_suggestion("    app [main] {\n        pf: platform \"…path or URL to platform…\"\n            ^^^^^^^^\n    }"),
+        alloc.reflow("Tip: See an example in the tutorial:\n\n<https://www.roc-lang.org/tutorial#building-an-application>"),
+
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "UNSPECIFIED PLATFORM".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
+fn to_multiple_platform_packages_report(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    module_id: ModuleId,
+    filename: PathBuf,
+    region: Region,
+    src: &[u8],
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
+    // than an incorrect module name problem (the latter can happen only after parsing).
+    let src = unsafe { from_utf8_unchecked(src) };
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let doc = alloc.stack([
+        alloc.reflow("This app specifies multiple packages as `platform`:"),
+        alloc.region(lines.convert_region(region)),
+        alloc.reflow("Roc apps must specify exactly one platform."),
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "MULTIPLE PLATFORMS".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
 fn to_parse_problem_report<'a>(
     problem: FileError<'a, SyntaxError<'a>>,
     mut module_ids: ModuleIds,
@@ -6342,7 +6490,7 @@ fn report_cannot_run(
                     alloc.reflow("I could not find a platform based on your input file."),
                     alloc.reflow(r"Does the module header have an entry that looks like this?"),
                     alloc
-                        .parser_suggestion("packages { blah: \"…path or URL to platform…\" }")
+                        .parser_suggestion("app [main] { pf: platform \"…path or URL to platform…\" }")
                         .indent(4),
                     alloc.reflow("Tip: The following part of the tutorial has an example of specifying a platform:\n\n<https://www.roc-lang.org/tutorial#building-an-application>"),
                 ]);

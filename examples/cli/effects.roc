@@ -1,7 +1,6 @@
-app "effects"
-    packages { pf: "effects-platform/main.roc" }
-    imports [pf.Effect]
-    provides [main] to pf
+app [main] { pf: platform "effects-platform/main.roc" }
+
+import pf.Effect
 
 main : Effect.Effect {}
 main =

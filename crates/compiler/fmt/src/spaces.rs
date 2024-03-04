@@ -289,11 +289,14 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 interface_imports: header.interface_imports.remove_spaces(arena),
             }),
             Header::App(header) => Header::App(AppHeader {
-                before_name: &[],
-                name: header.name.remove_spaces(arena),
-                packages: header.packages.remove_spaces(arena),
-                imports: header.imports.remove_spaces(arena),
+                before_provides: &[],
                 provides: header.provides.remove_spaces(arena),
+                before_packages: &[],
+                packages: header.packages.remove_spaces(arena),
+                old_imports: header.old_imports.remove_spaces(arena),
+                old_provides_to_new_package: header
+                    .old_provides_to_new_package
+                    .remove_spaces(arena),
             }),
             Header::Package(header) => Header::Package(PackageHeader {
                 before_name: &[],
@@ -405,6 +408,10 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
         PackageEntry {
             shorthand: self.shorthand,
             spaces_after_shorthand: &[],
+            platform_marker: match self.platform_marker {
+                Some(_) => Some(&[]),
+                None => None,
+            },
             package_name: self.package_name.remove_spaces(arena),
         }
     }

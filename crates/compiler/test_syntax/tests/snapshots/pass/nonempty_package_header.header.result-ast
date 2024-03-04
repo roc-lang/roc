@@ -35,6 +35,7 @@ Module {
                     @59-71 PackageEntry {
                         shorthand: "foo",
                         spaces_after_shorthand: [],
+                        platform_marker: None,
                         package_name: @64-71 PackageName(
                             "./foo",
                         ),

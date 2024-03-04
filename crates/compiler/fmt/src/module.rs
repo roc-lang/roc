@@ -9,8 +9,9 @@ use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
     ImportsKeyword, Keyword, KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader,
-    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
-    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword,
+    PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
+    WithKeyword,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -75,6 +76,7 @@ keywords! {
     RequiresKeyword,
     ProvidesKeyword,
     ToKeyword,
+    PlatformKeyword,
 }
 
 impl<V: Formattable> Formattable for Option<V> {
@@ -206,20 +208,24 @@ pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
 pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {
     buf.indent(0);
     buf.push_str("app");
+
     let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
 
-    fmt_str_literal(buf, header.name.value, indent);
+    if header.before_provides.iter().all(|c| c.is_newline()) {
+        buf.spaces(1);
+        fmt_exposes(buf, header.provides, 0);
+    } else {
+        fmt_default_spaces(buf, header.before_provides, indent);
+        fmt_exposes(buf, header.provides, indent);
+    }
 
-    if let Some(packages) = &header.packages {
-        packages.keyword.format(buf, indent);
-        fmt_packages(buf, packages.item, indent);
+    if header.before_packages.iter().all(|c| c.is_newline()) {
+        buf.spaces(1);
+        fmt_packages(buf, header.packages.value, 0);
+    } else {
+        fmt_default_spaces(buf, header.before_packages, indent);
+        fmt_packages(buf, header.packages.value, indent);
     }
-    if let Some(imports) = &header.imports {
-        imports.keyword.format(buf, indent);
-        fmt_imports(buf, imports.item, indent);
-    }
-    header.provides.format(buf, indent);
 }
 
 pub fn fmt_package_header<'a>(buf: &mut Buf, header: &'a PackageHeader<'a>) {
@@ -464,6 +470,15 @@ fn fmt_packages_entry(buf: &mut Buf, entry: &PackageEntry, indent: u16) {
     buf.push_str(entry.shorthand);
     buf.push(':');
     fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
+
+    let indent = indent + INDENT;
+
+    if let Some(spaces_after) = entry.platform_marker {
+        buf.indent(indent);
+        buf.push_str(roc_parse::keyword::PLATFORM);
+        fmt_default_spaces(buf, spaces_after, indent);
+    }
+
     fmt_package_name(buf, entry.package_name.value, indent);
 }
 

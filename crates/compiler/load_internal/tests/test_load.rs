@@ -272,6 +272,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
 
     let interns = &loaded_module.interns;
     let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
+
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
 

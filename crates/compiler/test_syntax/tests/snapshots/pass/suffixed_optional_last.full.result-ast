@@ -3,75 +3,41 @@ Full {
         comments: [],
         header: App(
             AppHeader {
-                before_name: [],
-                name: @4-6 PlainLine(
-                    "",
-                ),
-                packages: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: PackagesKeyword,
-                            after: [],
-                        },
-                        item: Collection {
-                            items: [
-                                @30-37 SpaceBefore(
-                                    PackageEntry {
-                                        shorthand: "cli",
-                                        spaces_after_shorthand: [],
-                                        package_name: @35-37 PackageName(
-                                            "",
-                                        ),
-                                    },
-                                    [
-                                        Newline,
-                                    ],
+                before_provides: [
+                    Newline,
+                ],
+                provides: [
+                    @74-78 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [
+                    Newline,
+                ],
+                packages: @6-44 Collection {
+                    items: [
+                        @30-37 SpaceBefore(
+                            PackageEntry {
+                                shorthand: "cli",
+                                spaces_after_shorthand: [],
+                                platform_marker: Some(
+                                    [],
                                 ),
-                            ],
-                            final_comments: [
+                                package_name: @35-37 PackageName(
+                                    "",
+                                ),
+                            },
+                            [
                                 Newline,
                             ],
-                        },
-                    },
-                ),
-                imports: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: ImportsKeyword,
-                            after: [],
-                        },
-                        item: [],
-                    },
-                ),
-                provides: ProvidesTo {
-                    provides_keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ProvidesKeyword,
-                        after: [],
-                    },
-                    entries: [
-                        @74-78 ExposedName(
-                            "main",
                         ),
                     ],
-                    types: None,
-                    to_keyword: Spaces {
-                        before: [],
-                        item: ToKeyword,
-                        after: [],
-                    },
-                    to: @83-86 ExistingPackage(
-                        "cli",
-                    ),
+                    final_comments: [
+                        Newline,
+                    ],
                 },
+                old_imports: None,
+                old_provides_to_new_package: None,
             },
         ),
     },
