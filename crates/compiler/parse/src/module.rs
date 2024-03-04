@@ -86,7 +86,7 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
             map!(
                 skip_first!(
                     keyword("package", EHeader::Start),
-                    increment_min_indent(package_header())
+                    increment_min_indent(one_of![package_header(), old_package_header()])
                 ),
                 Header::Package
             ),
@@ -377,12 +377,55 @@ fn old_app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 #[inline(always)]
 fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
     record!(PackageHeader {
-        before_name: space0_e(EHeader::IndentStart),
-        name: loc!(specialize_err(EHeader::PackageName, package_name())),
-        exposes: specialize_err(EHeader::Exposes, exposes_modules()),
-        packages: specialize_err(EHeader::Packages, packages()),
+        before_exposes: space0_e(EHeader::IndentStart),
+        exposes: specialize_err(EHeader::Exposes, exposes_module_collection()),
+        before_packages: space0_e(EHeader::IndentStart),
+        packages: specialize_err(EHeader::Packages, loc!(packages_collection())),
     })
     .trace("package_header")
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct OldPackageHeader<'a> {
+    before_name: &'a [CommentOrNewline<'a>],
+    exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
+    packages:
+        Loc<KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>>,
+}
+
+#[inline(always)]
+fn old_package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
+    map_with_arena!(
+        record!(OldPackageHeader {
+            before_name: skip_second!(
+                space0_e(EHeader::IndentStart),
+                specialize_err(EHeader::PackageName, package_name())
+            ),
+            exposes: specialize_err(EHeader::Exposes, exposes_modules()),
+            packages: specialize_err(EHeader::Packages, loc!(packages())),
+        }),
+        |arena: &'a bumpalo::Bump, old: OldPackageHeader<'a>| {
+            let before_exposes = merge_n_spaces!(
+                arena,
+                old.before_name,
+                old.exposes.keyword.before,
+                old.exposes.keyword.after
+            );
+            let before_packages = merge_spaces(
+                arena,
+                old.packages.value.keyword.before,
+                old.packages.value.keyword.after,
+            );
+
+            PackageHeader {
+                before_exposes,
+                exposes: old.exposes.item,
+                before_packages,
+                packages: old.packages.map(|kw| kw.item),
+            }
+        }
+    )
+    .trace("old_package_header")
 }
 
 #[inline(always)]
@@ -638,14 +681,19 @@ fn exposes_modules<'a>() -> impl Parser<
             EExposes::IndentExposes,
             EExposes::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
-            byte(b'[', EExposes::ListStart),
-            exposes_module(EExposes::Identifier),
-            byte(b',', EExposes::ListEnd),
-            byte(b']', EExposes::ListEnd),
-            Spaced::SpaceBefore
-        ),
+        item: exposes_module_collection(),
     })
+}
+
+fn exposes_module_collection<'a>(
+) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>, EExposes> {
+    collection_trailing_sep_e!(
+        byte(b'[', EExposes::ListStart),
+        exposes_module(EExposes::Identifier),
+        byte(b',', EExposes::ListEnd),
+        byte(b']', EExposes::ListEnd),
+        Spaced::SpaceBefore
+    )
 }
 
 fn exposes_module<'a, F, E>(

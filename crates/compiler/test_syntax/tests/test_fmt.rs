@@ -4841,6 +4841,28 @@ mod test_fmt {
     }
 
     #[test]
+    fn old_style_package_header_is_upgraded() {
+        module_formats_to(
+            indoc!(
+                "
+                package \"csv\"
+                    exposes [Csv]
+                    packages {
+                        parser: \"parser/main.roc\"
+                    }
+                "
+            ),
+            indoc!(
+                "
+                package [Csv] {
+                    parser: \"parser/main.roc\",
+                }
+                "
+            ),
+        );
+    }
+
+    #[test]
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"

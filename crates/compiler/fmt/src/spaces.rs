@@ -299,9 +299,9 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                     .remove_spaces(arena),
             }),
             Header::Package(header) => Header::Package(PackageHeader {
-                before_name: &[],
-                name: header.name.remove_spaces(arena),
+                before_exposes: &[],
                 exposes: header.exposes.remove_spaces(arena),
+                before_packages: &[],
                 packages: header.packages.remove_spaces(arena),
             }),
             Header::Platform(header) => Header::Platform(PlatformHeader {

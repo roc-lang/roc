@@ -4851,12 +4851,12 @@ fn build_package_header<'a>(
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     let exposes = bumpalo::collections::Vec::from_iter_in(
-        unspace(arena, header.exposes.item.items).iter().copied(),
+        unspace(arena, header.exposes.items).iter().copied(),
         arena,
     );
-    let packages = unspace(arena, header.packages.item.items);
+    let packages = unspace(arena, header.packages.value.items);
     let exposes_ids = get_exposes_ids(
-        header.exposes.item.items,
+        header.exposes.items,
         arena,
         &module_ids,
         &ident_ids_by_module,

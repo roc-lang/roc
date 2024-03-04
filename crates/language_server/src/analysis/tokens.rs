@@ -244,15 +244,14 @@ impl IterTokens for AppHeader<'_> {
 impl IterTokens for PackageHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
+            before_exposes: _,
             exposes,
+            before_packages: _,
             packages,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(exposes.item.iter_tokens(arena))
-            .chain(packages.item.iter_tokens(arena))
+        (exposes.iter_tokens(arena).into_iter())
+            .chain(packages.value.iter_tokens(arena))
             .collect_in(arena)
     }
 }
