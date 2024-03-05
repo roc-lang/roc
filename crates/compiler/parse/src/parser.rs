@@ -1,4 +1,4 @@
-use crate::{ast::Pattern, state::State};
+use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
@@ -821,7 +821,7 @@ where
     }
 }
 
-/// Creates a parser that allocates its output and returns a reference to it
+/// Creates a parser that allocates its output and returns a reference to it.
 /// The new parser acts the same if its inner parser fails
 ///
 /// # Examples
@@ -937,6 +937,35 @@ where
     }
 }
 
+/// Creates a new parser that can change its output based on a function.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     OddChar(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("hello", Problem::NotFound);
+/// let parser = then(parser_inner,
+///     |arena, new_state, progress, output| {
+///         // arbitrary check
+///         if new_state.pos().offset % 2 == 0 {
+///             Ok((progress, output, new_state))
+///         } else {
+///             Err((Progress::NoProgress, Problem::OddChar(new_state.pos())))
+///         }
+///     }
+/// );
+///
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0);
+/// assert!(actual.is_err());
+/// ```
 pub fn then<'a, P1, F, Before, After, E>(parser: P1, transform: F) -> impl Parser<'a, After, E>
 where
     P1: Parser<'a, Before, E>,
