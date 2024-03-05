@@ -547,14 +547,14 @@ mod cli_run {
         // on the building of the platform
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/cli_testing_examples/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/cli_testing_examples/expects/expects.roc ─────────────
 
                 This expectation failed:
 
@@ -580,14 +580,14 @@ mod cli_run {
         );
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/cli_testing_examples/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/cli_testing_examples/expects/expects.roc ─────────────
 
                 This expectation failed:
 
@@ -599,7 +599,7 @@ mod cli_run {
                 a : Num *
                 a = 1
 
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/cli_testing_examples/expects/expects.roc ─────────────
 
                 This expectation failed:
 
@@ -611,7 +611,7 @@ mod cli_run {
                 a : Num *
                 a = 1
 
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/cli_testing_examples/expects/expects.roc ─────────────
 
                 This expectation failed:
 
@@ -659,7 +659,7 @@ mod cli_run {
     )]
     fn fibonacci() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/cli_testing_examples/algorithms",
             "fibonacci.roc",
             "",
             UseValgrind::Yes,
@@ -698,7 +698,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/cli_testing_examples/algorithms",
             "quicksort.roc",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,

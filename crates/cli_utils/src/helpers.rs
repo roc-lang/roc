@@ -411,6 +411,8 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
 
     // Descend into examples/{dir_name}
     path.push("crates");
+    path.push("cli");
+    path.push("tests");
     path.push("cli_testing_examples");
     path.extend(dir_name.split('/')); // Make slashes cross-target
 
