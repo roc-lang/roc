@@ -625,64 +625,27 @@ fn initFromBigStr(slice_bytes: [*]u8, len: usize, alloc_ptr: usize) RocStr {
 }
 
 fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
-    var ret_array_index: usize = 0;
-    var slice_start_index: usize = 0;
-    var str_index: usize = 0;
-
-    const bytes = string.asU8ptr();
-    const len = string.len();
-    const alloc_ptr = @intFromPtr(string.getAllocationPtr()) >> 1;
-    const init_fn = if (string.isSmallStr())
-        &initFromSmallStr
-    else
-        &initFromBigStr;
-
-    const delimiter_bytes_ptrs = delimiter.asU8ptr();
-    const delimiter_len = delimiter.len();
-
-    if (len >= delimiter_len and delimiter_len > 0) {
-        const end_index: usize = len - delimiter_len + 1;
-        while (str_index <= end_index) {
-            var delimiter_index: usize = 0;
-            var matches_delimiter = true;
-
-            while (delimiter_index < delimiter_len) {
-                var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-
-                if (str_index + delimiter_index >= len) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                var strChar = bytes[str_index + delimiter_index];
-
-                if (delimiterChar != strChar) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                delimiter_index += 1;
-            }
-
-            if (matches_delimiter) {
-                const segment_len: usize = str_index - slice_start_index;
-
-                array[ret_array_index] = init_fn(@constCast(bytes) + slice_start_index, segment_len, alloc_ptr);
-                slice_start_index = str_index + delimiter_len;
-                ret_array_index += 1;
-                str_index += delimiter_len;
-            } else {
-                str_index += 1;
-            }
-        }
+    if (delimiter.len() == 0) {
+        string.incref(1);
+        array[0] = string;
+        return;
     }
 
-    array[ret_array_index] = init_fn(@constCast(bytes) + slice_start_index, len - slice_start_index, alloc_ptr);
+    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
 
-    if (!string.isSmallStr()) {
-        // Correct refcount for all of the splits made.
-        string.incref(ret_array_index + 1);
+    var i: usize = 0;
+    var offset: usize = 0;
+
+    while (it.next()) |zig_slice| {
+        const roc_slice = substringUnsafe(string, offset, zig_slice.len);
+        array[i] = roc_slice;
+
+        i += 1;
+        offset += zig_slice.len + delimiter.len();
     }
+
+    // Correct refcount for all of the splits made.
+    string.incref(i); // i == array.len()
 }
 
 test "strSplitHelp: empty delimiter" {
@@ -1008,43 +971,14 @@ test "strSplitHelp: overlapping delimiter 2" {
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
-    const bytes = string.asU8ptr();
-    const len = string.len();
-
-    const delimiter_bytes_ptrs = delimiter.asU8ptr();
-    const delimiter_len = delimiter.len();
-
-    var count: usize = 1;
-
-    if (len >= delimiter_len and delimiter_len > 0) {
-        var str_index: usize = 0;
-        const end_cond: usize = len - delimiter_len + 1;
-
-        while (str_index < end_cond) {
-            var delimiter_index: usize = 0;
-
-            var matches_delimiter = true;
-
-            while (delimiter_index < delimiter_len) {
-                const delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-                const strChar = bytes[str_index + delimiter_index];
-
-                if (delimiterChar != strChar) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                delimiter_index += 1;
-            }
-
-            if (matches_delimiter) {
-                count += 1;
-                str_index += delimiter_len;
-            } else {
-                str_index += 1;
-            }
-        }
+    if (delimiter.isEmpty()) {
+        return 1;
     }
+
+    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
+    var count: usize = 0;
+
+    while (it.next()) |_| : (count += 1) {}
 
     return count;
 }
