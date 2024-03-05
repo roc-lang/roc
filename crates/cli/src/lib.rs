@@ -575,8 +575,10 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
         let passed_color = ANSI_STYLE_CODES.green;
 
+        let reset = ANSI_STYLE_CODES.reset;
+
         println!(
-            "\n{failed_color}{failed_count}\x1B[39m failed and {passed_color}{passed_count}\x1B[39m passed in {} ms.\n",
+            "\n{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
             total_time.as_millis(),
         );
 
