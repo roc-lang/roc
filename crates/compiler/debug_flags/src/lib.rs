@@ -176,4 +176,7 @@ flags! {
 
     /// Print out shell commands used to buid the Roc and host code
     ROC_PRINT_BUILD_COMMANDS
+
+    /// Print out shell commands used to buid the Roc and host code along with used env vars
+    ROC_PRINT_BUILD_COMMANDS_WITH_ENV_VARS
 }
