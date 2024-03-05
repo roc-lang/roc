@@ -5789,6 +5789,7 @@ fn build_procedures_help<'a>(
             // only have top-level thunks for this proc's module in scope
             // this retain is not needed for correctness, but will cause less confusion when debugging
             let home = proc.name.name().module_id();
+
             current_scope.retain_top_level_thunks_for_module(home);
 
             build_proc(

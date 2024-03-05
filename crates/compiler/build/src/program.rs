@@ -19,6 +19,8 @@ use roc_reporting::{
 };
 use roc_target::{OperatingSystem, TargetInfo};
 use std::ffi::OsStr;
+use std::fs::{self, File};
+use std::io::Write;
 use std::ops::Deref;
 use std::{
     path::{Path, PathBuf},
@@ -286,9 +288,70 @@ fn gen_from_mono_module_llvm<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    //
+    // TEMP for debugging
+    //
+    let memory_buffer = {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.into_path();
+
+        let app_ll_file = dir.join("app.ll");
+        let app_bc_file = dir.join("app.bc");
+        let app_o_file = dir.join("app.o");
+
+        // write the ll code to a file, so we can modify it
+        module.print_to_file(&app_ll_file).unwrap();
+
+        let mut file_content = fs::read_to_string(&app_ll_file).unwrap();
+
+        // Replace all occurrences of "tail call" with "call".
+        file_content = file_content.replace("tail call", "call");
+
+        // Open the file in write mode to overwrite it with the modified content.
+        let mut file = File::create(&app_ll_file).unwrap();
+
+        // Write the modified content back to the file.
+        file.write_all(file_content.as_bytes()).unwrap();
+
+        // Convert .ll to .bc
+        use std::process::Command;
+        let mut llvm_as_command = Command::new("llvm-as");
+        llvm_as_command.args([
+            app_ll_file.to_str().unwrap(),
+            "-o",
+            app_bc_file.to_str().unwrap(),
+        ]);
+
+        llvm_as_command.output().unwrap();
+        
+
+        // write the .o file. Note that this builds the .o for the local machine,
+        // and ignores the `target_machine` entirely.
+        //
+        // different systems name this executable differently, so we shotgun for
+        // the most common ones and then give up.
+        let bc_to_object = Command::new("llc")
+            .args([
+                "-relocation-model=pic",
+                "-filetype=obj",
+                app_bc_file.to_str().unwrap(),
+                "-o",
+                app_o_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
+
+        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
+    };
+    //
+    // END TEMP
+    //
+
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
+    /*let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
     let memory_buffer = if fuzz || gen_sanitizers {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.into_path();
@@ -396,7 +459,7 @@ fn gen_from_mono_module_llvm<'a>(
                 target.architecture
             ),
         }
-    };
+    };*/
 
     let code_gen_object = code_gen_object_start.elapsed();
     let total = all_code_gen_start.elapsed();
