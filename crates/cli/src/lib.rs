@@ -17,9 +17,11 @@ use roc_error_macros::{internal_error, user_error};
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
+use roc_reporting::report::ANSI_STYLE_CODES;
 use roc_target::Target;
 use std::env;
 use std::ffi::{CString, OsStr, OsString};
@@ -28,7 +30,7 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use strum::IntoEnumIterator;
 use target_lexicon::{Architecture, Triple};
 #[cfg(not(target_os = "linux"))]
@@ -440,7 +442,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
     use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
-    use roc_reporting::report::ANSI_STYLE_CODES;
     use roc_target::TargetInfo;
 
     let start_time = Instant::now();
@@ -515,14 +516,15 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
-        arena,
-        target.clone(),
-        loaded,
-        opt_level,
-        LlvmBackendMode::CliTest,
-    )
-    .unwrap();
+    let (lib, expects_by_module, layout_interner) =
+        roc_repl_expect::run::expect_mono_module_to_dylib(
+            arena,
+            target.clone(),
+            loaded,
+            opt_level,
+            LlvmBackendMode::CliTest,
+        )
+        .unwrap();
 
     // Print warnings before running tests.
     {
@@ -542,21 +544,32 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
-        &mut writer,
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        arena,
-        interns,
-        &layout_interner.into_global(),
-        &lib,
-        &mut expectations,
-        expects,
-    )
-    .unwrap();
+    let mut total_failed_count = 0;
+    let mut total_passed_count = 0;
 
-    let total_time = start_time.elapsed();
+    let mut results_by_module = Vec::new();
+    let global_layout_interner = layout_interner.into_global();
+    for (module_id, expects) in expects_by_module.into_iter() {
+        let test_start_time = Instant::now();
+        let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
+            &mut writer,
+            roc_reporting::report::RenderTarget::ColorTerminal,
+            arena,
+            interns,
+            &global_layout_interner,
+            &lib,
+            &mut expectations,
+            expects,
+        )
+        .unwrap();
 
-    if failed_count == 0 && passed_count == 0 {
+        let duration = test_start_time.elapsed();
+        total_failed_count += failed_count;
+        total_passed_count += passed_count;
+        results_by_module.push((module_id, failed_count, passed_count, duration));
+    }
+
+    if total_failed_count == 0 && total_passed_count == 0 {
         // TODO print this in a more nicely formatted way!
         println!("No expectations were found.");
 
@@ -567,22 +580,50 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         // running tests altogether!
         Ok(2)
     } else {
-        let failed_color = if failed_count == 0 {
-            ANSI_STYLE_CODES.green
-        } else {
-            ANSI_STYLE_CODES.red
-        };
+        let show_module_label = results_by_module.len() > 1;
+        for (module_id, failed_count, passed_count, duration) in results_by_module {
+            print_test_results(
+                module_id,
+                show_module_label,
+                failed_count,
+                passed_count,
+                duration,
+                interns,
+            );
+        }
 
-        let passed_color = ANSI_STYLE_CODES.green;
+        Ok((total_failed_count > 0) as i32)
+    }
+}
 
-        let reset = ANSI_STYLE_CODES.reset;
+fn print_test_results(
+    module_id: ModuleId,
+    show_module_label: bool,
+    failed_count: usize,
+    passed_count: usize,
+    duration: Duration,
+    interns: &Interns,
+) {
+    let failed_color = if failed_count == 0 {
+        ANSI_STYLE_CODES.green
+    } else {
+        ANSI_STYLE_CODES.red
+    };
 
+    let passed_color = ANSI_STYLE_CODES.green;
+    let reset = ANSI_STYLE_CODES.reset;
+
+    if show_module_label {
+        let module_name = module_id.to_ident_str(interns);
+        println!(
+            "\n{module_name}.roc:\n    {failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
+            duration.as_millis(),
+        );
+    } else {
         println!(
             "\n{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
-            total_time.as_millis(),
+            duration.as_millis(),
         );
-
-        Ok((failed_count > 0) as i32)
     }
 }
 

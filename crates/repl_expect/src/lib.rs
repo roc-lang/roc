@@ -150,7 +150,7 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
+        let (lib, expects_by_module, layout_interner) = expect_mono_module_to_dylib(
             arena,
             target.clone(),
             loaded,
@@ -173,18 +173,22 @@ mod test {
         unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
-        let (_failed, _passed) = crate::run::run_expects_with_memory(
-            &mut writer,
-            RenderTarget::ColorTerminal,
-            arena,
-            interns,
-            &layout_interner.into_global(),
-            &lib,
-            &mut expectations,
-            expects,
-            &mut memory,
-        )
-        .unwrap();
+
+        let global_layout_interner = layout_interner.into_global();
+        for (_, expects) in expects_by_module {
+            let (_failed, _passed) = crate::run::run_expects_with_memory(
+                &mut writer,
+                RenderTarget::ColorTerminal,
+                arena,
+                interns,
+                &global_layout_interner,
+                &lib,
+                &mut expectations,
+                expects,
+                &mut memory,
+            )
+            .unwrap();
+        }
 
         // Remove ANSI escape codes from the answer - for example:
         //

@@ -173,7 +173,7 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
-    pub toplevel_expects: ToplevelExpects,
+    pub toplevel_expects: MutMap<ModuleId, ToplevelExpects>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
