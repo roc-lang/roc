@@ -982,6 +982,31 @@ where
     }
 }
 
+/// Creates a parser that matches a word exactly, useful when finding a keyword.
+/// This only matches if the next char is whitespace, the start of a comment, or the end of the file.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, keyword_e};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = keyword_e("when", Problem::NotFound);
+///
+/// let (progress, err) = parser.parse(&arena, State::new("whence".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("when".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 4);
+/// ```
 pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
