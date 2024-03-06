@@ -300,7 +300,7 @@ pub fn build_zig_host_wasm32(
             "c",
             "-target",
             "wasm32-wasi",
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
             "-fPIC",
             "-fstrip",
         ]);
@@ -1241,7 +1241,7 @@ fn link_wasm32(
             "ReleaseSmall",
             "-rdynamic",
             // useful for debugging
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
         ])
         .spawn()?;
 
