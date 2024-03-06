@@ -16,6 +16,7 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use regex::Regex;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
@@ -297,11 +298,7 @@ mod cli_run {
 
             let mut actual = strip_colors(&out.stdout);
 
-            // e.g. "1 failed and 0 passed in 123 ms."
-            if let Some(split) = actual.rfind("passed in ") {
-                let (before_first_digit, _) = actual.split_at(split);
-                actual = format!("{before_first_digit}passed in <ignored for test> ms.");
-            }
+            actual = ignore_test_timings(&actual);
 
             let self_path = file.display().to_string();
             actual = actual.replace(&self_path, "<ignored for tests>");
@@ -323,13 +320,26 @@ mod cli_run {
         }
     }
 
+    fn ignore_test_timings(output: &str) -> String {
+        let regex = Regex::new(r" passed in (\d+) ms\.").expect("Invalid regex pattern");
+        let replacement = " passed in <ignored for test> ms.";
+        regex.replace_all(output, replacement).to_string()
+    }
+
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    // not currently used
-    // fn test_roc_expect(dir_name: &str, roc_filename: &str) {
-    //     let path = file_path_from_root(dir_name, roc_filename);
-    //     let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
-    //     assert!(out.status.success());
-    // }
+    fn test_roc_expect(dir_name: &str, roc_filename: &str, expected_ending: &str) {
+        let path = file_path_from_root(dir_name, roc_filename);
+        check_output_with_stdin(
+            &path,
+            &[],
+            &[],
+            &[],
+            &[],
+            expected_ending,
+            UseValgrind::Yes,
+            TestCliCommands::Test,
+        );
+    }
 
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
@@ -635,6 +645,26 @@ mod cli_run {
             ),
             UseValgrind::Yes,
             TestCliCommands::Test,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            indoc!(
+                r#"
+                Direct.roc:
+                    0 failed and 2 passed in <ignored for test> ms.
+
+
+                Transitive.roc:
+                    0 failed and 1 passed in <ignored for test> ms.
+
+                "#
+            ),
         );
     }
 

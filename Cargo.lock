@@ -2417,6 +2417,7 @@ dependencies = [
  "mimalloc",
  "parking_lot",
  "pretty_assertions",
+ "regex",
  "roc_build",
  "roc_builtins",
  "roc_can",
