@@ -87,7 +87,10 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
         return HashSet::new();
     }
 
-    println!("\n\nDoing benchmarks {:?} times to reduce flukes.\n\n", nr_repeat_benchmarks);
+    println!(
+        "\n\nDoing benchmarks {:?} times to reduce flukes.\n\n",
+        nr_repeat_benchmarks
+    );
 
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
@@ -111,19 +114,16 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
 
 // returns Vec with names of regressed benchmarks
 fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
-    let mut bench_cmd = 
-        Command::new(format!(
-            "./bench-folder-{}/target/release/deps/time_bench",
-            branch_name
-        ));
+    let mut bench_cmd = Command::new(format!(
+        "./bench-folder-{}/target/release/deps/time_bench",
+        branch_name
+    ));
 
-    let bench_cmd_w_args =
-        bench_cmd.args(&["--bench", "--noplot"]);
+    let bench_cmd_w_args = bench_cmd.args(&["--bench", "--noplot"]);
 
     let bench_cmd_as_str = format!("{bench_cmd_w_args:?}");
 
-    let mut bench_cmd_child = 
-        bench_cmd_w_args
+    let mut bench_cmd_child = bench_cmd_w_args
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -163,8 +163,7 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
             "Error: time-bench execution failed with exit code {}.\n\
             See output above for error info.\n\
             Command was:\n\t{}",
-            exit_status, 
-            bench_cmd_as_str
+            exit_status, bench_cmd_as_str
         );
     }
 
@@ -220,7 +219,7 @@ fn sha_file(file_path: &Path) -> Result<String, io::Error> {
     assert!(disassembly_output.status.success());
 
     let mut reader = BufReader::new(disassembly_output.stdout.as_slice());
-    
+
     // the first line contains the path, we want to skip it
     let mut _discard_lines = String::new();
     reader.read_line(&mut _discard_lines)?;
@@ -265,7 +264,7 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
 }
 
 fn check_if_bench_executables_changed() -> bool {
-    let bench_folder_str = "/crates/cli_testing_examples/benchmarks/";
+    let bench_folder_str = "/crates/cli/tests/benchmarks/";
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
 
