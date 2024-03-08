@@ -11,12 +11,13 @@ extern crate roc_module;
 mod cli_run {
     use cli_utils::helpers::{
         extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -323,11 +324,12 @@ mod cli_run {
     }
 
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    fn test_roc_expect(dir_name: &str, roc_filename: &str) {
-        let path = file_path_from_root(dir_name, roc_filename);
-        let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
-    }
+    // not currently used
+    // fn test_roc_expect(dir_name: &str, roc_filename: &str) {
+    //     let path = file_path_from_root(dir_name, roc_filename);
+    //     let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
+    //     assert!(out.status.success());
+    // }
 
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
@@ -545,16 +547,18 @@ mod cli_run {
         // on the building of the platform
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
                 This expectation failed:
 
-                19│      expect words == []
+                28│      expect words == []
                                 ^^^^^^^^^^^
 
                 When it failed, these variables had these values:
@@ -562,12 +566,12 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [<ignored for tests>:22] x = 42
-                [<ignored for tests>:23] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:24] "this is line 24" = "this is line 24"
-                [<ignored for tests>:13] x = "abc"
-                [<ignored for tests>:13] x = 10
-                [<ignored for tests>:13] x = (A (B C))
+                [<ignored for tests>:31] x = 42
+                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:35] "this is line 24" = "this is line 24"
+                [<ignored for tests>:21] x = "abc"
+                [<ignored for tests>:21] x = 10
+                [<ignored for tests>:21] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -576,27 +580,53 @@ mod cli_run {
         );
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
                 This expectation failed:
 
-                 6│>  expect
-                 7│>      a = 1
-                 8│>      b = 2
-                 9│>
-                10│>      a == b
+                9│      expect a == 2
+                               ^^^^^^
 
                 When it failed, these variables had these values:
 
                 a : Num *
                 a = 1
 
-                b : Num *
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                10│      expect a == 3
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                14│>  expect
+                15│>      a = makeA
+                16│>      b = 2i64
+                17│>
+                18│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Int Signed64
+                a = 1
+
+                b : I64
                 b = 2
 
 
@@ -629,7 +659,7 @@ mod cli_run {
     )]
     fn fibonacci() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "fibonacci.roc",
             "",
             UseValgrind::Yes,
@@ -668,7 +698,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "quicksort.roc",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
@@ -871,10 +901,10 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                This roc file can print it's own source code. The source is:
+                This roc file can print its own source code. The source is:
 
                 app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
                     imports [
                         pf.Stdout,
                         "ingested-file.roc" as ownCode : Str,
@@ -882,7 +912,7 @@ mod cli_run {
                     provides [main] to pf
 
                 main =
-                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+                    Stdout.line "\nThis roc file can print its own source code. The source is:\n\n$(ownCode)"
 
                 "#
             ),
@@ -912,9 +942,9 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser/examples",
+            "examples/parser",
             "parse-movies-csv.roc",
-            "Parse success!\n",
+            "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n",
             UseValgrind::No,
         )
     }
@@ -924,17 +954,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
-            "examples/parser/examples",
+            "examples/parser",
             "letter-counts.roc",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn parse_http() {
-        test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
     #[test]
@@ -976,13 +1000,13 @@ mod cli_run {
 
             // TODO fix QuicksortApp and then remove this!
             match roc_filename {
-                "QuicksortApp.roc" => {
+                "quicksortApp.roc" => {
                     eprintln!(
                     "WARNING: skipping testing benchmark {roc_filename} because the test is broken right now!"
                 );
                     return;
                 }
-                "TestAStar.roc" => {
+                "testAStar.roc" => {
                     if cfg!(feature = "wasm32-cli-run") {
                         eprintln!(
                         "WARNING: skipping testing benchmark {roc_filename} because it currently does not work on wasm32 due to dictionaries."
@@ -1137,20 +1161,20 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("NQueens.roc", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("CFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
             test_benchmark(
-                "Deriv.roc",
+                "deriv.roc",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
@@ -1160,14 +1184,14 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("RBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
+            test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             test_benchmark(
-                "RBTreeInsert.roc",
+                "rBTreeInsert.roc",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
@@ -1179,25 +1203,25 @@ mod cli_run {
         #[test]
         fn rbtree_del() {
             test_benchmark(
-                "RBTreeDel.roc",
+                "rBTreeDel.roc",
                 &["420"],
-                &[],
                 "30\n",
-                true
+                UseValgrind::Yes,
             )
-        }*/
+        }
+        */
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("TestAStar.roc", &[], "True\n", UseValgrind::No)
+            test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
             test_benchmark(
-                "TestBase64.roc",
+                "testBase64.roc",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,
@@ -1207,19 +1231,19 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("Closure.roc", &[], "", UseValgrind::No)
+            test_benchmark("closure.roc", &[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("Issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark("issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
-                "QuicksortApp.roc",
+                "quicksortApp.roc",
                 &[],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,
@@ -1333,7 +1357,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
 
                 Something is off with the body of the main definition:
 
@@ -1363,13 +1387,36 @@ mod cli_run {
     }
 
     #[test]
+    fn known_type_error_with_long_path() {
+        check_compile_error(
+            &known_bad_file("UnusedImportButWithALongFileNameForTesting.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
     fn exposed_not_defined() {
         check_compile_error(
             &known_bad_file("ExposedNotDefined.roc"),
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
+                ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
 
                 bar is listed as exposed, but it isn't defined in this module.
 
@@ -1390,7 +1437,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
+                ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
                 Nothing from Symbol is used in this module.
 
@@ -1413,7 +1460,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
+                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
 
                 I don't know how to generate the foobar function.
 

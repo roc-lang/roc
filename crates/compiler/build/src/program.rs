@@ -86,6 +86,7 @@ pub struct CodeGenOptions {
     pub opt_level: OptLevel,
     pub emit_debug_info: bool,
     pub emit_llvm_ir: bool,
+    pub fuzz: bool,
 }
 
 type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
@@ -103,6 +104,7 @@ pub fn gen_from_mono_module<'a>(
     let path = roc_file_path;
     let debug = code_gen_options.emit_debug_info;
     let emit_llvm_ir = code_gen_options.emit_llvm_ir;
+    let fuzz = code_gen_options.fuzz;
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
@@ -131,6 +133,7 @@ pub fn gen_from_mono_module<'a>(
             backend_mode,
             debug,
             emit_llvm_ir,
+            fuzz,
         ),
     }
 }
@@ -148,6 +151,7 @@ fn gen_from_mono_module_llvm<'a>(
     backend_mode: LlvmBackendMode,
     emit_debug_info: bool,
     emit_llvm_ir: bool,
+    fuzz: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -162,12 +166,11 @@ fn gen_from_mono_module_llvm<'a>(
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
-    // mark our zig-defined builtins as internal
     let app_ll_file = {
-        let mut temp = PathBuf::from(roc_file_path);
-        temp.set_extension("ll");
+        let mut roc_file_path_buf = PathBuf::from(roc_file_path);
+        roc_file_path_buf.set_extension("ll");
 
-        temp
+        roc_file_path_buf
     };
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
@@ -274,26 +277,21 @@ fn gen_from_mono_module_llvm<'a>(
         );
     }
 
-    if emit_llvm_ir {
-        eprintln!("Emitting LLVM IR to {}", &app_ll_file.display());
-        module.print_to_file(&app_ll_file).unwrap();
-    }
-
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    // annotate the LLVM IR output with debug info
-    // so errors are reported with the line number of the LLVM source
-    let memory_buffer = if cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok() {
+    let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
+    let memory_buffer = if fuzz || gen_sanitizers {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.into_path();
 
-        let app_ll_file = dir.join("app.ll");
-        let app_bc_file = dir.join("app.bc");
-        let app_o_file = dir.join("app.o");
+        let temp_app_ll_file = dir.join("app.ll");
+        let temp_app_processed_file = dir.join("app_processed.ll"); // app.ll with llvm passes applied
+        let temp_app_processed_file_str = temp_app_processed_file.to_str().unwrap().to_owned();
+        let temp_app_o_file = dir.join("app.o");
 
         // write the ll code to a file, so we can modify it
-        module.print_to_file(&app_ll_file).unwrap();
+        module.print_to_file(&temp_app_ll_file).unwrap();
 
         // Apply coverage passes.
         // Note, this is specifically tailored for `cargo afl` and afl++.
@@ -301,33 +299,27 @@ fn gen_from_mono_module_llvm<'a>(
         let mut passes = vec![];
         let mut extra_args = vec![];
         let mut unrecognized = vec![];
-        for sanitizer in std::env::var("ROC_SANITIZERS")
-            .unwrap()
-            .split(',')
-            .map(|x| x.trim())
-        {
-            match sanitizer {
-                "address" => passes.push("asan-module"),
-                "memory" => passes.push("msan-module"),
-                "thread" => passes.push("tsan-module"),
-                "cargo-fuzz" => {
-                    passes.push("sancov-module");
-                    extra_args.extend_from_slice(&[
-                        "-sanitizer-coverage-level=3",
-                        "-sanitizer-coverage-prune-blocks=0",
-                        "-sanitizer-coverage-inline-8bit-counters",
-                        "-sanitizer-coverage-pc-table",
-                    ]);
+        if fuzz {
+            passes.push("sancov-module");
+            extra_args.extend_from_slice(&[
+                "-sanitizer-coverage-level=4",
+                "-sanitizer-coverage-inline-8bit-counters",
+                "-sanitizer-coverage-pc-table",
+                "-sanitizer-coverage-trace-compares",
+            ]);
+        }
+        if gen_sanitizers {
+            for sanitizer in std::env::var("ROC_SANITIZERS")
+                .unwrap()
+                .split(',')
+                .map(|x| x.trim())
+            {
+                match sanitizer {
+                    "address" => passes.push("asan-module"),
+                    "memory" => passes.push("msan-module"),
+                    "thread" => passes.push("tsan-module"),
+                    x => unrecognized.push(x.to_owned()),
                 }
-                "afl.rs" => {
-                    passes.push("sancov-module");
-                    extra_args.extend_from_slice(&[
-                        "-sanitizer-coverage-level=3",
-                        "-sanitizer-coverage-prune-blocks=0",
-                        "-sanitizer-coverage-trace-pc-guard",
-                    ]);
-                }
-                x => unrecognized.push(x.to_owned()),
             }
         }
         if !unrecognized.is_empty() {
@@ -341,40 +333,59 @@ fn gen_from_mono_module_llvm<'a>(
         }
 
         use std::process::Command;
-        let mut opt = Command::new("opt");
-        opt.args([
-            app_ll_file.to_str().unwrap(),
-            "-o",
-            app_bc_file.to_str().unwrap(),
-        ])
-        .args(extra_args);
-        if !passes.is_empty() {
-            opt.arg(format!("-passes={}", passes.join(",")));
-        }
-        let opt = opt.output().unwrap();
 
-        assert!(opt.stderr.is_empty(), "{opt:#?}");
+        // apply passes to app.ll
+        let mut opt_command = Command::new("opt");
+
+        opt_command
+            .args([
+                temp_app_ll_file.to_str().unwrap(),
+                "-o",
+                &temp_app_processed_file_str,
+            ])
+            .args(extra_args);
+        if !passes.is_empty() {
+            opt_command.arg(format!("-passes={}", passes.join(",")));
+        }
+
+        let opt_output = opt_command.output().unwrap();
+
+        assert!(opt_output.stderr.is_empty(), "{opt_output:#?}");
+
+        if emit_llvm_ir {
+            eprintln!("Emitting LLVM IR to {}", &app_ll_file.display());
+
+            std::fs::copy(temp_app_processed_file, app_ll_file).unwrap();
+        }
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
         //
         // different systems name this executable differently, so we shotgun for
         // the most common ones and then give up.
-        let bc_to_object = Command::new("llc")
+        let bc_to_object_output = Command::new("llc")
             .args([
                 "-relocation-model=pic",
                 "-filetype=obj",
-                app_bc_file.to_str().unwrap(),
+                &temp_app_processed_file_str,
                 "-o",
-                app_o_file.to_str().unwrap(),
+                temp_app_o_file.to_str().unwrap(),
             ])
             .output()
             .unwrap();
 
-        assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
+        assert!(
+            bc_to_object_output.status.success(),
+            "{bc_to_object_output:#?}"
+        );
 
-        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
+        MemoryBuffer::create_from_file(&temp_app_o_file).expect("memory buffer creation works")
     } else {
+        if emit_llvm_ir {
+            eprintln!("Emitting LLVM IR to {}", &app_ll_file.display());
+            module.print_to_file(&app_ll_file).unwrap();
+        }
+
         // Emit the .o file
         use target_lexicon::Architecture;
         match target.architecture {
@@ -650,7 +661,7 @@ pub fn handle_error_module(
 
     let problems = report_problems_typechecked(&mut module);
 
-    problems.print_to_stdout(total_time);
+    problems.print_error_warning_count(total_time);
 
     if print_run_anyway_hint {
         // If you're running "main.roc" then you can just do `roc run`
@@ -1291,6 +1302,7 @@ pub fn build_str_test<'a>(
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
         emit_llvm_ir: false,
+        fuzz: false,
     };
 
     let emit_timings = false;

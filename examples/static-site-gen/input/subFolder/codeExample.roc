@@ -29,6 +29,7 @@ transformFileContent = \currentUrl, htmlContent ->
     |> Result.map Html.render
     |> Result.withDefault ""
 
+### start snippet view
 view : NavLink, Str -> Html.Node
 view = \currentNavLink, htmlContent ->
     html [lang "en"] [
@@ -37,6 +38,7 @@ view = \currentNavLink, htmlContent ->
             Html.title [] [text currentNavLink.title],
             link [rel "stylesheet", href "style.css"] [],
         ],
+        ### start snippet body
         body [] [
             div [class "main"] [
                 div [class "navbar"] [
@@ -49,7 +51,9 @@ view = \currentNavLink, htmlContent ->
                 ],
             ],
         ],
+        ### end snippet body
     ]
+### end snippet view
 
 viewNavbar : NavLink -> Html.Node
 viewNavbar = \currentNavLink ->

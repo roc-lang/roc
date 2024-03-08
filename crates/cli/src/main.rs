@@ -210,33 +210,7 @@ fn main() -> io::Result<()> {
                 threading,
             ) {
                 Ok((problems, total_time)) => {
-                    println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
-                        if problems.errors == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.errors,
-                        if problems.errors == 1 {
-                            "error"
-                        } else {
-                            "errors"
-                        },
-                        if problems.warnings == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.warnings,
-                        if problems.warnings == 1 {
-                            "warning"
-                        } else {
-                            "warnings"
-                        },
-                        total_time.as_millis(),
-                    );
-
+                    problems.print_error_warning_count(total_time);
                     Ok(problems.exit_code())
                 }
 
@@ -287,6 +261,7 @@ fn main() -> io::Result<()> {
                             values.push(os_string.to_owned());
                         }
                     }
+                    None if from_stdin || to_stdout => {}
                     None => {
                         let mut os_string_values: Vec<OsString> = Vec::new();
 

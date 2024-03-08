@@ -68,6 +68,7 @@ pub const FLAG_STDIN: &str = "stdin";
 pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
+pub const FLAG_FUZZ: &str = "fuzz";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -139,6 +140,12 @@ pub fn build_app() -> Command {
         .value_parser(value_parser!(u32))
         .required(false);
 
+    let flag_fuzz = Arg::new(FLAG_FUZZ)
+        .long(FLAG_FUZZ)
+        .help("Instrument the roc binary for fuzzing with roc-fuzz")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
     let roc_file_to_run = Arg::new(ROC_FILE)
         .help("The .roc file of an app to run")
         .value_parser(value_parser!(PathBuf))
@@ -175,6 +182,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(flag_wasm_stack_size_kb)
             .arg(
                 Arg::new(FLAG_TARGET)
@@ -225,6 +233,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -248,6 +257,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
         )
@@ -262,11 +272,12 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
         )
         .subcommand(Command::new(CMD_FORMAT)
-            .about("Format a .roc file using standard Roc formatting")
+            .about("Format a .roc file or the .roc files contained in a directory using standard\nRoc formatting")
             .arg(
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
@@ -294,6 +305,7 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false),
             )
+            .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are formatted.")
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
@@ -392,6 +404,7 @@ pub fn build_app() -> Command {
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_prebuilt)
+        .arg(flag_fuzz)
         .arg(roc_file_to_run)
         .arg(args_for_app.trailing_var_arg(true))
 }
@@ -427,6 +440,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
     use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
+    use roc_reporting::report::ANSI_STYLE_CODES;
     use roc_target::TargetInfo;
 
     let start_time = Instant::now();
@@ -517,7 +531,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             "if there were errors, we would have already exited."
         );
         if problems.warnings > 0 {
-            problems.print_to_stdout(start_time.elapsed());
+            problems.print_error_warning_count(start_time.elapsed());
             println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
         }
     }
@@ -528,7 +542,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let (failed, passed) = roc_repl_expect::run::run_toplevel_expects(
+    let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
         &mut writer,
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
@@ -542,7 +556,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let total_time = start_time.elapsed();
 
-    if failed == 0 && passed == 0 {
+    if failed_count == 0 && passed_count == 0 {
         // TODO print this in a more nicely formatted way!
         println!("No expectations were found.");
 
@@ -553,18 +567,22 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         // running tests altogether!
         Ok(2)
     } else {
-        let failed_color = if failed == 0 {
-            32 // green
+        let failed_color = if failed_count == 0 {
+            ANSI_STYLE_CODES.green
         } else {
-            31 // red
+            ANSI_STYLE_CODES.red
         };
 
+        let passed_color = ANSI_STYLE_CODES.green;
+
+        let reset = ANSI_STYLE_CODES.reset;
+
         println!(
-            "\n\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
+            "\n{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
             total_time.as_millis(),
         );
 
-        Ok((failed > 0) as i32)
+        Ok((failed_count > 0) as i32)
     }
 }
 
@@ -747,6 +765,11 @@ pub fn build(
             (cross_compile && !targeting_wasm)
     };
 
+    let fuzz = matches.get_flag(FLAG_FUZZ);
+    if fuzz && !matches!(code_gen_backend, CodeGenBackend::Llvm(_)) {
+        user_error!("Cannot instrument binary for fuzzing while using a dev backend.");
+    }
+
     let wasm_dev_stack_bytes: Option<u32> = matches
         .try_get_one::<u32>(FLAG_WASM_STACK_SIZE_KB)
         .ok()
@@ -763,6 +786,7 @@ pub fn build(
         opt_level,
         emit_debug_info,
         emit_llvm_ir,
+        fuzz,
     };
 
     let load_config = standard_load_config(&triple, build_ordering, threading);
@@ -802,7 +826,7 @@ pub fn build(
                     // since the process is about to exit anyway.
                     // std::mem::forget(arena);
 
-                    problems.print_to_stdout(total_time);
+                    problems.print_error_warning_count(total_time);
                     println!(" while successfully building:\n\n    {generated_filename}");
 
                     // Return a nonzero exit code if there were problems
@@ -810,7 +834,7 @@ pub fn build(
                 }
                 BuildAndRun => {
                     if problems.fatally_errored {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -820,7 +844,7 @@ pub fn build(
                         return Ok(problems.exit_code());
                     }
                     if problems.errors > 0 || problems.warnings > 0 {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -840,7 +864,7 @@ pub fn build(
                 }
                 BuildAndRunIfNoErrors => {
                     if problems.fatally_errored {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -855,7 +879,7 @@ pub fn build(
                     );
 
                     if problems.warnings > 0 {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)

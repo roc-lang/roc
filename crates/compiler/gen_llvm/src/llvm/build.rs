@@ -1071,17 +1071,19 @@ pub fn module_from_builtins<'ctx>(
     // Anything not depended on by a `roc_builtin.` function could already by DCE'd theoretically.
     // That said, this workaround is good enough and fixes compilations times.
 
-    // Also, must_keep is the functions we depend on that would normally be provide by libc.
+    // Also, must_keep is the functions we depend on that would normally be provide by libc or compiler-rt.
     // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
     let must_keep = [
+        // Windows special required when floats are used
         "_fltused",
+        // From libc
         "floorf",
         "memcpy",
         "memset",
-        // I have no idea why this function is special.
-        // Without it, some tests hang on M1 mac outside of nix.
+        // From compiler-rt
+        "__divti3",
+        "__modti3",
         "__muloti4",
-        // fixes `Undefined Symbol in relocation`
         "__udivti3",
         // Roc special functions
         "__roc_force_longjmp",
@@ -4903,10 +4905,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                             Attribute::get_named_enum_kind_id("byval"),
                             c_abi_type.as_any_type_enum(),
                         );
-                        let nonnull = context.create_type_attribute(
-                            Attribute::get_named_enum_kind_id("nonnull"),
-                            c_abi_type.as_any_type_enum(),
-                        );
+                        let nonnull = context
+                            .create_enum_attribute(Attribute::get_named_enum_kind_id("nonnull"), 0);
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
                         let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
                         let param_index = i as u32 + returns_pointer as u32;
@@ -6753,9 +6753,7 @@ pub fn to_cc_return<'a>(
 ) -> CCReturn {
     let return_size = layout_interner.stack_size(layout);
     let pass_result_by_pointer = match env.target_info.operating_system {
-        roc_target::OperatingSystem::Windows => {
-            return_size >= 2 * env.target_info.ptr_width() as u32
-        }
+        roc_target::OperatingSystem::Windows => return_size > env.target_info.ptr_width() as u32,
         roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
         roc_target::OperatingSystem::Wasi => return_size > 2 * env.target_info.ptr_width() as u32,
     };

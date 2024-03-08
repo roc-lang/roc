@@ -462,11 +462,9 @@ mod test_reporting {
     fn human_readable(str: &str) -> String {
         str.replace(ANSI_STYLE_CODES.red, "<red>")
             .replace(ANSI_STYLE_CODES.white, "<white>")
-            .replace(ANSI_STYLE_CODES.blue, "<blue>")
             .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
             .replace(ANSI_STYLE_CODES.green, "<green>")
             .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
-            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
             .replace(ANSI_STYLE_CODES.reset, "<reset>")
             .replace(ANSI_STYLE_CODES.bold, "<bold>")
             .replace(ANSI_STYLE_CODES.underline, "<underline>")
@@ -480,7 +478,7 @@ mod test_reporting {
         "
         ),
         @r"
-    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+    ── NOT EXPOSED in /code/proj/Main.roc ──────────────────────────────────────────
 
     The List module does not expose `isempty`:
 
@@ -507,7 +505,7 @@ mod test_reporting {
         "
         ),
         @r"
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `y` is not used anywhere in your code.
 
@@ -532,7 +530,7 @@ mod test_reporting {
        "
         ),
         @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     The `i` name is first defined here:
 
@@ -564,7 +562,7 @@ mod test_reporting {
        "
         ),
         @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     The `Booly` name is first defined here:
 
@@ -596,7 +594,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     Using != and == together requires parentheses, to clarify how they
     should be grouped.
@@ -625,7 +623,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-        ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+        ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
         Nothing is named `bar` in this scope.
 
@@ -649,7 +647,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `true` in this scope.
 
@@ -681,7 +679,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     Using more than one == like this requires parentheses, to clarify how
     things should be grouped.
@@ -707,7 +705,7 @@ mod test_reporting {
          "#
         ),
         @r#"
-    ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED ARGUMENT in /code/proj/Main.roc ──────────────────────────────────────
 
     `box` doesn't use `htmlChildren`.
 
@@ -720,7 +718,7 @@ mod test_reporting {
     at the start of a variable name is a way of saying that the variable
     is not used.
 
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `y` is not used anywhere in your code.
 
@@ -759,7 +757,7 @@ mod test_reporting {
             &DEFAULT_PALETTE,
         );
 
-        assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
+        assert_eq!(human_readable(&buf), "<cyan>activityIndicatorLarge<reset>");
     }
 
     #[test]
@@ -804,7 +802,7 @@ mod test_reporting {
             ),
             indoc!(
                 r"
-                <cyan>── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─<reset>
+                <cyan>── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────<reset>
 
                 Nothing is named `theAdmin` in this scope.
 
@@ -830,7 +828,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `if` condition needs to be a Bool:
 
@@ -856,7 +854,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `if` guard condition needs to be a Bool:
 
@@ -881,7 +879,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
@@ -908,7 +906,7 @@ mod test_reporting {
              "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 3rd branch of this `if` does not match all the previous branches:
 
@@ -938,7 +936,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 2nd branch of this `when` does not match all the previous branches:
 
@@ -976,7 +974,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -1020,7 +1018,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This list contains elements with different types:
 
@@ -1047,7 +1045,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This list contains elements with different types:
 
@@ -1080,7 +1078,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     I cannot update the `.foo` field like this:
 
@@ -1110,7 +1108,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1135,7 +1133,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1161,7 +1159,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1174,7 +1172,7 @@ mod test_reporting {
 
         List ∞ -> *
 
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `g`:
 
@@ -1201,7 +1199,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -1237,7 +1235,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -1271,7 +1269,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1297,7 +1295,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1335,7 +1333,7 @@ mod test_reporting {
         // against that extra variable, rather than possibly having to translate a `Type`
         // again.
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1348,7 +1346,7 @@ mod test_reporting {
 
         List ∞ -> List *
 
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `g`:
 
@@ -1375,7 +1373,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `f`:
 
@@ -1388,7 +1386,7 @@ mod test_reporting {
 
         List ∞ -> List *
 
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `g`:
 
@@ -1416,7 +1414,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `f` has an unexpected type:
 
@@ -1450,7 +1448,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `f` has an unexpected type:
 
@@ -1487,7 +1485,7 @@ mod test_reporting {
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `f` has an unexpected type:
 
@@ -1524,7 +1522,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `then` branch of this `if` expression:
 
@@ -1558,7 +1556,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -1591,7 +1589,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -1623,7 +1621,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     The `x` value is not a function, but it was given 1 argument:
 
@@ -1645,7 +1643,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     The `f` function expects 1 argument, but it got 2 instead:
 
@@ -1667,7 +1665,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO FEW ARGS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `f` function expects 2 arguments, but it got only 1:
 
@@ -1688,7 +1686,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -1717,7 +1715,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 2nd pattern in this `when` does not match the previous ones:
 
@@ -1743,7 +1741,7 @@ mod test_reporting {
              "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -1771,7 +1769,7 @@ mod test_reporting {
              "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -1800,7 +1798,7 @@ mod test_reporting {
              "
         ),
         @r"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `foo` in this scope.
 
@@ -1856,7 +1854,7 @@ mod test_reporting {
         ),
         // Just putting this here. We should probably handle or-patterns better
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 2nd pattern in this branch does not match the previous ones:
 
@@ -1884,7 +1882,7 @@ mod test_reporting {
         ),
         // Maybe this should specifically say the pattern doesn't work?
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -1912,7 +1910,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of this definition:
 
@@ -1943,7 +1941,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer pattern is malformed:
 
@@ -1964,7 +1962,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This float pattern is malformed:
 
@@ -1985,7 +1983,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This hex integer pattern is malformed:
 
@@ -2006,7 +2004,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This octal integer pattern is malformed:
 
@@ -2027,7 +2025,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This binary integer pattern is malformed:
 
@@ -2049,7 +2047,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -2099,7 +2097,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `else` branch of this `if` expression:
 
@@ -2133,7 +2131,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -2168,7 +2166,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -2204,7 +2202,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `ok` in this scope.
 
@@ -2235,7 +2233,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `ok` is not used anywhere in your code.
 
@@ -2245,7 +2243,7 @@ mod test_reporting {
     If you didn't intend on using `ok` then remove it so future readers of
     your code don't wonder why it is there.
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -2277,7 +2275,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
     `f` is defined directly in terms of itself:
 
@@ -2304,7 +2302,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
     The `foo` definition is causing a very tricky infinite loop:
 
@@ -2332,7 +2330,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `x` record doesn’t have a `foo` field:
 
@@ -2354,7 +2352,7 @@ mod test_reporting {
         ),
         // TODO also suggest fields with the correct type
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `x` record doesn’t have a `foo` field:
 
@@ -2387,7 +2385,7 @@ mod test_reporting {
         ),
         // TODO also suggest fields with the correct type
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `r` record doesn’t have a `foo` field:
 
@@ -2415,7 +2413,7 @@ mod test_reporting {
         ),
         // TODO also suggest fields with the correct type
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `x` record doesn’t have a `foo` field:
 
@@ -2445,7 +2443,7 @@ mod test_reporting {
         ),
         // TODO also suggest fields with the correct type
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to + has an unexpected type:
 
@@ -2470,7 +2468,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to + has an unexpected type:
 
@@ -2498,7 +2496,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to + has an unexpected type:
 
@@ -2526,7 +2524,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -2560,7 +2558,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -2603,7 +2601,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This pattern does not cover all the possibilities:
 
@@ -2618,7 +2616,7 @@ mod test_reporting {
     matching in function arguments, put a `when` in the function body to
     account for all possibilities.
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -2655,7 +2653,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -2686,7 +2684,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2713,7 +2711,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2741,7 +2739,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2770,7 +2768,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2799,7 +2797,7 @@ mod test_reporting {
         ),
         // Tip: Looks like a record field guard is not exhaustive. Learn more about record pattern matches at TODO.
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2828,7 +2826,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2854,7 +2852,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -2881,7 +2879,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
 
     The 2nd pattern is redundant:
 
@@ -2909,7 +2907,7 @@ mod test_reporting {
         ),
         // de-aliases the alias to give a better error message
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `f` has an unexpected type:
 
@@ -2947,7 +2945,7 @@ mod test_reporting {
         ),
         // should not report Bar as unused!
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `Foo` alias is self-recursive in an invalid way:
 
@@ -2973,7 +2971,7 @@ mod test_reporting {
         ),
         // should not report Bar as unused!
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `Foo` alias is self-recursive in an invalid way:
 
@@ -2993,7 +2991,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE FIELD NAME in /code/proj/Main.roc ─────────────────────────────────
 
     This record defines the `.x` field twice!
 
@@ -3017,7 +3015,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE FIELD NAME in /code/proj/Main.roc ─────────────────────────────────
 
     This record defines the `.x` field twice!
 
@@ -3045,7 +3043,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE FIELD NAME in /code/proj/Main.roc ─────────────────────────────────
 
     This record defines the `.x` field twice!
 
@@ -3080,7 +3078,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE FIELD NAME in /code/proj/Main.roc ─────────────────────────────────
 
     This record defines the `.x` field twice!
 
@@ -3113,7 +3111,7 @@ mod test_reporting {
             "#
         ),
         @r"
-    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE FIELD NAME in /code/proj/Main.roc ─────────────────────────────────
 
     This record type defines the `.foo` field twice!
 
@@ -3141,7 +3139,7 @@ mod test_reporting {
             "#
         ),
         @r"
-    ── DUPLICATE TAG NAME ──────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE TAG NAME in /code/proj/Main.roc ───────────────────────────────────
 
     This tag union type defines the `Foo` tag twice!
 
@@ -3170,7 +3168,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── NAMING PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This annotation does not match the definition immediately following
     it:
@@ -3206,7 +3204,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This definition of `MyAlias` has an unexpected pattern:
 
@@ -3215,7 +3213,7 @@ mod test_reporting {
 
     Only type variables like `a` or `value` can occur in this position.
 
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `MyAlias` is not used anywhere in your code.
 
@@ -3238,7 +3236,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This definition of `Age` has an unexpected pattern:
 
@@ -3260,7 +3258,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY TYPE ARGUMENTS in /code/proj/Main.roc ──────────────────────────────
 
     The `Num` opaque expects 1 type argument, but it got 2 instead:
 
@@ -3282,7 +3280,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY TYPE ARGUMENTS in /code/proj/Main.roc ──────────────────────────────
 
     The `Num` opaque expects 1 type argument, but it got 2 instead:
 
@@ -3306,7 +3304,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
+    ── TOO FEW TYPE ARGUMENTS in /code/proj/Main.roc ───────────────────────────────
 
     The `Pair` alias expects 2 type arguments, but it got 1 instead:
 
@@ -3330,7 +3328,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY TYPE ARGUMENTS in /code/proj/Main.roc ──────────────────────────────
 
     The `Pair` alias expects 2 type arguments, but it got 3 instead:
 
@@ -3353,7 +3351,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── UNUSED TYPE ALIAS PARAMETER ─────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED TYPE ALIAS PARAMETER in /code/proj/Main.roc ──────────────────────────
 
     The `a` type parameter is not used in the `Foo` alias definition:
 
@@ -3375,7 +3373,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── ARGUMENTS BEFORE EQUALS ────────────────── tmp/elm_function_syntax/Test.roc ─
+    ── ARGUMENTS BEFORE EQUALS in tmp/elm_function_syntax/Test.roc ─────────────────
 
     I am partway through parsing a definition, but I got stuck here:
 
@@ -3403,7 +3401,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -3452,7 +3450,7 @@ mod test_reporting {
         // TODO render tag unions across multiple lines
         // TODO do not show recursion var if the recursion var does not render on the surface of a type
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -3506,7 +3504,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal is too big:
 
@@ -3518,7 +3516,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal is too small:
 
@@ -3530,7 +3528,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal is too big:
 
@@ -3542,7 +3540,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal is too small:
 
@@ -3554,7 +3552,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to + has an unexpected type:
 
@@ -3583,7 +3581,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This float literal is too big:
 
@@ -3595,7 +3593,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This float literal is too small:
 
@@ -3628,7 +3626,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal contains an invalid digit:
 
@@ -3640,7 +3638,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This hex integer literal contains an invalid digit:
 
@@ -3652,7 +3650,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This octal integer literal contains an invalid digit:
 
@@ -3664,7 +3662,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This binary integer literal contains an invalid digit:
 
@@ -3694,7 +3692,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This hex integer literal contains no digits:
 
@@ -3706,7 +3704,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This octal integer literal contains no digits:
 
@@ -3718,7 +3716,7 @@ mod test_reporting {
 
     Tip: Learn more about number literals at TODO
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This binary integer literal contains no digits:
 
@@ -3742,7 +3740,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This float literal contains an invalid digit:
 
@@ -3773,7 +3771,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This expression cannot be updated:
 
@@ -3782,7 +3780,7 @@ mod test_reporting {
 
     Only variables can be updated with record update syntax.
 
-    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+    ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Test` module is not imported:
 
@@ -3797,7 +3795,7 @@ mod test_reporting {
         Dict
         Hash
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This expression cannot be updated:
 
@@ -3816,7 +3814,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+    ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Foo` module is not imported:
 
@@ -3841,7 +3839,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to + has an unexpected type:
 
@@ -3869,7 +3867,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 1st argument to `f` is weird:
 
@@ -3898,7 +3896,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of this definition:
 
@@ -3929,7 +3927,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 1st argument to `f` is weird:
 
@@ -3962,7 +3960,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -3995,7 +3993,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -4026,7 +4024,7 @@ mod test_reporting {
                 "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to this function has an unexpected type:
 
@@ -4060,7 +4058,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -4094,7 +4092,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -4122,7 +4120,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── BAD OPTIONAL VALUE ──────────────────────────────────── /code/proj/Main.roc ─
+    ── BAD OPTIONAL VALUE in /code/proj/Main.roc ───────────────────────────────────
 
     This record uses an optional value for the `.y` field in an incorrect
     context!
@@ -4159,7 +4157,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
 
     The 3rd pattern is redundant:
 
@@ -4204,7 +4202,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED ARGUMENT in /code/proj/Main.roc ──────────────────────────────────────
 
     `f` doesn't use `foo`.
 
@@ -4226,7 +4224,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am trying to parse a qualified name here:
 
@@ -4247,7 +4245,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am trying to parse a qualified name here:
 
@@ -4267,7 +4265,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am trying to parse a record field access here:
 
@@ -4289,7 +4287,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── UNKNOWN OPERATOR ──────────────── tmp/type_annotation_double_colon/Test.roc ─
+    ── UNKNOWN OPERATOR in tmp/type_annotation_double_colon/Test.roc ───────────────
 
     This looks like an operator, but it's not one I recognize!
 
@@ -4321,7 +4319,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     This value is not a function, but it was given 3 arguments:
 
@@ -4340,7 +4338,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED TAG UNION TYPE ───────────────────── tmp/tag_union_open/Test.roc ─
+    ── UNFINISHED TAG UNION TYPE in tmp/tag_union_open/Test.roc ────────────────────
 
     I am partway through parsing a tag union type, but I got stuck here:
 
@@ -4362,7 +4360,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED TAG UNION TYPE ────────────────────── tmp/tag_union_end/Test.roc ─
+    ── UNFINISHED TAG UNION TYPE in tmp/tag_union_end/Test.roc ─────────────────────
 
     I am partway through parsing a tag union type, but I got stuck here:
 
@@ -4384,7 +4382,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── WEIRD TAG NAME ────────────────── tmp/tag_union_lowercase_tag_name/Test.roc ─
+    ── WEIRD TAG NAME in tmp/tag_union_lowercase_tag_name/Test.roc ─────────────────
 
     I am partway through parsing a tag union type, but I got stuck here:
 
@@ -4405,7 +4403,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── WEIRD TAG NAME ─────────── tmp/tag_union_second_lowercase_tag_name/Test.roc ─
+    ── WEIRD TAG NAME in tmp/tag_union_second_lowercase_tag_name/Test.roc ──────────
 
     I am partway through parsing a tag union type, but I got stuck here:
 
@@ -4426,7 +4424,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED RECORD TYPE ────────────────────── tmp/record_type_open/Test.roc ─
+    ── UNFINISHED RECORD TYPE in tmp/record_type_open/Test.roc ─────────────────────
 
     I am partway through parsing a record type, but I got stuck here:
 
@@ -4449,7 +4447,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED RECORD TYPE ─────────────── tmp/record_type_open_indent/Test.roc ─
+    ── UNFINISHED RECORD TYPE in tmp/record_type_open_indent/Test.roc ──────────────
 
     I am partway through parsing a record type, but I got stuck here:
 
@@ -4472,7 +4470,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED RECORD TYPE ─────────────────────── tmp/record_type_end/Test.roc ─
+    ── UNFINISHED RECORD TYPE in tmp/record_type_end/Test.roc ──────────────────────
 
     I am partway through parsing a record type, but I got stuck here:
 
@@ -4494,7 +4492,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED RECORD TYPE ──────── tmp/record_type_keyword_field_name/Test.roc ─
+    ── UNFINISHED RECORD TYPE in tmp/record_type_keyword_field_name/Test.roc ───────
 
     I just started parsing a record type, but I got stuck on this field
     name:
@@ -4516,7 +4514,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED RECORD TYPE ───────────── tmp/record_type_missing_comma/Test.roc ─
+    ── UNFINISHED RECORD TYPE in tmp/record_type_missing_comma/Test.roc ────────────
 
     I am partway through parsing a record type, but I got stuck here:
 
@@ -4532,38 +4530,38 @@ mod test_reporting {
     test_report!(
         record_type_tab,
         "f : { foo \t }",
-        @r"
-    ── TAB CHARACTER ──────────────────────────────── tmp/record_type_tab/Test.roc ─
+        @r###"
+    ── TAB CHARACTER in tmp/record_type_tab/Test.roc ───────────────────────────────
 
     I encountered a tab character:
 
     4│      f : { foo 	 }
                       ^
 
-    Tab characters are not allowed, use spaces instead.
-    "
+    Tab characters are not allowed in Roc code. Please use spaces instead!
+    "###
     );
 
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        @r"
-    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+        @r###"
+    ── TAB CHARACTER in tmp/comment_with_tab/Test.roc ──────────────────────────────
 
     I encountered a tab character:
 
     4│      # comment with a 	
                              ^
 
-    Tab characters are not allowed, use spaces instead.
-    "
+    Tab characters are not allowed in Roc code. Please use spaces instead!
+    "###
     );
 
     test_report!(
         comment_with_control_character,
         "# comment with a \x07\n",
         @r"
-    ── ASCII CONTROL CHARACTER ─────── tmp/comment_with_control_character/Test.roc ─
+    ── ASCII CONTROL CHARACTER in tmp/comment_with_control_character/Test.roc ──────
 
     I encountered an ASCII control character:
 
@@ -4578,7 +4576,7 @@ mod test_reporting {
         record_type_carriage_return,
         "f : { \r foo }",
         @r"
-    ── MISPLACED CARRIAGE RETURN ──────── tmp/record_type_carriage_return/Test.roc ─
+    ── MISPLACED CARRIAGE RETURN in tmp/record_type_carriage_return/Test.roc ───────
 
     I encountered a stray carriage return (\r):
 
@@ -4598,7 +4596,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED PARENTHESES ────────────────── tmp/type_in_parens_start/Test.roc ─
+    ── UNFINISHED PARENTHESES in tmp/type_in_parens_start/Test.roc ─────────────────
 
     I am partway through parsing a type in parentheses, but I got stuck
     here:
@@ -4621,7 +4619,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED PARENTHESES ──────────────────── tmp/type_in_parens_end/Test.roc ─
+    ── UNFINISHED PARENTHESES in tmp/type_in_parens_end/Test.roc ───────────────────
 
     I am partway through parsing a type in parentheses, but I got stuck
     here:
@@ -4646,7 +4644,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am confused by this type name:
 
@@ -4676,7 +4674,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am confused by this type name:
 
@@ -4705,7 +4703,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED TYPE ───────────────────────── tmp/type_apply_stray_dot/Test.roc ─
+    ── UNFINISHED TYPE in tmp/type_apply_stray_dot/Test.roc ────────────────────────
 
     I just started parsing a type, but I got stuck here:
 
@@ -4726,7 +4724,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am confused by this type name:
 
@@ -4757,7 +4755,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am confused by this type name:
 
@@ -4777,7 +4775,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── MISSING FINAL EXPRESSION ──────── tmp/def_missing_final_expression/Test.roc ─
+    ── MISSING FINAL EXPRESSION in tmp/def_missing_final_expression/Test.roc ───────
 
     I am partway through parsing a definition, but I got stuck here:
 
@@ -4805,7 +4803,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── INDENT ENDS AFTER EXPRESSION ────── tmp/expression_indentation_end/Test.roc ─
+    ── INDENT ENDS AFTER EXPRESSION in tmp/expression_indentation_end/Test.roc ─────
 
     I am partway through parsing an expression, but I got stuck here:
 
@@ -4831,7 +4829,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED INLINE ALIAS ──────────────────── tmp/type_inline_alias/Test.roc ─
+    ── UNFINISHED INLINE ALIAS in tmp/type_inline_alias/Test.roc ───────────────────
 
     I just started parsing an inline type alias, but I got stuck here:
 
@@ -4853,7 +4851,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── DOUBLE COMMA ─────────────────────────────── tmp/type_double_comma/Test.roc ─
+    ── DOUBLE COMMA in tmp/type_double_comma/Test.roc ──────────────────────────────
 
     I just started parsing a function argument type, but I encountered two
     commas in a row:
@@ -4876,7 +4874,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED TYPE ─────────────────────── tmp/type_argument_no_arrow/Test.roc ─
+    ── UNFINISHED TYPE in tmp/type_argument_no_arrow/Test.roc ──────────────────────
 
     I am partway through parsing a type, but I got stuck here:
 
@@ -4899,7 +4897,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED TYPE ───────────── tmp/type_argument_arrow_then_nothing/Test.roc ─
+    ── UNFINISHED TYPE in tmp/type_argument_arrow_then_nothing/Test.roc ────────────
 
     I just started parsing a type, but I got stuck here:
 
@@ -4924,7 +4922,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `myDict` definition:
 
@@ -4959,7 +4957,7 @@ mod test_reporting {
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `myDict` definition:
 
@@ -4991,7 +4989,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── IF GUARD NO CONDITION ───────────── tmp/if_guard_without_condition/Test.roc ─
+    ── IF GUARD NO CONDITION in tmp/if_guard_without_condition/Test.roc ────────────
 
     I just started parsing an if guard, but there is no guard condition:
 
@@ -5016,7 +5014,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED PATTERN ────────────────────────── tmp/empty_or_pattern/Test.roc ─
+    ── UNFINISHED PATTERN in tmp/empty_or_pattern/Test.roc ─────────────────────────
 
     I just started parsing a pattern, but I got stuck here:
 
@@ -5041,7 +5039,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── MISSING ARROW ────────────────────────── tmp/pattern_binds_keyword/Test.roc ─
+    ── MISSING ARROW in tmp/pattern_binds_keyword/Test.roc ─────────────────────────
 
     I am partway through parsing a `when` expression, but got stuck here:
 
@@ -5077,7 +5075,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED WHEN ─────────────────────────── tmp/when_missing_arrow/Test.roc ─
+    ── UNFINISHED WHEN in tmp/when_missing_arrow/Test.roc ──────────────────────────
 
     I was partway through parsing a `when` expression, but I got stuck here:
 
@@ -5110,7 +5108,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED ARGUMENT LIST ───────────────── tmp/lambda_double_comma/Test.roc ─
+    ── UNFINISHED ARGUMENT LIST in tmp/lambda_double_comma/Test.roc ────────────────
 
     I am partway through parsing a function argument list, but I got stuck
     at this comma:
@@ -5131,7 +5129,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED ARGUMENT LIST ──────────────── tmp/lambda_leading_comma/Test.roc ─
+    ── UNFINISHED ARGUMENT LIST in tmp/lambda_leading_comma/Test.roc ───────────────
 
     I am partway through parsing a function argument list, but I got stuck
     at this comma:
@@ -5178,7 +5176,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── NOT END OF FILE ──────────────────────── tmp/when_outdented_branch/Test.roc ─
+    ── NOT END OF FILE in tmp/when_outdented_branch/Test.roc ───────────────────────
 
     I expected to reach the end of the file, but got stuck here:
 
@@ -5197,7 +5195,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNEXPECTED ARROW ─────────────── tmp/when_over_indented_underscore/Test.roc ─
+    ── UNEXPECTED ARROW in tmp/when_over_indented_underscore/Test.roc ──────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
@@ -5234,7 +5232,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNEXPECTED ARROW ────────────────────── tmp/when_over_indented_int/Test.roc ─
+    ── UNEXPECTED ARROW in tmp/when_over_indented_int/Test.roc ─────────────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
@@ -5274,7 +5272,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED IF ────────────────────────────── tmp/if_outdented_then/Test.roc ─
+    ── UNFINISHED IF in tmp/if_outdented_then/Test.roc ─────────────────────────────
 
     I was partway through parsing an `if` expression, but I got stuck here:
 
@@ -5294,7 +5292,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED IF ──────────────────────────────── tmp/if_missing_else/Test.roc ─
+    ── UNFINISHED IF in tmp/if_missing_else/Test.roc ───────────────────────────────
 
     I was partway through parsing an `if` expression, but I got stuck here:
 
@@ -5313,7 +5311,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED LIST ──────────────────────────── tmp/list_double_comma/Test.roc ─
+    ── UNFINISHED LIST in tmp/list_double_comma/Test.roc ───────────────────────────
 
     I am partway through started parsing a list, but I got stuck here:
 
@@ -5333,7 +5331,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── UNFINISHED LIST ───────────────────────────── tmp/list_without_end/Test.roc ─
+    ── UNFINISHED LIST in tmp/list_without_end/Test.roc ────────────────────────────
 
     I am partway through started parsing a list, but I got stuck here:
 
@@ -5359,7 +5357,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This float literal contains an invalid digit:
 
@@ -5377,7 +5375,7 @@ mod test_reporting {
         unicode_not_hex,
         r#""abc\u(zzzz)def""#,
         @r#"
-    ── WEIRD CODE POINT ───────────────────────────── tmp/unicode_not_hex/Test.roc ─
+    ── WEIRD CODE POINT in tmp/unicode_not_hex/Test.roc ────────────────────────────
 
     I am partway through parsing a unicode code point, but I got stuck
     here:
@@ -5395,7 +5393,7 @@ mod test_reporting {
         unicode_too_large,
         r#""abc\u(110000)def""#,
         @r#"
-    ── INVALID UNICODE ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── INVALID UNICODE in /code/proj/Main.roc ──────────────────────────────────────
 
     This unicode code point is invalid:
 
@@ -5409,8 +5407,8 @@ mod test_reporting {
     test_report!(
         weird_escape,
         r#""abc\qdef""#,
-        @r#"
-    ── WEIRD ESCAPE ──────────────────────────────────── tmp/weird_escape/Test.roc ─
+        @r###"
+    ── WEIRD ESCAPE in tmp/weird_escape/Test.roc ───────────────────────────────────
 
     I was partway through parsing a  string literal, but I got stuck here:
 
@@ -5426,15 +5424,15 @@ mod test_reporting {
         - An escaped quote: \"
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
-        - An interpolated string: \(myVariable)
-    "#
+        - An interpolated string: $(myVariable)
+    "###
     );
 
     test_report!(
         single_quote_too_long,
         r"'abcdef'",
         @r#"
-    ── INVALID SCALAR ───────────────────────── tmp/single_quote_too_long/Test.roc ─
+    ── INVALID SCALAR in tmp/single_quote_too_long/Test.roc ────────────────────────
 
     I am part way through parsing this scalar literal (character literal),
     but it's too long to fit in a U32 so it's not a valid scalar.
@@ -5451,7 +5449,7 @@ mod test_reporting {
         single_no_end,
         r#""there is no end"#,
         @r#"
-    ── ENDLESS STRING ───────────────────────────────── tmp/single_no_end/Test.roc ─
+    ── ENDLESS STRING in tmp/single_no_end/Test.roc ────────────────────────────────
 
     I cannot find the end of this string:
 
@@ -5467,7 +5465,7 @@ mod test_reporting {
         multi_no_end,
         r#""""there is no end"#,
         @r#"
-    ── ENDLESS STRING ────────────────────────────────── tmp/multi_no_end/Test.roc ─
+    ── ENDLESS STRING in tmp/multi_no_end/Test.roc ─────────────────────────────────
 
     I cannot find the end of this block string:
 
@@ -5483,7 +5481,7 @@ mod test_reporting {
         multi_insufficient_indent,
         "    \"\"\"\n  testing\n    \"\"\"", // 4 space indent on the start, 2 space on the `testing` line
         @r#"
-    ── INSUFFICIENT INDENT IN MULTI-LINE STRING ─ ..._insufficient_indent/Test.roc ─
+    ── INSUFFICIENT INDENT IN MULTI-LINE STRING in ...insufficient_indent/Test.roc ─
 
     This multiline string is not sufficiently indented:
 
@@ -5505,7 +5503,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── INDENT ENDS AFTER EXPRESSION ──── tmp/dbg_without_final_expression/Test.roc ─
+    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
 
     I am partway through parsing a dbg statement, but I got stuck here:
 
@@ -5527,7 +5525,7 @@ mod test_reporting {
             "
         ),
         @r#"
-    ── INDENT ENDS AFTER EXPRESSION ─ tmp/expect_without_final_expression/Test.roc ─
+    ── INDENT ENDS AFTER EXPRESSION in ...expect_without_final_expression/Test.roc ─
 
     I am partway through parsing an expect statement, but I got stuck
     here:
@@ -5549,15 +5547,15 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if Bool.true then 1 else "\(greeting), World!"
+            if Bool.true then 1 else "$(greeting), World!"
             "#,
             ),
             @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if Bool.true then 1 else "\(greeting), World!"
+    6│      if Bool.true then 1 else "$(greeting), World!"
                                      ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:
@@ -5579,7 +5577,7 @@ mod test_reporting {
                 $name,
                 &format!(r#"if Bool.true then "abc" else 1 {} 2"#, $op),
                 |golden| assert_eq!(golden, format!(
-r#"── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+r#"── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
 This `if` has an `else` branch with a different type from its `then` branch:
 
@@ -5622,7 +5620,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `foo` record doesn’t have a `if` field:
 
@@ -5640,8 +5638,8 @@ All branches in an `if` must have the same type!
             Num.if
             "
         ),
-        @r"
-    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── NOT EXPOSED in /code/proj/Main.roc ──────────────────────────────────────────
 
     The Num module does not expose `if`:
 
@@ -5652,9 +5650,9 @@ All branches in an `if` must have the same type!
 
         Num.sin
         Num.div
-        Num.min
         Num.e
-    "
+        Num.pi
+    "###
     );
 
     test_report!(
@@ -5665,7 +5663,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am trying to parse a record field access here:
 
@@ -5684,7 +5682,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am very confused by this field access:
 
@@ -5703,7 +5701,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am very confused by this field access
 
@@ -5724,7 +5722,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r"
-    ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── NAMING PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am trying to parse an identifier here:
 
@@ -5758,7 +5756,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r#"
-    ── UNKNOWN OPERATOR ───────────────────────────────────── tmp/case_of/Test.roc ─
+    ── UNKNOWN OPERATOR in tmp/case_of/Test.roc ────────────────────────────────────
 
     This looks like an operator, but it's not one I recognize!
 
@@ -5790,8 +5788,8 @@ All branches in an `if` must have the same type!
             ["foo", bar("")]
             "#
         ),
-        @r#"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `bar` in this scope.
 
@@ -5800,11 +5798,11 @@ All branches in an `if` must have the same type!
 
     Did you mean one of these?
 
-        Nat
         Str
         Err
         U8
-    "#
+        F64
+    "###
     );
 
     test_report!(
@@ -5816,7 +5814,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r#"
-    ── UNKNOWN OPERATOR ──────────────────────────── tmp/invalid_operator/Test.roc ─
+    ── UNKNOWN OPERATOR in tmp/invalid_operator/Test.roc ───────────────────────────
 
     This looks like an operator, but it's not one I recognize!
 
@@ -5841,7 +5839,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r#"
-    ── UNKNOWN OPERATOR ───────────────────────────────── tmp/double_plus/Test.roc ─
+    ── UNKNOWN OPERATOR in tmp/double_plus/Test.roc ────────────────────────────────
 
     This looks like an operator, but it's not one I recognize!
 
@@ -5868,7 +5866,7 @@ All branches in an `if` must have the same type!
             "
         ),
         @r#"
-    ── UNKNOWN OPERATOR ────────────────────────────── tmp/inline_hastype/Test.roc ─
+    ── UNKNOWN OPERATOR in tmp/inline_hastype/Test.roc ─────────────────────────────
 
     This looks like an operator, but it's not one I recognize!
 
@@ -5899,7 +5897,7 @@ All branches in an `if` must have the same type!
         |golden| pretty_assertions::assert_eq!(
             golden,
             &format!(
-                r#"── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
+                r#"── UNKNOWN OPERATOR in tmp/wild_case_arrow/Test.roc ────────────────────────────
 
 This looks like an operator, but it's not one I recognize!
 
@@ -5932,7 +5930,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r"
-                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD PROVIDES in /code/proj/Main.roc ───────────────────────────────────────
 
                 I am partway through parsing a provides list, but I got stuck here:
 
@@ -5967,7 +5965,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r"
-                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD PROVIDES in /code/proj/Main.roc ───────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
@@ -5993,7 +5991,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r#"
-                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD PROVIDES in /code/proj/Main.roc ───────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
@@ -6020,7 +6018,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r#"
-                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD PROVIDES in /code/proj/Main.roc ───────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
@@ -6057,7 +6055,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r#"
-                ── BAD REQUIRES ────────────────────────────────────────── /code/proj/Main.roc ─
+                ── BAD REQUIRES in /code/proj/Main.roc ─────────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
@@ -6085,7 +6083,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r"
-                ── WEIRD IMPORTS ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD IMPORTS in /code/proj/Main.roc ────────────────────────────────────────
 
                 I am partway through parsing a header, but I got stuck here:
 
@@ -6112,7 +6110,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r"
-                ── WEIRD EXPOSES ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD EXPOSES in /code/proj/Main.roc ────────────────────────────────────────
 
                 I am partway through parsing an `exposes` list, but I got stuck here:
 
@@ -6140,7 +6138,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r"
-                ── WEIRD MODULE NAME ───────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD MODULE NAME in /code/proj/Main.roc ────────────────────────────────────
 
                 I am partway through parsing a header, but got stuck here:
 
@@ -6166,7 +6164,7 @@ In roc, functions are always written as a lambda, like{}
             ),
             indoc!(
                 r#"
-                ── WEIRD APP NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── WEIRD APP NAME in /code/proj/Main.roc ───────────────────────────────────────
 
                 I am partway through parsing a header, but got stuck here:
 
@@ -6190,7 +6188,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     This value is not a function, but it was given 2 arguments:
 
@@ -6211,7 +6209,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     This value is not a function, but it was given 2 arguments:
 
@@ -6233,7 +6231,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -6259,7 +6257,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED PARENTHESES ──────────────── tmp/pattern_in_parens_open/Test.roc ─
+    ── UNFINISHED PARENTHESES in tmp/pattern_in_parens_open/Test.roc ───────────────
 
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
@@ -6282,7 +6280,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED PARENTHESES ─────────── tmp/pattern_in_parens_end_comma/Test.roc ─
+    ── UNFINISHED PARENTHESES in tmp/pattern_in_parens_end_comma/Test.roc ──────────
 
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
@@ -6305,7 +6303,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED PARENTHESES ───────────────── tmp/pattern_in_parens_end/Test.roc ─
+    ── UNFINISHED PARENTHESES in tmp/pattern_in_parens_end/Test.roc ────────────────
 
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
@@ -6329,7 +6327,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED FUNCTION ───── tmp/unfinished_closure_pattern_in_parens/Test.roc ─
+    ── UNFINISHED FUNCTION in tmp/unfinished_closure_pattern_in_parens/Test.roc ────
 
     I was partway through parsing a  function, but I got stuck here:
 
@@ -6349,7 +6347,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED PARENTHESES ───────── tmp/pattern_in_parens_indent_open/Test.roc ─
+    ── UNFINISHED PARENTHESES in tmp/pattern_in_parens_indent_open/Test.roc ────────
 
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
@@ -6374,7 +6372,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `map` has an unexpected type:
 
@@ -6402,7 +6400,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `expect` condition needs to be a Bool:
 
@@ -6429,7 +6427,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to * has an unexpected type:
 
@@ -6444,7 +6442,7 @@ In roc, functions are always written as a lambda, like{}
 
         Num *
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `mult` definition:
 
@@ -6473,7 +6471,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to * has an unexpected type:
 
@@ -6488,7 +6486,7 @@ In roc, functions are always written as a lambda, like{}
 
         Num a
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `mult` definition:
 
@@ -6523,7 +6521,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     This alias has the same name as a builtin:
 
@@ -6533,7 +6531,7 @@ In roc, functions are always written as a lambda, like{}
     All builtin aliases are in scope by default, so I need this alias to
     have a different name!
 
-    ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
+    ── TOO FEW TYPE ARGUMENTS in /code/proj/Main.roc ───────────────────────────────
 
     The `Result` alias expects 2 type arguments, but it got 1 instead:
 
@@ -6561,7 +6559,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     This alias has the same name as a builtin:
 
@@ -6571,7 +6569,7 @@ In roc, functions are always written as a lambda, like{}
     All builtin aliases are in scope by default, so I need this alias to
     have a different name!
 
-    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY TYPE ARGUMENTS in /code/proj/Main.roc ──────────────────────────────
 
     The `Result` alias expects 2 type arguments, but it got 3 instead:
 
@@ -6593,7 +6591,7 @@ In roc, functions are always written as a lambda, like{}
         ),
         // TODO: We should tell the user that we inferred `_` as `a`
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -6627,7 +6625,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -6659,7 +6657,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -6699,7 +6697,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `inner` definition:
 
@@ -6728,7 +6726,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── NOT AN INLINE ALIAS ────────── tmp/error_inline_alias_not_an_alias/Test.roc ─
+    ── NOT AN INLINE ALIAS in tmp/error_inline_alias_not_an_alias/Test.roc ─────────
 
     The inline type after this `as` is not a type alias:
 
@@ -6748,7 +6746,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── QUALIFIED ALIAS NAME ──────────── tmp/error_inline_alias_qualified/Test.roc ─
+    ── QUALIFIED ALIAS NAME in tmp/error_inline_alias_qualified/Test.roc ───────────
 
     This type alias has a qualified name:
 
@@ -6768,7 +6766,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE ARGUMENT NOT LOWERCASE ─ ...r_inline_alias_argument_uppercase/Test.roc ─
+    ── TYPE ARGUMENT NOT LOWERCASE in ..._inline_alias_argument_uppercase/Test.roc ─
 
     This alias type argument is not lowercase:
 
@@ -6792,7 +6790,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `isEmpty` has an unexpected type:
 
@@ -6822,13 +6820,13 @@ In roc, functions are always written as a lambda, like{}
             C a b : a -> D a b
             D a b : { a, b }
 
-            f : C a Num.Nat -> D a Num.Nat
+            f : C a U64 -> D a U64
             f = \c -> c 6
             f
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `c` has an unexpected type:
 
@@ -6861,7 +6859,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `F` alias is self-recursive in an invalid way:
 
@@ -6884,7 +6882,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `F` alias is self-recursive in an invalid way:
 
@@ -6906,7 +6904,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `F` alias is self-recursive in an invalid way:
 
@@ -6931,7 +6929,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 1st argument to `job` is weird:
 
@@ -6966,7 +6964,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `job` definition:
 
@@ -6997,7 +6995,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── NESTED DATATYPE ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── NESTED DATATYPE in /code/proj/Main.roc ──────────────────────────────────────
 
     `Nested` is a nested datatype. Here is one recursive usage of it:
 
@@ -7025,7 +7023,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── NESTED DATATYPE ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── NESTED DATATYPE in /code/proj/Main.roc ──────────────────────────────────────
 
     `Nested` is a nested datatype. Here is one recursive usage of it:
 
@@ -7073,7 +7071,7 @@ In roc, functions are always written as a lambda, like{}
 
                     let real = format!(indoc!(
                         r"
-                        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
                         This 1st argument to `use` has an unexpected type:
 
@@ -7107,7 +7105,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32
         1, "i64",  mismatched_suffix_i64
         1, "i128", mismatched_suffix_i128
-        1, "nat",  mismatched_suffix_nat
         1, "dec",  mismatched_suffix_dec
         1, "f32",  mismatched_suffix_f32
         1, "f64",  mismatched_suffix_f64
@@ -7140,7 +7137,7 @@ In roc, functions are always written as a lambda, like{}
 
                     let real = format!(indoc!(
                         r"
-                        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
                         The branches of this `when` expression don't match the condition:
 
@@ -7177,7 +7174,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32_pattern
         1, "i64",  mismatched_suffix_i64_pattern
         1, "i128", mismatched_suffix_i128_pattern
-        1, "nat",  mismatched_suffix_nat_pattern
         1, "dec",  mismatched_suffix_dec_pattern
         1, "f32",  mismatched_suffix_f32_pattern
         1, "f64",  mismatched_suffix_f64_pattern
@@ -7192,7 +7188,7 @@ In roc, functions are always written as a lambda, like{}
         ),
         // TODO: link to number suffixes
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal contains an invalid digit:
 
@@ -7215,7 +7211,7 @@ In roc, functions are always written as a lambda, like{}
         ),
         // TODO: link to number suffixes
         @r"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     This integer literal contains an invalid digit:
 
@@ -7237,7 +7233,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CONFLICTING NUMBER SUFFIX ───────────────────────────── /code/proj/Main.roc ─
+    ── CONFLICTING NUMBER SUFFIX in /code/proj/Main.roc ────────────────────────────
 
     This number literal is an integer, but it has a float suffix:
 
@@ -7254,7 +7250,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CONFLICTING NUMBER SUFFIX ───────────────────────────── /code/proj/Main.roc ─
+    ── CONFLICTING NUMBER SUFFIX in /code/proj/Main.roc ────────────────────────────
 
     This number literal is a float, but it has an integer suffix:
 
@@ -7267,7 +7263,7 @@ In roc, functions are always written as a lambda, like{}
         u8_overflow,
         "256u8",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7283,7 +7279,7 @@ In roc, functions are always written as a lambda, like{}
         negative_u8,
         "-1u8",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7299,7 +7295,7 @@ In roc, functions are always written as a lambda, like{}
         u16_overflow,
         "65536u16",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7315,7 +7311,7 @@ In roc, functions are always written as a lambda, like{}
         negative_u16,
         "-1u16",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7331,7 +7327,7 @@ In roc, functions are always written as a lambda, like{}
         u32_overflow,
         "4_294_967_296u32",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7347,7 +7343,7 @@ In roc, functions are always written as a lambda, like{}
         negative_u32,
         "-1u32",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7363,7 +7359,7 @@ In roc, functions are always written as a lambda, like{}
         u64_overflow,
         "18_446_744_073_709_551_616u64",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7379,7 +7375,7 @@ In roc, functions are always written as a lambda, like{}
         negative_u64,
         "-1u64",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7395,7 +7391,7 @@ In roc, functions are always written as a lambda, like{}
         negative_u128,
         "-1u128",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7411,7 +7407,7 @@ In roc, functions are always written as a lambda, like{}
         i8_overflow,
         "128i8",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7427,7 +7423,7 @@ In roc, functions are always written as a lambda, like{}
         i8_underflow,
         "-129i8",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7443,7 +7439,7 @@ In roc, functions are always written as a lambda, like{}
         i16_overflow,
         "32768i16",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7459,7 +7455,7 @@ In roc, functions are always written as a lambda, like{}
         i16_underflow,
         "-32769i16",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7475,7 +7471,7 @@ In roc, functions are always written as a lambda, like{}
         i32_overflow,
         "2_147_483_648i32",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7491,7 +7487,7 @@ In roc, functions are always written as a lambda, like{}
         i32_underflow,
         "-2_147_483_649i32",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7507,7 +7503,7 @@ In roc, functions are always written as a lambda, like{}
         i64_overflow,
         "9_223_372_036_854_775_808i64",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7523,7 +7519,7 @@ In roc, functions are always written as a lambda, like{}
         i64_underflow,
         "-9_223_372_036_854_775_809i64",
         @r"
-    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER UNDERFLOWS SUFFIX in /code/proj/Main.roc ─────────────────────────────
 
     This integer literal underflows the type indicated by its suffix:
 
@@ -7539,7 +7535,7 @@ In roc, functions are always written as a lambda, like{}
         i128_overflow,
         "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
         @r"
-    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+    ── NUMBER OVERFLOWS SUFFIX in /code/proj/Main.roc ──────────────────────────────
 
     This integer literal overflows the type indicated by its suffix:
 
@@ -7561,7 +7557,7 @@ In roc, functions are always written as a lambda, like{}
         // TODO: this error message could be improved, e.g. something like "This argument can
         // be used as ... because of its literal value"
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `get` has an unexpected type:
 
@@ -7574,7 +7570,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7587,7 +7583,7 @@ In roc, functions are always written as a lambda, like{}
              "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `get` has an unexpected type:
 
@@ -7600,7 +7596,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7614,7 +7610,7 @@ In roc, functions are always written as a lambda, like{}
              "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `get` has an unexpected type:
 
@@ -7627,7 +7623,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7641,7 +7637,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -7672,7 +7668,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `R` alias is self-recursive in an invalid way:
 
@@ -7695,7 +7691,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `R` alias is self-recursive in an invalid way:
 
@@ -7719,7 +7715,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `Foo` alias is recursive in an invalid way:
 
@@ -7754,7 +7750,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     This alias has the same name as a builtin:
 
@@ -7774,7 +7770,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED in /code/proj/Main.roc ──────────────────────────────
 
     The opaque type Age referenced here is not defined:
 
@@ -7795,7 +7791,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED in /code/proj/Main.roc ──────────────────────────────
 
     The opaque type Age referenced here is not defined:
 
@@ -7809,7 +7805,7 @@ In roc, functions are always written as a lambda, like{}
 
     Note: It looks like there are no opaque types declared in this scope yet!
 
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `Age` is not used anywhere in your code.
 
@@ -7832,7 +7828,7 @@ In roc, functions are always written as a lambda, like{}
         // and checking it during can. The reason the error appears is because it is parsed as
         // Apply(Error(OtherModule), [@Age, 21])
         @r"
-    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED in /code/proj/Main.roc ──────────────────────────────
 
     The opaque type Age referenced here is not defined:
 
@@ -7841,7 +7837,7 @@ In roc, functions are always written as a lambda, like{}
 
     Note: It looks like there are no opaque types declared in this scope yet!
 
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
     I am trying to parse a qualified name here:
 
@@ -7868,7 +7864,7 @@ In roc, functions are always written as a lambda, like{}
         // `@Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
         // raise that declaration to the outer scope.
         @r"
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `Age` is not used anywhere in your code.
 
@@ -7878,7 +7874,7 @@ In roc, functions are always written as a lambda, like{}
     If you didn't intend on using `Age` then remove it so future readers of
     your code don't wonder why it is there.
 
-    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED in /code/proj/Main.roc ──────────────────────────────
 
     The opaque type Age referenced here is not defined:
 
@@ -7899,7 +7895,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+    ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
     The `Task` module is not imported:
 
@@ -7931,7 +7927,7 @@ In roc, functions are always written as a lambda, like{}
         // TODO(opaques): error could be improved by saying that the opaque definition demands
         // that the argument be a U8, and linking to the definitin!
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -7960,7 +7956,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -7990,7 +7986,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `v` definition:
 
@@ -8028,7 +8024,7 @@ In roc, functions are always written as a lambda, like{}
         // TODO(opaques): error could be improved by saying that the user-provided pattern
         // probably wants to change "Age" to "@Age"!
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 1st argument to `f` is weird:
 
@@ -8063,7 +8059,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 2nd pattern in this `when` does not match the previous ones:
 
@@ -8094,7 +8090,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -8132,7 +8128,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -8165,7 +8161,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `y` has an unexpected type:
 
@@ -8198,7 +8194,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -8217,17 +8213,17 @@ In roc, functions are always written as a lambda, like{}
         invalid_record_extension_type,
         indoc!(
             r"
-            f : { x : Num.Nat }[]
+            f : { x : U64 }[]
             f
             "
         ),
         @r"
-    ── INVALID_EXTENSION_TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    ── INVALID_EXTENSION_TYPE in /code/proj/Main.roc ───────────────────────────────
 
     This record extension type is invalid:
 
-    4│      f : { x : Num.Nat }[]
-                               ^^
+    4│      f : { x : U64 }[]
+                           ^^
 
     Note: A record extension variable can only contain a type variable or
     another record.
@@ -8243,7 +8239,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── INVALID_EXTENSION_TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    ── INVALID_EXTENSION_TYPE in /code/proj/Main.roc ───────────────────────────────
 
     This tag union extension type is invalid:
 
@@ -8270,7 +8266,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `UnknownType` in this scope.
 
@@ -8284,7 +8280,7 @@ In roc, functions are always written as a lambda, like{}
         Unsigned16
         Unsigned64
 
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `UnknownType` in this scope.
 
@@ -8311,7 +8307,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED ABILITY ── tmp/ability_first_demand_not_indented_enough/Test.roc ─
+    ── UNFINISHED ABILITY in tmp/ability_first_demand_not_indented_enough/Test.roc ─
 
     I was partway through parsing an ability definition, but I got stuck
     here:
@@ -8336,7 +8332,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-        ── UNFINISHED ABILITY ─── tmp/ability_demands_not_indented_with_first/Test.roc ─
+        ── UNFINISHED ABILITY in tmp/ability_demands_not_indented_with_first/Test.roc ──
 
         I was partway through parsing an ability definition, but I got stuck
         here:
@@ -8359,7 +8355,7 @@ In roc, functions are always written as a lambda, like{}
                 "
         ),
         @r"
-        ── UNFINISHED ABILITY ───────────── tmp/ability_demand_value_has_args/Test.roc ─
+        ── UNFINISHED ABILITY in tmp/ability_demand_value_has_args/Test.roc ────────────
 
         I was partway through parsing an ability definition, but I got stuck
         here:
@@ -8383,7 +8379,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNFINISHED ABILITY ────────── tmp/ability_non_signature_expression/Test.roc ─
+    ── UNFINISHED ABILITY in tmp/ability_non_signature_expression/Test.roc ─────────
 
     I was partway through parsing an ability definition, but I got stuck
     here:
@@ -8406,7 +8402,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
 
     The definition of `I` has an unbound type variable:
 
@@ -8428,7 +8424,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
 
     The definition of `I` has an unbound type variable:
 
@@ -8450,7 +8446,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
 
     The definition of `I` has 2 unbound type variables.
 
@@ -8474,7 +8470,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
 
     The definition of `I` has an unbound type variable:
 
@@ -8496,7 +8492,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
 
     The definition of `I` has an unbound type variable:
 
@@ -8519,7 +8515,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── ABILITY HAS TYPE VARIABLES ──────────────────────────── /code/proj/Main.roc ─
+    ── ABILITY HAS TYPE VARIABLES in /code/proj/Main.roc ───────────────────────────
 
     The definition of the `MHash` ability includes type variables:
 
@@ -8529,7 +8525,7 @@ In roc, functions are always written as a lambda, like{}
     Abilities cannot depend on type variables, but their member values
     can!
 
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `MHash` is not used anywhere in your code.
 
@@ -8551,7 +8547,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── IMPLEMENTS CLAUSE IS NOT AN ABILITY ─────────────────── /code/proj/Main.roc ─
+    ── IMPLEMENTS CLAUSE IS NOT AN ABILITY in /code/proj/Main.roc ──────────────────
 
     The type referenced in this "implements" clause is not an ability:
 
@@ -8570,7 +8566,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+        ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
         The `a` name is first defined here:
 
@@ -8599,7 +8595,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+        ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
         The `Ability` name is first defined here:
 
@@ -8626,7 +8622,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── ABILITY MEMBER MISSING IMPLEMENTS CLAUSE ────────────── /code/proj/Main.roc ─
+        ── ABILITY MEMBER MISSING IMPLEMENTS CLAUSE in /code/proj/Main.roc ─────────────
 
         The definition of the ability member `ab` does not include an `implements`
         clause binding a type variable to the ability `Ability`:
@@ -8641,7 +8637,7 @@ In roc, functions are always written as a lambda, like{}
 
         Otherwise, the function does not need to be part of the ability!
 
-        ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+        ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
         `Ability` is not used anywhere in your code.
 
@@ -8663,7 +8659,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── ABILITY MEMBER BINDS MULTIPLE VARIABLES ─────────────── /code/proj/Main.roc ─
+        ── ABILITY MEMBER BINDS MULTIPLE VARIABLES in /code/proj/Main.roc ──────────────
 
         The definition of the ability member `eq` includes multiple variables
         bound to the `MEq`` ability:`
@@ -8691,7 +8687,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── ILLEGAL IMPLEMENTS CLAUSE ───────────────────────────── /code/proj/Main.roc ─
+    ── ILLEGAL IMPLEMENTS CLAUSE in /code/proj/Main.roc ────────────────────────────
 
     An `implements` clause is not allowed here:
 
@@ -8701,7 +8697,7 @@ In roc, functions are always written as a lambda, like{}
     `implements` clauses can only be specified on the top-level type
     annotations.
 
-    ── ABILITY MEMBER MISSING IMPLEMENTS CLAUSE ────────────── /code/proj/Main.roc ─
+    ── ABILITY MEMBER MISSING IMPLEMENTS CLAUSE in /code/proj/Main.roc ─────────────
 
     The definition of the ability member `hash` does not include an
     `implements` clause binding a type variable to the ability `MHash`:
@@ -8732,7 +8728,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
         Something is off with this specialization of `hash`:
 
@@ -8765,7 +8761,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
 
@@ -8791,7 +8787,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `hash` is not used anywhere in your code.
 
@@ -8820,7 +8816,7 @@ In roc, functions are always written as a lambda, like{}
         ),
         // TODO: the error message here could be seriously improved!
         @r"
-    ── OVERLOADED SPECIALIZATION ───────────────────────────── /code/proj/Main.roc ─
+    ── OVERLOADED SPECIALIZATION in /code/proj/Main.roc ────────────────────────────
 
     This ability member specialization is already claimed to specialize
     another opaque type:
@@ -8833,7 +8829,7 @@ In roc, functions are always written as a lambda, like{}
     Ability specializations can only provide implementations for one
     opaque type, since all opaque types are different!
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This specialization of `hash` is overly general:
 
@@ -8873,7 +8869,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── OVERLOADED SPECIALIZATION ───────────────────────────── /code/proj/Main.roc ─
+    ── OVERLOADED SPECIALIZATION in /code/proj/Main.roc ────────────────────────────
 
     This ability member specialization is already claimed to specialize
     another opaque type:
@@ -8904,7 +8900,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with this specialization of `eq`:
 
@@ -8939,7 +8935,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `hash` definition:
 
@@ -8980,7 +8976,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -8993,7 +8989,7 @@ In roc, functions are always written as a lambda, like{}
 
     Only builtin abilities can have generated implementations!
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -9018,7 +9014,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── ABILITY NOT ON TOP-LEVEL ────────────────────────────── /code/proj/Main.roc ─
+        ── ABILITY NOT ON TOP-LEVEL in /code/proj/Main.roc ─────────────────────────────
 
         This ability definition is not on the top-level of a module:
 
@@ -9046,7 +9042,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `hashable` definition:
 
@@ -9092,7 +9088,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
+    ── ABILITY USED AS TYPE in /code/proj/Main.roc ─────────────────────────────────
 
     You are attempting to use the ability `MHash` as a type directly:
 
@@ -9106,7 +9102,7 @@ In roc, functions are always written as a lambda, like{}
 
         a implements MHash
 
-    ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
+    ── ABILITY USED AS TYPE in /code/proj/Main.roc ─────────────────────────────────
 
     You are attempting to use the ability `MHash` as a type directly:
 
@@ -9136,7 +9132,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -9189,7 +9185,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-        ── WEIRD IMPORTS ────────────────────────── tmp/imports_missing_comma/Test.roc ─
+        ── WEIRD IMPORTS in tmp/imports_missing_comma/Test.roc ─────────────────────────
 
         I am partway through parsing a imports list, but I got stuck here:
 
@@ -9214,7 +9210,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-        ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+        ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
         This `when` does not cover all the possibilities:
 
@@ -9261,7 +9257,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-        ── SPECIALIZATION NOT ON TOP-LEVEL ─────────────────────── /code/proj/Main.roc ─
+        ── SPECIALIZATION NOT ON TOP-LEVEL in /code/proj/Main.roc ──────────────────────
 
         This specialization of the `default` ability member is in a nested
         scope:
@@ -9286,7 +9282,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to == has an unexpected type:
 
@@ -9322,7 +9318,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `remove` has an unexpected type:
 
@@ -9343,7 +9339,7 @@ In roc, functions are always written as a lambda, like{}
     change the type annotation to be more specific? Maybe change the code
     to be more general?
 
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `new`:
 
@@ -9356,7 +9352,7 @@ In roc, functions are always written as a lambda, like{}
 
         { set : Set ∞ }
 
-    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE in /code/proj/Main.roc ────────────────────────────────────────
 
     I'm inferring a weird self-referential type for `goal`:
 
@@ -9386,7 +9382,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-        ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+        ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
         The `t1` definition is causing a very tricky infinite loop:
 
@@ -9414,7 +9410,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -9442,7 +9438,7 @@ In roc, functions are always written as a lambda, like{}
         // TODO: this error message is quite unfortunate. We should remove the duplication, and
         // also support regions that point to things in other modules. See also https://github.com/roc-lang/roc/issues/3056.
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -9479,7 +9475,7 @@ In roc, functions are always written as a lambda, like{}
                 "#
         ),
         @r"
-            ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+            ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
             The `t1` definition is causing a very tricky infinite loop:
 
@@ -9509,7 +9505,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── IMPLEMENTATION NOT FOUND ────────────────────────────── /code/proj/Main.roc ─
+    ── IMPLEMENTATION NOT FOUND in /code/proj/Main.roc ─────────────────────────────
 
     An implementation of `eq` could not be found in this scope:
 
@@ -9520,7 +9516,7 @@ In roc, functions are always written as a lambda, like{}
     another variable that implements this ability member, like
     { eq: myeq }
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
 
@@ -9547,7 +9543,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `aMEq` in this scope.
 
@@ -9561,7 +9557,7 @@ In roc, functions are always written as a lambda, like{}
         myMEq
         eq
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
 
@@ -9588,7 +9584,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+    ── OPTIONAL ABILITY IMPLEMENTATION in /code/proj/Main.roc ──────────────────────
 
     Ability implementations cannot be optional:
 
@@ -9599,7 +9595,7 @@ In roc, functions are always written as a lambda, like{}
 
 
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
 
@@ -9626,7 +9622,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+    ── OPTIONAL ABILITY IMPLEMENTATION in /code/proj/Main.roc ──────────────────────
 
     Ability implementations cannot be optional:
 
@@ -9639,7 +9635,7 @@ In roc, functions are always written as a lambda, like{}
     record of implementations. For example,    implements [Encoding] will
     attempt to derive `Encoding`
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `Encoding` ability:
 
@@ -9664,7 +9660,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── QUALIFIED ABILITY IMPLEMENTATION ────────────────────── /code/proj/Main.roc ─
+    ── QUALIFIED ABILITY IMPLEMENTATION in /code/proj/Main.roc ─────────────────────
 
     This ability implementation is qualified:
 
@@ -9674,7 +9670,7 @@ In roc, functions are always written as a lambda, like{}
     Custom implementations must be defined in the local scope, and
     unqualified.
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
 
@@ -9699,7 +9695,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── ABILITY IMPLEMENTATION NOT IDENTIFIER ───────────────── /code/proj/Main.roc ─
+    ── ABILITY IMPLEMENTATION NOT IDENTIFIER in /code/proj/Main.roc ────────────────
 
     This ability implementation is not an identifier:
 
@@ -9711,7 +9707,7 @@ In roc, functions are always written as a lambda, like{}
 
     Tip: consider defining this expression as a variable.
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
 
@@ -9738,7 +9734,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── DUPLICATE IMPLEMENTATION ────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE IMPLEMENTATION in /code/proj/Main.roc ─────────────────────────────
 
     This ability member implementation is duplicate:
 
@@ -9766,7 +9762,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── NOT AN ABILITY ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── NOT AN ABILITY in /code/proj/Main.roc ───────────────────────────────────────
 
     This identifier is not an ability in scope:
 
@@ -9789,7 +9785,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── ILLEGAL DERIVE in /code/proj/Main.roc ───────────────────────────────────────
 
     This ability cannot be derived:
 
@@ -9812,7 +9808,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Encoding` ability for `A`:
 
@@ -9837,7 +9833,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Encoding` ability for `A`:
 
@@ -9889,7 +9885,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     The `main` name is first defined here:
 
@@ -9904,7 +9900,7 @@ In roc, functions are always written as a lambda, like{}
     Since these variables have the same name, it's easy to use the wrong
     one by accident. Give one of them a new name.
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -9938,7 +9934,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
         Something is off with the body of the `withOpen` definition:
 
@@ -9973,7 +9969,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression is used in an unexpected way:
 
@@ -10020,7 +10016,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `foo` has an unexpected type:
 
@@ -10065,7 +10061,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to == has an unexpected type:
 
@@ -10090,7 +10086,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to == has an unexpected type:
 
@@ -10127,7 +10123,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the 2nd branch of this `when` expression:
 
@@ -10164,7 +10160,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `map` has an unexpected type:
 
@@ -10190,7 +10186,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-        ── NAME NOT BOUND IN ALL PATTERNS ──────────────────────── /code/proj/Main.roc ─
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
 
         `x` is not bound in all patterns of this `when` branch
 
@@ -10201,7 +10197,7 @@ In roc, functions are always written as a lambda, like{}
         of the branch. Otherwise, the program would crash when it tries to use
         an identifier that wasn't bound!
 
-        ── NAME NOT BOUND IN ALL PATTERNS ──────────────────────── /code/proj/Main.roc ─
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
 
         `y` is not bound in all patterns of this `when` branch
 
@@ -10212,7 +10208,7 @@ In roc, functions are always written as a lambda, like{}
         of the branch. Otherwise, the program would crash when it tries to use
         an identifier that wasn't bound!
 
-        ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+        ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
         `y` is not used in this `when` branch.
 
@@ -10225,6 +10221,28 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        issue_6279,
+        indoc!(
+            r#"
+            when A "" is
+                A x | B x | C -> x
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
+
+        `x` is not bound in all patterns of this `when` branch
+
+        5│          A x | B x | C -> x
+                      ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+        "###
+    );
+
+    test_report!(
         flip_flop_catch_all_branches_not_exhaustive,
         indoc!(
             r#"
@@ -10234,7 +10252,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -10260,7 +10278,7 @@ In roc, functions are always written as a lambda, like{}
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r"── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+                r"── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
                 Nothing is named `foo` in this scope.
 
@@ -10297,7 +10315,7 @@ In roc, functions are always written as a lambda, like{}
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+                r"── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
                 An underscore is being used as a variable here:
 
@@ -10323,7 +10341,7 @@ In roc, functions are always written as a lambda, like{}
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+                r"── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
                 This variable's name starts with an underscore:
 
@@ -10356,7 +10374,7 @@ In roc, functions are always written as a lambda, like{}
             golden,
             indoc!(
                 r"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
                 This variable's name starts with an underscore:
 
@@ -10383,7 +10401,7 @@ In roc, functions are always written as a lambda, like{}
             golden,
             indoc!(
                 r"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
                 Underscores are not allowed in identifier names:
 
@@ -10410,7 +10428,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD BUILDER ────────── tmp/optional_field_in_record_builder/Test.roc ─
+    ── BAD RECORD BUILDER in tmp/optional_field_in_record_builder/Test.roc ─────────
 
     I am partway through parsing a record builder, and I found an optional
     field:
@@ -10439,7 +10457,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD UPDATE ────────────────────── tmp/record_update_builder/Test.roc ─
+    ── BAD RECORD UPDATE in tmp/record_update_builder/Test.roc ─────────────────────
 
     I am partway through parsing a record update, and I found a record
     builder field:
@@ -10465,7 +10483,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── MULTIPLE RECORD BUILDERS ────────────────────────────── /code/proj/Main.roc ─
+    ── MULTIPLE RECORD BUILDERS in /code/proj/Main.roc ─────────────────────────────
 
     This function is applied to multiple record builders:
 
@@ -10488,7 +10506,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── UNAPPLIED RECORD BUILDER ────────────────────────────── /code/proj/Main.roc ─
+    ── UNAPPLIED RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────
 
     This record builder was not applied to a function:
 
@@ -10513,7 +10531,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     This value is not a function, but it was given 1 argument:
 
@@ -10545,7 +10563,7 @@ In roc, functions are always written as a lambda, like{}
     //         "#
     //     ),
     //     @r#"
-    // ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    // ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     // This value is an opaque type, so it cannot be called with an argument:
 
@@ -10572,7 +10590,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10584,7 +10602,7 @@ In roc, functions are always written as a lambda, like{}
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10596,7 +10614,7 @@ In roc, functions are always written as a lambda, like{}
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10608,7 +10626,7 @@ In roc, functions are always written as a lambda, like{}
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10638,7 +10656,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10650,7 +10668,7 @@ In roc, functions are always written as a lambda, like{}
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10662,7 +10680,7 @@ In roc, functions are always written as a lambda, like{}
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10674,7 +10692,7 @@ In roc, functions are always written as a lambda, like{}
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
 
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
@@ -10702,7 +10720,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `hash` is not used anywhere in your code.
 
@@ -10729,7 +10747,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── WRONG SPECIALIZATION TYPE ───────────────────────────── /code/proj/Main.roc ─
+    ── WRONG SPECIALIZATION TYPE in /code/proj/Main.roc ────────────────────────────
 
     This specialization of `hash` is not for the expected type:
 
@@ -10752,7 +10770,7 @@ In roc, functions are always written as a lambda, like{}
                 "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
@@ -10782,7 +10800,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── CYCLIC ALIAS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `Recursive` opaque is self-recursive in an invalid way:
 
@@ -10804,7 +10822,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Decoding` ability for `A`:
 
@@ -10829,7 +10847,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Decoding` ability for `A`:
 
@@ -10884,7 +10902,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -10915,7 +10933,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -10945,7 +10963,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r#"
-    ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED ARGUMENT in /code/proj/Main.roc ──────────────────────────────────────
 
     This function doesn't use `x`.
 
@@ -10977,7 +10995,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -11010,7 +11028,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -11047,7 +11065,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `then` branch of this `if` expression:
 
@@ -11079,7 +11097,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED DEFINITION in /code/proj/Main.roc ────────────────────────────────────
 
     `foo` is not used in this `when` branch.
 
@@ -11105,7 +11123,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -11134,7 +11152,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -11200,7 +11218,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -11228,7 +11246,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -11255,7 +11273,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+    ── UNMATCHABLE PATTERN in /code/proj/Main.roc ──────────────────────────────────
 
     The 2nd pattern will never be matched:
 
@@ -11282,7 +11300,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+    ── UNMATCHABLE PATTERN in /code/proj/Main.roc ──────────────────────────────────
 
     The 2nd pattern will never be matched:
 
@@ -11294,7 +11312,7 @@ In roc, functions are always written as a lambda, like{}
     It's impossible to create a value of this shape, so this pattern can
     be safely removed!
 
-    ── UNMATCHABLE PATTERN ─────────────────────────────────── /code/proj/Main.roc ─
+    ── UNMATCHABLE PATTERN in /code/proj/Main.roc ──────────────────────────────────
 
     The 3rd pattern will never be matched:
 
@@ -11313,17 +11331,17 @@ In roc, functions are always written as a lambda, like{}
         custom_type_conflicts_with_builtin,
         indoc!(
             r#"
-            Nat := [ S Nat, Z ]
+            Dec := [ S Dec, Z ]
 
             ""
             "#
         ),
     @r"
-    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE NAME in /code/proj/Main.roc ───────────────────────────────────────
 
     This opaque type has the same name as a builtin:
 
-    4│      Nat := [ S Nat, Z ]
+    4│      Dec := [ S Dec, Z ]
             ^^^^^^^^^^^^^^^^^^^
 
     All builtin opaque types are in scope by default, so I need this
@@ -11341,7 +11359,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNUSED IMPORT ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNUSED IMPORT in /code/proj/Main.roc ────────────────────────────────────────
 
     `List.concat` is not used in this module.
 
@@ -11393,7 +11411,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR DEFINITION in /code/proj/Main.roc ──────────────────────────────────
 
     `main` is defined directly in terms of itself:
 
@@ -11415,7 +11433,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `if` condition needs to be a Bool:
 
@@ -11441,7 +11459,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This `if` condition needs to be a Bool:
 
@@ -11469,7 +11487,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Hash` ability for `A`:
 
@@ -11494,7 +11512,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Hash` ability for `A`:
 
@@ -11577,7 +11595,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -11604,7 +11622,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -11650,7 +11668,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -11686,7 +11704,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `shiftRightZfBy` has an unexpected type:
 
@@ -11701,7 +11719,7 @@ In roc, functions are always written as a lambda, like{}
 
         U8
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `shiftRightBy` has an unexpected type:
 
@@ -11716,7 +11734,7 @@ In roc, functions are always written as a lambda, like{}
 
         U8
 
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `shiftLeftBy` has an unexpected type:
 
@@ -11744,7 +11762,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `contains` has an unexpected type:
 
@@ -11753,7 +11771,7 @@ In roc, functions are always written as a lambda, like{}
 
     The argument is a Unicode scalar value of type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     But `contains` needs its 2nd argument to be:
 
@@ -11771,7 +11789,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
@@ -11796,7 +11814,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -11810,7 +11828,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the branch patterns have type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     The branches must be cases of the `when` condition's type!
     "#
@@ -11826,7 +11844,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
@@ -11852,7 +11870,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
@@ -11880,7 +11898,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
@@ -11963,7 +11981,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -11990,7 +12008,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -12019,7 +12037,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -12042,7 +12060,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -12082,7 +12100,7 @@ In roc, functions are always written as a lambda, like{}
              "#
         ),
         @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -12120,7 +12138,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+    ── NOT EXPOSED in /code/proj/Main.roc ──────────────────────────────────────────
 
     The Bool module does not expose `structuralEq`:
 
@@ -12134,7 +12152,7 @@ In roc, functions are always written as a lambda, like{}
         Bool.false
         Bool.isEq
 
-    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+    ── NOT EXPOSED in /code/proj/Main.roc ──────────────────────────────────────────
 
     The Bool module does not expose `structuralNotEq`:
 
@@ -12162,7 +12180,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -12187,7 +12205,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The 1st argument to `foo` is weird:
 
@@ -12216,7 +12234,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Hash` ability for `F`:
 
@@ -12227,7 +12245,7 @@ In roc, functions are always written as a lambda, like{}
 
     Tip: You can define a custom implementation of `Hash` for `F`.
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Eq` ability for `F`:
 
@@ -12238,7 +12256,7 @@ In roc, functions are always written as a lambda, like{}
 
     Tip: You can define a custom implementation of `Eq` for `F`.
 
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     I can't derive an implementation of the `Encoding` ability for `F`:
 
@@ -12261,7 +12279,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r"
-    ── DUPLICATE BOUND ABILITY ─────────────────────────────── /code/proj/Main.roc ─
+    ── DUPLICATE BOUND ABILITY in /code/proj/Main.roc ──────────────────────────────
 
     I already saw that this type variable is bound to the `Hash` ability
     once before:
@@ -12287,7 +12305,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `g` has an unexpected type:
 
@@ -12324,7 +12342,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `g` has an unexpected type:
 
@@ -12362,7 +12380,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 1st argument to `g` has an unexpected type:
 
@@ -12395,7 +12413,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNFINISHED LIST PATTERN ────────── tmp/list_pattern_not_terminated/Test.roc ─
+    ── UNFINISHED LIST PATTERN in tmp/list_pattern_not_terminated/Test.roc ─────────
 
     I am partway through parsing a list pattern, but I got stuck here:
 
@@ -12416,7 +12434,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── INCORRECT REST PATTERN ─────── tmp/list_pattern_weird_rest_pattern/Test.roc ─
+    ── INCORRECT REST PATTERN in tmp/list_pattern_weird_rest_pattern/Test.roc ──────
 
     It looks like you may trying to write a list rest pattern, but it's
     not the form I expect:
@@ -12438,7 +12456,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r"
-    ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY WILDCARD in /code/proj/Main.roc ─────────────────────────────────
 
     This type annotation has a wildcard type variable (`*`) that isn't
     needed.
@@ -12465,7 +12483,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+    ── MULTIPLE LIST REST PATTERNS in /code/proj/Main.roc ──────────────────────────
 
     This list pattern match has multiple rest patterns:
 
@@ -12475,7 +12493,7 @@ In roc, functions are always written as a lambda, like{}
     I only support compiling list patterns with one .. pattern! Can you
     remove this additional one?
 
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12499,7 +12517,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── MULTIPLE LIST REST PATTERNS ─────────────────────────── /code/proj/Main.roc ─
+    ── MULTIPLE LIST REST PATTERNS in /code/proj/Main.roc ──────────────────────────
 
     This list pattern match has multiple rest patterns:
 
@@ -12509,7 +12527,7 @@ In roc, functions are always written as a lambda, like{}
     I only support compiling list patterns with one .. pattern! Can you
     remove this additional one?
 
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12533,7 +12551,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This list element doesn't match the types of other elements in the
     pattern:
@@ -12560,7 +12578,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     The branches of this `when` expression don't match the condition:
 
@@ -12593,7 +12611,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12633,7 +12651,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12677,15 +12695,15 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
-    
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
+
     The 2nd pattern is redundant:
-    
+
     6│       when l is
     7│           [A, ..] -> ""
     8│>          [.., A] -> ""
     9│           [..] -> ""
-    
+
     Any value of this shape will be handled by a previous pattern, so this
     one should be removed.
     "#
@@ -12743,7 +12761,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12770,7 +12788,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12813,7 +12831,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12840,7 +12858,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12889,7 +12907,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12920,7 +12938,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -12952,7 +12970,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -13001,7 +13019,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -13035,7 +13053,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
 
     The 3rd pattern is redundant:
 
@@ -13063,7 +13081,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
 
     The 3rd pattern is redundant:
 
@@ -13091,7 +13109,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
 
     The 3rd pattern is redundant:
 
@@ -13119,7 +13137,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
 
     The 2nd pattern is redundant:
 
@@ -13158,7 +13176,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -13189,7 +13207,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This value passed to `crash` is not a string:
 
@@ -13214,7 +13232,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
     @r"
-    ── UNAPPLIED CRASH ─────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNAPPLIED CRASH in /code/proj/Main.roc ──────────────────────────────────────
 
     This `crash` doesn't have a message given to it:
 
@@ -13235,7 +13253,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── OVERAPPLIED CRASH ───────────────────────────────────── /code/proj/Main.roc ─
+    ── OVERAPPLIED CRASH in /code/proj/Main.roc ────────────────────────────────────
 
     This `crash` has too many values given to it:
 
@@ -13271,7 +13289,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -13313,7 +13331,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+    ── DEFINITION ONLY USED IN RECURSION in /code/proj/Main.roc ────────────────────
 
     This definition is only used in recursion with itself:
 
@@ -13346,7 +13364,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13382,7 +13400,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+    ── DEFINITION ONLY USED IN RECURSION in /code/proj/Main.roc ────────────────────
 
     This definition is only used in recursion with itself:
 
@@ -13418,7 +13436,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13457,7 +13475,7 @@ In roc, functions are always written as a lambda, like{}
             {one, str}
         "#),
     @r#"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This 2nd argument to `concat` has an unexpected type:
 
@@ -13488,7 +13506,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `else` branch of this `if` expression:
 
@@ -13525,7 +13543,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `else` branch of this `if` expression:
 
@@ -13561,7 +13579,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `main` definition:
 
@@ -13599,7 +13617,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
     @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `main` definition:
 
@@ -13636,70 +13654,6 @@ In roc, functions are always written as a lambda, like{}
         )
     );
 
-    test_report!(
-        derive_decoding_for_nat,
-        indoc!(
-            r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
-
-            main =
-                myDecoder : Decoder Nat fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
-
-                myDecoder
-            "#
-        ),
-        @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│      myDecoder = decoder
-                        ^^^^^^^
-
-    I can't generate an implementation of the `Decoding` ability for
-
-        Nat
-
-    Note: Decoding to a Nat is not supported. Consider decoding to a
-    fixed-sized unsigned integer, like U64, then converting to a Nat if
-    needed.
-    "
-    );
-
-    test_report!(
-        derive_encoding_for_nat,
-        indoc!(
-            r#"
-            app "test" imports [] provides [main] to "./platform"
-
-            x : Nat
-
-            main = Encode.toEncoder x
-            "#
-        ),
-        @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│  main = Encode.toEncoder x
-                                ^
-
-    I can't generate an implementation of the `Encoding` ability for
-
-        Int Natural
-
-    In particular, an implementation for
-
-        Natural
-
-    cannot be generated.
-
-    Tip: `Natural` does not implement `Encoding`.
-    "
-    );
-
     test_no_problem!(
         derive_decoding_for_tuple,
         indoc!(
@@ -13729,7 +13683,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -13769,7 +13723,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
@@ -13809,7 +13763,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNSAFE PATTERN in /code/proj/Main.roc ───────────────────────────────────────
 
     This `when` does not cover all the possibilities:
 
@@ -13857,7 +13811,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
 
     The `parser` value is an opaque type, so it cannot be called with an
     argument:
@@ -13881,7 +13835,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -13912,7 +13866,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -13946,7 +13900,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -13980,7 +13934,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `f` definition:
 
@@ -14008,7 +13962,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO FEW ARGS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `sub` function expects 2 arguments, but it got only 1:
 
@@ -14028,7 +13982,7 @@ In roc, functions are always written as a lambda, like{}
             "
         ),
         @r"
-    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+    ── TOO FEW ARGS in /code/proj/Main.roc ─────────────────────────────────────────
 
     The `sub` function expects 2 arguments, but it got only 1:
 

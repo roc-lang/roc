@@ -3,12 +3,12 @@ procedure Bool.2 ():
     ret Bool.24;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.292 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.270 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.270;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.291 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.269 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.269;
 
 procedure Test.1 (Test.2, Test.3):
     let Test.15 : U8 = GetTagId Test.2;

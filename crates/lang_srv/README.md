@@ -1,4 +1,4 @@
-# roc_ls
+# roc_language_server
 
 This is a basic language server for Roc.
 
@@ -36,7 +36,7 @@ Note that the language server is a bit naïve:
 
 ## Installing
 
-The roc_lang_server binary is included with the [nightly releases](https://github.com/roc-lang/roc/releases). We recommend using the same version of roc and roc_lang_server.
+The roc_language_server binary is included with the [nightly releases](https://github.com/roc-lang/roc/releases). We recommend using the same version of roc and roc_language_server.
 
 ### Building from source
 
@@ -44,13 +44,13 @@ Follow the [building from source](https://github.com/roc-lang/roc/blob/main/BUIL
 
 ```
 # do `nix develop` first if you're using nix!
-cargo build -p roc_lang_srv --release
+cargo build -p roc_language_server --release
 ```
 
 This will give you the language server binary at:
 
 ```
-target/release/roc_ls
+target/release/roc_language_server
 ```
 
 ### Configuring in your editor
@@ -65,7 +65,7 @@ Add the following to your coc JSON configuration file:
 {
   "languageserver": {
     "roc": {
-      "command": "<path to binary folder>/roc_ls",
+      "command": "<path to binary folder>/roc_language_server",
       "filetypes": ["roc"]
     }
   }
@@ -78,3 +78,21 @@ If you're using coc.nvim and want to use the configuration above, be sure to als
 
 If you want to debug the server, use [debug_server.sh](./debug_server.sh)
 instead of the direct binary.
+
+If you would like to enable debug logging set the `ROCLS_LOG` environment variable to `debug` or `trace` for even more logs. 
+eg: `ROCLS_LOG=debug`  
+
+## Testing
+
+Tests use expect-test, which is a snapshot/expect testing framework.
+If a change is made that requires updating the expect tests run `cargo test` confirm that the diff is correct, then run `UPDATE_EXPECT=1 cargo test` to update the contents of the files with the new output.
+
+## Config
+
+You can set the environment variables below to control the operation of the language.
+
+`ROCLS_DEBOUNCE_MS`: Sets the amount of time to delay starting analysis of the document when a change comes in. This prevents starting pointless analysis while you are typing normally. 
+Default: `100`
+
+`ROCLS_LATEST_DOC_TIMEOUT_MS`: Sets the timeout for waiting for an analysis of the latest document to be complete. If a request is sent that needs the latest version of the document to be analyzed, then it will wait up to this duration before just giving up.
+Default: `5000`  

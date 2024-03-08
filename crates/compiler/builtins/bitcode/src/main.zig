@@ -36,6 +36,7 @@ comptime {
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.logC, "log");
+    exportDecFn(dec.powC, "pow");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
@@ -52,6 +53,10 @@ comptime {
 
     inline for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
+
+        dec.exportRound(T, ROC_BUILTINS ++ ".dec.round.");
+        dec.exportFloor(T, ROC_BUILTINS ++ ".dec.floor.");
+        dec.exportCeiling(T, ROC_BUILTINS ++ ".dec.ceiling.");
     }
 }
 
@@ -75,6 +80,7 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listClone, "clone");
     exportListFn(list.listCapacity, "capacity");
     exportListFn(list.listAllocationPtr, "allocation_ptr");
     exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
@@ -89,26 +95,8 @@ const FLOATS = [_]type{ f32, f64 };
 const NUMBERS = INTEGERS ++ FLOATS;
 
 comptime {
-    exportNumFn(num.bytesToU16C, "bytes_to_u16");
-    exportNumFn(num.bytesToU32C, "bytes_to_u32");
-    exportNumFn(num.bytesToU64C, "bytes_to_u64");
-    exportNumFn(num.bytesToU128C, "bytes_to_u128");
-
     exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
     exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
-
-    exportNumFn(num.compareI128, "compare.i128");
-    exportNumFn(num.compareU128, "compare.u128");
-
-    exportNumFn(num.lessThanI128, "less_than.i128");
-    exportNumFn(num.lessThanOrEqualI128, "less_than_or_equal.i128");
-    exportNumFn(num.greaterThanI128, "greater_than.i128");
-    exportNumFn(num.greaterThanOrEqualI128, "greater_than_or_equal.i128");
-
-    exportNumFn(num.lessThanU128, "less_than.u128");
-    exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
-    exportNumFn(num.greaterThanU128, "greater_than.u128");
-    exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
 
     exportNumFn(num.compareI128, "compare.i128");
     exportNumFn(num.compareU128, "compare.u128");
@@ -133,6 +121,9 @@ comptime {
         num.exportFloor(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f64.");
         num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
         num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
+
+        num.exportNumToFloatCast(T, f32, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f32.");
+        num.exportNumToFloatCast(T, f64, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
@@ -190,34 +181,28 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
-    exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplit, "str_split");
     exportStrFn(str.countSegments, "count_segments");
-    exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.isEmpty, "is_empty");
     exportStrFn(str.getCapacity, "capacity");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strEqual, "equal");
-    exportStrFn(str.substringUnsafe, "substring_unsafe");
-    exportStrFn(str.getUnsafe, "get_unsafe");
-    exportStrFn(str.reserve, "reserve");
-    exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
-    exportStrFn(str.appendScalar, "append_scalar");
+    exportStrFn(str.substringUnsafeC, "substring_unsafe");
+    exportStrFn(str.getUnsafeC, "get_unsafe");
+    exportStrFn(str.reserveC, "reserve");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
-    exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.fromUtf8C, "from_utf8");
+    exportStrFn(str.repeatC, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimStart, "trim_start");
     exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
-    exportStrFn(str.withCapacity, "with_capacity");
-    exportStrFn(str.strGraphemes, "graphemes");
+    exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 

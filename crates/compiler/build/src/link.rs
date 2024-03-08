@@ -1,6 +1,7 @@
 use crate::target::{arch_str, target_zig_str};
 use libloading::{Error, Library};
 use roc_command_utils::{cargo, clang, rustup, zig};
+use roc_debug_flags;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
@@ -299,7 +300,7 @@ pub fn build_zig_host_wasm32(
             "c",
             "-target",
             "wasm32-wasi",
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
             "-fPIC",
             "-fstrip",
         ]);
@@ -537,7 +538,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2023-05-28", "cargo"]);
+            cmd.args(["run", "nightly-2023-07-09", "cargo"]);
 
             cmd
         } else {
@@ -613,7 +614,8 @@ pub fn rebuild_host(
 
             // Clean up c_host.o
             if c_host_dest.exists() {
-                std::fs::remove_file(c_host_dest).unwrap();
+                // there can be a race condition on this file cleanup
+                let _ = std::fs::remove_file(c_host_dest);
             }
         }
     } else if rust_host_src.exists() {
@@ -810,15 +812,15 @@ fn nix_glibc_path_opt() -> Option<OsString> {
     env::var_os("NIX_GLIBC_PATH")
 }
 
-fn build_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
+fn build_path_or_panic<const N: usize>(segments: [&str; N]) -> PathBuf {
     let mut guess_path = PathBuf::new();
     for s in segments {
         guess_path.push(s);
     }
     if guess_path.exists() {
-        Some(guess_path)
+        guess_path
     } else {
-        None
+        panic!("{} does not exist.", guess_path.display());
     }
 }
 
@@ -846,6 +848,17 @@ fn look_for_library(lib_dirs: &[PathBuf], lib_filename: &str) -> Option<PathBuf>
 
 fn strs_to_path(strs: &[&str]) -> PathBuf {
     strs.iter().collect()
+}
+
+fn extra_link_flags() -> Vec<String> {
+    match env::var("ROC_LINK_FLAGS") {
+        Ok(flags) => {
+            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
+
+            flags
+        }
+        Err(_) => "".to_string(),
+    }.split_whitespace().map(|x| x.to_owned()).collect()
 }
 
 fn link_linux(
@@ -914,7 +927,7 @@ fn link_linux(
     let scrt1_name = "Scrt1.o";
     let scrt1_path = look_for_library(&lib_dirs, scrt1_name);
 
-    // Unwrap all the paths at once so we can inform the user of all missing libs at once
+    // Unwrap all the paths at once so we can inform the user of any missing libs
     let (libgcc_path, crti_path, crtn_path, scrt1_path) =
         match (libgcc_path, crti_path, crtn_path, scrt1_path) {
             (Some(libgcc), Some(crti), Some(crtn), Some(scrt1)) => (libgcc, crti, crtn, scrt1),
@@ -951,33 +964,40 @@ fn link_linux(
             }
         };
 
-    let ld_linux = match target.architecture {
+    let (libgcc_path_str, crti_path_str, crtn_path_str, scrt1_path_str) = (
+        libgcc_path.to_string_lossy(),
+        crti_path.to_string_lossy(),
+        crtn_path.to_string_lossy(),
+        scrt1_path.to_string_lossy(),
+    );
+
+    let ld_linux_path = match target.architecture {
         Architecture::X86_64 => {
             // give preference to nix_path if it's defined, this prevents bugs
             if let Some(nix_glibc_path) = nix_glibc_path_opt() {
-                build_path([
+                build_path_or_panic([
                     &nix_glibc_path.into_string().unwrap(),
                     "ld-linux-x86-64.so.2",
                 ])
             } else {
-                build_path(["/lib64", "ld-linux-x86-64.so.2"])
+                build_path_or_panic(["/lib64", "ld-linux-x86-64.so.2"])
             }
         }
-        Architecture::Aarch64(_) => build_path(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Aarch64(_) => build_path_or_panic(["/lib", "ld-linux-aarch64.so.1"]),
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
         ),
     };
-    let ld_linux = ld_linux.unwrap();
-    let ld_linux = ld_linux.to_str().unwrap();
+
+    let ld_linux_path_str = &ld_linux_path.to_string_lossy();
 
     let mut soname;
     let (base_args, output_path) = match link_type {
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path.to_string_lossy().into_owned()],
+            vec![scrt1_path_str.to_string()],
             output_path,
         ),
         LinkType::Dylib => {
@@ -1013,9 +1033,9 @@ fn link_linux(
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
-    let mut command = Command::new("ld");
+    let mut ld_command = Command::new("ld");
 
-    command
+    ld_command
         // Don't allow LD_ env vars to affect this
         .env_clear()
         .env("PATH", &env_path)
@@ -1031,12 +1051,13 @@ fn link_linux(
             "-A",
             arch_str(target),
             "-pie",
-            &*crti_path.to_string_lossy(),
-            &*crtn_path.to_string_lossy(),
+            &crti_path_str,
+            &crtn_path_str,
         ])
         .args(&base_args)
-        .args(["-dynamic-linker", ld_linux])
+        .args(["-dynamic-linker", ld_linux_path_str])
         .args(input_paths)
+        .args(extra_link_flags())
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
         .args([
@@ -1049,15 +1070,16 @@ fn link_linux(
             "-lrt",
             "-lutil",
             "-lc_nonshared",
-            libgcc_path.to_str().unwrap(),
+            &libgcc_path_str,
             // Output
             "-o",
             output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
         ]);
+    debug_print_command(&ld_command);
 
-    let output = command.spawn()?;
+    let ld_output = ld_command.spawn()?;
 
-    Ok((output, output_path))
+    Ok((ld_output, output_path))
 }
 
 fn link_macos(
@@ -1108,25 +1130,14 @@ fn link_macos(
             "-macos_version_min",
             &get_macos_version(),
         ])
-        .args(input_paths);
+        .args(input_paths)
+        .args(extra_link_flags());
 
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
         ld_command.arg(format!("-L{sdk_path}"));
         ld_command.arg(format!("-L{sdk_path}/swift"));
     };
-
-    let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
-        Ok(flags) => {
-            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
-
-            flags
-        }
-        Err(_) => "".to_string(),
-    };
-    for roc_link_flag in roc_link_flags.split_whitespace() {
-        ld_command.arg(roc_link_flag);
-    }
 
     ld_command.args([
         // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274
@@ -1162,14 +1173,18 @@ fn link_macos(
         output_path.to_str().unwrap(), // app
     ]);
 
+    debug_print_command(&ld_command);
+
     let mut ld_child = ld_command.spawn()?;
 
     match target.architecture {
         Architecture::Aarch64(_) => {
             ld_child.wait()?;
-            let codesign_child = Command::new("codesign")
-                .args(["-s", "-", output_path.to_str().unwrap()])
-                .spawn()?;
+
+            let mut codesign_cmd = Command::new("codesign");
+            codesign_cmd.args(["-s", "-", output_path.to_str().unwrap()]);
+            debug_print_command(&codesign_cmd);
+            let codesign_child = codesign_cmd.spawn()?;
 
             Ok((codesign_child, output_path))
         }
@@ -1178,8 +1193,11 @@ fn link_macos(
 }
 
 fn get_macos_version() -> String {
-    let cmd_stdout = Command::new("sw_vers")
-        .arg("-productVersion")
+    let mut cmd = Command::new("sw_vers");
+    cmd.arg("-productVersion");
+    debug_print_command(&cmd);
+
+    let cmd_stdout = cmd
         .output()
         .expect("Failed to execute command 'sw_vers -productVersion'")
         .stdout;
@@ -1221,8 +1239,9 @@ fn link_wasm32(
             "-fstrip",
             "-O",
             "ReleaseSmall",
+            "-rdynamic",
             // useful for debugging
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
         ])
         .spawn()?;
 
@@ -1382,15 +1401,11 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
-    let mut command_string = std::ffi::OsString::new();
-    command_string.push(command.get_program());
-
-    for arg in command.get_args() {
-        command_string.push(" ");
-        command_string.push(arg);
-    }
-
-    let cmd_str = command_string.to_str().unwrap();
+    let command_string = stringify_command(&command, false);
+    let cmd_str = &command_string;
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
+        print_command_str(cmd_str);
+    });
     let cmd_output = command.output().unwrap();
     let max_flaky_fail_count = 10;
 
@@ -1427,4 +1442,48 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
             ),
         }
     }
+}
+
+/// Stringify a command for printing
+/// e.g. `HOME=~ zig build-exe foo.zig -o foo`
+fn stringify_command(cmd: &Command, include_env_vars: bool) -> String {
+    let mut command_string = std::ffi::OsString::new();
+
+    if include_env_vars {
+        for (name, opt_val) in cmd.get_envs() {
+            command_string.push(name);
+            command_string.push("=");
+            if let Some(val) = opt_val {
+                command_string.push(val);
+            } else {
+                command_string.push("''");
+            }
+            command_string.push(" ");
+        }
+    }
+
+    command_string.push(cmd.get_program());
+
+    for arg in cmd.get_args() {
+        command_string.push(" ");
+        command_string.push(arg);
+    }
+
+    String::from(command_string.to_str().unwrap())
+}
+
+#[cfg(debug_assertions)]
+fn print_command_str(s: &str) {
+    println!("\nRoc build command:\n{}\n", s);
+}
+
+fn debug_print_command(_cmd: &Command) {
+    // This debug macro is compiled out in release mode, so the argument is unused
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS_WITH_ENV_VARS, {
+        print_command_str(&stringify_command(_cmd, true));
+    });
+
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
+        print_command_str(&stringify_command(_cmd, false));
+    });
 }

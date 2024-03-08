@@ -3,12 +3,12 @@ procedure Bool.2 ():
     ret Bool.23;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.292 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.270 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.270;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.291 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.269 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.269;
 
 procedure Test.6 (Test.8, #Attr.12):
     let Test.20 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;

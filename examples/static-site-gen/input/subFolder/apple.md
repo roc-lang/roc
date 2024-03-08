@@ -54,12 +54,21 @@ Herculei undae calcata inmeriti quercus ignes parabant iam.
 
 ### Example Code Blocks
 
+#### Something That Cannot Be Found
+
 ```sh
 # This isn't fenced roc code so its not formatted
 # Use a fence like ```roc to format code blocks
 ```
 
+#### A Complete File
+
 ```roc
 file:codeExample.roc
 ```
 
+#### A Snippet Of Some File
+
+```roc
+file:codeExample.roc:snippet:view
+```

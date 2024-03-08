@@ -1,5 +1,7 @@
 # devtools
 
+[Install nix](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#installing-nix) if you have not already done so.
+
 To make rust-analyzer and other vscode extensions work well you want them using the same rustc, glibc, zig... as specified in the roc nix flake.
 The easiest way to do this is to use another flake for all your dev tools that takes the roc flake as an input.
 

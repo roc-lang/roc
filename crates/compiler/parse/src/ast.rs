@@ -1296,6 +1296,16 @@ impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
 }
 
 impl<'a> Expr<'a> {
+    pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
+        module_name: "",
+        ident: "<function>",
+    };
+
+    pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
+        module_name: "",
+        ident: "*",
+    };
+
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
         Loc {
             region,

@@ -361,7 +361,7 @@ impl RocStr {
                         let ptr = if len < big_string.capacity() {
                             // We happen to have excess capacity already, so we will be able
                             // to write the terminator into the first byte of excess capacity.
-                            big_string.ptr_to_first_elem() as *mut u8
+                            big_string.ptr_to_first_elem()
                         } else {
                             // We always have an allocation that's even bigger than necessary,
                             // because the refcount bytes take up more than the 1B needed for
@@ -376,7 +376,7 @@ impl RocStr {
                             //
                             // IMPORTANT: Must use ptr::copy instead of ptr::copy_nonoverlapping
                             // because the regions definitely overlap!
-                            ptr::copy(big_string.ptr_to_first_elem() as *mut u8, alloc_ptr, len);
+                            ptr::copy(big_string.ptr_to_first_elem(), alloc_ptr, len);
 
                             alloc_ptr
                         };
@@ -388,7 +388,7 @@ impl RocStr {
                         // The backing list was not unique, so we can't mutate it in-place.
                         // ask for `len + 1` to store the original string and the terminator
                         with_stack_bytes(len + 1, |alloc_ptr: *mut u8| {
-                            let elem_ptr = big_string.ptr_to_first_elem() as *mut u8;
+                            let elem_ptr = big_string.ptr_to_first_elem();
 
                             // memcpy the bytes into the stack allocation
                             std::ptr::copy_nonoverlapping(elem_ptr, alloc_ptr, len);

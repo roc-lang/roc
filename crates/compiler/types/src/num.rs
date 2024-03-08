@@ -177,7 +177,6 @@ pub enum IntLitWidth {
     I32,
     I64,
     I128,
-    Nat,
     // An int literal can be promoted to an f32/f64/Dec if appropriate. The respective widths for
     // integers that can be stored in these float types without losing precision are:
     //   f32: +/- 2^24
@@ -204,8 +203,6 @@ impl IntLitWidth {
             I32 => (Signed, 32),
             I64 => (Signed, 64),
             I128 => (Signed, 128),
-            // TODO: Nat is target specific!
-            Nat => (Unsigned, 64),
             F32 => (Signed, 24),
             F64 => (Signed, 53),
             Dec => (Signed, 128),
@@ -229,7 +226,6 @@ impl IntLitWidth {
             I32 => "I32",
             I64 => "I64",
             I128 => "I128",
-            Nat => "Nat",
             F32 => "F32",
             F64 => "F64",
             Dec => "Dec",
@@ -249,8 +245,6 @@ impl IntLitWidth {
             I32 => i32::MAX as u128,
             I64 => i64::MAX as u128,
             I128 => i128::MAX as u128,
-            // TODO: this is target specific!
-            Nat => u64::MAX as u128,
             // Max int value without losing precision: 2^24
             F32 => 16_777_216,
             // Max int value without losing precision: 2^53
@@ -263,7 +257,7 @@ impl IntLitWidth {
     pub fn min_value(&self) -> i128 {
         use IntLitWidth::*;
         match self {
-            U8 | U16 | U32 | U64 | U128 | Nat => 0,
+            U8 | U16 | U32 | U64 | U128 => 0,
             I8 => i8::MIN as i128,
             I16 => i16::MIN as i128,
             I32 => i32::MIN as i128,
@@ -330,7 +324,6 @@ impl IntLitWidth {
             IntLitWidth::I32 => Symbol::NUM_I32,
             IntLitWidth::I64 => Symbol::NUM_I64,
             IntLitWidth::I128 => Symbol::NUM_I128,
-            IntLitWidth::Nat => Symbol::NUM_NAT,
             IntLitWidth::F32 => Symbol::NUM_F32,
             IntLitWidth::F64 => Symbol::NUM_F64,
             IntLitWidth::Dec => Symbol::NUM_DEC,
@@ -415,7 +408,6 @@ pub const fn int_lit_width_to_variable(w: IntLitWidth) -> Variable {
         IntLitWidth::I32 => Variable::I32,
         IntLitWidth::I64 => Variable::I64,
         IntLitWidth::I128 => Variable::I128,
-        IntLitWidth::Nat => Variable::NAT,
         IntLitWidth::F32 => Variable::F32,
         IntLitWidth::F64 => Variable::F64,
         IntLitWidth::Dec => Variable::DEC,
@@ -440,7 +432,6 @@ const ALL_INT_OR_FLOAT_VARIABLES: &[Variable] = &[
     Variable::U32,
     Variable::F64,
     Variable::I64,
-    Variable::NAT, // FIXME: Nat's order here depends on the target
     Variable::U64,
     Variable::I128,
     Variable::DEC,
@@ -466,7 +457,6 @@ const ALL_INT_VARIABLES: &[Variable] = &[
     Variable::I32,
     Variable::U32,
     Variable::I64,
-    Variable::NAT, // FIXME: Nat's order here depends on the target
     Variable::U64,
     Variable::I128,
     Variable::U128,

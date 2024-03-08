@@ -117,14 +117,13 @@ impl<'a> ReplApp<'a> for CliApp {
         main_fn_name: &str,
         ret_bytes: usize,
         mut transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        run_jit_function_dynamic_type!(self.lib, main_fn_name, ret_bytes, |v| transform(
-            &CliMemory, v
-        ))
+        let mut t = |v| transform(&CliMemory, v);
+        run_jit_function_dynamic_type!(self.lib, main_fn_name, ret_bytes, t)
     }
 }
 

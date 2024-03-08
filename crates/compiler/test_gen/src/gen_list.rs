@@ -330,7 +330,7 @@ fn list_map_try_ok() {
             List.mapTry [1, 2, 3] \num ->
                 str = Num.toStr (num * 2)
 
-                Ok "\(str)!"
+                Ok "$(str)!"
         "#,
         // Result Str [] is unwrapped to just Str
         RocList::<RocStr>::from_slice(&[
@@ -823,6 +823,30 @@ fn list_append_longer_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_append_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            [
+                { name: "foo", content: "cfoo" },
+                { name: "bar", content: "cbar" },
+                { name: "baz", content: "cbaz" },
+            ]
+            |> List.append { name: "spam", content: "cspam" }
+            "#
+        ),
+        RocList::from_slice(&[
+            (RocStr::from("cfoo"), RocStr::from("foo"),),
+            (RocStr::from("cbar"), RocStr::from("bar"),),
+            (RocStr::from("cbaz"), RocStr::from("baz"),),
+            (RocStr::from("cspam"), RocStr::from("spam"),),
+        ]),
+        RocList<(RocStr, RocStr)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend() {
     assert_evals_to!("List.prepend [] 1", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!(
@@ -883,6 +907,25 @@ fn list_prepend_big_list() {
             9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100
         ]),
         RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_prepend_record() {
+    assert_evals_to!(
+        indoc!(
+            r"
+            payment1 : { amount: Dec, date: [RD I32] }
+            payment1 = { amount: 1dec, date: (RD 1000) }
+            payment2 : { amount: Dec, date: [RD I32] }
+            payment2 = { amount: 2dec, date: (RD 1001) }
+
+            List.prepend [payment2] payment1
+            "
+        ),
+        RocList::from_slice(&[(RocDec::from(1), 1000i32), (RocDec::from(2), 1001i32),]),
+        RocList<(RocDec, i32)>
     );
 }
 
@@ -1014,7 +1057,7 @@ fn list_walk_implements_position() {
         r"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat where a implements Eq
+        find : List a, a -> Option U64 where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -1031,7 +1074,7 @@ fn list_walk_implements_position() {
             Some v -> v
         ",
         2,
-        usize
+        u64
     );
 }
 
@@ -1178,7 +1221,7 @@ fn list_count_if_empty_list() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -1200,7 +1243,7 @@ fn list_count_if_always_true_for_non_empty_list() {
             "
         ),
         8,
-        usize
+        u64
     );
 }
 
@@ -1218,7 +1261,7 @@ fn list_count_if_always_false_for_non_empty_list() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -1236,7 +1279,7 @@ fn list_count_if_condition() {
             "
         ),
         2,
-        usize
+        u64
     );
 }
 
@@ -1250,7 +1293,7 @@ fn list_count_if_str() {
              "#
         ),
         2,
-        usize
+        u64
     );
 }
 
@@ -1900,13 +1943,13 @@ fn list_concat_large() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_len() {
-    assert_evals_to!("List.len []", 0, usize);
+    assert_evals_to!("List.len []", 0, u64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_int_list_len() {
-    assert_evals_to!("List.len [12, 9, 6, 3]", 4, usize);
+    assert_evals_to!("List.len [12, 9, 6, 3]", 4, u64);
 }
 
 #[test]
@@ -1921,7 +1964,7 @@ fn loaded_int_list_len() {
             "
         ),
         3,
-        usize
+        u64
     );
 }
 
@@ -1939,7 +1982,7 @@ fn fn_int_list_len() {
             "
         ),
         4,
-        usize
+        u64
     );
 }
 
@@ -2359,7 +2402,7 @@ fn gen_wrap_len() {
             "
         ),
         RocList::from_slice(&[3]),
-        RocList<usize>
+        RocList<u64>
     );
 }
 
@@ -2412,7 +2455,7 @@ fn gen_swap() {
             app "quicksort" provides [main] to "./platform"
 
 
-            swap : Nat, Nat, List a -> List a
+            swap : U64, U64, List a -> List a
             swap = \i, j, list ->
                 when Pair (List.get list i) (List.get list j) is
                     Pair (Ok atI) (Ok atJ) ->
@@ -2447,7 +2490,7 @@ fn gen_quicksort() {
                     quicksortHelp list 0 (n - 1)
 
 
-                quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+                quicksortHelp : List (Num a), U64, U64 -> List (Num a)
                 quicksortHelp = \list, low, high ->
                     if low < high then
                         when partition low high list is
@@ -2459,7 +2502,7 @@ fn gen_quicksort() {
                         list
 
 
-                swap : Nat, Nat, List a -> List a
+                swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -2470,7 +2513,7 @@ fn gen_quicksort() {
                         _ ->
                             []
 
-                partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+                partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -2482,7 +2525,7 @@ fn gen_quicksort() {
                             Pair low initialList
 
 
-                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
+                partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -2520,7 +2563,7 @@ fn quicksort() {
                        quicksortHelp list 0 (List.len list - 1)
 
 
-                   quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+                   quicksortHelp : List (Num a), U64, U64 -> List (Num a)
                    quicksortHelp = \list, low, high ->
                        if low < high then
                            when partition low high list is
@@ -2532,7 +2575,7 @@ fn quicksort() {
                            list
 
 
-                   swap : Nat, Nat, List a -> List a
+                   swap : U64, U64, List a -> List a
                    swap = \i, j, list ->
                        when Pair (List.get list i) (List.get list j) is
                            Pair (Ok atI) (Ok atJ) ->
@@ -2543,7 +2586,7 @@ fn quicksort() {
                            _ ->
                                []
 
-                   partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+                   partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
@@ -2555,7 +2598,7 @@ fn quicksort() {
                                Pair low initialList
 
 
-                   partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]
+                   partitionHelp : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
                    partitionHelp = \i, j, list, high, pivot ->
                        # if j < high then
                        if Bool.false then
@@ -2596,7 +2639,7 @@ fn quicksort_singleton() {
                        quicksortHelp list 0 (List.len list - 1)
 
 
-                   quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+                   quicksortHelp : List (Num a), U64, U64 -> List (Num a)
                    quicksortHelp = \list, low, high ->
                        if low < high then
                            when partition low high list is
@@ -2608,7 +2651,7 @@ fn quicksort_singleton() {
                            list
 
 
-                   swap : Nat, Nat, List a -> List a
+                   swap : U64, U64, List a -> List a
                    swap = \i, j, list ->
                        when Pair (List.get list i) (List.get list j) is
                            Pair (Ok atI) (Ok atJ) ->
@@ -2619,7 +2662,7 @@ fn quicksort_singleton() {
                            _ ->
                                []
 
-                   partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+                   partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
@@ -2631,7 +2674,7 @@ fn quicksort_singleton() {
                                Pair low initialList
 
 
-                   partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]
+                   partitionHelp : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
                    partitionHelp = \i, j, list, high, pivot ->
                        if j < high then
                            when List.get list j is
@@ -2672,7 +2715,7 @@ fn empty_list_increment_decrement() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -2689,7 +2732,7 @@ fn list_literal_increment_decrement() {
             "
         ),
         6,
-        usize
+        u64
     );
 }
 
@@ -3158,7 +3201,7 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3170,7 +3213,7 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3186,7 +3229,7 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3198,7 +3241,7 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3214,7 +3257,7 @@ fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst [] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst [] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3226,7 +3269,7 @@ fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLast [] (\s -> Str.countGraphemes s > 5) is
+            when List.findLast [] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -3270,25 +3313,25 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         1,
-        usize
+        u64
     );
 
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLastIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+            when List.findLastIndex ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         2,
-        usize
+        u64
     );
 }
 
@@ -3298,25 +3341,25 @@ fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         999,
-        usize
+        u64
     );
 
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         999,
-        usize
+        u64
     );
 }
 
@@ -3326,25 +3369,25 @@ fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r"
-            when List.findFirstIndex [] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex [] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "
         ),
         999,
-        usize
+        u64
     );
 
     assert_evals_to!(
         indoc!(
             r"
-            when List.findLastIndex [] (\s -> Str.countGraphemes s > 5) is
+            when List.findLastIndex [] (\s -> Str.countUtf8Bytes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "
         ),
         999,
-        usize
+        u64
     );
 }
 
@@ -3512,14 +3555,14 @@ fn monomorphized_lists() {
             r"
             l = \{} -> [1, 2, 3]
 
-            f : List U8, List U16 -> Nat
+            f : List U8, List U16 -> U64
             f = \_, _ -> 18
 
             f (l {}) (l {})
             "
         ),
         18,
-        usize
+        u64
     )
 }
 
@@ -3695,10 +3738,10 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
                 List.concat state mappedVals
 
             add2 : Str -> Str
-            add2 = \x -> "added \(x)"
+            add2 = \x -> "added $(x)"
 
             mul2 : Str -> Str
-            mul2 = \x -> "multiplied \(x)"
+            mul2 = \x -> "multiplied $(x)"
 
             foo = [add2, mul2]
             bar = ["1", "2", "3", "4"]
@@ -3742,7 +3785,7 @@ fn list_infer_usage() {
             "#
         ),
         1,
-        usize
+        u64
     );
 }
 
@@ -3753,7 +3796,7 @@ fn list_walk_backwards_implements_position() {
         r"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat where a implements Eq
+        find : List a, a -> Option U64 where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -3770,7 +3813,7 @@ fn list_walk_backwards_implements_position() {
             Some v -> v
         ",
         0,
-        usize
+        u64
     );
 }
 

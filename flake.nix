@@ -19,7 +19,7 @@
       inputs.flake-utils.follows = "flake-utils";
     };
 
-    # for non flake backwards compatibility 
+    # for non flake backwards compatibility
     flake-compat = {
       url = "github:edolstra/flake-compat";
       flake = false;
@@ -45,7 +45,7 @@
         inherit (compile-deps) zigPkg llvmPkgs llvmVersion
           llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
-        # DevInputs are not necessary to build roc as a user 
+        # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
           lib.optionals stdenv.isLinux [
             valgrind # used in cli tests, see cli/tests/cli_run.rs
@@ -60,7 +60,7 @@
             xorg.libxcb
           ];
 
-        # DevInputs are not necessary to build roc as a user 
+        # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
           lib.optionals stdenv.isDarwin
             (with pkgs.darwin.apple_sdk.frameworks; [
