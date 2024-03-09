@@ -687,7 +687,7 @@ pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
         _ => {
             // TODO: tighten up the types here, we should always end up with a
             // formatted report from load.
-            print!("Failed with error: {problem:?}");
+            print!("Failed with error: {problem:?}\n");
             Ok(1)
         }
     }
