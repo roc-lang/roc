@@ -126,6 +126,7 @@ pub(crate) fn decoder(env: &mut Env, _def_symbol: Symbol, arity: u32) -> (Expr, 
             (finalizer_var, Loc::at_zero(finalizer)),
         ],
         CalledVia::Space,
+        Recursive::NotRecursive,
     );
 
     let (call_decode_custom, decode_custom_ret_var) = {
@@ -510,6 +511,7 @@ fn step_elem(
                         ),
                     ],
                     CalledVia::Space,
+                    Recursive::NotRecursive,
                 );
 
                 // when Decode.decodeWith bytes Decode.decoder fmt is
@@ -600,6 +602,7 @@ fn step_elem(
                 )),
                 vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
                 CalledVia::Space,
+                Recursive::NotRecursive,
             )
         };
 

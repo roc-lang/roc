@@ -1,4 +1,5 @@
 use log::debug;
+use roc_can::{expr::Recursive, traverse::find_recursive_calls};
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -8,8 +9,9 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::LineInfo;
 
 use tower_lsp::lsp_types::{
-    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
-    Location, MarkedString, Position, Range, SemanticTokens, SemanticTokensResult, TextEdit, Url,
+    CompletionItem, Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents,
+    LanguageString, Location, MarkedString, Position, Range, SemanticTokens, SemanticTokensResult,
+    TextEdit, Url,
 };
 
 use crate::{
@@ -69,6 +71,7 @@ impl DocInfo {
         let end = Position::new(self.line_info.num_lines(), 0);
         Range::new(start, end)
     }
+
     pub fn get_prefix_at_position(&self, position: Position) -> String {
         let position = position.to_roc_position(&self.line_info);
         let offset = position.offset as usize;
@@ -82,6 +85,7 @@ impl DocInfo {
 
         String::from(symbol)
     }
+
     pub fn format(&self) -> Option<Vec<TextEdit>> {
         let source = &self.source;
         let arena = &Bump::new();
@@ -139,7 +143,34 @@ impl AnalyzedDocument {
     }
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        self.analysis_result.diagnostics.clone()
+        let mut diags = self.analysis_result.diagnostics.clone();
+
+        if let Some(module) = &self.analysis_result.module {
+            let rec = find_recursive_calls(&module.declarations);
+            let extra = rec.into_iter().filter_map(|(region, rec)| match rec {
+                Recursive::Recursive => {
+                    let range = region.to_range(&self.doc_info.line_info);
+                    Some(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::HINT),
+                        message: "This call is recursive, not tail recursive".to_string(),
+                        ..Default::default()
+                    })
+                }
+                Recursive::TailRecursive => {
+                    let range = region.to_range(&self.doc_info.line_info);
+                    Some(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::INFORMATION),
+                        message: "This call is tail recursive".to_string(),
+                        ..Default::default()
+                    })
+                }
+                _ => None,
+            });
+            diags.extend(extra);
+        }
+        diags
     }
 
     pub fn symbol_at(&self, position: Position) -> Option<Symbol> {
@@ -172,16 +203,29 @@ impl AnalyzedDocument {
             ..
         } = self.module()?;
 
-        let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
+        let (var_info, recusive) = roc_can::traverse::find_hover_at(pos, declarations);
+        //Make a string that denotes if a function is recursive or not
+        let recursive_string = recusive.map(|rec| MarkedString::String(format!("{:?}", rec)));
+
+        let (region, var) = var_info?;
+
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 
         let range = region.to_range(self.line_info());
 
         Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                language: "roc".to_string(),
-                value: type_str,
-            })),
+            contents: HoverContents::Array(
+                vec![
+                    Some(MarkedString::LanguageString(LanguageString {
+                        language: "roc".to_string(),
+                        value: type_str,
+                    })),
+                    recursive_string,
+                ]
+                .into_iter()
+                .filter_map(|x| x)
+                .collect::<Vec<_>>(),
+            ),
             range: Some(range),
         })
     }

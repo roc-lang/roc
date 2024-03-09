@@ -496,7 +496,12 @@ fn call_hash_ability_member(
         (in_hasher_var, Loc::at_zero(in_hasher_expr)),
         (in_val_var, Loc::at_zero(in_val_expr)),
     ];
-    let call_hash = Expr::Call(hash_fn_data, hash_arguments, CalledVia::Space);
+    let call_hash = Expr::Call(
+        hash_fn_data,
+        hash_arguments,
+        CalledVia::Space,
+        Recursive::NotRecursive,
+    );
 
     (this_out_hasher_var, call_hash)
 }

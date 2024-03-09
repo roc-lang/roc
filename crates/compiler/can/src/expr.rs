@@ -39,7 +39,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub tail_call: Option<Symbol>,
+    pub rec_call: Recursive,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
@@ -49,10 +49,7 @@ pub struct Output {
 impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
-
-        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
-            self.tail_call = Some(later);
-        }
+        self.rec_call.union_mut(other.rec_call);
 
         self.introduced_variables
             .union_owned(other.introduced_variables);
@@ -151,6 +148,7 @@ pub enum Expr {
         Box<(Variable, Loc<Expr>, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
+        Recursive,
     ),
     RunLowLevel {
         op: LowLevel,
@@ -315,7 +313,7 @@ impl Expr {
             Self::If { .. } => Category::If,
             Self::LetRec(_, expr, _) => expr.value.category(),
             Self::LetNonRec(_, expr) => expr.value.category(),
-            &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
+            &Self::Call(_, _, called_via, _) => Category::CallResult(None, called_via),
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
             Self::ForeignCall { .. } => Category::ForeignCall,
             Self::Closure(..) => Category::Lambda,
@@ -555,8 +553,22 @@ pub enum Recursive {
     Recursive = 1,
     TailRecursive = 2,
 }
+impl Default for Recursive {
+    fn default() -> Self {
+        Self::NotRecursive
+    }
+}
 
 impl Recursive {
+    pub fn union_mut(&mut self, other: Recursive) {
+        match (&self, &other) {
+            //Any recursive calls should mark the whole output recursive, tail recrusive calls shouldn't mark an already recursive output as tail recursive
+            (_, Recursive::Recursive) | (Recursive::NotRecursive, Recursive::TailRecursive) => {
+                *self = other
+            }
+            _ => (),
+        }
+    }
     pub fn is_recursive(&self) -> bool {
         match self {
             Recursive::NotRecursive => false,
@@ -619,6 +631,16 @@ pub fn canonicalize_expr<'a>(
     scope: &mut Scope,
     region: Region,
     expr: &'a ast::Expr<'a>,
+) -> (Loc<Expr>, Output) {
+    canonicalize_expr_with_tail(env, var_store, scope, region, expr, false)
+}
+pub fn canonicalize_expr_with_tail<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    expr: &'a ast::Expr<'a>,
+    is_tail: bool,
 ) -> (Loc<Expr>, Output) {
     use Expr::*;
 
@@ -724,7 +746,7 @@ pub fn canonicalize_expr<'a>(
 
             let output = Output {
                 references,
-                tail_call: None,
+                rec_call: Recursive::NotRecursive,
                 ..Default::default()
             };
 
@@ -834,7 +856,7 @@ pub fn canonicalize_expr<'a>(
 
                 let output = Output {
                     references,
-                    tail_call: None,
+                    rec_call: Recursive::NotRecursive,
                     ..Default::default()
                 };
 
@@ -862,6 +884,7 @@ pub fn canonicalize_expr<'a>(
 
                 args.push((var_store.fresh(), arg_expr));
                 output.references.union_mut(&arg_out.references);
+                output.rec_call.union_mut(arg_out.rec_call);
             }
 
             if let ast::Expr::OpaqueRef(name) = loc_fn.value {
@@ -914,6 +937,7 @@ pub fn canonicalize_expr<'a>(
 
                     args.push(arg_expr);
                     output.references.union_mut(&arg_out.references);
+                    output.rec_call.union_mut(arg_out.rec_call);
                 }
 
                 let crash = if args.len() > 1 {
@@ -948,18 +972,22 @@ pub fn canonicalize_expr<'a>(
 
                 output.union(fn_expr_output);
 
-                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_call = None;
-
                 let expr = match fn_expr.value {
                     Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
-                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
+                        // we're calling a symbol by name, check if it's the tail-callable symbol and if it's in the tail position
+                        let is_recursive = match &env.tailcallable_symbol {
+                            Some(tc_sym) if *tc_sym == symbol => {
+                                if is_tail {
+                                    Recursive::TailRecursive
+                                } else {
+                                    Recursive::Recursive
+                                }
+                            }
+                            Some(_) | None => Recursive::NotRecursive,
                         };
+                        output.rec_call.union_mut(is_recursive.clone());
 
                         Call(
                             Box::new((
@@ -970,6 +998,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
+                            is_recursive,
                         )
                     }
                     RuntimeError(_) => {
@@ -1009,6 +1038,7 @@ pub fn canonicalize_expr<'a>(
                             )),
                             args,
                             *application_style,
+                            Recursive::NotRecursive,
                         )
                     }
                 };
@@ -1060,7 +1090,14 @@ pub fn canonicalize_expr<'a>(
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
-                can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
+                can_defs_with_return(
+                    env,
+                    var_store,
+                    inner_scope,
+                    env.arena.alloc(defs),
+                    loc_ret,
+                    is_tail,
+                )
             })
         }
         ast::Expr::RecordBuilder(_) => {
@@ -1081,9 +1118,6 @@ pub fn canonicalize_expr<'a>(
             let (can_cond, mut output) =
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
-            // the condition can never be a tail-call
-            output.tail_call = None;
-
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
@@ -1095,19 +1129,13 @@ pub fn canonicalize_expr<'a>(
                         region,
                         branch,
                         &mut output,
+                        is_tail,
                     )
                 });
 
                 output.references.union_mut(&branch_references);
 
                 can_branches.push(can_when_branch);
-            }
-
-            // A "when" with no branches is a runtime error, but it will mess things up
-            // if code gen mistakenly thinks this is a tail call just because its condition
-            // happened to be one. (The condition gave us our initial output value.)
-            if branches.is_empty() {
-                output.tail_call = None;
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1296,29 +1324,33 @@ pub fn canonicalize_expr<'a>(
                 let (loc_cond, cond_output) =
                     canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
 
-                let (loc_then, then_output) = canonicalize_expr(
+                let (loc_then, then_output) = canonicalize_expr_with_tail(
                     env,
                     var_store,
                     scope,
                     then_branch.region,
                     &then_branch.value,
+                    is_tail,
                 );
 
                 branches.push((loc_cond, loc_then));
 
                 output.references.union_mut(&cond_output.references);
                 output.references.union_mut(&then_output.references);
+                output.union(then_output);
             }
 
-            let (loc_else, else_output) = canonicalize_expr(
+            let (loc_else, else_output) = canonicalize_expr_with_tail(
                 env,
                 var_store,
                 scope,
                 final_else_branch.region,
                 &final_else_branch.value,
+                is_tail,
             );
 
             output.references.union_mut(&else_output.references);
+            output.union(else_output);
 
             (
                 If {
@@ -1411,7 +1443,8 @@ pub fn canonicalize_expr<'a>(
             (answer, Output::default())
         }
         &ast::Expr::ParensAround(sub_expr) => {
-            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+            let (loc_expr, output) =
+                canonicalize_expr_with_tail(env, var_store, scope, region, sub_expr, is_tail);
 
             (loc_expr.value, output)
         }
@@ -1519,12 +1552,14 @@ fn canonicalize_closure_body<'a>(
     let bound_by_argument_patterns: Vec<_> =
         BindingsFromPattern::new_many(can_args.iter().map(|x| &x.2)).collect();
 
-    let (loc_body_expr, new_output) = canonicalize_expr(
+    let (loc_body_expr, new_output) = canonicalize_expr_with_tail(
         env,
         var_store,
         scope,
         loc_body_expr.region,
         &loc_body_expr.value,
+        //A closure return is a tail for this closure
+        true,
     );
 
     let mut captured_symbols: Vec<_> = new_output
@@ -1662,6 +1697,7 @@ fn canonicalize_when_branch<'a>(
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
+    is_tail: bool,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
@@ -1697,12 +1733,13 @@ fn canonicalize_when_branch<'a>(
         some_symbols_not_bound_in_all_patterns = true;
     }
 
-    let (value, mut branch_output) = canonicalize_expr(
+    let (value, mut branch_output) = canonicalize_expr_with_tail(
         env,
         var_store,
         scope,
         branch.value.region,
         &branch.value.value,
+        is_tail,
     );
 
     let guard = match &branch.guard {
@@ -2297,7 +2334,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
-        Call(boxed_tuple, args, called_via) => {
+        Call(boxed_tuple, args, called_via, tail_call) => {
             let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
@@ -2372,6 +2409,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                         Box::new((fn_var, loc_expr, closure_var, expr_var)),
                         args,
                         called_via,
+                        tail_call,
                     )
                 }
             }
@@ -2632,6 +2670,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                         (var_store.fresh(), loc_expr),
                     ],
                     CalledVia::StringInterpolation,
+                    Recursive::NotRecursive,
                 );
 
                 Loc::at(Region::zero(), expr)
@@ -2668,6 +2707,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
                 (var_store.fresh(), loc_expr),
             ],
             CalledVia::StringInterpolation,
+            Recursive::NotRecursive,
         );
 
         loc_expr = Loc::at(Region::zero(), expr);
@@ -3084,14 +3124,14 @@ pub enum DeclarationTag {
 
 impl DeclarationTag {
     fn len(self) -> usize {
-        use DeclarationTag::*;
+        use DeclarationTag as dt;
 
         match self {
-            Function(_) | Recursive(_) | TailRecursive(_) => 1,
-            Value => 1,
-            Expectation | ExpectationFx => 1,
-            Destructure(_) => 1,
-            MutualRecursion { length, .. } => length as usize + 1,
+            dt::Function(_) | dt::Recursive(_) | dt::TailRecursive(_) => 1,
+            dt::Value => 1,
+            dt::Expectation | dt::ExpectationFx => 1,
+            dt::Destructure(_) => 1,
+            dt::MutualRecursion { length, .. } => length as usize + 1,
         }
     }
 }
@@ -3182,7 +3222,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
                 stack.push(&def.loc_expr.value);
                 stack.push(&expr.value);
             }
-            Expr::Call(boxed_expr, args, _called_via) => {
+            Expr::Call(boxed_expr, args, _called_via, tail_call) => {
                 stack.reserve(1 + args.len());
 
                 match &boxed_expr.1.value {

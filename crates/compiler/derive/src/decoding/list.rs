@@ -1,4 +1,4 @@
-use roc_can::expr::Expr;
+use roc_can::expr::{Expr, Recursive};
 
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -84,6 +84,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
             decode_list_fn,
             vec![(elem_decoder_var, Loc::at_zero(elem_decoder))],
             CalledVia::Space,
+            Recursive::NotRecursive,
         );
 
         (decode_list_call, this_decode_list_ret_var)

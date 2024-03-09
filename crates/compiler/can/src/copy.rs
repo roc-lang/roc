@@ -1,7 +1,8 @@
 use crate::{
     def::Def,
     expr::{
-        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
+        ClosureData, Expr, Field, OpaqueWrapFunctionData, Recursive, StructAccessorData,
+        WhenBranchPattern,
     },
     pattern::{DestructType, ListPatterns, Pattern, RecordDestruct, TupleDestruct},
 };
@@ -393,7 +394,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             LetNonRec(Box::new(def), Box::new(body.map(|e| go_help!(e))))
         }
 
-        Call(f, args, called_via) => {
+        Call(f, args, called_via, rec) => {
             let (fn_var, fn_expr, clos_var, ret_var) = &**f;
             Call(
                 Box::new((
@@ -406,6 +407,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                     .map(|(var, expr)| (sub!(*var), expr.map(|e| go_help!(e))))
                     .collect(),
                 *called_via,
+                *rec,
             )
         }
         Crash { msg, ret_var } => Crash {

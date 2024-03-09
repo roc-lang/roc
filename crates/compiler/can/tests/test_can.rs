@@ -727,7 +727,7 @@ mod test_can {
     fn simplify_curried_call(expr: &Expr) -> (&Expr, &Expr) {
         match expr {
             LetNonRec(_, loc_expr) => simplify_curried_call(&loc_expr.value),
-            Call(fun, args, _) => (&fun.1.value, &args[0].1.value),
+            Call(fun, args, _, _) => (&fun.1.value, &args[0].1.value),
             _ => panic!("Final Expr is not a Call: {:?}", expr),
         }
     }
@@ -959,6 +959,35 @@ mod test_can {
         assert_eq!(p_detected, Recursive::TailRecursive);
     }
 
+    #[test]
+    fn recognize_tail_calls_if_else() {
+        let src = indoc!(
+            r"
+                g = \x ->
+                    if x == 0 then
+                        0
+                    else
+                        g (x - 1)
+                g 100
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+        assert!(problems
+            .iter()
+            .all(|problem| matches!(problem, Problem::UnusedDef(_, _))));
+
+        let actual = loc_expr.value;
+
+        let g_detected = get_closure(&actual, 0);
+
+        assert_eq!(g_detected, Recursive::TailRecursive);
+    }
+
     // TODO restore this test! It should report two unused defs (h and p), but only reports 1.
     // #[test]
     // fn reproduce_incorrect_unused_defs() {
@@ -1030,12 +1059,75 @@ mod test_can {
         let detected = get_closure(&loc_expr.value, 0);
         assert_eq!(detected, Recursive::TailRecursive);
     }
+    #[test]
+    fn when_not_tail_call() {
+        let src = indoc!(
+            r"
+                g = \x ->
+                    when x is
+                        0 ->  0
+                        _ -> 10 + (g (x + 1))
+
+                g 0
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+        assert_eq!(detected, Recursive::Recursive);
+    }
 
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
             r"
                 f = \x -> f x
+
+                f 0
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+
+        assert_eq!(detected, Recursive::TailRecursive);
+    }
+    #[test]
+    fn immediate_not_tail_call() {
+        let src = indoc!(
+            r"
+                f = \x -> 10+(f x)
+
+                f 0
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+
+        let detected = get_closure(&loc_expr.value, 0);
+
+        assert_eq!(detected, Recursive::Recursive);
+    }
+    #[test]
+    fn variable_tail_call() {
+        let src = indoc!(
+            r"
+                f = \x -> 
+                    g = f x
+                    g
 
                 f 0
             "

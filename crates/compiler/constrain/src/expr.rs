@@ -449,7 +449,7 @@ pub fn constrain_expr(
                 constraints.exists([*elem_var], and_constraint)
             }
         }
-        Call(boxed, loc_args, called_via) => {
+        Call(boxed, loc_args, called_via, _) => {
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
@@ -4097,7 +4097,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | If { .. }
             | LetRec(_, _, _)
             | LetNonRec(_, _)
-            | Call(_, _, _)
+            | Call(_, _, _, _)
             | RunLowLevel { .. }
             | ForeignCall { .. }
             | EmptyRecord
