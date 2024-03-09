@@ -437,6 +437,13 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
 }
 
+struct ModuleTestResults {
+    module_id: ModuleId,
+    failed_count: usize,
+    passed_count: usize,
+    tests_duration: Duration,
+}
+
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
@@ -516,7 +523,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects_by_module, layout_interner) =
+    let (dyn_lib, expects_by_module, layout_interner) =
         roc_repl_expect::run::expect_mono_module_to_dylib(
             arena,
             target.clone(),
@@ -549,6 +556,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut results_by_module = Vec::new();
     let global_layout_interner = layout_interner.into_global();
+
     for (module_id, expects) in expects_by_module.into_iter() {
         let test_start_time = Instant::now();
         let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
@@ -557,16 +565,23 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             arena,
             interns,
             &global_layout_interner,
-            &lib,
+            &dyn_lib,
             &mut expectations,
             expects,
         )
         .unwrap();
 
-        let duration = test_start_time.elapsed();
+        let tests_duration = test_start_time.elapsed();
+
+        results_by_module.push(ModuleTestResults {
+            module_id,
+            failed_count,
+            passed_count,
+            tests_duration,
+        });
+
         total_failed_count += failed_count;
         total_passed_count += passed_count;
-        results_by_module.push((module_id, failed_count, passed_count, duration));
     }
 
     if total_failed_count == 0 && total_passed_count == 0 {
@@ -581,15 +596,9 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         Ok(2)
     } else {
         let show_module_label = results_by_module.len() > 1;
-        for (module_id, failed_count, passed_count, duration) in results_by_module {
-            print_test_results(
-                module_id,
-                show_module_label,
-                failed_count,
-                passed_count,
-                duration,
-                interns,
-            );
+
+        for module_test_results in results_by_module {
+            print_test_results(module_test_results, show_module_label, interns);
         }
 
         Ok((total_failed_count > 0) as i32)
@@ -597,13 +606,17 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 }
 
 fn print_test_results(
-    module_id: ModuleId,
+    module_test_results: ModuleTestResults,
     show_module_label: bool,
-    failed_count: usize,
-    passed_count: usize,
-    duration: Duration,
     interns: &Interns,
 ) {
+    let ModuleTestResults {
+        module_id,
+        failed_count,
+        passed_count,
+        tests_duration,
+    } = module_test_results;
+
     let failed_color = if failed_count == 0 {
         ANSI_STYLE_CODES.green
     } else {
@@ -613,17 +626,18 @@ fn print_test_results(
     let passed_color = ANSI_STYLE_CODES.green;
     let reset = ANSI_STYLE_CODES.reset;
 
+    let test_summary_str =
+        format!(
+            "{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.",
+            tests_duration.as_millis()
+        );
+
     if show_module_label {
         let module_name = module_id.to_ident_str(interns);
-        println!(
-            "\n{module_name}.roc:\n    {failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
-            duration.as_millis(),
-        );
+
+        println!("\n{module_name}.roc:\n    {test_summary_str}",);
     } else {
-        println!(
-            "\n{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
-            duration.as_millis(),
-        );
+        println!("{test_summary_str}");
     }
 }
 

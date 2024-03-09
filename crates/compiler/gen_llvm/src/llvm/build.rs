@@ -55,7 +55,6 @@ use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
 use std::convert::TryInto;
 use std::path::Path;
-use std::result;
 use target_lexicon::{Aarch64Architecture, Architecture, OperatingSystem, Triple};
 
 use super::convert::{struct_type_from_union_layout, RocUnion};
@@ -5671,8 +5670,10 @@ pub fn build_procedures_expose_expects<'a>(
     expects_by_module: MutMap<ModuleId, Vec<'a, Symbol>>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
 ) -> MutMap<ModuleId, Vec<'a, &'a str>> {
+    // converts Vec<Vec<Symbol>> into Vec<Symbol>
     let flattened_symbols: Vec<Symbol> =
         Vec::from_iter_in(expects_by_module.values().flatten().copied(), env.arena);
+
     let entry_point = EntryPoint::Expects {
         symbols: &flattened_symbols,
     };
@@ -5695,30 +5696,34 @@ pub fn build_procedures_expose_expects<'a>(
         niche: captures_niche,
     };
 
-    let mut names_by_module = MutMap::default();
+    let mut expect_names_by_module = MutMap::default();
+
     for (module_id, expects) in expects_by_module {
         let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
 
         for symbol in expects.iter().copied() {
-            let it = top_level.arguments.iter().copied();
-            let bytes = roc_alias_analysis::func_name_bytes_help(
+            let args_iter = top_level.arguments.iter().copied();
+
+            let func_name_bytes = roc_alias_analysis::func_name_bytes_help(
                 symbol,
-                it,
+                args_iter,
                 captures_niche,
                 top_level.result,
             );
-            let func_name = FuncName(&bytes);
+
+            let func_name = FuncName(&func_name_bytes);
             let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-            let mut it = func_solutions.specs();
-            let func_spec = match it.next() {
+            let mut func_spec_iter = func_solutions.specs();
+
+            let func_spec = match func_spec_iter.next() {
                 Some(spec) => spec,
-                None => panic!("no specialization for expect {symbol}"),
+                None => panic!("No specialization for expect {symbol}."),
             };
 
             debug_assert!(
-                it.next().is_none(),
-                "we expect only one specialization of this symbol"
+                func_spec_iter.next().is_none(),
+                "We expect only one specialization of this symbol."
             );
 
             // NOTE fake layout; it is only used for debug prints
@@ -5728,8 +5733,8 @@ pub fn build_procedures_expose_expects<'a>(
             let name = roc_main_fn.get_name().to_str().unwrap();
 
             let expect_name = &format!("Expect_{name}");
-            let expect_name = env.arena.alloc_str(expect_name);
-            expect_names.push(&*expect_name);
+            let expect_name_str = env.arena.alloc_str(expect_name);
+            expect_names.push(&*expect_name_str);
 
             // Add main to the module.
             let _ = expose_function_to_host_help_c_abi(
@@ -5742,9 +5747,10 @@ pub fn build_procedures_expose_expects<'a>(
                 &format!("Expect_{name}"),
             );
         }
-        names_by_module.insert(module_id, expect_names);
+        expect_names_by_module.insert(module_id, expect_names);
     }
-    names_by_module
+
+    expect_names_by_module
 }
 
 fn build_procedures_help<'a>(

@@ -691,7 +691,8 @@ pub fn expect_mono_module_to_dylib<'a>(
         procedures,
     );
 
-    let mut result_expects: MutMap<ModuleId, ExpectFunctions> = MutMap::default();
+    let mut modules_expects: MutMap<ModuleId, ExpectFunctions> = MutMap::default();
+
     for (module_id, expects) in toplevel_expects.into_iter() {
         let expect_names = expect_names.get(&module_id).unwrap();
 
@@ -720,12 +721,12 @@ pub fn expect_mono_module_to_dylib<'a>(
                 env.arena,
             );
 
-        let expects = ExpectFunctions {
+        let expect_funs = ExpectFunctions {
             pure: expects_pure,
             fx: expects_fx,
         };
 
-        result_expects.insert(module_id, expects);
+        modules_expects.insert(module_id, expect_funs);
     }
 
     env.dibuilder.finalize();
@@ -753,5 +754,5 @@ pub fn expect_mono_module_to_dylib<'a>(
     }
 
     llvm_module_to_dylib(env.module, &target, opt_level)
-        .map(|lib| (lib, result_expects, layout_interner))
+        .map(|dy_lib| (dy_lib, modules_expects, layout_interner))
 }

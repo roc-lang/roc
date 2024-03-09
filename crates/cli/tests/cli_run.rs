@@ -200,7 +200,7 @@ mod cli_run {
                 vec.into_iter()
             };
 
-            let out = match cli_mode {
+            let cmd_output = match cli_mode {
                 CliMode::RocBuild => {
                     run_roc_on_failure_is_panic(
                         file,
@@ -296,34 +296,32 @@ mod cli_run {
                 }
             };
 
-            let mut actual = strip_colors(&out.stdout);
-
-            actual = ignore_test_timings(&actual);
-
             let self_path = file.display().to_string();
-            actual = actual.replace(&self_path, "<ignored for tests>");
 
-            if !actual.ends_with(expected_ending) {
+            let actual_cmd_stdout = ignore_test_timings(&strip_colors(&cmd_output.stdout))
+                .replace(&self_path, "<ignored for tests>");
+
+            if !actual_cmd_stdout.ends_with(expected_ending) {
                 panic!(
                     "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
-                    expected_ending, actual, out.stderr
+                    expected_ending, actual_cmd_stdout, cmd_output.stderr
                 );
             }
 
-            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
+            if !cmd_output.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
-                    out.status, out.stderr
+                    cmd_output.status, cmd_output.stderr
                 );
             }
         }
     }
 
-    fn ignore_test_timings(output: &str) -> String {
+    fn ignore_test_timings(cmd_output: &str) -> String {
         let regex = Regex::new(r" passed in (\d+) ms\.").expect("Invalid regex pattern");
         let replacement = " passed in <ignored for test> ms.";
-        regex.replace_all(output, replacement).to_string()
+        regex.replace_all(cmd_output, replacement).to_string()
     }
 
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
@@ -640,8 +638,8 @@ mod cli_run {
                 b = 2
 
 
-
-                1 failed and 0 passed in <ignored for test> ms."#
+                1 failed and 0 passed in <ignored for test> ms.
+                "#
             ),
             UseValgrind::Yes,
             TestCliCommands::Test,
@@ -659,10 +657,8 @@ mod cli_run {
                 Direct.roc:
                     0 failed and 2 passed in <ignored for test> ms.
 
-
                 Transitive.roc:
                     0 failed and 1 passed in <ignored for test> ms.
-
                 "#
             ),
         );

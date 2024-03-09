@@ -2779,7 +2779,7 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            if toplevel_expects.pure.len() > 0 || toplevel_expects.fx.len() > 0 {
+            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
                 state.toplevel_expects.insert(module_id, toplevel_expects);
             }
 
