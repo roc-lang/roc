@@ -153,7 +153,7 @@ impl AnalyzedDocument {
                     Some(Diagnostic {
                         range,
                         severity: Some(DiagnosticSeverity::HINT),
-                        message: "This call is recursive,not tail recursive".to_string(),
+                        message: "This call is recursive, not tail recursive".to_string(),
                         ..Default::default()
                     })
                 }
