@@ -1338,6 +1338,30 @@ where
 // Using some combinators together results in combinatorial type explosion
 // which makes things take forever to compile. Using macros instead avoids this!
 
+/// Wraps the output of the parser in a `Loc` struct, providing location information
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_parse::loc;
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = loc!(word("hello", Problem::NotFound));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Loc::new(0, 5, ()));
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! loc {
     ($parser:expr) => {
