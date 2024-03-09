@@ -1290,6 +1290,31 @@ where
     }
 }
 
+/// Creates a parser that only fails if its inner parser partially matches
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, optional, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = optional(word("hello", Problem::NotFound));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, None);
+/// assert_eq!(state.pos().offset, 0);
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Some(()));
+/// assert_eq!(state.pos().offset, 5);
+/// ```
 pub fn optional<'a, P, T, E>(parser: P) -> impl Parser<'a, Option<T>, E>
 where
     P: Parser<'a, T, E>,
