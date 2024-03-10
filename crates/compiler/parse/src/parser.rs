@@ -1518,6 +1518,27 @@ macro_rules! collection_trailing_sep_e {
     };
 }
 
+/// Creates a parser that always succeeds with the given output
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress, word};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_parse::succeed;
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = succeed!("different");
+///
+/// let (progress, output, state) = Parser::<&'a str,()>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, "different");
+/// assert_eq!(state.pos().offset, 0);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! succeed {
     ($value:expr) => {
