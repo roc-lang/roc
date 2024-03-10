@@ -22,6 +22,7 @@ pub struct ModuleDocumentation {
 pub enum DocEntry {
     DocDef(DocDef),
     DetachedDoc(String),
+    ModuleDoc(String),
 }
 
 #[derive(Debug, Clone)]
@@ -179,7 +180,7 @@ fn generate_entry_docs(
     if let Some(docs) = comments_or_new_lines_to_docs(header_comments) {
         println!("<<docs:\n {:#?}\n docs>>", docs);
 
-        acc.push(DetachedDoc(docs));
+        acc.push(DocEntry::ModuleDoc(docs));
     }
 
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;

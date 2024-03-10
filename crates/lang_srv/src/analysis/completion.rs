@@ -8,7 +8,8 @@ use roc_can::{
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
-use roc_collections::MutMap;
+use roc_collections::{MutMap, VecMap};
+use roc_load::docs::ModuleDocumentation;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Position, Region};
 use roc_types::{
@@ -326,6 +327,7 @@ pub(super) fn get_module_completion_items(
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     modules_info: &ModulesInfo,
+    docs: &VecMap<ModuleId, ModuleDocumentation>,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
     let module_completions = imported_modules
@@ -333,6 +335,7 @@ pub(super) fn get_module_completion_items(
         .flat_map(|(mod_id, exposed_symbols)| {
             let mod_name = mod_id.to_ident_str(interns).to_string();
 
+            //Completion for modules themselves
             if mod_name.starts_with(&prefix) {
                 let item = CompletionItem {
                     label: mod_name.clone(),
@@ -342,12 +345,13 @@ pub(super) fn get_module_completion_items(
                         mod_id,
                         interns,
                         exposed_symbols,
+                        docs.get(mod_id),
                         modules_info,
                     )),
                     ..Default::default()
                 };
                 vec![item]
-            //Complete dot completions
+            //Complete dot completions for module exports
             } else if prefix.starts_with(&(mod_name + ".")) {
                 get_module_exposed_completion(exposed_symbols, modules_info, mod_id, interns)
             } else {
