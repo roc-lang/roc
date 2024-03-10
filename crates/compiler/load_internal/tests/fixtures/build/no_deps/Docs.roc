@@ -12,6 +12,5 @@ makeUser = \name ->
     { name }
 
 ## gets the user's name
-getName : User -> Str
 getName = \a -> a.name
 

@@ -239,8 +239,20 @@ fn generate_entry_docs(
                     }
                 }
 
-                ValueDef::Body(_, _) => {
-                    // TODO generate docs for un-annotated bodies
+                ValueDef::Body(pattern, _) => {
+                    if let Pattern::Identifier(identifier) = pattern.value {
+                        // Check if this module exposes the def
+                        if let Some(ident_id) = ident_ids.get_id(identifier) {
+                            let doc_def = DocDef {
+                                name: identifier.to_string(),
+                                type_annotation: TypeAnnotation::NoTypeAnn,
+                                type_vars: Vec::new(),
+                                symbol: Symbol::new(home, ident_id),
+                                docs,
+                            };
+                            acc.push(DocEntry::DocDef(doc_def));
+                        }
+                    }
                 }
 
                 ValueDef::Dbg { .. } => {
