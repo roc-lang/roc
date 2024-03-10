@@ -1384,6 +1384,29 @@ macro_rules! loc {
 }
 
 /// If the first one parses, ignore its output and move on to parse with the second one.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_parse::skip_first;
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = skip_first!(
+///    word("hello, ", |_| ()),
+///    lowercase_ident()
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "world");
+/// assert_eq!(state.pos().offset, 12);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! skip_first {
     ($p1:expr, $p2:expr) => {
