@@ -1548,6 +1548,32 @@ macro_rules! succeed {
     };
 }
 
+/// Creates a parser that always fails.
+/// If the inner parser succeeds, the error can be customized with the given function
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress, word, fail_when};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     OtherProblem(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = fail_when(Problem::OtherProblem, word("hello", Problem::NotFound));
+///
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::OtherProblem(Position::new(0)));
+///
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(0)));
+/// ```
 pub fn fail_when<'a, T, T2, E, F, P>(f: F, p: P) -> impl Parser<'a, T, E>
 where
     T: 'a,
