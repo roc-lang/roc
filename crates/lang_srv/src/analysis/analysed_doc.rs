@@ -1,4 +1,5 @@
 use log::{debug, info};
+use roc_load::docs::DocDef;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -169,19 +170,46 @@ impl AnalyzedDocument {
             declarations,
             module_id,
             interns,
+            abilities,
+            docs_by_module,
             ..
         } = self.module()?;
 
         let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
+
+        let docs = roc_can::traverse::find_closest_symbol_at(pos, declarations, abilities)
+            .and_then(|symb| {
+                let symb = symb.implementation_symbol();
+                docs_by_module
+                    .get(module_id)?
+                    .entries
+                    .iter()
+                    .find_map(|doc| match doc {
+                        roc_load::docs::DocEntry::DocDef(DocDef { symbol, docs, .. })
+                            if symbol == &symb =>
+                        {
+                            docs.clone()
+                        }
+                        _ => None,
+                    })
+            });
+
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 
         let range = region.to_range(self.line_info());
 
+        let type_content = MarkedString::LanguageString(LanguageString {
+            language: "roc".to_string(),
+            value: type_str,
+        });
+
+        let content = vec![Some(type_content), docs.map(|a| MarkedString::String(a))]
+            .into_iter()
+            .filter_map(|a| a)
+            .collect::<Vec<_>>();
+
         Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                language: "roc".to_string(),
-                value: type_str,
-            })),
+            contents: HoverContents::Array(content),
             range: Some(range),
         })
     }

@@ -177,6 +177,8 @@ fn generate_entry_docs(
     let mut acc = Vec::with_capacity(defs.tags.len() + 1);
 
     if let Some(docs) = comments_or_new_lines_to_docs(header_comments) {
+        println!("<<docs:\n {:#?}\n docs>>", docs);
+
         acc.push(DetachedDoc(docs));
     }
 
@@ -197,6 +199,7 @@ fn generate_entry_docs(
 
         let docs = comments_or_new_lines_to_docs(&scratchpad);
 
+        println!("<<docs:\n {:#?}\n docs>>", docs);
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
@@ -379,12 +382,14 @@ fn contains_unexposed_type(
         Apply(module_name, _ident, loc_args) => {
             // If the *ident* was unexposed, we would have gotten a naming error
             // during canonicalization, so all we need to check is the module.
-            let module_id = module_ids.get_id(&(*module_name).into()).unwrap();
-
-            !exposed_module_ids.contains(&module_id)
-                || loc_args.iter().any(|loc_arg| {
-                    contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
-                })
+            if let Some(module_id) = module_ids.get_id(&(*module_name).into()) {
+                !exposed_module_ids.contains(&module_id)
+                    || loc_args.iter().any(|loc_arg| {
+                        contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
+                    })
+            } else {
+                return true;
+            }
         }
         Malformed(_) | Inferred | Wildcard | BoundVariable(_) => false,
         Function(loc_args, loc_ret) => {

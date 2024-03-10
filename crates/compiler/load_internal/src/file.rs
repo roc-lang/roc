@@ -3378,17 +3378,13 @@ fn finish(
 
     roc_checkmate::dump_checkmate!(checkmate);
 
-    let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
+    // let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
 
-    for module_id in state.exposed_modules.iter() {
-        let docs = documentation.remove(module_id).unwrap_or_else(|| {
-            panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
-        });
-
-        docs_by_module.push(docs);
-    }
-
-    debug_assert_eq!(documentation.len(), 0);
+    // for (module_id, _) in state.module_cache.module_names {
+    //     if let Some(docs) = documentation.remove(&module_id) {
+    //         docs_by_module.push(docs);
+    //     }
+    // }
 
     LoadedModule {
         module_id: state.root_id,
@@ -3406,7 +3402,7 @@ fn finish(
         resolved_implementations,
         sources,
         timings: state.timings,
-        docs_by_module,
+        docs_by_module: documentation,
         abilities_store,
         exposed_imports: state.module_cache.exposed_imports,
         imports: state.module_cache.imports,
@@ -5411,9 +5407,7 @@ fn canonicalize_and_constrain<'a>(
         }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
-        | HeaderType::Hosted { name, .. }
-            if exposed_module_ids.contains(&parsed.module_id) =>
-        {
+        | HeaderType::Hosted { name, .. } => {
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
@@ -5427,11 +5421,10 @@ fn canonicalize_and_constrain<'a>(
                 parsed.header_comments,
             );
 
+            println!("adding docs for {:?},", module_path);
+            println!("docs {:#?},", &docs);
+
             Some(docs)
-        }
-        HeaderType::Interface { .. } | HeaderType::Builtin { .. } | HeaderType::Hosted { .. } => {
-            // This module isn't exposed by the platform, so don't generate docs for it!
-            None
         }
     };
 
