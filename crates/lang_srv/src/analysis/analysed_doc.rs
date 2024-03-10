@@ -313,6 +313,7 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     module_id,
                     interns,
+                    docs_by_module.get(module_id),
                     exposed_imports,
                 );
                 Some(completions)

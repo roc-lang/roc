@@ -388,14 +388,14 @@ Utf8ByteProblem : [
 Utf8Problem : { byteIndex : U64, problem : Utf8ByteProblem }
 
 ## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
-## ```
+## ```roc
 ## expect Str.isEmpty "hi!" == Bool.false
 ## expect Str.isEmpty "" == Bool.true
 ## ```
 isEmpty : Str -> Bool
 
 ## Concatenates two strings together.
-## ```
+## ```roc
 ## expect Str.concat "ab" "cd" == "abcd"
 ## expect Str.concat "hello" "" == "hello"
 ## expect Str.concat "" "" == ""
@@ -407,7 +407,7 @@ concat : Str, Str -> Str
 ## This is a performance optimization tool that's like calling [Str.reserve] on an empty string.
 ## It's useful when you plan to build up a string incrementally, for example by calling [Str.concat] on it:
 ##
-## ```
+## ```roc
 ## greeting = "Hello and welcome to Roc"
 ## subject = "Awesome Programmer"
 ##
@@ -434,7 +434,7 @@ withCapacity : U64 -> Str
 ## allocating extra capacity up front, which can prevent the need for reallocations and copies.
 ## Consider the following example which does not use [Str.reserve]:
 ##
-## ```
+## ```roc
 ## greeting = "Hello and welcome to Roc"
 ## subject = "Awesome Programmer"
 ##
@@ -456,7 +456,7 @@ withCapacity : U64 -> Str
 ##
 ## Here's a modified example which uses [Str.reserve] to eliminate the need for all that reallocation, copying, and deallocation.
 ##
-## ```
+## ```roc
 ## helloWorld =
 ##     greeting
 ##     |> Str.reserve 21
@@ -488,7 +488,7 @@ reserve : Str, U64 -> Str
 
 ## Combines a [List] of strings into a single string, with a separator
 ## string in between each.
-## ```
+## ```roc
 ## expect Str.joinWith ["one", "two", "three"] ", " == "one, two, three"
 ## expect Str.joinWith ["1", "2", "3", "4"] "." == "1.2.3.4"
 ## ```
@@ -498,19 +498,19 @@ joinWith : List Str, Str -> Str
 ##
 ## Passing `""` for the separator is not useful;
 ## it returns the original string wrapped in a [List].
-## ```
+## ```roc
 ## expect Str.split "1,2,3" "," == ["1","2","3"]
 ## expect Str.split "1,2,3" "" == ["1,2,3"]
 ## ```
 split : Str, Str -> List Str
 
 ## Repeats a string the given number of times.
-## ```
+## ```roc
 ## expect Str.repeat "z" 3 == "zzz"
 ## expect Str.repeat "na" 8 == "nananananananana"
 ## ```
 ## Returns `""` when given `""` for the string or `0` for the count.
-## ```
+## ```roc
 ## expect Str.repeat "" 10 == ""
 ## expect Str.repeat "anything" 0 == ""
 ## ```
@@ -519,7 +519,7 @@ repeat : Str, U64 -> Str
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
-## ```
+## ```roc
 ## expect Str.toUtf8 "Roc" == [82, 111, 99]
 ## expect Str.toUtf8 "鹏" == [233, 185, 143]
 ## expect Str.toUtf8 "சி" == [224, 174, 154, 224, 174, 191]
@@ -530,7 +530,7 @@ toUtf8 : Str -> List U8
 ## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 ##
 ## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
-## ```
+## ```roc
 ## expect Str.fromUtf8 [82, 111, 99] == Ok "Roc"
 ## expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
 ## expect Str.fromUtf8 [224, 174, 154, 224, 174, 191] == Ok "சி"
@@ -563,14 +563,14 @@ FromUtf8Result : {
 fromUtf8Lowlevel : List U8 -> FromUtf8Result
 
 ## Check if the given [Str] starts with a value.
-## ```
+## ```roc
 ## expect Str.startsWith "ABC" "A" == Bool.true
 ## expect Str.startsWith "ABC" "X" == Bool.false
 ## ```
 startsWith : Str, Str -> Bool
 
 ## Check if the given [Str] ends with a value.
-## ```
+## ```roc
 ## expect Str.endsWith "ABC" "C" == Bool.true
 ## expect Str.endsWith "ABC" "X" == Bool.false
 ## ```
@@ -578,26 +578,26 @@ endsWith : Str, Str -> Bool
 
 ## Return the [Str] with all whitespace removed from both the beginning
 ## as well as the end.
-## ```
+## ```roc
 ## expect Str.trim "   Hello      \n\n" == "Hello"
 ## ```
 trim : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the beginning.
-## ```
+## ```roc
 ## expect Str.trimStart "   Hello      \n\n" == "Hello      \n\n"
 ## ```
 trimStart : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the end.
-## ```
+## ```roc
 ## expect Str.trimEnd "   Hello      \n\n" == "   Hello"
 ## ```
 trimEnd : Str -> Str
 
 ## Encode a [Str] to a [Dec]. A [Dec] value is a 128-bit decimal
 ## [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic).
-## ```
+## ```roc
 ## expect Str.toDec "10" == Ok 10dec
 ## expect Str.toDec "-0.25" == Ok -0.25dec
 ## expect Str.toDec "not a number" == Err InvalidNumStr
@@ -608,7 +608,7 @@ toDec = \string -> strToNumHelp string
 ## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f64` suffix.
-## ```
+## ```roc
 ## expect Str.toF64 "0.10" == Ok 0.10f64
 ## expect Str.toF64 "not a number" == Err InvalidNumStr
 ## ```
@@ -618,7 +618,7 @@ toF64 = \string -> strToNumHelp string
 ## Encode a [Str] to a [F32].A [F32] value is a 32-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f32` suffix.
-## ```
+## ```roc
 ## expect Str.toF32 "0.10" == Ok 0.10f32
 ## expect Str.toF32 "not a number" == Err InvalidNumStr
 ## ```
@@ -628,7 +628,7 @@ toF32 = \string -> strToNumHelp string
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
 ## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
 ## 340 undecillion). It can be specified with a u128 suffix.
-## ```
+## ```roc
 ## expect Str.toU128 "1500" == Ok 1500u128
 ## expect Str.toU128 "0.1" == Err InvalidNumStr
 ## expect Str.toU128 "-1" == Err InvalidNumStr
@@ -641,7 +641,7 @@ toU128 = \string -> strToNumHelp string
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
 ## `170_141_183_460_469_231_731_687_303_715_884_105_727`. It can be specified
 ## with a i128 suffix.
-## ```
+## ```roc
 ## expect Str.toI128 "1500" == Ok 1500i128
 ## expect Str.toI128 "-1" == Ok -1i128
 ## expect Str.toI128 "0.1" == Err InvalidNumStr
@@ -653,7 +653,7 @@ toI128 = \string -> strToNumHelp string
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
 ## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It
 ## can be specified with a u64 suffix.
-## ```
+## ```roc
 ## expect Str.toU64 "1500" == Ok 1500u64
 ## expect Str.toU64 "0.1" == Err InvalidNumStr
 ## expect Str.toU64 "-1" == Err InvalidNumStr
@@ -665,7 +665,7 @@ toU64 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
 ## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be
 ## specified with a i64 suffix.
-## ```
+## ```roc
 ## expect Str.toI64 "1500" == Ok 1500i64
 ## expect Str.toI64 "-1" == Ok -1i64
 ## expect Str.toI64 "0.1" == Err InvalidNumStr
@@ -677,7 +677,7 @@ toI64 = \string -> strToNumHelp string
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
 ## from `0` to `4_294_967_295` (over 4 billion). It can be specified with
 ## a u32 suffix.
-## ```
+## ```roc
 ## expect Str.toU32 "1500" == Ok 1500u32
 ## expect Str.toU32 "0.1" == Err InvalidNumStr
 ## expect Str.toU32 "-1" == Err InvalidNumStr
@@ -689,7 +689,7 @@ toU32 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
 ## from `-2_147_483_648` to `2_147_483_647`. It can be
 ## specified with a i32 suffix.
-## ```
+## ```roc
 ## expect Str.toI32 "1500" == Ok 1500i32
 ## expect Str.toI32 "-1" == Ok -1i32
 ## expect Str.toI32 "0.1" == Err InvalidNumStr
@@ -700,7 +700,7 @@ toI32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
 ## from `0` to `65_535`. It can be specified with a u16 suffix.
-## ```
+## ```roc
 ## expect Str.toU16 "1500" == Ok 1500u16
 ## expect Str.toU16 "0.1" == Err InvalidNumStr
 ## expect Str.toU16 "-1" == Err InvalidNumStr
@@ -712,7 +712,7 @@ toU16 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
 ## from `-32_768` to `32_767`. It can be
 ## specified with a i16 suffix.
-## ```
+## ```roc
 ## expect Str.toI16 "1500" == Ok 1500i16
 ## expect Str.toI16 "-1" == Ok -1i16
 ## expect Str.toI16 "0.1" == Err InvalidNumStr
@@ -723,7 +723,7 @@ toI16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
 ## from `0` to `255`. It can be specified with a u8 suffix.
-## ```
+## ```roc
 ## expect Str.toU8 "250" == Ok 250u8
 ## expect Str.toU8 "-0.1" == Err InvalidNumStr
 ## expect Str.toU8 "not a number" == Err InvalidNumStr
@@ -735,7 +735,7 @@ toU8 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
 ## from `-128` to `127`. It can be
 ## specified with a i8 suffix.
-## ```
+## ```roc
 ## expect Str.toI8 "-15" == Ok -15i8
 ## expect Str.toI8 "150.00" == Err InvalidNumStr
 ## expect Str.toI8 "not a number" == Err InvalidNumStr
@@ -747,7 +747,7 @@ toI8 = \string -> strToNumHelp string
 getUnsafe : Str, U64 -> U8
 
 ## Gives the number of bytes in a [Str] value.
-## ```
+## ```roc
 ## expect Str.countUtf8Bytes "Hello World" == 11
 ## ```
 countUtf8Bytes : Str -> U64
@@ -758,7 +758,7 @@ substringUnsafe : Str, U64, U64 -> Str
 ## Returns the given [Str] with each occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
-## ```
+## ```roc
 ## expect Str.replaceEach "foo/bar/baz" "/" "_" == "foo_bar_baz"
 ## expect Str.replaceEach "not here" "/" "_" == "not here"
 ## ```
@@ -792,7 +792,7 @@ expect Str.replaceEach "abcdefg" "nothing" "_" == "abcdefg"
 ## Returns the given [Str] with the first occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
-## ```
+## ```roc
 ## expect Str.replaceFirst "foo/bar/baz" "/" "_" == "foo_bar/baz"
 ## expect Str.replaceFirst "no slashes here" "/" "_" == "no slashes here"
 ## ```
@@ -810,7 +810,7 @@ expect Str.replaceFirst "abcdefg" "nothing" "_" == "abcdefg"
 ## Returns the given [Str] with the last occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
-## ```
+## ```roc
 ## expect Str.replaceLast "foo/bar/baz" "/" "_" == "foo/bar_baz"
 ## expect Str.replaceLast "no slashes here" "/" "_" == "no slashes here"
 ## ```
@@ -828,7 +828,7 @@ expect Str.replaceLast "abcdefg" "nothing" "_" == "abcdefg"
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
-## ```
+## ```roc
 ## expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
 ## expect Str.splitFirst "no slashes here" "/" == Err NotFound
 ## ```
@@ -882,7 +882,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
 ## Returns the given [Str] before the last occurrence of a delimiter, as well as
 ## the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
-## ```
+## ```roc
 ## expect Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
 ## expect Str.splitLast "no slashes here" "/" == Err NotFound
 ## ```
@@ -974,7 +974,7 @@ matchesAtHelp = \state ->
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte. The index for that byte in the string is provided
 ## to the update function.
-## ```
+## ```roc
 ## f : List U8, U8, U64 -> List U8
 ## f = \state, byte, _ -> List.append state byte
 ## expect Str.walkUtf8WithIndex "ABC" [] f == [65, 66, 67]
@@ -996,7 +996,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte.
 ##
-## ```
+## ```roc
 ## sumOfUtf8Bytes =
 ##     Str.walkUtf8 "Hello, World!" 0 \total, byte ->
 ##         total + byte
@@ -1037,14 +1037,14 @@ strToNumHelp = \string ->
         Err InvalidNumStr
 
 ## Adds a prefix to the given [Str].
-## ```
+## ```roc
 ## expect Str.withPrefix "Awesome" "Roc" == "RocAwesome"
 ## ```
 withPrefix : Str, Str -> Str
 withPrefix = \str, prefix -> Str.concat prefix str
 
 ## Determines whether or not the first Str contains the second.
-## ```
+## ```roc
 ## expect Str.contains "foobarbaz" "bar"
 ## expect !(Str.contains "apple" "orange")
 ## expect Str.contains "anything" ""
