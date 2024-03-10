@@ -1591,6 +1591,25 @@ where
     }
 }
 
+/// Creates a parser that always fails with the same output.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress, fail};
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = fail(Problem::NotFound);
+///
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(0)));
+/// ```
 pub fn fail<'a, T, E, F>(f: F) -> impl Parser<'a, T, E>
 where
     T: 'a,
