@@ -3339,7 +3339,7 @@ fn finish(
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
-    mut documentation: VecMap<ModuleId, ModuleDocumentation>,
+    documentation: VecMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
     //
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,

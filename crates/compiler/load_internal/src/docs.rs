@@ -406,7 +406,7 @@ fn contains_unexposed_type(
                         contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
                     })
             } else {
-                return true;
+                true
             }
         }
         Malformed(_) | Inferred | Wildcard | BoundVariable(_) => false,

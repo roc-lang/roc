@@ -23,7 +23,7 @@ use roc_load_internal::file::{
 };
 use roc_load_internal::module::LoadedModule;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
