@@ -9,10 +9,7 @@ use bumpalo::Bump;
 use parking_lot::Mutex;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::{MutMap, MutSet, VecMap};
-use roc_load::{
-    docs::{ModuleDocumentation},
-    CheckedModule, LoadedModule,
-};
+use roc_load::{docs::ModuleDocumentation, CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_region::all::LineInfo;
@@ -41,6 +38,7 @@ pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 pub(super) struct ModulesInfo {
     subs: Mutex<HashMap<ModuleId, Subs>>,
     exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    docs: VecMap<ModuleId, ModuleDocumentation>,
 }
 
 impl ModulesInfo {
@@ -54,6 +52,7 @@ impl ModulesInfo {
     fn from_analysis(
         exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
         typechecked: &MutMap<ModuleId, CheckedModule>,
+        docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     ) -> ModulesInfo {
         //We wrap this in arc because later we will go through each module's imports and store the full list of symbols that each imported module exposes.
         //eg: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
@@ -71,6 +70,7 @@ impl ModulesInfo {
         ModulesInfo {
             subs: all_subs,
             exposed,
+            docs: docs_by_module,
         }
     }
 }
@@ -89,7 +89,6 @@ pub(super) struct AnalyzedModule {
     // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
     // one module may not be true global to the language server.
     module_id_to_url: ModuleIdToUrl,
-    docs_by_module: Arc<VecMap<ModuleId, ModuleDocumentation>>,
 }
 #[derive(Debug, Clone)]
 pub struct AnalysisResult {
@@ -158,9 +157,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
     });
 
     let exposed_imports = resolve_exposed_imports(exposed_imports, &exposes);
-    let docs_by_module = Arc::new(docs_by_module);
 
-    let modules_info = Arc::new(ModulesInfo::from_analysis(exposes, &typechecked));
+    let modules_info = Arc::new(ModulesInfo::from_analysis(
+        exposes,
+        &typechecked,
+        docs_by_module,
+    ));
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
         module_id_to_url: module_id_to_url_from_sources(&sources),
@@ -172,7 +174,6 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         exposed_imports,
         imports: &mut imports,
         modules_info,
-        docs_by_module,
     };
 
     for (module_id, (path, source)) in sources {
@@ -262,7 +263,6 @@ struct AnalyzedDocumentBuilder<'a> {
     imports: &'a mut MutMap<ModuleId, MutSet<ModuleId>>,
     exposed_imports: HashMap<ModuleId, Vec<(Symbol, Variable)>>,
     modules_info: Arc<ModulesInfo>,
-    docs_by_module: Arc<VecMap<ModuleId, ModuleDocumentation>>,
 }
 
 impl<'a> AnalyzedDocumentBuilder<'a> {
@@ -304,7 +304,6 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             modules_info: self.modules_info.clone(),
             interns: self.interns.clone(),
             module_id_to_url: self.module_id_to_url.clone(),
-            docs_by_module: self.docs_by_module.clone(),
         };
 
         let line_info = LineInfo::new(&source);

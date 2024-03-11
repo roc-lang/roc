@@ -171,7 +171,7 @@ impl AnalyzedDocument {
             module_id,
             interns,
             abilities,
-            docs_by_module,
+            modules_info,
             ..
         } = self.module()?;
 
@@ -180,7 +180,8 @@ impl AnalyzedDocument {
         let docs = roc_can::traverse::find_closest_symbol_at(pos, declarations, abilities)
             .and_then(|symb| {
                 let symb = symb.implementation_symbol();
-                docs_by_module
+                modules_info
+                    .docs
                     .get(module_id)?
                     .entries
                     .iter()
@@ -253,7 +254,6 @@ impl AnalyzedDocument {
             declarations,
             exposed_imports,
             imports,
-            docs_by_module,
             modules_info,
             ..
         } = self.module()?;
@@ -274,7 +274,6 @@ impl AnalyzedDocument {
                     interns,
                     imports,
                     modules_info,
-                    docs_by_module,
                     true,
                 ))
             } else {
@@ -300,7 +299,6 @@ impl AnalyzedDocument {
                     interns,
                     imports,
                     modules_info,
-                    docs_by_module,
                     true,
                 );
                 Some(completions)
@@ -313,7 +311,7 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     module_id,
                     interns,
-                    docs_by_module.get(module_id),
+                    modules_info.docs.get(module_id),
                     exposed_imports,
                 );
                 Some(completions)

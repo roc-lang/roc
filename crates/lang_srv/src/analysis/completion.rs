@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use log::{debug, warn};
 
 use roc_can::{expr::Declarations, traverse::Visitor};
-use roc_collections::{MutMap, VecMap};
+use roc_collections::MutMap;
 use roc_load::docs::{DocDef, ModuleDocumentation};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::Position;
@@ -57,7 +57,6 @@ pub(super) fn get_module_completion_items(
     interns: &Interns,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     modules_info: &ModulesInfo,
-    docs: &VecMap<ModuleId, ModuleDocumentation>,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
     let module_completions = imported_modules
@@ -75,7 +74,7 @@ pub(super) fn get_module_completion_items(
                         mod_id,
                         interns,
                         exposed_symbols,
-                        docs.get(mod_id),
+                        modules_info.docs.get(mod_id),
                         modules_info,
                     )),
                     ..Default::default()
@@ -87,7 +86,7 @@ pub(super) fn get_module_completion_items(
                     exposed_symbols,
                     modules_info,
                     mod_id,
-                    docs.get(mod_id),
+                    modules_info.docs.get(mod_id),
                     interns,
                 )
             } else {
