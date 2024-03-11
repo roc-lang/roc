@@ -284,6 +284,15 @@ fn render_module_documentation(
                     buf.push_str("</section>");
                 }
             }
+            DocEntry::ModuleDoc(docs) => {
+                markdown_to_html(
+                    &mut buf,
+                    all_exposed_symbols,
+                    &module.scope,
+                    docs,
+                    root_module,
+                );
+            }
             DocEntry::DetachedDoc(docs) => {
                 markdown_to_html(
                     &mut buf,
