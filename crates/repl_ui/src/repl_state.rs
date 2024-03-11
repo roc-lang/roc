@@ -59,6 +59,7 @@ impl ReplState {
     ) -> ReplAction<'a> {
         let pending_past_def;
         let src: &str = match parse_src(arena, line) {
+            ParseOutcome::Ignored => return ReplAction::Nothing,
             ParseOutcome::Empty | ParseOutcome::Help => return ReplAction::Help,
             ParseOutcome::Exit => return ReplAction::Exit,
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
@@ -198,12 +199,17 @@ pub enum ParseOutcome<'a> {
     Incomplete,
     SyntaxErr,
     Empty,
+    Ignored,
     Help,
     Exit,
 }
 
 pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
-    match line.trim().to_lowercase().as_str() {
+    let trimmed = line.trim();
+    if trimmed.starts_with("#") {
+        return ParseOutcome::Ignored;
+    }
+    match trimmed.to_lowercase().as_str() {
         "" => ParseOutcome::Empty,
         ":help" => ParseOutcome::Help,
         // These are all common things beginners try.

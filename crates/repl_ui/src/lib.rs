@@ -77,6 +77,7 @@ pub fn is_incomplete(input: &str) -> bool {
             !input.ends_with('\n')
         }
         ParseOutcome::Empty
+        | ParseOutcome::Ignored
         | ParseOutcome::Help
         | ParseOutcome::Exit
         | ParseOutcome::ValueDef(_)
