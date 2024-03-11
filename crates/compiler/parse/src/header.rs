@@ -78,6 +78,31 @@ pub enum HeaderType<'a> {
         exposes: &'a [Loc<ExposedName<'a>>],
     },
 }
+impl<'a> HeaderType<'a> {
+    pub fn get_name(self) -> Option<&'a str> {
+        match self {
+            Self::Interface { name, .. }
+            | Self::Builtin { name, .. }
+            | Self::Hosted { name, .. } => Some(name.into()),
+            Self::App {
+                output_name: StrLiteral::PlainLine(name),
+                ..
+            }
+            | Self::Platform {
+                config_shorthand: name,
+                ..
+            }
+            | Self::Package {
+                config_shorthand: name,
+                ..
+            } => Some(name),
+            Self::App { .. } => {
+                //TODO:Eli This can be removed once module params is implimented and app names are no longer strings
+                None
+            }
+        }
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Version<'a> {
