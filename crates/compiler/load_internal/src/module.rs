@@ -38,6 +38,7 @@ pub struct LoadedModule {
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
+    pub exposed_modules: Vec<ModuleId>,
     pub exposed_values: Vec<Symbol>,
     pub exposed_types_storage: ExposedTypesStorageSubs,
     pub resolved_implementations: ResolvedImplementations,

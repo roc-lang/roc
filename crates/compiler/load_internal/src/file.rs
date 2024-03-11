@@ -3378,14 +3378,6 @@ fn finish(
 
     roc_checkmate::dump_checkmate!(checkmate);
 
-    // let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
-
-    // for (module_id, _) in state.module_cache.module_names {
-    //     if let Some(docs) = documentation.remove(&module_id) {
-    //         docs_by_module.push(docs);
-    //     }
-    // }
-
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -3399,6 +3391,7 @@ fn finish(
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         exposed_types_storage,
+        exposed_modules: state.exposed_modules.into(),
         resolved_implementations,
         sources,
         timings: state.timings,
