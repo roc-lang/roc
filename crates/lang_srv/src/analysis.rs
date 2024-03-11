@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::{MutMap, MutSet, VecMap};
 use roc_load::{
-    docs::{DocDef, ModuleDocumentation},
+    docs::{ModuleDocumentation},
     CheckedModule, LoadedModule,
 };
 use roc_module::symbol::{Interns, ModuleId, Symbol};

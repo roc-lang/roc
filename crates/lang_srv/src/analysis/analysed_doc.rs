@@ -203,9 +203,9 @@ impl AnalyzedDocument {
             value: type_str,
         });
 
-        let content = vec![Some(type_content), docs.map(|a| MarkedString::String(a))]
+        let content = vec![Some(type_content), docs.map(MarkedString::String)]
             .into_iter()
-            .filter_map(|a| a)
+            .flatten()
             .collect::<Vec<_>>();
 
         Some(Hover {
