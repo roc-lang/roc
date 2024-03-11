@@ -129,7 +129,7 @@ fn get_module_exposed_completion(
         .collect::<Vec<_>>()
 }
 
-///Efficently walks the list of docs collecting the docs for  completions as we go. Should be faster than re-walking for every completion
+///Efficiently walks the list of docs collecting the docs for  completions as we go. Should be faster than re-walking for every completion
 fn get_completion_docs(
     completions: &[(Symbol, Variable)],
     docs: &ModuleDocumentation,
@@ -345,7 +345,7 @@ pub fn field_completion(
         variable_name, field, middle_fields
     );
 
-    //We get completetions here, but all we really want is the info about the variable that is the first part of our record completion.
+    //We get completions here, but all we really want is the info about the variable that is the first part of our record completion.
     //We are completing the full name of the variable so we should only have one match
     let completion = get_completions(position, declarations, variable_name, interns)
         .into_iter()

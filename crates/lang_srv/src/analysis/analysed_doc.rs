@@ -246,7 +246,7 @@ impl AnalyzedDocument {
         let is_field_or_module_completion = symbol_prefix.contains('.');
 
         if is_field_or_module_completion {
-            //if the second last section is capitalised we know we are completing a module of an import of a module eg: My.Module.function
+            //if the second last section is capitalized we know we are completing a module of an import of a module eg: My.Module.function
             let is_module_completion = symbol_prefix
                 .split('.')
                 .nth_back(1)

@@ -217,7 +217,7 @@ fn start_phase<'a>(
                     //
                     // At the end of this loop, dep_idents contains all the information to
                     // resolve a symbol from another module: if it's in here, that means
-                    // we have both imported the module and the ident was exported by that mdoule.
+                    // we have both imported the module and the ident was exported by that module.
                     for dep_id in deps_by_name.values() {
                         // We already verified that these are all present,
                         // so unwrapping should always succeed here.

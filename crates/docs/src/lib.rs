@@ -4,7 +4,7 @@ extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::Bump;
 use roc_can::scope::Scope;
-use roc_collections::{VecSet};
+use roc_collections::VecSet;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
