@@ -1,5 +1,4 @@
 use log::{debug, info};
-use roc_load::docs::DocDef;
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -170,30 +169,16 @@ impl AnalyzedDocument {
             declarations,
             module_id,
             interns,
-            abilities,
             modules_info,
             ..
         } = self.module()?;
 
         let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
 
-        let docs = roc_can::traverse::find_closest_symbol_at(pos, declarations, abilities)
-            .and_then(|symb| {
-                let symb = symb.implementation_symbol();
-                modules_info
-                    .docs
-                    .get(module_id)?
-                    .entries
-                    .iter()
-                    .find_map(|doc| match doc {
-                        roc_load::docs::DocEntry::DocDef(DocDef { symbol, docs, .. })
-                            if symbol == &symb =>
-                        {
-                            docs.clone()
-                        }
-                        _ => None,
-                    })
-            });
+        //TODO:Can this be integrated into find closest type? is it even worth it?
+        let docs = self
+            .symbol_at(position)
+            .and_then(|symb| modules_info.docs.get(module_id)?.get_doc_for_symbol(&symb));
 
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 

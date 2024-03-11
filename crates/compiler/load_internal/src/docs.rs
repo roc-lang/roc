@@ -17,6 +17,14 @@ pub struct ModuleDocumentation {
     pub scope: Scope,
     pub exposed_symbols: VecSet<Symbol>,
 }
+impl ModuleDocumentation {
+    pub fn get_doc_for_symbol(&self, symb: &Symbol) -> Option<String> {
+        self.entries.iter().find_map(|doc| match doc {
+            DocEntry::DocDef(DocDef { symbol, docs, .. }) if symbol == symb => docs.clone(),
+            _ => None,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum DocEntry {
