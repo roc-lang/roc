@@ -51,7 +51,7 @@ false = @Bool False
 ## gate. The infix operator `&&` can also be used as shorthand for
 ## `Bool.and`.
 ##
-## ```
+## ```roc
 ## expect (Bool.and Bool.true Bool.true) == Bool.true
 ## expect (Bool.true && Bool.true) == Bool.true
 ## expect (Bool.false && Bool.true) == Bool.false
@@ -66,7 +66,7 @@ false = @Bool False
 ## In these languages the compiler will skip evaluating the expression after the
 ## first operator under certain circumstances. For example an expression like
 ## `enablePets && likesDogs user` would compile to.
-## ```
+## ```roc
 ## if enablePets then
 ##     likesDogs user
 ## else
@@ -80,7 +80,7 @@ and : Bool, Bool -> Bool
 ## Returns `Bool.true` when either input is a `Bool.true`. This is equivalent to
 ## the logic [OR](https://en.wikipedia.org/wiki/Logical_disjunction) gate.
 ## The infix operator `||` can also be used as shorthand for `Bool.or`.
-## ```
+## ```roc
 ## expect (Bool.or Bool.false Bool.true) == Bool.true
 ## expect (Bool.true || Bool.true) == Bool.true
 ## expect (Bool.false || Bool.true) == Bool.true
@@ -98,7 +98,7 @@ or : Bool, Bool -> Bool
 ## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
 ## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
 ## gate. The operator `!` can also be used as shorthand for `Bool.not`.
-## ```
+## ```roc
 ## expect (Bool.not Bool.false) == Bool.true
 ## expect (!Bool.false) == Bool.true
 ## ```
@@ -111,7 +111,7 @@ not : Bool -> Bool
 ##
 ## **Note** that `isNotEq` does not accept arguments whose types contain
 ## functions.
-## ```
+## ```roc
 ## expect (Bool.isNotEq Bool.false Bool.true) == Bool.true
 ## expect (Bool.false != Bool.false) == Bool.false
 ## expect "Apples" != "Oranges"

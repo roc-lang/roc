@@ -59,7 +59,7 @@ DecodeError : [TooShort]
 ## This can be useful when creating a [custom](#custom) decoder or when
 ## using [fromBytesPartial](#fromBytesPartial). For example writing unit tests,
 ## such as;
-## ```
+## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
 ##     actual = Decode.fromBytesPartial input Json.json
@@ -117,7 +117,7 @@ DecoderFormatting implements
 ## Build a custom [Decoder] function. For example the implementation of
 ## `decodeBool` could be defined as follows;
 ##
-## ```
+## ```roc
 ## decodeBool = Decode.custom \bytes, @Json {} ->
 ##     when bytes is
 ##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.dropFirst bytes 5 }
@@ -132,7 +132,7 @@ decodeWith : List U8, Decoder val fmt, fmt -> DecodeResult val where fmt impleme
 decodeWith = \bytes, @Decoder decode, fmt -> decode bytes fmt
 
 ## Decode a `List U8` utf-8 bytes and return a [DecodeResult](#DecodeResult)
-## ```
+## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
 ##     actual = Decode.fromBytesPartial input Json.json
@@ -146,7 +146,7 @@ fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
 ## Decode a `List U8` utf-8 bytes and return a [Result] with no leftover bytes
 ## expected. If successful returns `Ok val`, however, if there are bytes
 ## remaining returns `Err Leftover (List U8)`.
-## ```
+## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
 ##     actual = Decode.fromBytes input Json.json
