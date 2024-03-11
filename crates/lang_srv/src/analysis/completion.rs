@@ -457,7 +457,7 @@ fn make_completion_items_string(
         .map(|(symbol, var)| make_completion_item(subs, module_id, interns, None, symbol, var))
         .collect()
 }
-///This efficently walks the list of docs checking fewer times
+///Efficently walks the list of docs collecting the docs for  completions as we go. Should be faster than re-walking for every completion
 fn get_completion_docs(
     completions: &[(Symbol, Variable)],
     docs: &ModuleDocumentation,

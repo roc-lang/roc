@@ -5400,10 +5400,47 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match header_type {
-        HeaderType::App { .. } => None,
-        HeaderType::Platform { .. } | HeaderType::Package { .. } => {
-            // TODO: actually generate docs for platform and package modules.
+        HeaderType::App {
+            output_name: StrLiteral::PlainLine(str),
+            ..
+        } => {
+            let mut scope = module_output.scope.clone();
+            scope.add_docs_imports();
+            let docs = crate::docs::generate_module_docs(
+                scope,
+                module_id,
+                module_ids,
+                str.into(),
+                &parsed_defs_for_docs,
+                exposed_module_ids,
+                module_output.exposed_symbols.clone(),
+                parsed.header_comments,
+            );
+            Some(docs)
+        }
+        HeaderType::App { .. } => {
+            //TODO:Eli This may not be needed after module params becuase app headers might have non string names
             None
+        }
+        HeaderType::Platform {
+            config_shorthand, ..
+        }
+        | HeaderType::Package {
+            config_shorthand, ..
+        } => {
+            let mut scope = module_output.scope.clone();
+            scope.add_docs_imports();
+            let docs = crate::docs::generate_module_docs(
+                scope,
+                module_id,
+                module_ids,
+                config_shorthand.into(),
+                &parsed_defs_for_docs,
+                exposed_module_ids,
+                module_output.exposed_symbols.clone(),
+                parsed.header_comments,
+            );
+            Some(docs)
         }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
