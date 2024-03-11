@@ -47,7 +47,7 @@ pub(super) fn module_documentation(
     let module_doc = module_docs
         .and_then(|docs| {
             docs.entries.first().and_then(|first_doc| match first_doc {
-                roc_load::docs::DocEntry::ModuleDoc(str) => Some(str.clone()),
+                roc_load::docs::DocEntry::ModuleDoc(str) => Some(str.clone().trim().to_string()),
                 _ => None,
             })
         })

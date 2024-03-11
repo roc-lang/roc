@@ -17,12 +17,13 @@ mod helpers;
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
+use roc_load_internal::docs::DocDef;
 use roc_load_internal::file::{
     ExecutionMode, LoadConfig, LoadResult, LoadStart, LoadingProblem, Threading,
 };
 use roc_load_internal::module::LoadedModule;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::{Interns, ModuleId};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
@@ -427,18 +428,36 @@ fn load_docs() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("no_deps", "Docs", subs_by_module);
 
-    let prob = format!("{:#?}", loaded_module.can_problems);
-    let prob_type = format!("{:#?}", loaded_module.type_problems);
-    // assert_str_eq!("", prob, "can problems");
-    // assert_str_eq!("", prob_type, "type problems");
-    let docs = format!(
-        "{:#?}",
-        loaded_module
-            .docs_by_module
-            .get(&loaded_module.module_id)
-            .unwrap()
-    );
-    assert_str_eq!("", docs);
+    let docs = loaded_module
+        .docs_by_module
+        .get(&loaded_module.module_id)
+        .expect("module should have docs");
+    let docs = docs
+        .entries
+        .iter()
+        .map(|a| match a {
+            roc_load_internal::docs::DocEntry::DocDef(DocDef { name, docs, .. }) => {
+                (Some(name.clone()), docs.clone().map(|a| a.to_string()))
+            }
+            roc_load_internal::docs::DocEntry::ModuleDoc(docs)
+            | roc_load_internal::docs::DocEntry::DetachedDoc(docs) => (None, Some(docs.clone())),
+        })
+        .collect::<Vec<_>>();
+
+    let expected = vec![
+        (None, Some("An interface for docs tests\n")),
+        (Some("User"), Some("This is a user\n")),
+        (Some("makeUser"), Some("Makes a user\n")),
+        (Some("getName"), Some("Gets the user's name\n")),
+        (Some("getNameExposed"), None),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.map(|a| a.to_string()), b.map(|b| b.to_string())))
+    .collect::<Vec<_>>();
+
+    // let has_all_docs = expected.map(|a| docs.contains(&a)).all(|a| a);
+    // assert!(has_all_docs, "Some of the expected docs were not created")
+    assert_eq!(expected, docs);
 }
 
 #[test]

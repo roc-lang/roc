@@ -139,7 +139,7 @@ fn get_completion_docs(
         .iter()
         .filter_map(|doc| match doc {
             roc_load::docs::DocEntry::DocDef(DocDef { docs, symbol, .. }) => {
-                let docs = docs.clone()?;
+                let docs = docs.as_ref().map(|a| a.trim().to_string())?;
                 let (idx, _s) = symbols.iter().enumerate().find(|(_i, s)| s == &&symbol)?;
                 symbols.swap_remove(idx);
                 Some((*symbol, docs))
