@@ -178,8 +178,6 @@ fn generate_entry_docs(
     let mut acc = Vec::with_capacity(defs.tags.len() + 1);
 
     if let Some(docs) = comments_or_new_lines_to_docs(header_comments) {
-        println!("<<docs:\n {:#?}\n docs>>", docs);
-
         acc.push(DocEntry::ModuleDoc(docs));
     }
 
@@ -200,7 +198,6 @@ fn generate_entry_docs(
 
         let docs = comments_or_new_lines_to_docs(&scratchpad);
 
-        println!("<<docs:\n {:#?}\n docs>>", docs);
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
