@@ -1621,6 +1621,39 @@ where
     }
 }
 
+/// Creates a new parser from two other parsers.
+/// The two parsers can have different outputs, but must have the same error type.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, word1};
+/// # use roc_region::all::{Loc, Position};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_parse::and;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = and!(
+///     word("hello", Problem::NotFound),
+///     word1(b',', Problem::NotFound)
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ((), ()));
+/// assert_eq!(state.pos().offset, 6);
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(5)));
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
