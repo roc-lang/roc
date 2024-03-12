@@ -1738,6 +1738,45 @@ macro_rules! absolute_indented_seq {
     };
 }
 
+/// Creates a new parser that returns the result of the first parser that makes progress,
+/// whether or not that parser succeeds.
+/// If no parsers make progress, then the last parser's result is returned.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, word1};
+/// # use roc_region::all::{Loc, Position};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_parse::one_of;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser1 = one_of!(
+///     word("hello", Problem::NotFound),
+///     word1(b'h', Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser1.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+///
+/// let parser2 = one_of!(
+///     // swapped the order of the parsers
+///     word1(b'h', Problem::NotFound),
+///     word("hello", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser2.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 1);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
