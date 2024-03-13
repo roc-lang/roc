@@ -232,14 +232,16 @@ impl AnalyzedDocument {
         let is_field_or_module_completion = symbol_prefix.contains('.');
 
         if is_field_or_module_completion {
-            //if the second last section is capitalised we know we are completing a module of an import of a module eg: My.Module.function
+            // If the second to last section is capitalised we know we are completing a
+            // module inside an import of a module, e.g.: My.Module.function
             let is_module_completion = symbol_prefix
                 .split('.')
-                .nth_back(1)
-                .and_then(|a| a.chars().nth(0).map(|c| c.is_uppercase()))
+                .nth_back(1) // second to last
+                .and_then(|str| str.chars().nth(0).map(|c| c.is_uppercase()))
                 .unwrap_or(false);
+
             if is_module_completion {
-                info!("Getting module dot completion");
+                info!("Getting module dot completion...");
                 Some(get_module_completion_items(
                     symbol_prefix,
                     interns,
@@ -248,7 +250,7 @@ impl AnalyzedDocument {
                     true,
                 ))
             } else {
-                info!("Getting record dot completion");
+                info!("Getting record dot completion...");
                 field_completion(
                     position,
                     symbol_prefix,
@@ -263,8 +265,9 @@ impl AnalyzedDocument {
                 .chars()
                 .nth(0)
                 .map_or(false, |c| c.is_uppercase());
+
             if is_module_or_type_completion {
-                info!("Getting module completion");
+                info!("Getting module completion...");
                 let completions = get_module_completion_items(
                     symbol_prefix,
                     interns,
@@ -274,7 +277,7 @@ impl AnalyzedDocument {
                 );
                 Some(completions)
             } else {
-                info!("Getting variable completion");
+                info!("Getting variable completion...");
                 let completions = get_completion_items(
                     position,
                     symbol_prefix,

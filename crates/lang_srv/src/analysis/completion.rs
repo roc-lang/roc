@@ -298,7 +298,10 @@ fn make_completion_item(
         ..Default::default()
     }
 }
-/// Walks through declarations that would be accessible from the provided position adding them to a list of completion items until all accessible declarations have been fully explored
+
+/// Walks through declarations that would be accessible from the provided
+/// position, adding them to a list of completion items until all accessible
+/// declarations have been fully explored.
 pub fn get_completion_items(
     position: Position,
     prefix: String,
@@ -310,7 +313,9 @@ pub fn get_completion_items(
 ) -> Vec<CompletionItem> {
     let mut completions = get_completions(position, decls, prefix, interns);
     completions.extend(exposed_imports);
+
     debug!("extended with:{:#?}", exposed_imports);
+
     make_completion_items(
         subs,
         module_id,
@@ -321,6 +326,7 @@ pub fn get_completion_items(
             .collect(),
     )
 }
+
 pub(super) fn get_module_completion_items(
     prefix: String,
     interns: &Interns,
@@ -347,16 +353,19 @@ pub(super) fn get_module_completion_items(
                     ..Default::default()
                 };
                 vec![item]
-            //Complete dot completions
+
+            // Complete dot completions
             } else if prefix.starts_with(&(mod_name + ".")) {
                 get_module_exposed_completion(exposed_symbols, modules_info, mod_id, interns)
             } else {
                 vec![]
             }
         });
+
     if just_modules {
         return module_completions.collect();
     }
+
     module_completions.collect()
 }
 
@@ -369,7 +378,8 @@ fn get_module_exposed_completion(
     exposed_symbols
         .iter()
         .map(|(sym, var)| {
-            //We need to fetch the subs for the module that is exposing what we are trying to complete because that will have the type info we need
+            // We need to fetch the subs for the module that is exposing what we
+            // are trying to complete, because that will have the type info we need.
             modules_info
                 .with_subs(mod_id, |subs| {
                     make_completion_item(
@@ -385,8 +395,8 @@ fn get_module_exposed_completion(
         .collect::<Vec<_>>()
 }
 
-///Provides a list of completions for Type aliases within the scope.
-///TODO: Use this when we know we are within a type definition
+/// Provides a list of completions for Type aliases within the scope.
+/// TODO: Use this when we know we are within a type definition.
 fn _alias_completions(
     aliases: &MutMap<Symbol, (bool, Alias)>,
     module_id: &ModuleId,
@@ -397,9 +407,10 @@ fn _alias_completions(
         .filter(|(symbol, (_exposed, _alias))| &symbol.module_id() == module_id)
         .map(|(symbol, (_exposed, _alias))| {
             let name = symbol.as_str(interns).to_string();
+
             CompletionItem {
                 label: name.clone(),
-                detail: Some(name + "we don't know how to print types "),
+                detail: Some(name + " we don't know how to print types."),
                 kind: Some(CompletionItemKind::CLASS),
                 ..Default::default()
             }
