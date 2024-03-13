@@ -9,7 +9,7 @@
 // It does this as efficiently as possible by using branchless SIMD to fill padding bytes,
 // and reading the contents of the file directly into an arena in as few syscalls as possible.
 
-use bumpalo::{self, Bump};
+use arena::Arena;
 use core::{
     alloc::Layout,
     mem::{align_of, MaybeUninit},
@@ -24,12 +24,12 @@ const MAX_ROC_SOURCE_FILE_SIZE: usize = u16::MAX as usize * u16::MAX as usize; /
 #[cfg(test)]
 const MAX_ROC_SOURCE_FILE_SIZE: usize = 1024; // small enough that we can create a tempfile to exercise this scenario
 
-pub struct Src64<'a> {
+pub struct Src64 {
     /// These bytes are guaranteed to have a 16B-aligned address (so the parser can do 128-bit SIMD on it).
     /// This slice is guaranteed to have a length that's a multiple of 64B, because the parser iterates in
     /// chunks of 64B. (If extra bytes are needed to make it a multiple of 64B, we add trailing newlines
     /// because the parser ignores those.)
-    bytes: &'a [u8],
+    bytes: [u8],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]

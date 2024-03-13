@@ -1,0 +1,21 @@
+[package]
+name = "arena"
+description = "A growable (Vec-style) arena allocator that returns u32 indices into its memory, and can be cached to/from disk in one syscall."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[target.'cfg(not(wasm32))'.dependencies.fs]
+path = "../fs"
+
+# We use wee_alloc for wasm "virtual" allocations, since wasm doesn't have
+# a built-in mmap or VirtualAlloc equivalent. This adds about 800B to the binary.
+# We could alternatively just always grow the heap and leak.
+[target.'cfg(wasm32)'.dependencies.wee_alloc]
+version = "0.4.5"
+default-features = false
+
+[dependencies]
+crash = { path = "../crash" }
