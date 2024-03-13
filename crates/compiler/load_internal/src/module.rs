@@ -46,6 +46,10 @@ pub struct LoadedModule {
     pub docs_by_module: Vec<(ModuleId, ModuleDocumentation)>,
     pub abilities_store: AbilitiesStore,
     pub typechecked: MutMap<ModuleId, CheckedModule>,
+
+    pub imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    pub exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
+    pub exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
 }
 
 impl LoadedModule {
