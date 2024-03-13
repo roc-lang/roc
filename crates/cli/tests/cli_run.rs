@@ -319,18 +319,18 @@ mod cli_run {
     }
 
     fn ignore_test_timings(cmd_output: &str) -> String {
-        let regex = Regex::new(r" passed in (\d+) ms\.").expect("Invalid regex pattern");
-        let replacement = " passed in <ignored for test> ms.";
+        let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
+        let replacement = " in <ignored for test> ms.";
         regex.replace_all(cmd_output, replacement).to_string()
     }
 
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    fn test_roc_expect(dir_name: &str, roc_filename: &str, expected_ending: &str) {
+    fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
         let path = file_path_from_root(dir_name, roc_filename);
         check_output_with_stdin(
             &path,
             &[],
-            &[],
+            flags,
             &[],
             &[],
             expected_ending,
@@ -652,8 +652,26 @@ mod cli_run {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
             "main.roc",
+            &[],
             indoc!(
                 r#"
+                0 failed and 3 passed in <ignored for test> ms.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects_verbose() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &["--verbose"],
+            indoc!(
+                r#"
+                Compiled in <ignored for test> ms.
+
                 Direct.roc:
                     0 failed and 2 passed in <ignored for test> ms.
 

@@ -13,11 +13,12 @@ use roc_build::program::{
     handle_error_module, handle_loading_problem, standard_load_config, BuildFileError,
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
+use roc_collections::MutMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_module::symbol::ModuleId;
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
@@ -63,6 +64,7 @@ pub const FLAG_LIB: &str = "lib";
 pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
+pub const FLAG_VERBOSE: &str = "verbose";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
@@ -114,7 +116,7 @@ pub fn build_app() -> Command {
 
     let flag_profiling = Arg::new(FLAG_PROFILING)
         .long(FLAG_PROFILING)
-        .help("Keep debug info in the final generated program even in optmized builds")
+        .help("Keep debug info in the final generated program even in optimized builds")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -236,6 +238,13 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(flag_fuzz.clone())
+            .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed test statistics by module")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -522,6 +531,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let mut expectations = std::mem::take(&mut loaded.expectations);
 
     let interns = loaded.interns.clone();
+    let sources = loaded.sources.clone();
 
     let (dyn_lib, expects_by_module, layout_interner) =
         roc_repl_expect::run::expect_mono_module_to_dylib(
@@ -557,6 +567,8 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let mut results_by_module = Vec::new();
     let global_layout_interner = layout_interner.into_global();
 
+    let compilation_duration = start_time.elapsed();
+
     for (module_id, expects) in expects_by_module.into_iter() {
         let test_start_time = Instant::now();
         let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
@@ -584,6 +596,8 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         total_passed_count += passed_count;
     }
 
+    let total_duration = start_time.elapsed();
+
     if total_failed_count == 0 && total_passed_count == 0 {
         // TODO print this in a more nicely formatted way!
         println!("No expectations were found.");
@@ -595,10 +609,15 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         // running tests altogether!
         Ok(2)
     } else {
-        let show_module_label = results_by_module.len() > 1;
-
-        for module_test_results in results_by_module {
-            print_test_results(module_test_results, show_module_label, interns);
+        if matches.get_flag(FLAG_VERBOSE) {
+            println!("Compiled in {} ms.", compilation_duration.as_millis());
+            for module_test_results in results_by_module {
+                print_test_results(module_test_results, &sources);
+            }
+        } else {
+            let test_summary_str =
+                test_summary(total_failed_count, total_passed_count, total_duration);
+            println!("{test_summary_str}");
         }
 
         Ok((total_failed_count > 0) as i32)
@@ -607,8 +626,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
 fn print_test_results(
     module_test_results: ModuleTestResults,
-    show_module_label: bool,
-    interns: &Interns,
+    sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
 ) {
     let ModuleTestResults {
         module_id,
@@ -617,28 +635,27 @@ fn print_test_results(
         tests_duration,
     } = module_test_results;
 
+    let test_summary_str = test_summary(failed_count, passed_count, tests_duration);
+
+    let (module_path, _) = sources.get(&module_id).unwrap();
+    let module_name = module_path.file_name().unwrap().to_str().unwrap();
+
+    println!("\n{module_name}:\n    {test_summary_str}",);
+}
+
+fn test_summary(failed_count: usize, passed_count: usize, tests_duration: Duration) -> String {
     let failed_color = if failed_count == 0 {
         ANSI_STYLE_CODES.green
     } else {
         ANSI_STYLE_CODES.red
     };
-
     let passed_color = ANSI_STYLE_CODES.green;
     let reset = ANSI_STYLE_CODES.reset;
 
-    let test_summary_str =
-        format!(
-            "{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.",
-            tests_duration.as_millis()
-        );
-
-    if show_module_label {
-        let module_name = module_id.to_ident_str(interns);
-
-        println!("\n{module_name}.roc:\n    {test_summary_str}",);
-    } else {
-        println!("{test_summary_str}");
-    }
+    format!(
+        "{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.",
+        tests_duration.as_millis()
+    )
 }
 
 /// Find the element of `options` with the smallest edit distance to
