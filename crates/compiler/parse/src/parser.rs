@@ -2282,6 +2282,53 @@ macro_rules! word1_check_indent {
     };
 }
 
+/// Creates a new parser that maps the `Ok` result of parsing.
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::map;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map!(
+///     word("hello", Problem::NotFound),
+///     |_output| "new output!"
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::map;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map!(
+///     word("bye", Problem::NotFound),
+///     |_output| "new output!"
+/// );
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
+/// ```
 #[macro_export]
 macro_rules! map {
     ($parser:expr, $transform:expr) => {
