@@ -223,17 +223,17 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ownership {
+pub(crate) enum Ownership {
     Owned,
     Borrowed,
 }
 
 impl Ownership {
-    fn is_owned(&self) -> bool {
+    pub(crate) fn is_owned(&self) -> bool {
         matches!(self, Ownership::Owned)
     }
 
-    fn is_borrowed(&self) -> bool {
+    pub(crate) fn is_borrowed(&self) -> bool {
         matches!(self, Ownership::Borrowed)
     }
 }
@@ -1265,7 +1265,7 @@ fn insert_dec_stmt<'a>(
 /**
  * Retrieve the borrow signature of a low-level operation.
  */
-fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
+pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
     use LowLevel::*;
 
     const IRRELEVANT: Ownership = Ownership::Owned;
