@@ -1889,6 +1889,31 @@ where
     }
 }
 
+/// Creates a new parser that changes the `Err` type.
+/// This can be used as `.map`, but for errors.
+/// It has no effect, if the inner parser succeeds.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize};
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     Other(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = specialize(
+///     |_prev_err, pos| Problem::Other(pos),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::Other(Position::new(0)));
+/// ```
 pub fn specialize<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
     F: Fn(X, Position) -> Y,
@@ -1904,6 +1929,32 @@ where
     }
 }
 
+/// Creates a new parser that changes the `Err` type.
+/// This can be used as `.map`, but for errors.
+/// Similar to `specialize`, the error is allocated, and the mapping function receives a reference to the error.
+/// It has no effect, if the inner parser succeeds.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_ref};
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     Other(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = specialize_ref(
+///     |_prev_err, pos| Problem::Other(pos),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::Other(Position::new(0)));
+/// ```
 pub fn specialize_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
     F: Fn(&'a X, Position) -> Y,
@@ -1976,6 +2027,45 @@ where
     }
 }
 
+/// Matches a single `u8` and moves the state's position forward if it succeeds
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word1};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = word1(b'h', Problem::NotFound);
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word1};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = word1(b'?', Problem::NotFound);
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
+/// ```
 pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
