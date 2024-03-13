@@ -2082,6 +2082,50 @@ where
     }
 }
 
+/// Matches a single `u8` and moves the state's position forward if it succeeds.
+/// This parser will fail if it is a lower indentation level than it should be.
+///
+/// # Example
+///
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word1_indent};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = word1_indent(b'h', Problem::NotFound);
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word1, word1_indent};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     WrongIndentLevel(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = word1_indent(b'h', Problem::WrongIndentLevel);
+/// let state = State::new(" hello, world".as_bytes());
+/// let _ = word1(b' ', Problem::NotFound).parse(&arena, state.clone(), 0).unwrap();
+/// let actual = parser.parse(&arena, state, 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::WrongIndentLevel(Position::zero())),
+/// );
+/// ```
 pub fn word1_indent<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
