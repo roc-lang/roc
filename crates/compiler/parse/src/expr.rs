@@ -311,8 +311,20 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
 
 fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     line_min_indent(move |arena, state: State<'a>, min_indent: u32| {
-        let (_, expr, state) =
-            loc_possibly_negative_or_negated_term(options).parse(arena, state, min_indent)?;
+        let (_, expr, state) = loc_possibly_negative_or_negated_term(options)
+            .parse(arena, state, min_indent)
+            .map(|(progress, expr, state)| {
+                // If the next thing after the expression is a `!`, then it's Suffixed
+                if state.bytes().starts_with(b"!") {
+                    (
+                        progress,
+                        Loc::at(expr.region, Expr::Suffixed(arena.alloc(expr.value))),
+                        state.advance(1),
+                    )
+                } else {
+                    (progress, expr, state)
+                }
+            })?;
 
         let initial_state = state.clone();
         let end = state.pos();

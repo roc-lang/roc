@@ -513,7 +513,10 @@ impl<'a> Formattable for Expr<'a> {
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
             IngestedFile(_, _) => {}
-            Suffixed(sub_expr) => sub_expr.format_with_options(buf, parens, newlines, indent),
+            Suffixed(sub_expr) => {
+                sub_expr.format_with_options(buf, parens, newlines, indent);
+                buf.push('!');
+            }
         }
     }
 }

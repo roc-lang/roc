@@ -1,1 +1,1 @@
-Stdout.line
+Stdout.line!

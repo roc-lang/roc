@@ -442,6 +442,7 @@ mod test_snapshots {
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
         pass/suffixed.expr,
+        pass/suffixed_nested.expr,
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
