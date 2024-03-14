@@ -1571,6 +1571,7 @@ impl<'a> Malformed for Expr<'a> {
             PrecedenceConflict(_) |
             MultipleRecordBuilders(_) |
             UnappliedRecordBuilder(_) => true,
+            Suffixed(expr) => expr.is_malformed(),
         }
     }
 }

@@ -441,6 +441,7 @@ mod test_snapshots {
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
+        pass/suffixed.expr,
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,

@@ -1957,6 +1957,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::Str(string) => Pattern::StrLiteral(string),
         Expr::SingleQuote(string) => Pattern::SingleQuote(string),
         Expr::MalformedIdent(string, problem) => Pattern::MalformedIdent(string, problem),
+        Expr::Suffixed(_) => todo!(),
     };
 
     // Now we re-add the spaces
@@ -3009,6 +3010,7 @@ where
             Err((NoProgress, to_error("->", state.pos())))
         }
         "<-" => good!(BinOp::Backpassing, 2),
+        "!" => Err((NoProgress, to_error("!", state.pos()))),
         _ => bad_made_progress!(chomped),
     }
 }
