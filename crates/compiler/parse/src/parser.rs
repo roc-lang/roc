@@ -2868,6 +2868,50 @@ where
     map_with_arena!(parser, transform)
 }
 
+/// Creates a new parser that only has `Progress` of `NoProgress`.
+/// The `State` is still modified, if the inner parser succeeds.
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, backtrackable};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = backtrackable(
+///     word("hello", Problem::NotFound),
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, backtrackable};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = backtrackable(
+///     word("bye", Problem::NotFound),
+/// );
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
+/// ```
 pub fn backtrackable<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Val, Error>
 where
     P: Parser<'a, Val, Error>,
