@@ -2591,6 +2591,65 @@ macro_rules! debug {
     };
 }
 
+/// Creates a new parser that matches either parser.
+/// If the first parser succeeds, its result is used,
+/// otherwise, the second parser's result is used.
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
+/// # use roc_region::all::Position;
+/// # use roc_parse::either;
+/// # use bumpalo::{Bump, vec};
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = either!(
+///     word("hello", Problem::NotFound),
+///     word("bye", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Either::First(()));
+/// assert_eq!(state.pos().offset, 5);
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Either::Second(()));
+/// assert_eq!(state.pos().offset, 3);
+/// # }
+/// # foo(&arena);
+/// ```
+///
+/// ## Failure Case
+///
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
+/// # use roc_region::all::Position;
+/// # use roc_parse::either;
+/// # use bumpalo::{Bump, vec};
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = either!(
+///     word("hello", Problem::NotFound),
+///     word("bye", Problem::NotFound)
+/// );
+/// let (progress, err) = parser.parse(&arena, State::new("later, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! either {
     ($p1:expr, $p2:expr) => {
