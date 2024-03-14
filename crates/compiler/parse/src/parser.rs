@@ -2768,7 +2768,32 @@ where
     and!(p1, p2)
 }
 
-/// For some reason, some usages won't compile unless they use this instead of the macro version
+/// The same as the `loc` macro.
+///
+/// For some reason, some usages won't compile unless they use this instead of the macro version.
+/// This is likely because the lifetime `'a` is not defined at the call site.
+///
+/// # Examples
+/// ```
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = loc(word("hello", Problem::NotFound));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Loc::new(0, 5, ()));
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[inline(always)]
 pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
 where
@@ -2778,7 +2803,54 @@ where
     loc!(parser)
 }
 
-/// For some reason, some usages won't compile unless they use this instead of the macro version
+/// The same as the `map_with_arena` macro.
+///
+/// For some reason, some usages won't compile unless they use this instead of the macro version.
+/// This is likely because the lifetime `'a` is not defined at the call site.
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map_with_arena};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena(
+///     word("hello", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map_with_arena};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena(
+///     word("bye", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
+/// ```
 #[inline(always)]
 pub fn map_with_arena<'a, P, F, Before, After, E>(
     parser: P,
