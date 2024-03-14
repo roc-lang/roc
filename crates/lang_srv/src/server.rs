@@ -365,7 +365,7 @@ mod tests {
         .collect::<Vec<_>>()
     }
     ///Gets completion and returns only the label and docs for each completion
-    async fn get_completion_strings(
+    async fn get_basic_completion_info(
         reg: &Registry,
         url: &Url,
         position: Position,
@@ -427,7 +427,7 @@ mod tests {
 
         inner.change(&url, change, 1).await.unwrap();
 
-        get_completion_strings(reg, &url, position).await
+        get_basic_completion_info(reg, &url, position).await
     }
     async fn completion_test_labels(
         initial: &str,
@@ -460,11 +460,11 @@ mod tests {
 
         let change = suffix.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = comp_labels(get_completion_strings(reg, &url, position).await);
+        let comp1 = comp_labels(get_basic_completion_info(reg, &url, position).await);
 
         let c = suffix.clone() + "i";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = comp_labels(get_completion_strings(reg, &url, position).await);
+        let comp2 = comp_labels(get_basic_completion_info(reg, &url, position).await);
 
         let actual = [comp1, comp2];
 
@@ -502,11 +502,11 @@ mod tests {
 
         let change = doc.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = comp_labels(get_completion_strings(reg, &url, position).await);
+        let comp1 = comp_labels(get_basic_completion_info(reg, &url, position).await);
 
         let c = doc.clone() + "t";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = comp_labels(get_completion_strings(reg, &url, position).await);
+        let comp2 = comp_labels(get_basic_completion_info(reg, &url, position).await);
         let actual = [comp1, comp2];
 
         expect![[r#"
