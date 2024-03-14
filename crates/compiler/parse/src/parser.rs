@@ -2675,6 +2675,32 @@ macro_rules! either {
 
 /// Parse everything between two braces (e.g. parentheses), skipping both braces
 /// and keeping only whatever was parsed in between them.
+///
+/// # Example
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, word1};
+/// # use roc_region::all::Position;
+/// # use roc_parse::{between, skip_first, skip_second};
+/// # use bumpalo::{Bump, vec};
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = between!(
+///     word1(b'(', Problem::NotFound),
+///     word("hello", Problem::NotFound),
+///     word1(b')', Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("(hello), world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 7);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! between {
     ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
