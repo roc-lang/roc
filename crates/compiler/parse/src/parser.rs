@@ -2554,6 +2554,34 @@ macro_rules! one_or_more {
     };
 }
 
+/// Creates a parser debug prints the result of parsing.
+/// It doesn't change the inner parser at all,
+/// so its quite useful for inspecting a parser.
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::debug;
+/// # use bumpalo::{Bump, vec};
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = debug!(
+///     word("hello", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! debug {
     ($parser:expr) => {
