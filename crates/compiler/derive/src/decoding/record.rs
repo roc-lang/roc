@@ -222,384 +222,15 @@ fn step_field(
         //                 }
         //     )
 
-        let this_custom_callback_var;
-        let custom_callback_ret_var;
-        let custom_callback = {
-            // \bytes, fmt ->
-            //     when Decode.decodeWith bytes Decode.decoder fmt is
-            //         rec ->
-            //             {
-            //                 rest: rec.rest,
-            //                 result: when rec.result is
-            //                     Ok val -> Ok {state & first: Ok val},
-            //                     Err err -> Err err
-            //             }
-            let bytes_arg_symbol = env.new_symbol("bytes");
-            let fmt_arg_symbol = env.new_symbol("fmt");
-            let bytes_arg_var = env.subs.fresh_unnamed_flex_var();
-            let fmt_arg_var = env.subs.fresh_unnamed_flex_var();
-
-            // rec.result : [Ok field_var, Err DecodeError]
-            let rec_dot_result = {
-                let tag_union = FlatType::TagUnion(
-                    UnionTags::for_result(env.subs, field_var, decode_err_var),
-                    TagExt::Any(Variable::EMPTY_TAG_UNION),
-                );
-
-                synth_var(env.subs, Content::Structure(tag_union))
-            };
-
-            // rec : { rest: List U8, result: (typeof rec.result) }
-            let rec_var = {
-                let fields = RecordFields::insert_into_subs(
-                    env.subs,
-                    [
-                        ("rest".into(), RecordField::Required(Variable::LIST_U8)),
-                        ("result".into(), RecordField::Required(rec_dot_result)),
-                    ],
-                );
-                let record = FlatType::Record(fields, Variable::EMPTY_RECORD);
-
-                synth_var(env.subs, Content::Structure(record))
-            };
-
-            // `Decode.decoder` for the field's value
-            let decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
-            let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
-            let lambda_set_var = env.subs.fresh_unnamed_flex_var();
-            let this_decode_with_var = {
-                let subs_slice = SubsSlice::insert_into_subs(
-                    env.subs,
-                    [bytes_arg_var, decoder_var, fmt_arg_var],
-                );
-                let this_decode_with_var = synth_var(
-                    env.subs,
-                    Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
-                );
-
-                env.unify(decode_with_var, this_decode_with_var);
-
-                this_decode_with_var
-            };
-
-            // The result of decoding this field's value - either the updated state, or a decoding error.
-            let when_expr_var = {
-                let flat_type = FlatType::TagUnion(
-                    UnionTags::for_result(env.subs, state_record_var, decode_err_var),
-                    TagExt::Any(Variable::EMPTY_TAG_UNION),
-                );
-
-                synth_var(env.subs, Content::Structure(flat_type))
-            };
-
-            // What our decoder passed to `Decode.custom` returns - the result of decoding the
-            // field's value, and the remaining bytes.
-            custom_callback_ret_var = {
-                let rest_field = RecordField::Required(Variable::LIST_U8);
-                let result_field = RecordField::Required(when_expr_var);
-                let flat_type = FlatType::Record(
-                    RecordFields::insert_into_subs(
-                        env.subs,
-                        [("rest".into(), rest_field), ("result".into(), result_field)],
-                    ),
-                    Variable::EMPTY_RECORD,
-                );
-
-                synth_var(env.subs, Content::Structure(flat_type))
-            };
-
-            let custom_callback_body = {
-                let rec_symbol = env.new_symbol("rec");
-
-                // # Uses a single-branch `when` because `let` is more expensive to monomorphize
-                // # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-                // when Decode.decodeWith bytes Decode.decoder fmt is
-                //     rec ->
-                //         {
-                //             rest: rec.rest,
-                //             result: when rec.result is
-                //                 Ok val -> Ok {state & first: Ok val},
-                //                 Err err -> Err err
-                //         }
-                let branch_body = {
-                    let result_val = {
-                        // result: when rec.result is
-                        //     Ok val -> Ok {state & first: Ok val},
-                        //     Err err -> Err err
-                        let ok_val_symbol = env.new_symbol("val");
-                        let err_val_symbol = env.new_symbol("err");
-                        let ok_branch_expr = {
-                            // Ok {state & first: Ok val},
-                            let mut updates = SendMap::default();
-
-                            updates.insert(
-                                field_name.clone(),
-                                Field {
-                                    var: result_field_var,
-                                    region: Region::zero(),
-                                    loc_expr: Box::new(Loc::at_zero(Expr::Tag {
-                                        tag_union_var: result_field_var,
-                                        ext_var: env.new_ext_var(ExtensionKind::TagUnion),
-                                        name: "Ok".into(),
-                                        arguments: vec![(
-                                            field_var,
-                                            Loc::at_zero(Expr::Var(ok_val_symbol, field_var)),
-                                        )],
-                                    })),
-                                },
-                            );
-
-                            let updated_record = Expr::RecordUpdate {
-                                record_var: state_record_var,
-                                ext_var: env.new_ext_var(ExtensionKind::Record),
-                                symbol: state_arg_symbol,
-                                updates,
-                            };
-
-                            Expr::Tag {
-                                tag_union_var: when_expr_var,
-                                ext_var: env.new_ext_var(ExtensionKind::TagUnion),
-                                name: "Ok".into(),
-                                arguments: vec![(state_record_var, Loc::at_zero(updated_record))],
-                            }
-                        };
-
-                        let branches = vec![
-                            // Ok val -> Ok {state & first: Ok val},
-                            WhenBranch {
-                                patterns: vec![WhenBranchPattern {
-                                    pattern: Loc::at_zero(Pattern::AppliedTag {
-                                        whole_var: rec_dot_result,
-                                        ext_var: Variable::EMPTY_TAG_UNION,
-                                        tag_name: "Ok".into(),
-                                        arguments: vec![(
-                                            field_var,
-                                            Loc::at_zero(Pattern::Identifier(ok_val_symbol)),
-                                        )],
-                                    }),
-                                    degenerate: false,
-                                }],
-                                value: Loc::at_zero(ok_branch_expr),
-                                guard: None,
-                                redundant: RedundantMark::known_non_redundant(),
-                            },
-                            // Err err -> Err err
-                            WhenBranch {
-                                patterns: vec![WhenBranchPattern {
-                                    pattern: Loc::at_zero(Pattern::AppliedTag {
-                                        whole_var: rec_dot_result,
-                                        ext_var: Variable::EMPTY_TAG_UNION,
-                                        tag_name: "Err".into(),
-                                        arguments: vec![(
-                                            decode_err_var,
-                                            Loc::at_zero(Pattern::Identifier(err_val_symbol)),
-                                        )],
-                                    }),
-                                    degenerate: false,
-                                }],
-                                value: Loc::at_zero(Expr::Tag {
-                                    tag_union_var: when_expr_var,
-                                    ext_var: env.new_ext_var(ExtensionKind::TagUnion),
-                                    name: "Err".into(),
-                                    arguments: vec![(
-                                        decode_err_var,
-                                        Loc::at_zero(Expr::Var(err_val_symbol, decode_err_var)),
-                                    )],
-                                }),
-                                guard: None,
-                                redundant: RedundantMark::known_non_redundant(),
-                            },
-                        ];
-
-                        // when rec.result is
-                        //     Ok val -> Ok {state & first: Ok val},
-                        //     Err err -> Err err
-                        Expr::When {
-                            loc_cond: Box::new(Loc::at_zero(Expr::RecordAccess {
-                                record_var: rec_var,
-                                ext_var: env.new_ext_var(ExtensionKind::Record),
-                                field_var: rec_dot_result,
-                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
-                                field: "result".into(),
-                            })),
-                            cond_var: rec_dot_result,
-                            expr_var: when_expr_var,
-                            region: Region::zero(),
-                            branches,
-                            branches_cond_var: rec_dot_result,
-                            exhaustive: ExhaustiveMark::known_exhaustive(),
-                        }
-                    };
-
-                    // {
-                    //     rest: rec.rest,
-                    //     result: when rec.result is
-                    //         Ok val -> Ok {state & first: Ok val},
-                    //         Err err -> Err err
-                    // }
-                    let mut fields_map = SendMap::default();
-
-                    fields_map.insert(
-                        "rest".into(),
-                        Field {
-                            var: Variable::LIST_U8,
-                            region: Region::zero(),
-                            loc_expr: Box::new(Loc::at_zero(Expr::RecordAccess {
-                                record_var: rec_var,
-                                ext_var: env.new_ext_var(ExtensionKind::Record),
-                                field_var: Variable::LIST_U8,
-                                loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
-                                field: "rest".into(),
-                            })),
-                        },
-                    );
-
-                    // result: when rec.result is
-                    //     Ok val -> Ok {state & first: Ok val},
-                    //     Err err -> Err err
-                    fields_map.insert(
-                        "result".into(),
-                        Field {
-                            var: when_expr_var,
-                            region: Region::zero(),
-                            loc_expr: Box::new(Loc::at_zero(result_val)),
-                        },
-                    );
-
-                    Expr::Record {
-                        record_var: custom_callback_ret_var,
-                        fields: fields_map,
-                    }
-                };
-
-                let branch = WhenBranch {
-                    patterns: vec![WhenBranchPattern {
-                        pattern: Loc::at_zero(Pattern::Identifier(rec_symbol)),
-                        degenerate: false,
-                    }],
-                    value: Loc::at_zero(branch_body),
-                    guard: None,
-                    redundant: RedundantMark::known_non_redundant(),
-                };
-
-                let condition_expr = Expr::Call(
-                    Box::new((
-                        this_decode_with_var,
-                        Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
-                        lambda_set_var,
-                        rec_var,
-                    )),
-                    vec![
-                        (
-                            Variable::LIST_U8,
-                            Loc::at_zero(Expr::Var(bytes_arg_symbol, Variable::LIST_U8)),
-                        ),
-                        (
-                            decoder_var,
-                            Loc::at_zero(Expr::AbilityMember(
-                                Symbol::DECODE_DECODER,
-                                None,
-                                decoder_var,
-                            )),
-                        ),
-                        (
-                            fmt_arg_var,
-                            Loc::at_zero(Expr::Var(fmt_arg_symbol, fmt_arg_var)),
-                        ),
-                    ],
-                    CalledVia::Space,
-                );
-
-                // when Decode.decodeWith bytes Decode.decoder fmt is
-                Expr::When {
-                    loc_cond: Box::new(Loc::at_zero(condition_expr)),
-                    cond_var: rec_var,
-                    expr_var: custom_callback_ret_var,
-                    region: Region::zero(),
-                    branches: vec![branch],
-                    branches_cond_var: rec_var,
-                    exhaustive: ExhaustiveMark::known_exhaustive(),
-                }
-            };
-
-            let custom_closure_symbol = env.new_symbol("customCallback");
-            this_custom_callback_var = env.subs.fresh_unnamed_flex_var();
-            let custom_callback_lambda_set_var = {
-                let content = Content::LambdaSet(LambdaSet {
-                    solved: UnionLambdas::insert_into_subs(
-                        env.subs,
-                        [(custom_closure_symbol, [state_record_var])],
-                    ),
-                    recursion_var: OptVariable::NONE,
-                    unspecialized: Default::default(),
-                    ambient_function: this_custom_callback_var,
-                });
-                let custom_callback_lambda_set_var = synth_var(env.subs, content);
-                let subs_slice =
-                    SubsSlice::insert_into_subs(env.subs, [bytes_arg_var, fmt_arg_var]);
-
-                env.subs.set_content(
-                    this_custom_callback_var,
-                    Content::Structure(FlatType::Func(
-                        subs_slice,
-                        custom_callback_lambda_set_var,
-                        custom_callback_ret_var,
-                    )),
-                );
-
-                custom_callback_lambda_set_var
-            };
-
-            // \bytes, fmt -> …
-            Expr::Closure(ClosureData {
-                function_type: this_custom_callback_var,
-                closure_type: custom_callback_lambda_set_var,
-                return_type: custom_callback_ret_var,
-                name: custom_closure_symbol,
-                captured_symbols: vec![(state_arg_symbol, state_record_var)],
-                recursive: Recursive::NotRecursive,
-                arguments: vec![
-                    (
-                        bytes_arg_var,
-                        AnnotatedMark::known_exhaustive(),
-                        Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
-                    ),
-                    (
-                        fmt_arg_var,
-                        AnnotatedMark::known_exhaustive(),
-                        Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
-                    ),
-                ],
-                loc_body: Box::new(Loc::at_zero(custom_callback_body)),
-            })
-        };
-
-        let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
-        let decode_custom = {
-            let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
-            let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
-            let this_decode_custom_var = {
-                let subs_slice = SubsSlice::insert_into_subs(env.subs, [this_custom_callback_var]);
-                let flat_type =
-                    FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
-
-                synth_var(env.subs, Content::Structure(flat_type))
-            };
-
-            env.unify(decode_custom_var, this_decode_custom_var);
-
-            // Decode.custom \bytes, fmt -> …
-            Expr::Call(
-                Box::new((
-                    this_decode_custom_var,
-                    Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
-                    decode_custom_closure_var,
-                    decode_custom_ret_var,
-                )),
-                vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
-                CalledVia::Space,
-            )
-        };
+        let (decode_custom_ret_var, decode_custom) = custom_decoder(
+            env,
+            field_var,
+            decode_err_var,
+            state_record_var,
+            &field_name,
+            result_field_var,
+            state_arg_symbol,
+        );
 
         env.unify(keep_payload_var, decode_custom_ret_var);
 
@@ -724,6 +355,510 @@ fn step_field(
     (expr, function_type)
 }
 
+fn custom_decoder(
+    env: &mut Env<'_>,
+    field_var: Variable,
+    decode_err_var: Variable,
+    state_record_var: Variable,
+    field_name: &Lowercase,
+    result_field_var: Variable,
+    state_arg_symbol: Symbol,
+) -> (Variable, Expr) {
+    let (this_custom_callback_var, custom_callback) = custom_callback(
+        env,
+        field_var,
+        decode_err_var,
+        state_record_var,
+        field_name,
+        result_field_var,
+        state_arg_symbol,
+    );
+
+    let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
+    let decode_custom = {
+        let decode_custom_var = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
+        let decode_custom_closure_var = env.subs.fresh_unnamed_flex_var();
+        let this_decode_custom_var = {
+            let subs_slice = SubsSlice::insert_into_subs(env.subs, [this_custom_callback_var]);
+            let flat_type =
+                FlatType::Func(subs_slice, decode_custom_closure_var, decode_custom_ret_var);
+
+            synth_var(env.subs, Content::Structure(flat_type))
+        };
+
+        env.unify(decode_custom_var, this_decode_custom_var);
+
+        // Decode.custom \bytes, fmt -> …
+        Expr::Call(
+            Box::new((
+                this_decode_custom_var,
+                Loc::at_zero(Expr::Var(Symbol::DECODE_CUSTOM, this_decode_custom_var)),
+                decode_custom_closure_var,
+                decode_custom_ret_var,
+            )),
+            vec![(this_custom_callback_var, Loc::at_zero(custom_callback))],
+            CalledVia::Space,
+        )
+    };
+    (decode_custom_ret_var, decode_custom)
+}
+
+// \bytes, fmt ->
+//     when Decode.decodeWith bytes Decode.decoder fmt is
+//         rec ->
+//             {
+//                 rest: rec.rest,
+//                 result: when rec.result is
+//                     Ok val -> Ok {state & first: Ok val},
+//                     Err err -> Err err
+//             }
+fn custom_callback(
+    env: &mut Env<'_>,
+    field_var: Variable,
+    decode_err_var: Variable,
+    state_record_var: Variable,
+    field_name: &Lowercase,
+    result_field_var: Variable,
+    state_arg_symbol: Symbol,
+) -> (Variable, Expr) {
+    let this_custom_callback_var;
+    let custom_callback_ret_var;
+
+    let custom_callback = {
+        // \bytes, fmt ->
+        //     when Decode.decodeWith bytes Decode.decoder fmt is
+        //         rec ->
+        //             {
+        //                 rest: rec.rest,
+        //                 result: when rec.result is
+        //                     Ok val -> Ok {state & first: Ok val},
+        //                     Err err -> Err err
+        //             }
+        let bytes_arg_symbol = env.new_symbol("bytes");
+        let fmt_arg_symbol = env.new_symbol("fmt");
+        let bytes_arg_var = env.subs.fresh_unnamed_flex_var();
+        let fmt_arg_var = env.subs.fresh_unnamed_flex_var();
+
+        let (rec_dot_result, rec_var, decoder_var, lambda_set_var, this_decode_with_var) =
+            make_decoder_var(env, field_var, decode_err_var, bytes_arg_var, fmt_arg_var);
+
+        // The result of decoding this field's value - either the updated state, or a decoding error.
+        let when_expr_var = {
+            let flat_type = FlatType::TagUnion(
+                UnionTags::for_result(env.subs, state_record_var, decode_err_var),
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            );
+
+            synth_var(env.subs, Content::Structure(flat_type))
+        };
+
+        // What our decoder passed to `Decode.custom` returns - the result of decoding the
+        // field's value, and the remaining bytes.
+        custom_callback_ret_var = {
+            let rest_field = RecordField::Required(Variable::LIST_U8);
+            let result_field = RecordField::Required(when_expr_var);
+            let flat_type = FlatType::Record(
+                RecordFields::insert_into_subs(
+                    env.subs,
+                    [("rest".into(), rest_field), ("result".into(), result_field)],
+                ),
+                Variable::EMPTY_RECORD,
+            );
+
+            synth_var(env.subs, Content::Structure(flat_type))
+        };
+
+        let condition_expr = decode_with(
+            this_decode_with_var,
+            lambda_set_var,
+            rec_var,
+            bytes_arg_symbol,
+            decoder_var,
+            fmt_arg_var,
+            fmt_arg_symbol,
+        );
+        let ok_branch_expr = record_update_expr(
+            field_name,
+            result_field_var,
+            field_var,
+            state_record_var,
+            state_arg_symbol,
+            when_expr_var,
+        );
+
+        let custom_callback_body = bytes_decoder_body(
+            env,
+            field_var,
+            when_expr_var,
+            rec_dot_result,
+            decode_err_var,
+            rec_var,
+            custom_callback_ret_var,
+            condition_expr,
+            ok_branch_expr,
+        );
+
+        let custom_closure_symbol = env.new_symbol("customCallback");
+        this_custom_callback_var = env.subs.fresh_unnamed_flex_var();
+        let custom_callback_lambda_set_var = {
+            let content = Content::LambdaSet(LambdaSet {
+                solved: UnionLambdas::insert_into_subs(
+                    env.subs,
+                    [(custom_closure_symbol, [state_record_var])],
+                ),
+                recursion_var: OptVariable::NONE,
+                unspecialized: Default::default(),
+                ambient_function: this_custom_callback_var,
+            });
+            let custom_callback_lambda_set_var = synth_var(env.subs, content);
+            let subs_slice = SubsSlice::insert_into_subs(env.subs, [bytes_arg_var, fmt_arg_var]);
+
+            env.subs.set_content(
+                this_custom_callback_var,
+                Content::Structure(FlatType::Func(
+                    subs_slice,
+                    custom_callback_lambda_set_var,
+                    custom_callback_ret_var,
+                )),
+            );
+
+            custom_callback_lambda_set_var
+        };
+
+        // \bytes, fmt -> …
+        Expr::Closure(ClosureData {
+            function_type: this_custom_callback_var,
+            closure_type: custom_callback_lambda_set_var,
+            return_type: custom_callback_ret_var,
+            name: custom_closure_symbol,
+            captured_symbols: vec![(state_arg_symbol, state_record_var)],
+            recursive: Recursive::NotRecursive,
+            arguments: vec![
+                (
+                    bytes_arg_var,
+                    AnnotatedMark::known_exhaustive(),
+                    Loc::at_zero(Pattern::Identifier(bytes_arg_symbol)),
+                ),
+                (
+                    fmt_arg_var,
+                    AnnotatedMark::known_exhaustive(),
+                    Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
+                ),
+            ],
+            loc_body: Box::new(Loc::at_zero(custom_callback_body)),
+        })
+    };
+    (this_custom_callback_var, custom_callback)
+}
+
+fn make_decoder_var(
+    env: &mut Env<'_>,
+    field_var: Variable,
+    decode_err_var: Variable,
+    bytes_arg_var: Variable,
+    fmt_arg_var: Variable,
+) -> (Variable, Variable, Variable, Variable, Variable) {
+    // rec.result : [Ok field_var, Err DecodeError]
+    let rec_dot_result = {
+        let tag_union = FlatType::TagUnion(
+            UnionTags::for_result(env.subs, field_var, decode_err_var),
+            TagExt::Any(Variable::EMPTY_TAG_UNION),
+        );
+
+        synth_var(env.subs, Content::Structure(tag_union))
+    };
+
+    // rec : { rest: List U8, result: (typeof rec.result) }
+    let rec_var = {
+        let fields = RecordFields::insert_into_subs(
+            env.subs,
+            [
+                ("rest".into(), RecordField::Required(Variable::LIST_U8)),
+                ("result".into(), RecordField::Required(rec_dot_result)),
+            ],
+        );
+        let record = FlatType::Record(fields, Variable::EMPTY_RECORD);
+
+        synth_var(env.subs, Content::Structure(record))
+    };
+
+    // `Decode.decoder` for the field's value
+    let decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
+    let decode_with_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
+    let lambda_set_var = env.subs.fresh_unnamed_flex_var();
+    let this_decode_with_var = {
+        let subs_slice =
+            SubsSlice::insert_into_subs(env.subs, [bytes_arg_var, decoder_var, fmt_arg_var]);
+        let this_decode_with_var = synth_var(
+            env.subs,
+            Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
+        );
+
+        env.unify(decode_with_var, this_decode_with_var);
+
+        this_decode_with_var
+    };
+    (
+        rec_dot_result,
+        rec_var,
+        decoder_var,
+        lambda_set_var,
+        this_decode_with_var,
+    )
+}
+
+fn bytes_decoder_body(
+    env: &mut Env<'_>,
+    field_var: Variable,
+    when_expr_var: Variable,
+    rec_dot_result: Variable,
+    decode_err_var: Variable,
+    rec_var: Variable,
+    custom_callback_ret_var: Variable,
+    condition_expr: Expr,
+    ok_branch_expr: impl Fn(&mut Env<'_>, Symbol) -> Expr,
+) -> Expr {
+    let custom_callback_body = {
+        let rec_symbol = env.new_symbol("rec");
+
+        // # Uses a single-branch `when` because `let` is more expensive to monomorphize
+        // # due to checks for polymorphic expressions, and `rec` would be polymorphic.
+        // when Decode.decodeWith bytes Decode.decoder fmt is
+        //     rec ->
+        //         {
+        //             rest: rec.rest,
+        //             result: when rec.result is
+        //                 Ok val -> Ok {state & first: Ok val},
+        //                 Err err -> Err err
+        //         }
+        let branch_body = {
+            let result_val = {
+                // result: when rec.result is
+                //     Ok val -> Ok {state & first: Ok val},
+                //     Err err -> Err err
+                let ok_val_symbol = env.new_symbol("val");
+                let err_val_symbol = env.new_symbol("err");
+
+                let branches = vec![
+                    // Ok val -> Ok {state & first: Ok val},
+                    WhenBranch {
+                        patterns: vec![WhenBranchPattern {
+                            pattern: Loc::at_zero(Pattern::AppliedTag {
+                                whole_var: rec_dot_result,
+                                ext_var: Variable::EMPTY_TAG_UNION,
+                                tag_name: "Ok".into(),
+                                arguments: vec![(
+                                    field_var,
+                                    Loc::at_zero(Pattern::Identifier(ok_val_symbol)),
+                                )],
+                            }),
+                            degenerate: false,
+                        }],
+                        value: Loc::at_zero(ok_branch_expr(env, ok_val_symbol)),
+                        guard: None,
+                        redundant: RedundantMark::known_non_redundant(),
+                    },
+                    // Err err -> Err err
+                    WhenBranch {
+                        patterns: vec![WhenBranchPattern {
+                            pattern: Loc::at_zero(Pattern::AppliedTag {
+                                whole_var: rec_dot_result,
+                                ext_var: Variable::EMPTY_TAG_UNION,
+                                tag_name: "Err".into(),
+                                arguments: vec![(
+                                    decode_err_var,
+                                    Loc::at_zero(Pattern::Identifier(err_val_symbol)),
+                                )],
+                            }),
+                            degenerate: false,
+                        }],
+                        value: Loc::at_zero(Expr::Tag {
+                            tag_union_var: when_expr_var,
+                            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+                            name: "Err".into(),
+                            arguments: vec![(
+                                decode_err_var,
+                                Loc::at_zero(Expr::Var(err_val_symbol, decode_err_var)),
+                            )],
+                        }),
+                        guard: None,
+                        redundant: RedundantMark::known_non_redundant(),
+                    },
+                ];
+
+                // when rec.result is
+                //     Ok val -> Ok {state & first: Ok val},
+                //     Err err -> Err err
+                Expr::When {
+                    loc_cond: Box::new(Loc::at_zero(Expr::RecordAccess {
+                        record_var: rec_var,
+                        ext_var: env.new_ext_var(ExtensionKind::Record),
+                        field_var: rec_dot_result,
+                        loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
+                        field: "result".into(),
+                    })),
+                    cond_var: rec_dot_result,
+                    expr_var: when_expr_var,
+                    region: Region::zero(),
+                    branches,
+                    branches_cond_var: rec_dot_result,
+                    exhaustive: ExhaustiveMark::known_exhaustive(),
+                }
+            };
+
+            // {
+            //     rest: rec.rest,
+            //     result: when rec.result is
+            //         Ok val -> Ok {state & first: Ok val},
+            //         Err err -> Err err
+            // }
+            let mut fields_map = SendMap::default();
+
+            fields_map.insert(
+                "rest".into(),
+                Field {
+                    var: Variable::LIST_U8,
+                    region: Region::zero(),
+                    loc_expr: Box::new(Loc::at_zero(Expr::RecordAccess {
+                        record_var: rec_var,
+                        ext_var: env.new_ext_var(ExtensionKind::Record),
+                        field_var: Variable::LIST_U8,
+                        loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
+                        field: "rest".into(),
+                    })),
+                },
+            );
+
+            // result: when rec.result is
+            //     Ok val -> Ok {state & first: Ok val},
+            //     Err err -> Err err
+            fields_map.insert(
+                "result".into(),
+                Field {
+                    var: when_expr_var,
+                    region: Region::zero(),
+                    loc_expr: Box::new(Loc::at_zero(result_val)),
+                },
+            );
+
+            Expr::Record {
+                record_var: custom_callback_ret_var,
+                fields: fields_map,
+            }
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: Loc::at_zero(Pattern::Identifier(rec_symbol)),
+                degenerate: false,
+            }],
+            value: Loc::at_zero(branch_body),
+            guard: None,
+            redundant: RedundantMark::known_non_redundant(),
+        };
+
+        // when Decode.decodeWith bytes Decode.decoder fmt is
+        Expr::When {
+            loc_cond: Box::new(Loc::at_zero(condition_expr)),
+            cond_var: rec_var,
+            expr_var: custom_callback_ret_var,
+            region: Region::zero(),
+            branches: vec![branch],
+            branches_cond_var: rec_var,
+            exhaustive: ExhaustiveMark::known_exhaustive(),
+        }
+    };
+    custom_callback_body
+}
+
+/// Ok {state & first: Ok val},
+fn record_update_expr<'a>(
+    field_name: &'a Lowercase,
+    result_field_var: Variable,
+    field_var: Variable,
+    state_record_var: Variable,
+    state_arg_symbol: Symbol,
+    when_expr_var: Variable,
+) -> impl Fn(&mut Env<'_>, Symbol) -> Expr + 'a {
+    move |env: &mut Env<'_>, ok_val_symbol: Symbol| {
+        let ok_branch_expr = {
+            // Ok {state & first: Ok val},
+            let mut updates = SendMap::default();
+
+            updates.insert(
+                field_name.clone(),
+                Field {
+                    var: result_field_var,
+                    region: Region::zero(),
+                    loc_expr: Box::new(Loc::at_zero(Expr::Tag {
+                        tag_union_var: result_field_var,
+                        ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+                        name: "Ok".into(),
+                        arguments: vec![(
+                            field_var,
+                            Loc::at_zero(Expr::Var(ok_val_symbol, field_var)),
+                        )],
+                    })),
+                },
+            );
+
+            let updated_record = Expr::RecordUpdate {
+                record_var: state_record_var,
+                ext_var: env.new_ext_var(ExtensionKind::Record),
+                symbol: state_arg_symbol,
+                updates,
+            };
+
+            Expr::Tag {
+                tag_union_var: when_expr_var,
+                ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+                name: "Ok".into(),
+                arguments: vec![(state_record_var, Loc::at_zero(updated_record))],
+            }
+        };
+        ok_branch_expr
+    }
+}
+
+fn decode_with(
+    this_decode_with_var: Variable,
+    lambda_set_var: Variable,
+    rec_var: Variable,
+    bytes_arg_symbol: Symbol,
+    decoder_var: Variable,
+    fmt_arg_var: Variable,
+    fmt_arg_symbol: Symbol,
+) -> Expr {
+    let condition_expr = Expr::Call(
+        Box::new((
+            this_decode_with_var,
+            Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
+            lambda_set_var,
+            rec_var,
+        )),
+        vec![
+            (
+                Variable::LIST_U8,
+                Loc::at_zero(Expr::Var(bytes_arg_symbol, Variable::LIST_U8)),
+            ),
+            (
+                decoder_var,
+                Loc::at_zero(Expr::AbilityMember(
+                    Symbol::DECODE_DECODER,
+                    None,
+                    decoder_var,
+                )),
+            ),
+            (
+                fmt_arg_var,
+                Loc::at_zero(Expr::Var(fmt_arg_symbol, fmt_arg_var)),
+            ),
+        ],
+        CalledVia::Space,
+    );
+    condition_expr
+}
+
 // Example:
 // finalizer = \rec ->
 //     when rec.first is
@@ -732,7 +867,7 @@ fn step_field(
 //                 Ok second -> Ok {first, second}
 //                 Err NoField -> Err TooShort
 //         Err NoField -> Err TooShort
-fn finalizer(
+fn finalizer2(
     env: &mut Env,
     state_record_var: Variable,
     fields: &[Lowercase],
@@ -740,6 +875,7 @@ fn finalizer(
     result_field_vars: &[Variable],
 ) -> (Expr, Variable, Variable) {
     let state_arg_symbol = env.new_symbol("stateRecord");
+    ///
     let mut fields_map = SendMap::default();
     let mut pattern_symbols = Vec::with_capacity(fields.len());
     let decode_err_var = {
@@ -987,4 +1123,566 @@ fn initial_state(
             fields: initial_state_fields,
         },
     )
+}
+
+// fn try_missing(
+//     env: &mut Env,
+//     state_record_var: Variable,
+//     fields: &[Lowercase],
+//     field_vars: &[Variable],
+//     result_field_vars: &[Variable],
+// ) {
+//     // a1=
+//     //     when a.f0 is
+//     //         first=
+//     //             Ok _ -> a
+//     //             Err NoField ->
+//     //                when Decode.decodeWith [] Decode.decoder fmt is
+//     //                    rec ->
+//     //                        {
+//     //                            rest: rec.rest,
+//     //                            result: when rec.result is
+//     //                                Ok val -> {state & first: Ok val},
+//     //                                Err _ -> a
+//     //                        })
+
+//     for (field_name, &field_var) in fields.iter().zip(field_vars.iter()) {
+//         let symbol = env.new_symbol(field_name.as_str());
+
+//         pattern_symbols.push(symbol);
+
+//         let field_expr = Expr::Var(symbol, field_var);
+//         let field = Field {
+//             var: field_var,
+//             region: Region::zero(),
+//             loc_expr: Box::new(Loc::at_zero(field_expr)),
+//         };
+
+//         fields_map.insert(field_name.clone(), field);
+//     }
+// }
+
+///Decode.fromBytesPartial [] Decode.decoder fmt
+
+// let from_bytes_return_errors = {
+//     let tag_var_leftover = SubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8]);
+//     let union = FlatType::TagUnion(
+//         UnionTags::insert_slices_into_subs(env.subs, [("Leftover".into(), tag_var_leftover)]),
+//         TagExt::Any(decode_err_var),
+//     );
+//     synth_var(env.subs, Content::Structure(union))
+// };
+// let result_var = {
+//     let tag_union = FlatType::TagUnion(
+//         UnionTags::for_result(env.subs, field_var, from_bytes_return_errors),
+//         TagExt::Any(Variable::EMPTY_TAG_UNION),
+//     );
+
+//     synth_var(env.subs, Content::Structure(tag_union))
+// };
+
+fn decode_partial(
+    env: &mut Env<'_>,
+    field_var: Variable,
+    fmt_arg_var: Variable,
+    fmt_arg_symbol: Symbol,
+    decode_err_var: Variable,
+) -> (Expr, Variable, Variable) {
+    // //This is a DecodeResult type: [Ok field_var, Err DecodeError]
+    // let rec_dot_result = {
+    //     let tag_union = FlatType::TagUnion(
+    //         UnionTags::for_result(env.subs, field_var, decode_err_var),
+    //         TagExt::Any(Variable::EMPTY_TAG_UNION),
+    //     );
+
+    //     synth_var(env.subs, Content::Structure(tag_union))
+    // };
+    // // rec : { rest: List U8, result: (typeof rec.result) }
+    // let rec_var = {
+    //     let fields = RecordFields::insert_into_subs(
+    //         env.subs,
+    //         [
+    //             ("rest".into(), RecordField::Required(Variable::LIST_U8)),
+    //             ("result".into(), RecordField::Required(rec_dot_result)),
+    //         ],
+    //     );
+    //     let record = FlatType::Record(fields, Variable::EMPTY_RECORD);
+
+    //     synth_var(env.subs, Content::Structure(record))
+    // }; //Make decode partial
+
+    // //Here we get the function
+    // let decode_partial_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
+    // let decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
+    // let lambda_set_var = env.subs.fresh_unnamed_flex_var();
+
+    // //This generates the type for this call of the function
+    // let this_decode_partial_var = {
+    //     let subs_slice =
+    //         SubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, decoder_var, fmt_arg_var]);
+    //     let this_decode_partial_var = synth_var(
+    //         env.subs,
+    //         Content::Structure(FlatType::Func(subs_slice, lambda_set_var, rec_var)),
+    //     );
+
+    //     //I think this registers the variable of this call of the function
+    //     env.unify(decode_partial_var, this_decode_partial_var);
+
+    //     this_decode_partial_var
+    // };
+    let (rec_dot_result, rec_var, decoder_var, lambda_set_var, this_decode_with_var) =
+        make_decoder_var(
+            env,
+            field_var,
+            decode_err_var,
+            Variable::LIST_U8,
+            fmt_arg_var,
+        );
+    (
+        Expr::Call(
+            Box::new((
+                this_decode_with_var,
+                Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
+                lambda_set_var,
+                rec_var,
+            )),
+            vec![
+                (Variable::LIST_U8, Loc::at_zero(empty_list(Variable::U8))),
+                (
+                    decoder_var,
+                    Loc::at_zero(Expr::AbilityMember(
+                        Symbol::DECODE_DECODER,
+                        None,
+                        decoder_var,
+                    )),
+                ),
+                (
+                    fmt_arg_var,
+                    Loc::at_zero(Expr::Var(fmt_arg_symbol, fmt_arg_var)),
+                ),
+            ],
+            CalledVia::Space,
+        ),
+        rec_var,
+        rec_dot_result,
+    )
+}
+fn decode_partial_res(
+    env: &mut Env<'_>,
+    field_var: Variable,
+    fmt_arg_var: Variable,
+    fmt_arg_symbol: Symbol,
+    decode_err_var: Variable,
+) -> Expr {
+    // result: when rec.result is
+    //     Ok val -> Ok {state & first: Ok val},
+    //     Err err -> Err err
+    // let ok_val_symbol = env.new_symbol("val");
+    // let err_val_symbol = env.new_symbol("err");
+
+    // let branches = vec![
+    //     // Ok val -> Ok val},
+    //     ok_to_ok_branch(rec_dot_result,,field_var ,&ok_val_symbol ,env ),
+    //     // Err err -> Err err
+    //     WhenBranch {
+    //         patterns: vec![WhenBranchPattern {
+    //             pattern: Loc::at_zero(Pattern::AppliedTag {
+    //                 whole_var: rec_dot_result,
+    //                 ext_var: Variable::EMPTY_TAG_UNION,
+    //                 tag_name: "Err".into(),
+    //                 arguments: vec![(
+    //                     decode_err_var,
+    //                     Loc::at_zero(Pattern::Identifier(err_val_symbol)),
+    //                 )],
+    //             }),
+    //             degenerate: false,
+    //         }],
+    //         value: Loc::at_zero(Expr::Tag {
+    //             tag_union_var: when_expr_var,
+    //             ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+    //             name: "Err".into(),
+    //             arguments: vec![(
+    //                 decode_err_var,
+    //                 Loc::at_zero(Expr::Var(err_val_symbol, decode_err_var)),
+    //             )],
+    //         }),
+    //         guard: None,
+    //         redundant: RedundantMark::known_non_redundant(),
+    //     },
+    // ];
+
+    // when rec.result is
+    //     Ok val -> Ok {state & first: Ok val},
+    //     Err err -> Err err
+    // Expr::When {
+    //     loc_cond: Box::new(Loc::at_zero(Expr::RecordAccess {
+    //         record_var: rec_var,
+    //         ext_var: env.new_ext_var(ExtensionKind::Record),
+    //         field_var: rec_dot_result,
+    //         loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_var))),
+    //         field: "result".into(),
+    //     })),
+    //     cond_var: rec_dot_result,
+    //     expr_var: when_expr_var,
+    //     region: Region::zero(),
+    //     branches,
+    //     branches_cond_var: rec_dot_result,
+    //     exhaustive: ExhaustiveMark::known_exhaustive(),
+    // }
+    //     // when Decode.decodeWith [] Decode.decoder fmt is
+    let (partial_expr, rec_result, rec_dot_result) =
+        decode_partial(env, field_var, fmt_arg_var, fmt_arg_symbol, decode_err_var);
+    let rec_symbol = env.new_symbol("rec");
+
+    let branch = WhenBranch {
+        patterns: vec![WhenBranchPattern {
+            pattern: Loc::at_zero(Pattern::Identifier(rec_symbol)),
+            degenerate: false,
+        }],
+        value: Loc::at_zero(Expr::RecordAccess {
+            record_var: rec_result,
+            ext_var: env.new_ext_var(ExtensionKind::Record),
+            field_var: rec_dot_result,
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(rec_symbol, rec_result))),
+            field: "result".into(),
+        }),
+        guard: None,
+        redundant: RedundantMark::known_non_redundant(),
+    };
+
+    // when Decode.decodeWith bytes Decode.decoder fmt is
+    Expr::When {
+        loc_cond: Box::new(Loc::at_zero(partial_expr)),
+        cond_var: rec_result,
+        expr_var: rec_dot_result,
+        region: Region::zero(),
+        branches: vec![branch],
+        branches_cond_var: rec_result,
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    }
+}
+
+fn empty_list(var: Variable) -> Expr {
+    Expr::List {
+        elem_var: var,
+        loc_elems: vec![],
+    }
+}
+// Example:
+// finalizer = \rec ->
+//     when rec.first is
+//         Ok first ->
+//             when rec.second is
+//                 Ok second -> Ok {first, second}
+//                 Err NoField -> Err TooShort
+//         Err NoField -> Err TooShort
+
+//THis is my new one
+fn finalizer(
+    env: &mut Env,
+    state_record_var: Variable,
+    fields: &[Lowercase],
+    field_vars: &[Variable],
+    result_field_vars: &[Variable],
+) -> (Expr, Variable, Variable) {
+    let state_arg_symbol = env.new_symbol("stateRecord");
+
+    let mut fields_map = SendMap::default();
+    let mut pattern_symbols = Vec::with_capacity(fields.len());
+    let decode_err_var = {
+        let flat_type = FlatType::TagUnion(
+            UnionTags::tag_without_arguments(env.subs, "TooShort".into()),
+            TagExt::Any(Variable::EMPTY_TAG_UNION),
+        );
+
+        synth_var(env.subs, Content::Structure(flat_type))
+    };
+
+    for (field_name, &field_var) in fields.iter().zip(field_vars.iter()) {
+        let symbol = env.new_symbol(field_name.as_str());
+
+        pattern_symbols.push(symbol);
+
+        let field_expr = Expr::Var(symbol, field_var);
+        let field = Field {
+            var: field_var,
+            region: Region::zero(),
+            loc_expr: Box::new(Loc::at_zero(field_expr)),
+        };
+
+        fields_map.insert(field_name.clone(), field);
+    }
+
+    // The bottom of the happy path - return the decoded record {first: a, second: b} wrapped with
+    // "Ok".
+    let return_type_var;
+    let mut body = {
+        let subs = &mut env.subs;
+        let record_field_iter = fields
+            .iter()
+            .zip(field_vars.iter())
+            .map(|(field_name, &field_var)| (field_name.clone(), RecordField::Required(field_var)));
+        let flat_type = FlatType::Record(
+            RecordFields::insert_into_subs(subs, record_field_iter),
+            Variable::EMPTY_RECORD,
+        );
+        let done_record_var = synth_var(subs, Content::Structure(flat_type));
+        let done_record = Expr::Record {
+            record_var: done_record_var,
+            fields: fields_map,
+        };
+
+        return_type_var = {
+            let flat_type = FlatType::TagUnion(
+                UnionTags::for_result(subs, done_record_var, decode_err_var),
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            );
+
+            synth_var(subs, Content::Structure(flat_type))
+        };
+
+        Expr::Tag {
+            tag_union_var: return_type_var,
+            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+            name: "Ok".into(),
+            arguments: vec![(done_record_var, Loc::at_zero(done_record))],
+        }
+    };
+    let fmt_arg_symbol = env.new_symbol("fmt");
+    let fmt_arg_var = env.subs.fresh_unnamed_flex_var();
+
+    // Unwrap each result in the decoded state
+    //
+    // when rec.first is
+    //     Ok first -> ...happy path...
+    //     Err NoField -> Err TooShort
+    for (((symbol, field_name), &field_var), &result_field_var) in pattern_symbols
+        .iter()
+        .rev()
+        .zip(fields.iter().rev())
+        .zip(field_vars.iter().rev())
+        .zip(result_field_vars.iter().rev())
+    {
+        let cond_expr = attempt_expression(
+            state_record_var,
+            env,
+            field_var,
+            result_field_var,
+            state_arg_symbol,
+            field_name,
+            fmt_arg_var,
+            fmt_arg_symbol,
+            decode_err_var,
+            symbol,
+        );
+
+        // Example: `Ok x -> expr`
+        let ok_branch = WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: Loc::at_zero(Pattern::AppliedTag {
+                    whole_var: result_field_var,
+                    ext_var: Variable::EMPTY_TAG_UNION,
+                    tag_name: "Ok".into(),
+                    arguments: vec![(field_var, Loc::at_zero(Pattern::Identifier(*symbol)))],
+                }),
+                degenerate: false,
+            }],
+            value: Loc::at_zero(body),
+            guard: None,
+            redundant: RedundantMark::known_non_redundant(),
+        };
+
+        // Example: `_ -> Err TooShort`
+        let err_branch = WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: Loc::at_zero(Pattern::Underscore),
+                degenerate: false,
+            }],
+            value: Loc::at_zero(Expr::Tag {
+                tag_union_var: return_type_var,
+                ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+                name: "Err".into(),
+                arguments: vec![(
+                    decode_err_var,
+                    Loc::at_zero(Expr::Tag {
+                        tag_union_var: decode_err_var,
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        name: "TooShort".into(),
+                        arguments: Vec::new(),
+                    }),
+                )],
+            }),
+            guard: None,
+            redundant: RedundantMark::known_non_redundant(),
+        };
+
+        body = Expr::When {
+            loc_cond: Box::new(Loc::at_zero(cond_expr)),
+            cond_var: result_field_var,
+            expr_var: return_type_var,
+            region: Region::zero(),
+            branches: vec![ok_branch, err_branch],
+            branches_cond_var: result_field_var,
+            exhaustive: ExhaustiveMark::known_exhaustive(),
+        };
+    }
+
+    let function_var = synth_var(env.subs, Content::Error); // We'll fix this up in subs later.
+    let function_symbol = env.new_symbol("finalizer");
+    let lambda_set = LambdaSet {
+        solved: UnionLambdas::tag_without_arguments(env.subs, function_symbol),
+        recursion_var: OptVariable::NONE,
+        unspecialized: Default::default(),
+        ambient_function: function_var,
+    };
+    let closure_type = synth_var(env.subs, Content::LambdaSet(lambda_set));
+    let flat_type = FlatType::Func(
+        SubsSlice::insert_into_subs(env.subs, [state_record_var, fmt_arg_var]),
+        closure_type,
+        return_type_var,
+    );
+
+    // Fix up function_var so it's not Content::Error anymore
+    env.subs
+        .set_content(function_var, Content::Structure(flat_type));
+
+    let finalizer = Expr::Closure(ClosureData {
+        function_type: function_var,
+        closure_type,
+        return_type: return_type_var,
+        name: function_symbol,
+        captured_symbols: Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments: vec![
+            (
+                state_record_var,
+                AnnotatedMark::known_exhaustive(),
+                Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
+            ),
+            (
+                fmt_arg_var,
+                AnnotatedMark::known_exhaustive(),
+                Loc::at_zero(Pattern::Identifier(fmt_arg_symbol)),
+            ),
+        ],
+        loc_body: Box::new(Loc::at_zero(body)),
+    });
+
+    (finalizer, function_var, decode_err_var)
+}
+
+///field_var: the variable of the field in the state record: [Ok var,Err NoField]
+///result_field_var: the variable of the actual field
+
+// when rec.f0 is
+//     Err _ ->
+//         when Decode.decodeWith [] Decode.decoder fmt is
+//             rec2 -> rec2.result
+
+//     Ok a -> Ok a
+fn attempt_expression(
+    state_record_var: Variable,
+    env: &mut Env<'_>,
+    field_var: Variable,
+    result_field_var: Variable,
+    state_arg_symbol: Symbol,
+    field_name: &Lowercase,
+    fmt_arg_var: Variable,
+    fmt_arg_symbol: Symbol,
+    decode_err_var: Variable,
+    symbol: &Symbol,
+) -> Expr {
+    let decode_when = {
+        let (partial_expr, rec_result, rec_dot_result) =
+            decode_partial(env, field_var, fmt_arg_var, fmt_arg_symbol, decode_err_var);
+        let decoder_rec_symb = env.new_symbol("decRec");
+
+        let branch = WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern: Loc::at_zero(Pattern::Identifier(decoder_rec_symb)),
+                degenerate: false,
+            }],
+            value: Loc::at_zero(Expr::RecordAccess {
+                record_var: rec_result,
+                ext_var: env.new_ext_var(ExtensionKind::Record),
+                field_var: rec_dot_result,
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(decoder_rec_symb, rec_result))),
+                field: "result".into(),
+            }),
+            guard: None,
+            redundant: RedundantMark::known_non_redundant(),
+        };
+
+        // when Decode.decodeWith bytes Decode.decoder fmt is
+        Expr::When {
+            loc_cond: Box::new(Loc::at_zero(partial_expr)),
+            cond_var: rec_result,
+            expr_var: rec_dot_result,
+            region: Region::zero(),
+            branches: vec![branch],
+            branches_cond_var: rec_result,
+            exhaustive: ExhaustiveMark::known_exhaustive(),
+        }
+    };
+
+    // when rec.first is
+    let cond_expr = Expr::RecordAccess {
+        record_var: state_record_var,
+        ext_var: env.new_ext_var(ExtensionKind::Record),
+        field_var: result_field_var,
+        loc_expr: Box::new(Loc::at_zero(Expr::Var(state_arg_symbol, state_record_var))),
+        field: field_name.clone(),
+    };
+    // Example: `Ok x -> Ok x`
+    let ok_branch = ok_to_ok_branch(result_field_var, result_field_var, field_var, symbol, env);
+
+    // Example: `_ -> Decode.partial [] Decode.decoder fmt  `
+    let err_branch = WhenBranch {
+        patterns: vec![WhenBranchPattern {
+            pattern: Loc::at_zero(Pattern::Underscore),
+            degenerate: false,
+        }],
+        value: Loc::at_zero(decode_when),
+        guard: None,
+        redundant: RedundantMark::known_non_redundant(),
+    };
+
+    Expr::When {
+        loc_cond: Box::new(Loc::at_zero(cond_expr)),
+        cond_var: result_field_var,
+        expr_var: result_field_var,
+        region: Region::zero(),
+        branches: vec![ok_branch, err_branch],
+        branches_cond_var: result_field_var,
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    }
+}
+
+fn ok_to_ok_branch(
+    pattern_var: Variable,
+    result_var: Variable,
+    field_var: Variable,
+    symbol: &Symbol,
+    env: &mut Env<'_>,
+) -> WhenBranch {
+    let ok_branch = WhenBranch {
+        patterns: vec![WhenBranchPattern {
+            pattern: Loc::at_zero(Pattern::AppliedTag {
+                whole_var: pattern_var,
+                ext_var: Variable::EMPTY_TAG_UNION,
+                tag_name: "Ok".into(),
+                arguments: vec![(field_var, Loc::at_zero(Pattern::Identifier(*symbol)))],
+            }),
+            degenerate: false,
+        }],
+        value: Loc::at_zero(Expr::Tag {
+            tag_union_var: result_var,
+            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+            name: "Ok".into(),
+            arguments: vec![(field_var, Loc::at_zero(Expr::Var(*symbol, field_var)))],
+        }),
+        guard: None,
+        redundant: RedundantMark::known_non_redundant(),
+    };
+    ok_branch
 }

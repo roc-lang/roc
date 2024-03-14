@@ -1273,7 +1273,7 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                             rest = List.dropFirst bytesAfterValue n
 
                             # Build final record from decoded fields and values
-                            when finalizer updatedRecord is
+                            when finalizer updatedRecord json is
                                 Ok val -> { result: Ok val, rest }
                                 Err e -> { result: Err e, rest }
 

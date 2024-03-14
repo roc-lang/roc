@@ -103,7 +103,7 @@ DecoderFormatting implements
     ## `Skip` if the field is not a part of the decoded record.
     ##
     ## `finalizer` should produce the record value from the decoded `state`.
-    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
+    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state, fmt -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
     ## `tuple state stepElem finalizer` decodes a tuple element-by-element.
     ##
