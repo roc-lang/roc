@@ -2341,6 +2341,53 @@ macro_rules! map {
     };
 }
 
+/// Creates a new parser that maps the `Ok` result of parsing.
+/// Similar to `map`, but the transform function also takes a bump allocator.
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::map_with_arena;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena!(
+///     word("hello", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::map_with_arena;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena!(
+///     word("bye", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
+/// ```
 #[macro_export]
 macro_rules! map_with_arena {
     ($parser:expr, $transform:expr) => {
@@ -2355,6 +2402,10 @@ macro_rules! map_with_arena {
     };
 }
 
+/// Applies the parser as many times as possible.
+/// This parser will only fail if the inner parser makes partial progress.
+///
+/// No examples can be written, since when this macro expands, it uses private methods.
 #[macro_export]
 macro_rules! zero_or_more {
     ($parser:expr) => {
@@ -2414,6 +2465,60 @@ macro_rules! zero_or_more {
     };
 }
 
+/// Creates a parser that matches one or more times.
+/// If the inner parser fails to match or partially matches, then this parser fails.
+///
+/// # Example
+/// ## Success case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::one_or_more;
+/// # use bumpalo::{Bump, vec};
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = one_or_more!(
+///     word("hello, ", Problem::NotFound),
+///     Problem::NotFound
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, bumpalo::vec![in &arena; (),()]);
+/// assert_eq!(state.pos(), Position::new(14));
+/// # }
+/// # foo(&arena);
+/// ```
+///
+/// ## Failure case
+/// ```rust
+/// # use roc_parse::state::{State};
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::one_or_more;
+/// # use bumpalo::{Bump, vec};
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = one_or_more!(
+///     word("bye, ", Problem::NotFound),
+///     Problem::NotFound
+/// );
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(
+///     actual,
+///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
+/// );
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! one_or_more {
     ($parser:expr, $to_error:expr) => {
