@@ -825,6 +825,7 @@ where
 /// The new parser acts the same if its inner parser fails
 ///
 /// # Examples
+/// ## Success Case
 /// ```
 /// # use roc_parse::state::{State};
 /// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
@@ -844,6 +845,7 @@ where
 /// assert_eq!(state.pos(), Position::new(5));
 /// ```
 ///
+/// ## Error Case
 /// ```
 /// # use roc_parse::state::{State};
 /// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
@@ -876,7 +878,7 @@ where
     }
 }
 
-/// Creates a parser from two other parser.
+/// Creates a parser from two other parsers.
 /// However, the second parser is created based on the results of the first parser
 ///
 /// # Examples
