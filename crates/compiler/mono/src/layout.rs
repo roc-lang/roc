@@ -4337,15 +4337,48 @@ where
                 NonRecursive {
                     sorted_tag_layouts: tags,
                 } => {
-                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                    tag_layouts.extend(tags.iter().map(|r| r.1));
+                    let mut layouts = Vec::with_capacity_in(tags.len(), env.arena);
+
+                    let semantic = match tags.first() {
+                        Some((tag_or_closure, _)) => match tag_or_closure {
+                            TagOrClosure::Tag(_tag) => TagName::semantic_repr(
+                                env.arena,
+                                tags.iter()
+                                    .map(|(tag_or_closure, layout)| match tag_or_closure {
+                                        TagOrClosure::Tag(tag) => {
+                                            layouts.push(*layout);
+                                            tag
+                                        }
+                                        TagOrClosure::Closure(_symbol) => {
+                                            unreachable!()
+                                        }
+                                    }),
+                            ),
+                            TagOrClosure::Closure(_symbol) => Symbol::semantic_repr(
+                                env.arena,
+                                tags.iter()
+                                    .map(|(tag_or_closure, layout)| match tag_or_closure {
+                                        TagOrClosure::Tag(_tag) => unreachable!(),
+                                        TagOrClosure::Closure(symbol) => {
+                                            layouts.push(*layout);
+                                            symbol
+                                        }
+                                    }),
+                            ),
+                        },
+                        None => {
+                            // This would be a tag union with no tags, which should have hit a
+                            // different case earlier.
+                            unreachable!();
+                        }
+                    };
 
                     let layout = Layout {
                         repr: LayoutRepr::Union(UnionLayout::NonRecursive(
-                            tag_layouts.into_bump_slice(),
+                            layouts.into_bump_slice(),
                         ))
                         .direct(),
-                        semantic: SemanticRepr::NONE,
+                        semantic,
                     };
                     env.cache.put_in(layout)
                 }

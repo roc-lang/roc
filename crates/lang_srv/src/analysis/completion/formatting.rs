@@ -6,7 +6,7 @@ use tower_lsp::lsp_types::{Documentation, MarkupContent, MarkupKind};
 
 use crate::analysis::{utils::format_var_type, ModulesInfo};
 
-fn module_exposed_list(
+fn get_module_exposed_list(
     module_id: &ModuleId,
     interns: &Interns,
     modules_info: &ModulesInfo,
@@ -15,9 +15,9 @@ fn module_exposed_list(
     modules_info.with_subs(module_id, |subs| {
         let items = exposed
             .iter()
-            .map(|(symb, var)| {
+            .map(|(symbol, var)| {
                 let var_str = format_var_type(*var, subs, module_id, interns);
-                format!("{0}: {1}", symb.as_str(interns), var_str)
+                format!("{0}: {1}", symbol.as_str(interns), var_str)
             })
             .collect::<Vec<_>>();
 
@@ -27,13 +27,15 @@ fn module_exposed_list(
 pub(super) enum DescriptionsType {
     Exposes,
 }
+
 fn md_doc(val: String) -> Documentation {
     Documentation::MarkupContent(MarkupContent {
         kind: MarkupKind::Markdown,
         value: val,
     })
 }
-///Generates a nicely formatted block of text for the completionitem documentation field
+
+/// Generates a nicely formatted block of text for the completionitem documentation field.
 pub(super) fn module_documentation(
     description_type: DescriptionsType,
     module_id: &ModuleId,
@@ -43,7 +45,7 @@ pub(super) fn module_documentation(
     modules_info: &ModulesInfo,
 ) -> Documentation {
     let exposed_string =
-        module_exposed_list(module_id, interns, modules_info, exposed).unwrap_or_default();
+        get_module_exposed_list(module_id, interns, modules_info, exposed).unwrap_or_default();
     let module_doc = module_docs
         .and_then(|docs| {
             docs.entries.first().and_then(|first_doc| match first_doc {

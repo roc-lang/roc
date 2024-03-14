@@ -33,7 +33,7 @@ use self::{analysed_doc::ModuleIdToUrl, tokens::Token};
 
 pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 
-///Contains maps of info about all modules that were analyzed
+/// Contains hashmaps of info about all modules that were analyzed
 #[derive(Debug)]
 pub(super) struct ModulesInfo {
     subs: Mutex<HashMap<ModuleId, Subs>>,
@@ -48,14 +48,16 @@ impl ModulesInfo {
     {
         self.subs.lock().get_mut(mod_id).map(f)
     }
-    ///Transforms some of the raw data from the analysis into a state that is more useful during processes like completion
+    /// Transforms some of the raw data from the analysis into a state that is
+    /// more useful during processes like completion.
     fn from_analysis(
         exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
         typechecked: &MutMap<ModuleId, CheckedModule>,
         docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     ) -> ModulesInfo {
-        //We wrap this in arc because later we will go through each module's imports and store the full list of symbols that each imported module exposes.
-        //eg: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
+        // We wrap this in Arc because later we will go through each module's imports and
+        // store the full list of symbols that each imported module exposes.
+        // example: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
         let exposed = exposes
             .into_iter()
             .map(|(id, symbols)| (id, Arc::new(symbols)))
@@ -78,7 +80,7 @@ impl ModulesInfo {
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzedModule {
     exposed_imports: Vec<(Symbol, Variable)>,
-    ///This modules imports grouped by which module they come from
+    /// imports are grouped by which module they come from
     imports: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     module_id: ModuleId,
     interns: Interns,
@@ -184,8 +186,9 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
     documents
 }
 
-///Take the exposed imports from each module, lookup the symbol within that module's list of exposed symbols and then get the type info for that import
-///eg: `import {Task.{await}}`. `await` is an exposed_import, so we need to lookup its type info
+/// Take the exposed imports from each module, lookup the symbol within that module's list of
+/// exposed symbols and then get the type info for that import.
+/// example: `import {Task.{await}}`. `await` is an exposed_import, so we need to lookup its type info.
 fn resolve_exposed_imports(
     exposed_imports: MutMap<ModuleId, MutMap<Symbol, roc_region::all::Region>>,
     exposes: &MutMap<ModuleId, Vec<(Symbol, Variable)>>,

@@ -254,6 +254,7 @@ impl LanguageServer for RocServer {
                 },
             work_done_progress_params: _,
         } = params;
+
         unwind_async(self.state.registry.hover(&text_document.uri, position)).await
     }
 
@@ -270,6 +271,7 @@ impl LanguageServer for RocServer {
             work_done_progress_params: _,
             partial_result_params: _,
         } = params;
+
         unwind_async(
             self.state
                 .registry
@@ -284,6 +286,7 @@ impl LanguageServer for RocServer {
             options: _,
             work_done_progress_params: _,
         } = params;
+
         unwind_async(self.state.registry.formatting(&text_document.uri)).await
     }
 
@@ -296,12 +299,14 @@ impl LanguageServer for RocServer {
             work_done_progress_params: _,
             partial_result_params: _,
         } = params;
+
         unwind_async(self.state.registry.semantic_tokens(&text_document.uri)).await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
-        trace!("Got completion request");
+        trace!("Got completion request.");
+
         unwind_async(
             self.state
                 .registry
@@ -310,13 +315,16 @@ impl LanguageServer for RocServer {
         .await
     }
 }
-async fn unwind_async<F, T>(f: F) -> tower_lsp::jsonrpc::Result<T>
+
+async fn unwind_async<Fut, T>(future: Fut) -> tower_lsp::jsonrpc::Result<T>
 where
-    F: Future<Output = T>,
+    Fut: Future<Output = T>,
 {
-    let result = { futures::FutureExt::catch_unwind(AssertUnwindSafe(f)).await };
+    let result = { futures::FutureExt::catch_unwind(AssertUnwindSafe(future)).await };
+
     match result {
         Ok(a) => tower_lsp::jsonrpc::Result::Ok(a),
+
         Err(err) => tower_lsp::jsonrpc::Result::Err(jsonrpc::Error {
             code: jsonrpc::ErrorCode::InternalError,
             message: format!("{:?}", err),
@@ -385,7 +393,9 @@ mod tests {
           exposes []
           imports []
         "#};
+
     static INIT: Once = Once::new();
+
     async fn test_setup(doc: String) -> (RocServerState, Url) {
         INIT.call_once(|| {
             env_logger::builder()
@@ -397,11 +407,12 @@ mod tests {
         let url = Url::parse("file:/Test.roc").unwrap();
 
         let inner = RocServerState::new(RocServerConfig::default(), Registry::default());
-        //setup the file
+        // setup the file
         inner.change(&url, doc, 0).await.unwrap();
         (inner, url)
     }
-    ///Runs a basic completion and returns the response
+
+    /// Runs a basic completion and returns the response
     async fn completion_test(
         initial: &str,
         addition: &str,
@@ -442,6 +453,7 @@ mod tests {
               when a is
                 inn as outer -> 
                   "#};
+
         let (inner, url) = test_setup(suffix.clone()).await;
         let position = Position::new(6, 7);
         let reg = &inner.registry;
@@ -455,6 +467,7 @@ mod tests {
         let comp2 = comp_labels(get_completion_strings(reg, &url, position).await);
 
         let actual = [comp1, comp2];
+
         expect![[r#"
             [
                 Some(
@@ -473,7 +486,7 @@ mod tests {
         .assert_debug_eq(&actual)
     }
 
-    ///Test that completion works properly when we apply an "as" pattern to a record
+    /// Tests that completion works properly when we apply an "as" pattern to a record.
     #[tokio::test]
     async fn test_completion_as_record() {
         let doc = DOC_LIT.to_string()

@@ -1347,7 +1347,7 @@ expect pluralize "cactus" "cacti" 2 == "2 cacti"
 
 If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect` expressions (that is, the two `pluralize` calls) and report any that returned `Bool.false`.
 
-If a test fails, it will not show the actual value that differs from the expected value. To show the actual value, you can write the expect like this:
+If a test fails, it will not show the actual value that differs from the expected value. This [will be resolved in the future](https://github.com/roc-lang/roc/issues/4633). For now, to show the actual value you can write the expect like this:
 
 ```roc
 expect
