@@ -531,7 +531,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             "if there were errors, we would have already exited."
         );
         if problems.warnings > 0 {
-            problems.print_to_stdout(start_time.elapsed());
+            problems.print_error_warning_count(start_time.elapsed());
             println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
         }
     }
@@ -575,8 +575,10 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
         let passed_color = ANSI_STYLE_CODES.green;
 
+        let reset = ANSI_STYLE_CODES.reset;
+
         println!(
-            "\n{failed_color}{failed_count}\x1B[39m failed and {passed_color}{passed_count}\x1B[39m passed in {} ms.\n",
+            "\n{failed_color}{failed_count}{reset} failed and {passed_color}{passed_count}{reset} passed in {} ms.\n",
             total_time.as_millis(),
         );
 
@@ -824,7 +826,7 @@ pub fn build(
                     // since the process is about to exit anyway.
                     // std::mem::forget(arena);
 
-                    problems.print_to_stdout(total_time);
+                    problems.print_error_warning_count(total_time);
                     println!(" while successfully building:\n\n    {generated_filename}");
 
                     // Return a nonzero exit code if there were problems
@@ -832,7 +834,7 @@ pub fn build(
                 }
                 BuildAndRun => {
                     if problems.fatally_errored {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -842,7 +844,7 @@ pub fn build(
                         return Ok(problems.exit_code());
                     }
                     if problems.errors > 0 || problems.warnings > 0 {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -862,7 +864,7 @@ pub fn build(
                 }
                 BuildAndRunIfNoErrors => {
                     if problems.fatally_errored {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -877,7 +879,7 @@ pub fn build(
                     );
 
                     if problems.warnings > 0 {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)

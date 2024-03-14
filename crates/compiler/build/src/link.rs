@@ -300,7 +300,7 @@ pub fn build_zig_host_wasm32(
             "c",
             "-target",
             "wasm32-wasi",
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
             "-fPIC",
             "-fstrip",
         ]);
@@ -812,15 +812,15 @@ fn nix_glibc_path_opt() -> Option<OsString> {
     env::var_os("NIX_GLIBC_PATH")
 }
 
-fn build_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
+fn build_path_or_panic<const N: usize>(segments: [&str; N]) -> PathBuf {
     let mut guess_path = PathBuf::new();
     for s in segments {
         guess_path.push(s);
     }
     if guess_path.exists() {
-        Some(guess_path)
+        guess_path
     } else {
-        None
+        panic!("{} does not exist.", guess_path.display());
     }
 }
 
@@ -927,7 +927,7 @@ fn link_linux(
     let scrt1_name = "Scrt1.o";
     let scrt1_path = look_for_library(&lib_dirs, scrt1_name);
 
-    // Unwrap all the paths at once so we can inform the user of all missing libs at once
+    // Unwrap all the paths at once so we can inform the user of any missing libs
     let (libgcc_path, crti_path, crtn_path, scrt1_path) =
         match (libgcc_path, crti_path, crtn_path, scrt1_path) {
             (Some(libgcc), Some(crti), Some(crtn), Some(scrt1)) => (libgcc, crti, crtn, scrt1),
@@ -964,33 +964,40 @@ fn link_linux(
             }
         };
 
-    let ld_linux = match target.architecture {
+    let (libgcc_path_str, crti_path_str, crtn_path_str, scrt1_path_str) = (
+        libgcc_path.to_string_lossy(),
+        crti_path.to_string_lossy(),
+        crtn_path.to_string_lossy(),
+        scrt1_path.to_string_lossy(),
+    );
+
+    let ld_linux_path = match target.architecture {
         Architecture::X86_64 => {
             // give preference to nix_path if it's defined, this prevents bugs
             if let Some(nix_glibc_path) = nix_glibc_path_opt() {
-                build_path([
+                build_path_or_panic([
                     &nix_glibc_path.into_string().unwrap(),
                     "ld-linux-x86-64.so.2",
                 ])
             } else {
-                build_path(["/lib64", "ld-linux-x86-64.so.2"])
+                build_path_or_panic(["/lib64", "ld-linux-x86-64.so.2"])
             }
         }
-        Architecture::Aarch64(_) => build_path(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Aarch64(_) => build_path_or_panic(["/lib", "ld-linux-aarch64.so.1"]),
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
         ),
     };
-    let ld_linux = ld_linux.unwrap();
-    let ld_linux = ld_linux.to_str().unwrap();
+
+    let ld_linux_path_str = &ld_linux_path.to_string_lossy();
 
     let mut soname;
     let (base_args, output_path) = match link_type {
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path.to_string_lossy().into_owned()],
+            vec![scrt1_path_str.to_string()],
             output_path,
         ),
         LinkType::Dylib => {
@@ -1026,9 +1033,9 @@ fn link_linux(
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
-    let mut command = Command::new("ld");
+    let mut ld_command = Command::new("ld");
 
-    command
+    ld_command
         // Don't allow LD_ env vars to affect this
         .env_clear()
         .env("PATH", &env_path)
@@ -1044,11 +1051,11 @@ fn link_linux(
             "-A",
             arch_str(target),
             "-pie",
-            &*crti_path.to_string_lossy(),
-            &*crtn_path.to_string_lossy(),
+            &crti_path_str,
+            &crtn_path_str,
         ])
         .args(&base_args)
-        .args(["-dynamic-linker", ld_linux])
+        .args(["-dynamic-linker", ld_linux_path_str])
         .args(input_paths)
         .args(extra_link_flags())
         // ld.lld requires this argument, and does not accept --arch
@@ -1063,16 +1070,16 @@ fn link_linux(
             "-lrt",
             "-lutil",
             "-lc_nonshared",
-            libgcc_path.to_str().unwrap(),
+            &libgcc_path_str,
             // Output
             "-o",
             output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
         ]);
-    debug_print_command(&command);
+    debug_print_command(&ld_command);
 
-    let output = command.spawn()?;
+    let ld_output = ld_command.spawn()?;
 
-    Ok((output, output_path))
+    Ok((ld_output, output_path))
 }
 
 fn link_macos(
@@ -1234,7 +1241,7 @@ fn link_wasm32(
             "ReleaseSmall",
             "-rdynamic",
             // useful for debugging
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
         ])
         .spawn()?;
 
@@ -1394,7 +1401,7 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
-    let command_string = stringify_command(&command);
+    let command_string = stringify_command(&command, false);
     let cmd_str = &command_string;
     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
         print_command_str(cmd_str);
@@ -1439,18 +1446,20 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
 
 /// Stringify a command for printing
 /// e.g. `HOME=~ zig build-exe foo.zig -o foo`
-fn stringify_command(cmd: &Command) -> String {
+fn stringify_command(cmd: &Command, include_env_vars: bool) -> String {
     let mut command_string = std::ffi::OsString::new();
 
-    for (name, opt_val) in cmd.get_envs() {
-        command_string.push(name);
-        command_string.push("=");
-        if let Some(val) = opt_val {
-            command_string.push(val);
-        } else {
-            command_string.push("''");
+    if include_env_vars {
+        for (name, opt_val) in cmd.get_envs() {
+            command_string.push(name);
+            command_string.push("=");
+            if let Some(val) = opt_val {
+                command_string.push(val);
+            } else {
+                command_string.push("''");
+            }
+            command_string.push(" ");
         }
-        command_string.push(" ");
     }
 
     command_string.push(cmd.get_program());
@@ -1470,7 +1479,11 @@ fn print_command_str(s: &str) {
 
 fn debug_print_command(_cmd: &Command) {
     // This debug macro is compiled out in release mode, so the argument is unused
+    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS_WITH_ENV_VARS, {
+        print_command_str(&stringify_command(_cmd, true));
+    });
+
     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRINT_BUILD_COMMANDS, {
-        print_command_str(&stringify_command(_cmd));
+        print_command_str(&stringify_command(_cmd, false));
     });
 }

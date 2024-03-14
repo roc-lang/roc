@@ -404,14 +404,15 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
     Ok(answer)
 }
 
-// start the dir with crates/cli_testing_examples
+// start the dir with crates/cli/tests
 #[allow(dead_code)]
 pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
     // Descend into examples/{dir_name}
     path.push("crates");
-    path.push("cli_testing_examples");
+    path.push("cli");
+    path.push("tests");
     path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path

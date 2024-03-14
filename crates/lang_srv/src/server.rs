@@ -3,9 +3,10 @@ use analysis::HIGHLIGHT_TOKENS_LEGEND;
 use log::{debug, trace};
 use registry::{Registry, RegistryConfig};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
-use tower_lsp::jsonrpc::Result;
+use tower_lsp::jsonrpc::{self, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -138,10 +139,6 @@ impl RocServerState {
         Self { config, registry }
     }
 
-    async fn registry(&self) -> &Registry {
-        &self.registry
-    }
-
     async fn close(&self, _fi: Url) {}
 
     pub async fn change(
@@ -258,13 +255,7 @@ impl LanguageServer for RocServer {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper_async(|| async {
-            self.state
-                .registry
-                .hover(&text_document.uri, position)
-                .await
-        })
-        .await
+        unwind_async(self.state.registry.hover(&text_document.uri, position)).await
     }
 
     async fn goto_definition(
@@ -281,13 +272,11 @@ impl LanguageServer for RocServer {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper_async(|| async {
+        unwind_async(
             self.state
-                .registry()
-                .await
-                .goto_definition(&text_document.uri, position)
-                .await
-        })
+                .registry
+                .goto_definition(&text_document.uri, position),
+        )
         .await
     }
 
@@ -298,14 +287,7 @@ impl LanguageServer for RocServer {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper_async(|| async {
-            self.state
-                .registry()
-                .await
-                .formatting(&text_document.uri)
-                .await
-        })
-        .await
+        unwind_async(self.state.registry.formatting(&text_document.uri)).await
     }
 
     async fn semantic_tokens_full(
@@ -318,39 +300,36 @@ impl LanguageServer for RocServer {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper_async(|| async {
-            self.state
-                .registry()
-                .await
-                .semantic_tokens(&text_document.uri)
-                .await
-        })
-        .await
+        unwind_async(self.state.registry.semantic_tokens(&text_document.uri)).await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
-        trace!("Got completion request");
+        trace!("Got completion request.");
 
-        panic_wrapper_async(|| async {
+        unwind_async(
             self.state
                 .registry
-                .completion_items(&doc.text_document.uri, doc.position)
-                .await
-        })
+                .completion_items(&doc.text_document.uri, doc.position),
+        )
         .await
     }
 }
 
-async fn panic_wrapper_async<Fut, T>(
-    f: impl FnOnce() -> Fut + std::panic::UnwindSafe,
-) -> Result<Option<T>>
+async fn unwind_async<Fut, T>(future: Fut) -> tower_lsp::jsonrpc::Result<T>
 where
-    Fut: Future<Output = Option<T>>,
+    Fut: Future<Output = T>,
 {
-    match std::panic::catch_unwind(f) {
-        Ok(r) => Ok(r.await),
-        Err(_) => Err(tower_lsp::jsonrpc::Error::internal_error()),
+    let result = { futures::FutureExt::catch_unwind(AssertUnwindSafe(future)).await };
+
+    match result {
+        Ok(a) => tower_lsp::jsonrpc::Result::Ok(a),
+
+        Err(err) => tower_lsp::jsonrpc::Result::Err(jsonrpc::Error {
+            code: jsonrpc::ErrorCode::InternalError,
+            message: format!("{:?}", err),
+            data: None,
+        }),
     }
 }
 
@@ -383,7 +362,8 @@ mod tests {
         .map(|item| item.label)
         .collect::<Vec<_>>()
     }
-    ///Gets completion and returns only the label for each completion
+
+    /// Gets completion and returns only the label for each completion
     async fn get_completion_labels(
         reg: &Registry,
         url: &Url,
@@ -399,23 +379,44 @@ mod tests {
           exposes []
           imports []
         "#};
+
     static INIT: Once = Once::new();
+
     async fn test_setup(doc: String) -> (RocServerState, Url) {
         INIT.call_once(|| {
             env_logger::builder()
                 .is_test(true)
-                .filter_level(log::LevelFilter::Trace)
+                .filter_level(log::LevelFilter::Debug)
                 .init();
         });
         info!("Doc is:\n{0}", doc);
         let url = Url::parse("file:/Test.roc").unwrap();
 
         let inner = RocServerState::new(RocServerConfig::default(), Registry::default());
-        //setup the file
+        // setup the file
         inner.change(&url, doc, 0).await.unwrap();
         (inner, url)
     }
-    ///Test that completion works properly when we apply an "as" pattern to an identifier
+
+    /// Runs a basic completion and returns the response
+    async fn completion_test(
+        initial: &str,
+        addition: &str,
+        position: Position,
+    ) -> Option<std::vec::Vec<std::string::String>> {
+        let doc = DOC_LIT.to_string() + initial;
+        let (inner, url) = test_setup(doc.clone()).await;
+        let registry = &inner.registry;
+
+        let change = doc.clone() + addition;
+        info!("doc is:\n{0}", change);
+
+        inner.change(&url, change, 1).await.unwrap();
+
+        get_completion_labels(registry, &url, position).await
+    }
+
+    /// Tests that completion works properly when we apply an "as" pattern to an identifier.
     #[tokio::test]
     async fn test_completion_as_identifier() {
         let suffix = DOC_LIT.to_string()
@@ -424,6 +425,7 @@ mod tests {
               when a is
                 inn as outer -> 
                   "#};
+
         let (inner, url) = test_setup(suffix.clone()).await;
         let position = Position::new(6, 7);
         let reg = &inner.registry;
@@ -437,6 +439,7 @@ mod tests {
         let comp2 = get_completion_labels(reg, &url, position).await;
 
         let actual = [comp1, comp2];
+
         expect![[r#"
             [
                 Some(
@@ -455,7 +458,7 @@ mod tests {
         .assert_debug_eq(&actual)
     }
 
-    ///Test that completion works properly when we apply an "as" pattern to a record
+    /// Tests that completion works properly when we apply an "as" pattern to a record.
     #[tokio::test]
     async fn test_completion_as_record() {
         let doc = DOC_LIT.to_string()
@@ -495,6 +498,50 @@ mod tests {
                     ],
                 ),
             ]
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+
+    /// Tests that completion of function args in scope works properly.
+    #[tokio::test]
+    async fn test_completion_fun_params() {
+        let actual = completion_test(
+            indoc! {r"
+            main = \param1, param2 ->
+              "},
+            "par",
+            Position::new(4, 3),
+        )
+        .await;
+
+        expect![[r#"
+            Some(
+                [
+                    "param1",
+                    "param2",
+                ],
+            )
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+
+    #[tokio::test]
+    async fn test_completion_fun_params_map() {
+        let actual = completion_test(
+            indoc! {r"
+            main = [] |> List.map \param1 , param2-> 
+              "},
+            "par",
+            Position::new(4, 3),
+        )
+        .await;
+        expect![[r#"
+            Some(
+                [
+                    "param1",
+                    "param2",
+                ],
+            )
         "#]]
         .assert_debug_eq(&actual);
     }

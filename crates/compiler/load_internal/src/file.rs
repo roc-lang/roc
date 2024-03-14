@@ -1901,7 +1901,7 @@ fn load_multi_threaded<'a>(
             //     &mut can_problems_recorded,
             //     &mut type_problems_recorded,
             // )
-            // .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
+            // .print_error_warning_count(Duration::default()); // TODO determine total elapsed time and use it here
 
             Err(LoadingProblem::FormattedReport(
                 concat!(
@@ -2537,6 +2537,10 @@ fn update<'a>(
             }
 
             report_unused_imported_modules(&mut state, module_id, &constrained_module);
+            state
+                .module_cache
+                .exposed_imports
+                .insert(module_id, constrained_module.module.exposed_imports.clone());
 
             state
                 .module_cache
@@ -2583,6 +2587,10 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
+            state
+                .module_cache
+                .exposes
+                .insert(module_id, solved_module.exposed_vars_by_symbol.clone());
 
             let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
                 let modules = state.arc_modules.lock();
@@ -3400,6 +3408,9 @@ fn finish(
         timings: state.timings,
         docs_by_module,
         abilities_store,
+        exposed_imports: state.module_cache.exposed_imports,
+        imports: state.module_cache.imports,
+        exposes: state.module_cache.exposes,
     }
 }
 

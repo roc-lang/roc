@@ -1,16 +1,24 @@
+use std::{collections::HashMap, sync::Arc};
+
 use log::{debug, trace, warn};
+
 use roc_can::{
     def::Def,
     expr::{ClosureData, Declarations, Expr, WhenBranch},
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
+use roc_collections::MutMap;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Position, Region};
-use roc_types::subs::{Subs, Variable};
+use roc_types::{
+    subs::{Subs, Variable},
+    types::Alias,
+};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
-use super::utils::format_var_type;
+use super::{utils::format_var_type, ModulesInfo};
+mod formatting;
 
 pub struct CompletionVisitor<'a> {
     position: Position,
@@ -287,11 +295,13 @@ fn make_completion_item(
         label: str,
         detail: Some(type_str),
         kind: Some(typ),
-
         ..Default::default()
     }
 }
-/// Walks through declarations that would be accessible from the provided position adding them to a list of completion items until all accessible declarations have been fully explored
+
+/// Walks through declarations that would be accessible from the provided
+/// position, adding them to a list of completion items until all accessible
+/// declarations have been fully explored.
 pub fn get_completion_items(
     position: Position,
     prefix: String,
@@ -299,8 +309,13 @@ pub fn get_completion_items(
     subs: &mut Subs,
     module_id: &ModuleId,
     interns: &Interns,
+    exposed_imports: &[(Symbol, Variable)],
 ) -> Vec<CompletionItem> {
-    let completions = get_completions(position, decls, prefix, interns);
+    let mut completions = get_completions(position, decls, prefix, interns);
+    completions.extend(exposed_imports);
+
+    debug!("extended with:{:#?}", exposed_imports);
+
     make_completion_items(
         subs,
         module_id,
@@ -310,6 +325,97 @@ pub fn get_completion_items(
             .map(|(symb, var)| (symb.as_str(interns).to_string(), var))
             .collect(),
     )
+}
+
+pub(super) fn get_module_completion_items(
+    prefix: String,
+    interns: &Interns,
+    imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    modules_info: &ModulesInfo,
+    just_modules: bool,
+) -> Vec<CompletionItem> {
+    let module_completions = imported_modules
+        .iter()
+        .flat_map(|(mod_id, exposed_symbols)| {
+            let mod_name = mod_id.to_ident_str(interns).to_string();
+
+            if mod_name.starts_with(&prefix) {
+                let item = CompletionItem {
+                    label: mod_name.clone(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    documentation: Some(formatting::module_documentation(
+                        formatting::DescriptionsType::Exposes,
+                        mod_id,
+                        interns,
+                        exposed_symbols,
+                        modules_info,
+                    )),
+                    ..Default::default()
+                };
+                vec![item]
+
+            // Complete dot completions
+            } else if prefix.starts_with(&(mod_name + ".")) {
+                get_module_exposed_completion(exposed_symbols, modules_info, mod_id, interns)
+            } else {
+                vec![]
+            }
+        });
+
+    if just_modules {
+        return module_completions.collect();
+    }
+
+    module_completions.collect()
+}
+
+fn get_module_exposed_completion(
+    exposed_symbols: &[(Symbol, Variable)],
+    modules_info: &ModulesInfo,
+    mod_id: &ModuleId,
+    interns: &Interns,
+) -> Vec<CompletionItem> {
+    exposed_symbols
+        .iter()
+        .map(|(sym, var)| {
+            // We need to fetch the subs for the module that is exposing what we
+            // are trying to complete, because that will have the type info we need.
+            modules_info
+                .with_subs(mod_id, |subs| {
+                    make_completion_item(
+                        subs,
+                        mod_id,
+                        interns,
+                        sym.as_str(interns).to_string(),
+                        *var,
+                    )
+                })
+                .expect("Couldn't find subs for module during completion.")
+        })
+        .collect::<Vec<_>>()
+}
+
+/// Provides a list of completions for Type aliases within the scope.
+/// TODO: Use this when we know we are within a type definition.
+fn _alias_completions(
+    aliases: &MutMap<Symbol, (bool, Alias)>,
+    module_id: &ModuleId,
+    interns: &Interns,
+) -> Vec<CompletionItem> {
+    aliases
+        .iter()
+        .filter(|(symbol, (_exposed, _alias))| &symbol.module_id() == module_id)
+        .map(|(symbol, (_exposed, _alias))| {
+            let name = symbol.as_str(interns).to_string();
+
+            CompletionItem {
+                label: name.clone(),
+                detail: Some(name + " we don't know how to print types."),
+                kind: Some(CompletionItemKind::CLASS),
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 fn make_completion_items(
     subs: &mut Subs,

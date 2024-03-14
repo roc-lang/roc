@@ -1347,7 +1347,7 @@ expect pluralize "cactus" "cacti" 2 == "2 cacti"
 
 If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect` expressions (that is, the two `pluralize` calls) and report any that returned `Bool.false`.
 
-If a test fails, it will not show the actual value that differs from the expected value. To show the actual value, you can write the expect like this:
+If a test fails, it will not show the actual value that differs from the expected value. This [will be resolved in the future](https://github.com/roc-lang/roc/issues/4633). For now, to show the actual value you can write the expect like this:
 
 ```roc
 expect
@@ -1482,7 +1482,7 @@ You can find documentation for the `Stdout.line` function in the [Stdout](https:
 
 Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
-See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/package) for an example.
+See [Parser Package](https://github.com/lukewilliamboswell/roc-parser/tree/main/package) for an example.
 
 Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
 

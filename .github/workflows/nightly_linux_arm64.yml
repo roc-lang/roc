@@ -10,7 +10,7 @@ jobs:
   build:
     name: build and package nightly release
     runs-on: [self-hosted, Linux, ARM64]
-    timeout-minutes: 90
+    timeout-minutes: 110
 
     steps:
       - uses: actions/checkout@v4
