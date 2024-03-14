@@ -1340,7 +1340,7 @@ where
 // Using some combinators together results in combinatorial type explosion
 // which makes things take forever to compile. Using macros instead avoids this!
 
-/// Wraps the output of the parser in a `Loc` struct, providing location information
+/// Wraps the output of the parser in a [`Loc`](../roc_region/all/struct.Loc.html) struct, providing location information
 ///
 /// # Examples
 /// ```
@@ -1690,8 +1690,8 @@ macro_rules! record {
     };
 }
 
-/// Similar to `and`, but we modify the min_indent of the second parser to be
-/// 1 greater than the line_indent() at the start of the first parser.
+/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
+/// 1 greater than the `line_indent()` at the start of the first parser.
 #[macro_export]
 macro_rules! indented_seq {
     ($p1:expr, $p2:expr) => {
@@ -1718,8 +1718,8 @@ macro_rules! indented_seq {
     };
 }
 
-/// Similar to `and`, but we modify the min_indent of the second parser to be
-/// 1 greater than the column() at the start of the first parser.
+/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
+/// 1 greater than the `column()` at the start of the first parser.
 #[macro_export]
 macro_rules! absolute_indented_seq {
     ($p1:expr, $p2:expr) => {
@@ -1933,7 +1933,7 @@ where
 
 /// Creates a new parser that changes the `Err` type.
 /// This can be used as `.map`, but for errors.
-/// Similar to `specialize`, the error is allocated, and the mapping function receives a reference to the error.
+/// Similar to [`specialize`], the error is allocated, and the mapping function receives a reference to the error.
 /// It has no effect, if the inner parser succeeds.
 ///
 /// # Examples
@@ -2344,7 +2344,8 @@ macro_rules! map {
 }
 
 /// Creates a new parser that maps the `Ok` result of parsing.
-/// Similar to `map`, but the transform function also takes a bump allocator.
+/// Similar to [`map!`], but the transform function also takes a bump allocator.
+///
 /// # Example
 /// ## Success case
 /// ```rust
@@ -2713,6 +2714,8 @@ macro_rules! between {
 /// Creates a new parser that returns the results of two parsers applied sequentially.
 /// It returns any partial progress made by the first parser.
 ///
+/// This is a function version of the [`and!`] macro.
+///
 /// For some reason, some usages won't compile unless they use this instead of the macro version
 ///
 /// # Example
@@ -2770,7 +2773,7 @@ where
     and!(p1, p2)
 }
 
-/// The same as the `loc` macro.
+/// The same as the [`loc!`] macro.
 ///
 /// For some reason, some usages won't compile unless they use this instead of the macro version.
 /// This is likely because the lifetime `'a` is not defined at the call site.
@@ -2805,7 +2808,7 @@ where
     loc!(parser)
 }
 
-/// The same as the `map_with_arena` macro.
+/// The same as the [`map_with_arena!`] macro.
 ///
 /// For some reason, some usages won't compile unless they use this instead of the macro version.
 /// This is likely because the lifetime `'a` is not defined at the call site.
@@ -2870,7 +2873,7 @@ where
     map_with_arena!(parser, transform)
 }
 
-/// Creates a new parser that only has `Progress` of `NoProgress`.
+/// Creates a new parser that only has [`Progress`] of [`NoProgress`](Progress::NoProgress).
 /// The `State` is still modified, if the inner parser succeeds.
 ///
 /// # Example
