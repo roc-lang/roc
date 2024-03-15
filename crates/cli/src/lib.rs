@@ -571,7 +571,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     for (module_id, expects) in expects_by_module.into_iter() {
         let test_start_time = Instant::now();
-        
+
         let (failed_count, passed_count) = roc_repl_expect::run::run_toplevel_expects(
             &mut writer,
             roc_reporting::report::RenderTarget::ColorTerminal,
