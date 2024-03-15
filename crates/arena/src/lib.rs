@@ -4,12 +4,10 @@
 
 mod arena;
 mod arena_ref;
-mod soa;
 mod string;
 mod vec;
 
 pub use crate::arena::*;
 pub use crate::arena_ref::*;
-pub use crate::soa::*;
 pub use crate::string::*;
 pub use crate::vec::*;

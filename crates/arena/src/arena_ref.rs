@@ -1,6 +1,6 @@
 use core::{fmt, marker::PhantomData, mem::MaybeUninit, ptr, usize};
 
-use crate::Arena;
+use crate::arena::Arena;
 
 /// A mutable reference to something that has been allocated inside an Arena.
 ///

@@ -7,34 +7,29 @@
 /// memory usage creeping up over time in long-running compiler processes (e.g. watch mode,
 /// editor integrations, the repl) because we actually give memory back to the OS when
 /// we're done with it (e.g. a module gets unloaded).
-use crate::{
-    alloc::{alloc_virtual, dealloc_virtual},
-    arena_ref::ArenaRef,
-    ArenaRefMut,
-};
+use crate::{arena_ref::ArenaRef, ArenaRefMut};
+use heap_alloc::Allocation;
 
 #[cfg(not(wasm32))]
 use fs::{FileMetadata, IoError, ReadFile, WriteFile};
 
 use core::{
     alloc::Layout,
-    cell::Cell,
     mem::{self, align_of, size_of, MaybeUninit},
     ptr::NonNull,
     slice,
 };
 
-/// We'll exit after printing this message to stderr if allocation fails
-#[cfg(not(debug_assertions))]
-const ALLOC_FAILED_MESSAGE: &str =
-    "The Roc compiler had to exit unexpectedly because a virtual memory allocation operation failed.\n\nThis normally should never happen, but one way it could happen is if the compiler is running in an unusually memory-constrained environment, such as a virtualized operating system.\n\nIf you are seeing this message repeatedly, you might want to try contacting other Roc community members via <https://roc-lang.org/community> to see if they can help.";
-
-#[cfg(not(debug_assertions))]
-/// We'll exit with this code if allocation fails
-const ALLOC_FAILED_EXIT_CODE: i32 = 90;
-
 #[cfg(debug_assertions)]
 static NEXT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+pub type Result<T> = core::result::Result<T, AllocFailed>;
+
+#[derive(Debug, PartialEq)]
+pub enum AllocFailed {
+    MaxCapacityExceeded,
+    OsAllocFailed,
+}
 
 #[derive(Debug)]
 pub(crate) struct Header {
@@ -91,12 +86,38 @@ impl Drop for Header {
 static ARENA_IDS: () = (); // TODO make this use std, Mutex, etc.
 
 #[derive(Debug)]
-#[cfg_attr(not(debug_assertions), repr(transparent))]
-pub struct Arena {
-    pub(crate) content: [Header],
+enum Storage {
+    /// We own our own Allocation. When the arena gets dropped, this will also get dropped
+    /// (and the memory will be freed). This means if we need more memory, we can make a new
+    /// allocation, copy the bytes from the old one over, and drop the old one.
+    Owned(Allocation),
+
+    /// We do not own our own Allocation; rather, we have a slice into an allocation that
+    /// someone else owns (e.g. there was one big virtual memory allocation at the beginning
+    /// of the CLI run, and each module's arena gets a fixed-size chunk of that virtual memory.)
+    Borrowed,
 }
 
-impl Arena {
+#[derive(Debug)]
+pub struct Arena<'a> {
+    storage: Storage,
+
+    /// We are not allowed to store more than this many bytes. If we run out, give an error!
+    max_bytes_stored: usize,
+
+    /// This is *not* a reference to a Header, despite what it says! (That's just for alignment.)
+    /// It actually points to the first byte of content immediately *after* the Header. If you want
+    /// the address of the header, you have to subtract size_of::<Header>() bytes from this pointer.
+    pub(crate) content: &'a mut Header,
+}
+
+impl Arena<'a> {
+    pub fn from_owned(allocation: Allocation, max_bytes_stored: usize) -> &mut Self {
+        let storage = Storage::Owned(allocation);
+
+        let todo = todo!(); // TODO get content from pointer etc.
+    }
+
     /// Create a new arena using the given slice of memory, if possible.
     /// If there isn't enough memory in the slice, returns a new arena with its own allocation
     /// and doesn't use any of the given memory.
@@ -104,7 +125,14 @@ impl Arena {
     /// # Safety
     /// The given pointer must point to at least `capacity` bytes, and `capacity` must
     /// be greater than size_of::<Header>().
-    pub unsafe fn from_mut_slice(slice: &mut [usize]) -> &mut Self {
+    pub fn from_borrowed(
+        allocation: &'a mut Allocation,
+        layout: Layout,
+        max_bytes_stored: usize,
+    ) -> &mut Self {
+        let storage = Storage::Borrowed;
+        let todo = (); // TODO go ask the allocation to give me a number of its bytes.
+
         // We don't want to expose Header outside this module, but it's very important that
         // the slice points to something with the correct alignment!
         debug_assert_eq!(
@@ -155,6 +183,7 @@ impl Arena {
         file: &mut (impl ReadFile + FileMetadata),
         buf: &mut [u8],
     ) -> Result<(Self, usize), IoError> {
+        let todo = (); // TODO just move this into fs, no need to get arena involved here! Also, this is broken: we take &mut and then return owned from those bytes!
         let bytes_read = file.read_into(buf)?;
         let mut ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
         let mut alloc_size;
@@ -281,7 +310,7 @@ impl Arena {
     ///
     /// This is based on bumpalo's `alloc_with` - see bumpalo's docs on why the Fn can improve perf:
     /// https://docs.rs/bumpalo/latest/bumpalo/struct.Bump.html#method.alloc_with
-    pub fn alloc<T>(&mut self) -> ArenaRefMut<MaybeUninit<T>> {
+    pub fn alloc<T>(&mut self) -> Result<ArenaRefMut<MaybeUninit<T>>> {
         unsafe { self.alloc_layout(Layout::new::<T>()).cast() }
     }
 
@@ -308,27 +337,51 @@ impl Arena {
     /// new location (unlike, say, a Vec would when it resizes); instead, it will create new OS
     /// allocations as needed. When the arena gets dropped, all of those allocations will be
     /// returned to the OS (or marked as free in the wasm allocator).
-    pub fn alloc_layout(&mut self, layout: Layout) -> ArenaRefMut<u8> {
+    pub fn alloc_layout(&mut self, layout: Layout) -> Result<ArenaRefMut<u8>> {
         let size = layout.size();
         let align = layout.align();
-        let content_ptr = self.content as *const Header as *const u8 as usize;
+        let mut content_ptr = self.content as *const Header as *const u8 as usize;
         let ptr = self.next() as usize;
         let new_ptr = ptr.saturating_sub(size);
 
         debug_assert!(align > 0);
 
         // Round down to the requested alignment.
-        let new_ptr = new_ptr & !(align - 1);
+        let mut new_ptr = new_ptr & !(align - 1);
 
         if new_ptr < content_ptr {
             // Didn't have enough capacity!
-            todo!("reallocate and copy");
-        } else {
-            self.set_next(new_ptr as *mut u8);
+            match self.storage {
+                Storage::Owned(allocation) => {
+                    let additional_bytes_desired = todo!();
 
-            // This won't overflow because if we're in this branch, new_ptr >= content_ptr
-            ArenaRefMut::new_in((new_ptr - content_ptr) as u32, self)
+                    match allocation.grow(additional_bytes_desired) {
+                        Ok(()) => {
+                            // TODO recompute new_ptr and content_ptr based on the new allocation
+                            // If the pointer didn't change, don't copy. (Actually, this probably requires
+                            // bumping up instead of down...which seems fine!)
+                            new_ptr = todo!();
+                            content_ptr = todo!();
+                        }
+                        Err(_) => {
+                            return Err(AllocFailed::OsAllocFailed);
+                        }
+                    }
+
+                    let todo = todo!("tell the allocation to reallocate and copy, do 1.5x what we need to fit new_ptr");
+                }
+                Storage::Borrowed => {
+                    // If we've borrowed our allocation, we can't reallocate. Error out!
+                    return Err(AllocFailed::MaxCapacityExceeded);
+                }
+            }
         }
+
+        self.set_next(new_ptr as *mut u8);
+
+        // This won't overflow because we already handled the case where new_ptr < content_ptr,
+        // and we would have returned already if this would overflow.
+        Ok(ArenaRefMut::new_in((new_ptr - content_ptr) as u32, self))
     }
 
     pub unsafe fn get_unchecked<'a, T>(&'a self, arena_ref: impl Into<ArenaRef<'a, T>>) -> &'a T {
@@ -354,64 +407,5 @@ impl Arena {
                 self.header().len(),
             )
         }
-    }
-}
-
-#[cfg(all(test, not(wasm32)))]
-mod from_file {
-    use super::Arena;
-
-    #[test]
-    fn fails_if_read_fails() {
-        use fs::{FileMetadata, IoError, ReadFile};
-
-        struct SimFile;
-
-        impl ReadFile for SimFile {
-            fn read_into(&mut self, _buf: &mut [u8]) -> Result<usize, IoError> {
-                Err(IoError::NOT_ENOUGH_MEMORY)
-            }
-        }
-
-        impl FileMetadata for SimFile {
-            fn size_on_disk(&mut self) -> Result<u64, IoError> {
-                unreachable!("size_on_disk should not be called if the initial read fails.")
-            }
-        }
-
-        let mut buf = [0; 24];
-        let res = Arena::from_file(&mut SimFile, &mut buf);
-
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn retries_if_buffer_full() {
-        use fs::{FileMetadata, IoError, ReadFile};
-        const BUF_SIZE: usize = 24;
-
-        struct SimFile;
-
-        impl ReadFile for SimFile {
-            fn read_into(&mut self, _buf: &mut [u8]) -> Result<usize, IoError> {
-                // We fill up the entire buffer
-                Ok(BUF_SIZE)
-            }
-        }
-
-        impl FileMetadata for SimFile {
-            fn size_on_disk(&mut self) -> Result<u64, IoError> {
-                // We should end up reading the size of the file on disk.
-                // It should report that it's bigger than the buffer.
-                Ok(BUF_SIZE as u64 + 10)
-            }
-        }
-
-        let mut buf = [0; BUF_SIZE];
-        let (arena, bytes_read) = Arena::from_file(&mut SimFile, &mut buf)
-            .expect("Arena::from_file failed, but was expected to succeed.");
-
-        assert_eq!(BUF_SIZE, bytes_read);
-        assert_eq!(58, arena.header().original_capacity);
     }
 }

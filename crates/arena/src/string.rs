@@ -1,5 +1,7 @@
-use crate::vec::{AsU32, Vec};
-use crate::Arena;
+use crate::{
+    arena::Arena,
+    vec::{AsU32, Vec},
+};
 
 pub type String32<'a, T> = Vec<'a, T, u32>;
 pub type String16<'a, T> = Vec<'a, T, u16>;

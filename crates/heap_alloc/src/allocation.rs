@@ -11,11 +11,11 @@
 /// list behind the scenes, since wasm only supports growing the heap and that's it. Although
 /// wasm doesn't have a watch mode, it does have long-running processes in the form of the repl
 /// and also potentially in the future a playground.
-use core::{alloc::Layout, cell::Cell, fmt, ptr::NonNull};
+use core::{alloc::Layout, fmt, ptr::NonNull};
 
 #[derive(Debug)]
 pub struct Allocation {
-    pages: Cell<Page>,
+    pages: NonNull<Page>,
     layout: Layout,
     len: usize,
 }
@@ -52,149 +52,148 @@ const PAGE_SIZE: usize = 65536;
 static WEE_ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct AllocFailed;
+pub enum AllocFailed {
+    OsAllocFailed,
+    InvalidLayout,
+}
 
 impl Allocation {
     /// This may round the requested number of bytes up to the nearest page size,
     /// depending on target OS.
     pub fn alloc_virtual(layout: Layout) -> Result<Self, AllocFailed> {
-        let size = layout.size();
-
-        #[cfg(unix)]
-        {
-            use core::{ffi::c_void, ptr};
-
-            extern "C" {
-                fn mmap(
-                    addr: *mut c_void,
-                    length: usize,
-                    prot: i32,
-                    flags: i32,
-                    fd: i32,
-                    offset: i64,
-                ) -> *mut c_void;
+        // Round up to nearest OS page size or the requested alignment,
+        // whichevever is bigger. Pad the size to fit this alignment.
+        let layout = match layout.align_to(layout.align().max(PAGE_SIZE)) {
+            Ok(layout) => layout.pad_to_align(),
+            Err(_) => {
+                return Err(AllocFailed::InvalidLayout);
             }
+        };
 
-            const MAP_FAILED: *mut c_void = -1isize as *mut c_void;
-            const PROT_READ: i32 = 1;
-            const PROT_WRITE: i32 = 2;
-            const MAP_PRIVATE: i32 = 0x0002;
+        let non_null = {
+            #[cfg(unix)]
+            {
+                use core::{ffi::c_void, ptr};
 
-            #[cfg(target_os = "macos")]
-            const MAP_ANONYMOUS: i32 = 0x1000;
-
-            #[cfg(target_os = "linux")]
-            const MAP_ANONYMOUS: i32 = 0x0020;
-
-            // Round up to nearest OS page size or the requested alignment,
-            // whichevever is bigger.
-            let size = round_up_to(size, layout.align().max(PAGE_SIZE));
-
-            // Safety: We rounded up `size` to the correct multiple already.
-            let answer = unsafe {
-                mmap(
-                    ptr::null_mut(),
-                    size,
-                    PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            };
-            // We should never return a size smaller than what was requested!
-            debug_assert!(size >= layout.size());
-
-            match NonNull::new(answer) {
-                Some(non_null) if answer != MAP_FAILED => {
-                    // Once https://github.com/rust-lang/rust/issues/117691 lands,
-                    // this can become non_null.read()
-                    let pages = unsafe { (non_null.as_ptr() as *mut Page).read() };
-
-                    Ok(Self {
-                        pages: Cell::new(pages),
-                        len: 0,
-                        layout,
-                    })
+                extern "C" {
+                    fn mmap(
+                        addr: *mut c_void,
+                        length: usize,
+                        prot: i32,
+                        flags: i32,
+                        fd: i32,
+                        offset: i64,
+                    ) -> *mut c_void;
                 }
-                _ => {
-                    #[cfg(debug_assertions)]
-                    {
-                        panic!("alloc_virtual for layout {:?} and rounded-off size {} failed with return value {} (MAP_FAILED == it? {}), and OS error {:?}", layout, size, answer as usize, MAP_FAILED == answer, std::io::Error::last_os_error());
-                    }
 
-                    #[cfg(not(debug_assertions))]
-                    {
-                        crash::unrecoverable!(ALLOC_FAILED_EXIT_CODE, ALLOC_FAILED_MESSAGE)
+                const MAP_FAILED: *mut c_void = -1isize as *mut c_void;
+                const PROT_READ: i32 = 1;
+                const PROT_WRITE: i32 = 2;
+                const MAP_PRIVATE: i32 = 0x0002;
+
+                #[cfg(target_os = "macos")]
+                const MAP_ANONYMOUS: i32 = 0x1000;
+
+                #[cfg(target_os = "linux")]
+                const MAP_ANONYMOUS: i32 = 0x0020;
+
+                // Safety: We rounded up `size` to the correct multiple already.
+                let answer = unsafe {
+                    mmap(
+                        ptr::null_mut(),
+                        layout.size(),
+                        PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS,
+                        -1,
+                        0,
+                    )
+                };
+
+                match NonNull::new(answer) {
+                    Some(non_null) if answer != MAP_FAILED => non_null,
+                    _ => {
+                        return Err(AllocFailed::OsAllocFailed);
                     }
                 }
             }
-        }
 
-        #[cfg(windows)]
-        {
-            use core::{ffi::c_void, ptr};
+            #[cfg(windows)]
+            {
+                use core::{ffi::c_void, ptr};
 
-            extern "system" {
-                fn VirtualAlloc(
-                    lpAddress: *mut c_void,
-                    dwSize: usize,
-                    flAllocationType: u32,
-                    flProtect: u32,
-                ) -> *mut c_void;
-            }
+                extern "system" {
+                    fn VirtualAlloc(
+                        lpAddress: *mut c_void,
+                        dwSize: usize,
+                        flAllocationType: u32,
+                        flProtect: u32,
+                    ) -> *mut c_void;
+                }
 
-            // Round up to nearest 4096B
-            let size = {
-                const PAGE_MULTIPLE: usize = 4096; // Pages must be a multiple of this.
+                const MEM_COMMIT: u32 = 0x1000;
+                const MEM_RESERVE: u32 = 0x2000;;
+                const PAGE_READWRITE: u32 = 0x04;
 
-                (size + (PAGE_MULTIPLE - 1)) & !(PAGE_MULTIPLE - 1)
-            };
+                // Safety: We rounded up `size` to the correct multiple already.
+                let ptr = unsafe {
+                    VirtualAlloc(
+                        ptr::null_mut(),
+                        layout.size(),
+                        MEM_COMMIT | MEM_RESERVE,
+                        PAGE_READWRITE,
+                    )
+                };
 
-            const MEM_COMMIT: u32 = 0x1000;
-            const MEM_RESERVE: u32 = 0x2000;;
-            const PAGE_READWRITE: u32 = 0x04;
-
-            // Safety: We rounded up `size` to the correct multiple already.
-            let ptr = unsafe {
-                VirtualAlloc(
-                    ptr::null_mut(),
-                    size,
-                    MEM_COMMIT | MEM_RESERVE,
-                    PAGE_READWRITE,
-                )
-            };
-
-            // We should never return a size smaller than what was requested!
-            debug_assert!(size >= layout.size());
-
-            match NonNull::new(ptr) {
-                Some(non_null) => (non_null.cast(), size),
-                None => crash::unrecoverable!(ALLOC_FAILED_MESSAGE, ALLOC_FAILED_EXIT_CODE),
-            }
-        }
-
-        #[cfg(wasm32)]
-        {
-            let ptr = unsafe { WEE_ALLOC.alloc(layout) };
-
-            // We should never return a size smaller than what was requested!
-            debug_assert!(size >= layout.size());
-
-            match NonNull::new(ptr) {
-                Some(non_null) => (non_null.cast(), size),
-                None => {
-                    extern "C" {
-                        fn alloc_failed(ptr: *const u8, len: usize) -> !;
+                match NonNull::new(ptr) {
+                    Some(non_null) => non_null,
+                    None => {
+                        return Err(AllocFailed::OsAllocFailed);
                     }
-
-                    alloc_failed(ALLOC_FAILED_MESSAGE.as_ptr(), ALLOC_FAILED_MESSAGE.len());
                 }
             }
-        }
+
+            #[cfg(wasm32)]
+            {
+                let ptr = unsafe { WEE_ALLOC.alloc(layout) };
+
+                // We should never return a size smaller than what was requested!
+                debug_assert!(size >= layout.size());
+
+                match NonNull::new(ptr) {
+                    Some(non_null) => non_null,
+                    None => {
+                        return Err(AllocFailed::OsAllocFailed);
+                    }
+                }
+            }
+        };
+
+        Ok(Self {
+            pages: non_null.cast(),
+            len: 0,
+            layout,
+        })
     }
 
     pub fn bytes_remaining(&self) -> usize {
         self.layout.size().saturating_sub(self.len)
+    }
+
+    /// Reallocate in-place if possible; otherwise, create a new allocation
+    /// and copy over the contents of the old one. If the new size would
+    /// exceed isize::MAX, it instead becomes isize::MAX.
+    pub fn grow(&mut self, additional_bytes_desired: usize) {
+        let layout = self.layout;
+        let new_size = layout.size().saturating_add(additional_bytes_desired);
+        let layout = Layout::from_size_align(new_size, layout.align())
+            // Although the alignment is already valid, this can theoretically fail
+            // in the very specific case where the new size, when rounded to the nearest
+            // multiple of alignment, exceeds isize::MAX. In the extremely unlikely
+            // event where that happens, decline to grow and go back to the old layout.
+            .unwrap_or(layout)
+            .pad_to_align();
+
+        let todo = todo!(); // TODO try to grow the allocation in-place. Replace self's pointer.
     }
 
     pub fn slice_mut(&mut self, layout: Layout) -> &mut [u8] {
@@ -321,8 +320,4 @@ fn verify_page_size() {
     };
 
     assert_eq!(os_page_size, PAGE_SIZE);
-}
-
-fn round_up_to(num: usize, rounding_to: usize) -> usize {
-    (num + (rounding_to - 1)) & !(rounding_to - 1)
 }

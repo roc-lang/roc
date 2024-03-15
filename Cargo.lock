@@ -135,9 +135,7 @@ dependencies = [
 name = "arena"
 version = "0.0.1"
 dependencies = [
- "crash",
- "fs",
- "wee_alloc",
+ "heap_alloc",
 ]
 
 [[package]]
@@ -961,10 +959,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs"
-version = "0.0.1"
-
-[[package]]
 name = "fs_at"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1131,6 +1125,13 @@ checksum = "290f1a1d9242c78d09ce40a5e87e7554ee637af1351968159f4952f028f75604"
 dependencies = [
  "ahash",
  "allocator-api2",
+]
+
+[[package]]
+name = "heap_alloc"
+version = "0.0.1"
+dependencies = [
+ "wee_alloc",
 ]
 
 [[package]]
@@ -4441,13 +4442,6 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
-
-[[package]]
-name = "virtual_alloc"
-version = "0.0.1"
-dependencies = [
- "wee_alloc",
-]
 
 [[package]]
 name = "vte"

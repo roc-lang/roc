@@ -6,7 +6,7 @@
 /// lookups on the first type variable are less expensive than subsequent ones, because
 /// subsequent ones require multiplication. As such, put whatever needs the most
 /// individual lookups as the first type variable!
-use crate::{Arena, ArenaRefMut};
+use crate::{arena::Arena, arena_ref::ArenaRefMut};
 use core::{
     alloc::Layout,
     mem::{self, align_of, size_of},
@@ -58,6 +58,11 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
     }
 
     pub fn get(&self, arena: &'a Arena, index: Len) -> Option<&'a T> {
+        #[cfg(debug_assertions)]
+        {
+            self.start.debug_verify_arena(arena, "Vec::get");
+        }
+
         if index < self.len {
             Some(unsafe { self.get_unchecked(arena, index) })
         } else {
@@ -68,9 +73,9 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
     pub unsafe fn get_unchecked(&self, arena: &'a Arena, index: Len) -> &'a T {
         #[cfg(debug_assertions)]
         {
-            self.start.debug_verify_arena(arena, "Vec::get");
+            self.start.debug_verify_arena(arena, "Vec::get_unchecked");
 
-            // We still verify in debug builds!
+            // We still do a bounds check in debug builds!
             assert!(index < self.len);
         }
 
@@ -83,6 +88,11 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
         dest: &mut Vec<'b, T, impl AsU32>,
         dest_arena: &mut Arena,
     ) {
+        #[cfg(debug_assertions)]
+        {
+            self.start.debug_verify_arena(self_arena, "Vec::write");
+        }
+
         // This will fail if dest.len + self.len overflows, so we no longer need to worry about that.
         dest.reserve(self.len);
 
@@ -92,7 +102,12 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
         unsafe { core::ptr::copy_nonoverlapping(src_ptr, dest_ptr, self.len.as_u32() as usize) }
     }
 
-    fn reserve(&self, len: impl AsU32) {
+    fn reserve(&self, arena: &mut Arena, len: impl AsU32) {
+        #[cfg(debug_assertions)]
+        {
+            self.start.debug_verify_arena(arena, "Vec::reserve");
+        }
+
         let todo = todo!("need to check for capacity overflow!");
     }
 }
