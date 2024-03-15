@@ -761,6 +761,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
+            Expr::Suffixed(a) => a.remove_spaces(arena),
         }
     }
 }

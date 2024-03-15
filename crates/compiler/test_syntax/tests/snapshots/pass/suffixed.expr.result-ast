@@ -1,0 +1,6 @@
+Suffixed(
+    Var {
+        module_name: "Stdout",
+        ident: "line",
+    },
+)
