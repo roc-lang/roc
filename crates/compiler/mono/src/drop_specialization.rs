@@ -1593,7 +1593,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits => RC::NoRc,
-        I128OfDec | DecWithoutDecimalPoint => RC::NoRc,
+        I128OfDec | NumWithoutDecimalPoint | NumWithDecimalPoint => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,

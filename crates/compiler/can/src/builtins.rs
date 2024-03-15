@@ -205,7 +205,8 @@ map_symbol_to_lowlevel_and_arity! {
     NumCountTrailingZeroBits; NUM_COUNT_TRAILING_ZERO_BITS; 1,
     NumCountOneBits; NUM_COUNT_ONE_BITS; 1,
     I128OfDec; I128_OF_DEC; 1,
-    DecWithoutDecimalPoint; NUM_DEC_WITHOUT_DECIMAL_POINT; 1,
+    NumWithoutDecimalPoint; NUM_WITHOUT_DECIMAL_POINT; 1,
+    NumWithDecimalPoint; NUM_WITH_DECIMAL_POINT; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,

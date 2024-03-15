@@ -2029,8 +2029,13 @@ trait Backend<'a> {
                 }
             }
 
-            LowLevel::DecWithoutDecimalPoint => {
+            LowLevel::NumWithoutDecimalPoint => {
                 let intrinsic = bitcode::DEC_TO_I128.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumWithDecimalPoint => {
+                let intrinsic = bitcode::DEC_FROM_I128.to_string();
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
             }
 

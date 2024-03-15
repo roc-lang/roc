@@ -1172,9 +1172,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
         }
-        I128OfDec | DecWithoutDecimalPoint => {
-            arguments!(dec);
-            dec_unary_op(env, bitcode::DEC_TO_I128, dec)
+        I128OfDec | NumWithoutDecimalPoint | NumWithDecimalPoint => {
+            arguments!(arg);
+            arg
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
