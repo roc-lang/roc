@@ -102,8 +102,9 @@ pub enum LowLevel {
     NumCountLeadingZeroBits,
     NumCountTrailingZeroBits,
     NumCountOneBits,
+    NumWithoutDecimalPoint,
+    NumWithDecimalPoint,
     I128OfDec,
-    DecWithoutDecimalPoint,
     Eq,
     NotEq,
     And,
@@ -338,7 +339,8 @@ map_symbol_to_lowlevel! {
     NumCountTrailingZeroBits <= NUM_COUNT_TRAILING_ZERO_BITS;
     NumCountOneBits <= NUM_COUNT_ONE_BITS;
     I128OfDec <= I128_OF_DEC;
-    DecWithoutDecimalPoint <= I128_OF_DEC;
+    NumWithoutDecimalPoint <= NUM_WITHOUT_DECIMAL_POINT;
+    NumWithDecimalPoint <= NUM_WITH_DECIMAL_POINT;
     Eq <= BOOL_STRUCTURAL_EQ;
     NotEq <= BOOL_STRUCTURAL_NOT_EQ;
     And <= BOOL_AND;

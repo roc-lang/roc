@@ -49,6 +49,7 @@ comptime {
     exportDecFn(dec.tanC, "tan");
     exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.fromI128, "from_i128");
     exportDecFn(dec.toStr, "to_str");
 
     inline for (INTEGERS) |T| {

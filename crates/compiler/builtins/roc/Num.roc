@@ -151,7 +151,7 @@ interface Num
         toF64,
         toF64Checked,
         withoutDecimalPoint,
-        # withDecimalPoint
+        withDecimalPoint
     ]
     imports [
         Bool.{ Bool },
@@ -1414,4 +1414,4 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]
 withoutDecimalPoint : Dec -> I128
 
 ## Turns a [I128] into the coresponding [Dec], effectifely addoing the decimal point.
-#withDecimalPoint : I128 -> Dec
+withDecimalPoint : I128 -> Dec
