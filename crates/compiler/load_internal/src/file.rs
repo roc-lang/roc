@@ -702,7 +702,7 @@ struct State<'a> {
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
-    pub toplevel_expects: ToplevelExpects,
+    pub toplevel_expects: MutMap<ModuleId, ToplevelExpects>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -784,7 +784,7 @@ impl<'a> State<'a> {
             dependencies,
             procedures: MutMap::default(),
             host_exposed_lambda_sets: std::vec::Vec::new(),
-            toplevel_expects: ToplevelExpects::default(),
+            toplevel_expects: MutMap::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_modules: &[],
             exposed_types,
@@ -2787,8 +2787,9 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            state.toplevel_expects.pure.extend(toplevel_expects.pure);
-            state.toplevel_expects.fx.extend(toplevel_expects.fx);
+            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
+                state.toplevel_expects.insert(module_id, toplevel_expects);
+            }
 
             state
                 .module_cache

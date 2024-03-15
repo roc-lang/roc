@@ -42,7 +42,7 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_error_macros::{internal_error, todo_lambda_erasure};
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
     HostExposedLambdaSets, ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
@@ -5667,10 +5667,16 @@ pub fn build_procedures_expose_expects<'a>(
     env: &Env<'a, '_, '_>,
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
-    expects: &'a [Symbol],
+    expects_by_module: MutMap<ModuleId, Vec<'a, Symbol>>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-) -> Vec<'a, &'a str> {
-    let entry_point = EntryPoint::Expects { symbols: expects };
+) -> MutMap<ModuleId, Vec<'a, &'a str>> {
+    // converts Vec<Vec<Symbol>> into Vec<Symbol>
+    let flattened_symbols: Vec<Symbol> =
+        Vec::from_iter_in(expects_by_module.values().flatten().copied(), env.arena);
+
+    let entry_point = EntryPoint::Expects {
+        symbols: &flattened_symbols,
+    };
 
     let mod_solutions = build_procedures_help(
         env,
@@ -5690,49 +5696,61 @@ pub fn build_procedures_expose_expects<'a>(
         niche: captures_niche,
     };
 
-    let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
+    let mut expect_names_by_module = MutMap::default();
 
-    for symbol in expects.iter().copied() {
-        let it = top_level.arguments.iter().copied();
-        let bytes =
-            roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, top_level.result);
-        let func_name = FuncName(&bytes);
-        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+    for (module_id, expects) in expects_by_module {
+        let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
 
-        let mut it = func_solutions.specs();
-        let func_spec = match it.next() {
-            Some(spec) => spec,
-            None => panic!("no specialization for expect {symbol}"),
-        };
+        for symbol in expects.iter().copied() {
+            let args_iter = top_level.arguments.iter().copied();
 
-        debug_assert!(
-            it.next().is_none(),
-            "we expect only one specialization of this symbol"
-        );
+            let func_name_bytes = roc_alias_analysis::func_name_bytes_help(
+                symbol,
+                args_iter,
+                captures_niche,
+                top_level.result,
+            );
 
-        // NOTE fake layout; it is only used for debug prints
-        let roc_main_fn =
-            function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
+            let func_name = FuncName(&func_name_bytes);
+            let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-        let name = roc_main_fn.get_name().to_str().unwrap();
+            let mut func_spec_iter = func_solutions.specs();
 
-        let expect_name = &format!("Expect_{name}");
-        let expect_name = env.arena.alloc_str(expect_name);
-        expect_names.push(&*expect_name);
+            let func_spec = match func_spec_iter.next() {
+                Some(spec) => spec,
+                None => panic!("No specialization for expect {symbol}."),
+            };
 
-        // Add main to the module.
-        let _ = expose_function_to_host_help_c_abi(
-            env,
-            layout_interner,
-            name,
-            roc_main_fn,
-            top_level.arguments,
-            top_level.result,
-            &format!("Expect_{name}"),
-        );
+            debug_assert!(
+                func_spec_iter.next().is_none(),
+                "We expect only one specialization of this symbol."
+            );
+
+            // NOTE fake layout; it is only used for debug prints
+            let roc_main_fn =
+                function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
+
+            let name = roc_main_fn.get_name().to_str().unwrap();
+
+            let expect_name = &format!("Expect_{name}");
+            let expect_name_str = env.arena.alloc_str(expect_name);
+            expect_names.push(&*expect_name_str);
+
+            // Add main to the module.
+            let _ = expose_function_to_host_help_c_abi(
+                env,
+                layout_interner,
+                name,
+                roc_main_fn,
+                top_level.arguments,
+                top_level.result,
+                &format!("Expect_{name}"),
+            );
+        }
+        expect_names_by_module.insert(module_id, expect_names);
     }
 
-    expect_names
+    expect_names_by_module
 }
 
 fn build_procedures_help<'a>(
