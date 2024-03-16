@@ -155,7 +155,7 @@ interface Num
         f32ToParts,
         f64ToParts,
         f32FromParts,
-        f64FromParts
+        f64FromParts,
     ]
     imports [
         Bool.{ Bool },
@@ -1413,17 +1413,16 @@ toU128Checked : Int * -> Result U128 [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
 
-
 ## Turns a [Dec] into its [I128] representation by removing the decimal point.
 withoutDecimalPoint : Dec -> I128
 
 ## Turns a [I128] into the coresponding [Dec] by adding the decimal point.
 withDecimalPoint : I128 -> Dec
 
-f32ToParts: F32 -> { sign : Bool, exponent : U8, fraction : U32 }
+f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 
-f64ToParts: F64 -> { sign : Bool, exponent : U16, fraction : U64 }
+f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
 
-f32FromParts: { sign : Bool, exponent : U8, fraction : U32 } -> F32
+f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 
-f64FromParts: { sign : Bool, exponent : U16, fraction : U64 } -> F64
+f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
