@@ -1349,7 +1349,9 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         | NumWithoutDecimalPoint
         | NumWithDecimalPoint
         | NumF32ToParts
-        | NumF64ToParts => &[IRRELEVANT],
+        | NumF64ToParts
+        | NumF32FromParts
+        | NumF64FromParts => &[IRRELEVANT],
         StrStartsWith | StrEndsWith => &[BORROWED, BORROWED],
         StrFromUtf8 => &[OWNED],
         StrToUtf8 => &[OWNED],

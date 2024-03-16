@@ -1272,6 +1272,8 @@ define_builtins! {
         160 NUM_WITH_DECIMAL_POINT: "withDecimalPoint"
         161 NUM_F32_TO_PARTS: "f32ToParts"
         162 NUM_F64_TO_PARTS: "f64ToParts"
+        163 NUM_F32_FROM_PARTS: "f32FromParts"
+        164 NUM_F64_FROM_PARTS: "f64FromParts"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
