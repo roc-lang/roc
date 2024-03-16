@@ -626,6 +626,7 @@ pub fn desugar_expr<'a>(
             })
         }
         LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
+        Suffixed(_) => todo!(),
     }
 }
 

@@ -705,7 +705,7 @@ struct State<'a> {
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
-    pub toplevel_expects: ToplevelExpects,
+    pub toplevel_expects: MutMap<ModuleId, ToplevelExpects>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -787,7 +787,7 @@ impl<'a> State<'a> {
             dependencies,
             procedures: MutMap::default(),
             host_exposed_lambda_sets: std::vec::Vec::new(),
-            toplevel_expects: ToplevelExpects::default(),
+            toplevel_expects: MutMap::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_modules: &[],
             exposed_types,
@@ -1971,7 +1971,7 @@ fn load_multi_threaded<'a>(
             //     &mut can_problems_recorded,
             //     &mut type_problems_recorded,
             // )
-            // .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
+            // .print_error_warning_count(Duration::default()); // TODO determine total elapsed time and use it here
 
             Err(LoadingProblem::FormattedReport(
                 concat!(
@@ -2590,6 +2590,10 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
+            state
+                .module_cache
+                .exposes
+                .insert(module_id, solved_module.exposed_vars_by_symbol.clone());
 
             let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
                 let modules = state.arc_modules.lock();
@@ -2786,8 +2790,9 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            state.toplevel_expects.pure.extend(toplevel_expects.pure);
-            state.toplevel_expects.fx.extend(toplevel_expects.fx);
+            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
+                state.toplevel_expects.insert(module_id, toplevel_expects);
+            }
 
             state
                 .module_cache
@@ -3404,6 +3409,9 @@ fn finish(
         timings: state.timings,
         docs_by_module,
         abilities_store,
+        exposed_imports: state.module_cache.exposed_imports,
+        imports: state.module_cache.imports,
+        exposes: state.module_cache.exposes,
     }
 }
 

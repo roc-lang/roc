@@ -46,6 +46,10 @@ pub struct LoadedModule {
     pub docs_by_module: Vec<(ModuleId, ModuleDocumentation)>,
     pub abilities_store: AbilitiesStore,
     pub typechecked: MutMap<ModuleId, CheckedModule>,
+
+    pub imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    pub exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
+    pub exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
 }
 
 impl LoadedModule {
@@ -166,7 +170,7 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
-    pub toplevel_expects: ToplevelExpects,
+    pub toplevel_expects: MutMap<ModuleId, ToplevelExpects>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,

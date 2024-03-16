@@ -316,8 +316,20 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
 
 fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     line_min_indent(move |arena, state: State<'a>, min_indent: u32| {
-        let (_, expr, state) =
-            loc_possibly_negative_or_negated_term(options).parse(arena, state, min_indent)?;
+        let (_, expr, state) = loc_possibly_negative_or_negated_term(options)
+            .parse(arena, state, min_indent)
+            .map(|(progress, expr, state)| {
+                // If the next thing after the expression is a `!`, then it's Suffixed
+                if state.bytes().starts_with(b"!") {
+                    (
+                        progress,
+                        Loc::at(expr.region, Expr::Suffixed(arena.alloc(expr.value))),
+                        state.advance(1),
+                    )
+                } else {
+                    (progress, expr, state)
+                }
+            })?;
 
         let initial_state = state.clone();
         let end = state.pos();
@@ -1773,7 +1785,7 @@ fn parse_expr_end<'a>(
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((
             _,
-            has @ Loc {
+            implements @ Loc {
                 value:
                     Expr::Var {
                         module_name: "",
@@ -1805,17 +1817,17 @@ fn parse_expr_end<'a>(
             }
 
             // Attach any spaces to the `implements` keyword
-            let has = if !expr_state.spaces_after.is_empty() {
+            let implements = if !expr_state.spaces_after.is_empty() {
                 arena
                     .alloc(Implements::Implements)
-                    .with_spaces_before(expr_state.spaces_after, has.region)
+                    .with_spaces_before(expr_state.spaces_after, implements.region)
             } else {
-                Loc::at(has.region, Implements::Implements)
+                Loc::at(implements.region, Implements::Implements)
             };
 
             let args = arguments.into_bump_slice();
             let (_, (type_def, def_region), state) =
-                finish_parsing_ability_def_help(min_indent, name, args, has, arena, state)?;
+                finish_parsing_ability_def_help(min_indent, name, args, implements, arena, state)?;
 
             let mut defs = Defs::default();
 
@@ -1950,6 +1962,18 @@ fn parse_expr_end<'a>(
             }
         }
     }
+    .map(|(progress, expr, state)| {
+        // If the next thing after the expression is a `!`, then it's Suffixed
+        if state.bytes().starts_with(b"!") {
+            (
+                progress,
+                Expr::Suffixed(arena.alloc(expr)),
+                state.advance(1),
+            )
+        } else {
+            (progress, expr, state)
+        }
+    })
 }
 
 pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -2078,6 +2102,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::Str(string) => Pattern::StrLiteral(string),
         Expr::SingleQuote(string) => Pattern::SingleQuote(string),
         Expr::MalformedIdent(string, problem) => Pattern::MalformedIdent(string, problem),
+        Expr::Suffixed(_) => todo!(),
     };
 
     // Now we re-add the spaces
@@ -3143,6 +3168,7 @@ where
             Err((NoProgress, to_error("->", state.pos())))
         }
         "<-" => good!(BinOp::Backpassing, 2),
+        "!" => Err((NoProgress, to_error("!", state.pos()))),
         _ => bad_made_progress!(chomped),
     }
 }

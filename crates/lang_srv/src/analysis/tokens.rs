@@ -698,6 +698,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::MalformedIdent(_, _) | Expr::MalformedClosure | Expr::PrecedenceConflict(_) => {
                 bumpvec![in arena;]
             }
+            Expr::Suffixed(_) => todo!(),
         }
     }
 }

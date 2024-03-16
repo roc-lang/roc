@@ -1524,6 +1524,7 @@ pub fn canonicalize_expr<'a>(
                 bad_expr
             );
         }
+        ast::Expr::Suffixed(_) => todo!(),
     };
 
     // At the end, diff used_idents and defined_idents to see which were unused.
@@ -2616,6 +2617,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             ast::RecordBuilderField::SpaceBefore(_, _)
             | ast::RecordBuilderField::SpaceAfter(_, _) => false,
         }),
+        ast::Expr::Suffixed(_) => todo!(),
     }
 }
 

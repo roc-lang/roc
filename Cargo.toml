@@ -33,7 +33,6 @@ exclude = [
   "ci/benchmarks/bench-runner",
   "ci/repl_basic_test",
   # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
-  "crates/cli_testing_examples",
   "examples",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
