@@ -354,24 +354,33 @@ mod tests {
 
     use super::*;
 
-    fn completion_resp_to_labels(resp: CompletionResponse) -> Vec<String> {
+    fn completion_resp_to_strings(
+        resp: CompletionResponse,
+    ) -> Vec<(String, Option<Documentation>)> {
         match resp {
             CompletionResponse::Array(list) => list.into_iter(),
             CompletionResponse::List(list) => list.items.into_iter(),
         }
-        .map(|item| item.label)
+        .map(|item| (item.label, item.documentation))
         .collect::<Vec<_>>()
     }
 
-    /// Gets completion and returns only the label for each completion
-    async fn get_completion_labels(
+    /// gets completion and returns only the label and docs for each completion
+    async fn get_basic_completion_info(
         reg: &Registry,
         url: &Url,
         position: Position,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Vec<(String, Option<Documentation>)>> {
         reg.completion_items(url, position)
             .await
-            .map(completion_resp_to_labels)
+            .map(completion_resp_to_strings)
+    }
+
+    /// gets completion and returns only the label for each completion
+    fn comp_labels(
+        completions: Option<Vec<(String, Option<Documentation>)>>,
+    ) -> Option<Vec<String>> {
+        completions.map(|list| list.into_iter().map(|(labels, _)| labels).collect())
     }
 
     const DOC_LIT: &str = indoc! {r#"
@@ -403,7 +412,7 @@ mod tests {
         initial: &str,
         addition: &str,
         position: Position,
-    ) -> Option<std::vec::Vec<std::string::String>> {
+    ) -> Option<Vec<(String, Option<Documentation>)>> {
         let doc = DOC_LIT.to_string() + initial;
         let (inner, url) = test_setup(doc.clone()).await;
         let registry = &inner.registry;
@@ -413,10 +422,18 @@ mod tests {
 
         inner.change(&url, change, 1).await.unwrap();
 
-        get_completion_labels(registry, &url, position).await
+        get_basic_completion_info(registry, &url, position).await
     }
 
-    /// Tests that completion works properly when we apply an "as" pattern to an identifier.
+    async fn completion_test_labels(
+        initial: &str,
+        addition: &str,
+        position: Position,
+    ) -> Option<Vec<String>> {
+        comp_labels(completion_test(initial, addition, position).await)
+    }
+
+    /// Test that completion works properly when we apply an "as" pattern to an identifier
     #[tokio::test]
     async fn test_completion_as_identifier() {
         let suffix = DOC_LIT.to_string()
@@ -428,15 +445,15 @@ mod tests {
 
         let (inner, url) = test_setup(suffix.clone()).await;
         let position = Position::new(6, 7);
-        let reg = &inner.registry;
+        let registry = &inner.registry;
 
         let change = suffix.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = get_completion_labels(reg, &url, position).await;
+        let comp1 = comp_labels(get_basic_completion_info(registry, &url, position).await);
 
         let c = suffix.clone() + "i";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = get_completion_labels(reg, &url, position).await;
+        let comp2 = comp_labels(get_basic_completion_info(registry, &url, position).await);
 
         let actual = [comp1, comp2];
 
@@ -474,11 +491,11 @@ mod tests {
 
         let change = doc.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = get_completion_labels(reg, &url, position).await;
+        let comp1 = comp_labels(get_basic_completion_info(reg, &url, position).await);
 
         let c = doc.clone() + "t";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = get_completion_labels(reg, &url, position).await;
+        let comp2 = comp_labels(get_basic_completion_info(reg, &url, position).await);
         let actual = [comp1, comp2];
 
         expect![[r#"
@@ -502,10 +519,10 @@ mod tests {
         .assert_debug_eq(&actual);
     }
 
-    /// Tests that completion of function args in scope works properly.
+    /// Test that completion works properly when we apply an "as" pattern to a record
     #[tokio::test]
     async fn test_completion_fun_params() {
-        let actual = completion_test(
+        let actual = completion_test_labels(
             indoc! {r"
             main = \param1, param2 ->
               "},
@@ -526,10 +543,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_completion_fun_params_map() {
-        let actual = completion_test(
+    async fn test_completion_closure() {
+        let actual = completion_test_labels(
             indoc! {r"
-            main = [] |> List.map \param1 , param2-> 
+            main = [] |> List.map \ param1 , param2-> 
               "},
             "par",
             Position::new(4, 3),
@@ -540,6 +557,38 @@ mod tests {
                 [
                     "param1",
                     "param2",
+                ],
+            )
+        "#]]
+        .assert_debug_eq(&actual);
+    }
+
+    #[tokio::test]
+    async fn test_completion_with_docs() {
+        let actual = completion_test(
+            indoc! {r"
+            ## This is the main function
+            main = mai
+              "},
+            "par",
+            Position::new(4, 10),
+        )
+        .await;
+
+        expect![[r#"
+            Some(
+                [
+                    (
+                        "main",
+                        Some(
+                            MarkupContent(
+                                MarkupContent {
+                                    kind: Markdown,
+                                    value: "This is the main function",
+                                },
+                            ),
+                        ),
+                    ),
                 ],
             )
         "#]]
