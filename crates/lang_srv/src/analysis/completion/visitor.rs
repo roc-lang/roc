@@ -13,7 +13,7 @@ use roc_types::subs::Variable;
 
 pub(crate) struct CompletionVisitor<'a> {
     pub(crate) position: Position,
-    pub(crate) found_decls: Vec<(Symbol, Variable)>,
+    pub(crate) found_declarations: Vec<(Symbol, Variable)>,
     pub(crate) interns: &'a Interns,
     pub(crate) prefix: String,
 }
@@ -26,7 +26,7 @@ impl Visitor for CompletionVisitor<'_> {
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region.contains_pos(self.position) {
             let mut res = self.expression_defs(expr);
-            self.found_decls.append(&mut res);
+            self.found_declarations.append(&mut res);
 
             walk_expr(self, expr, var);
         }
@@ -40,7 +40,8 @@ impl Visitor for CompletionVisitor<'_> {
             }
             | DeclarationInfo::Destructure { loc_expr, .. } => {
                 let res = self.decl_to_completion_item(&decl);
-                self.found_decls.extend(res);
+                self.found_declarations.extend(res);
+
                 if loc_expr.region.contains_pos(self.position) {
                     walk_decl(self, decl);
                 };
@@ -52,19 +53,23 @@ impl Visitor for CompletionVisitor<'_> {
     }
 
     fn visit_def(&mut self, def: &Def) {
-        let res = self.extract_defs(def);
-        self.found_decls.extend(res);
+        let sym_var_vec = self.extract_defs(def);
+        self.found_declarations.extend(sym_var_vec);
+
         walk_def(self, def);
     }
 }
+
 impl CompletionVisitor<'_> {
     fn extract_defs(&mut self, def: &Def) -> Vec<(Symbol, Variable)> {
         trace!("Completion begin");
+
         def.pattern_vars
             .iter()
             .map(|(symbol, var)| (*symbol, *var))
             .collect()
     }
+
     fn expression_defs(&self, expr: &Expr) -> Vec<(Symbol, Variable)> {
         match expr {
             Expr::When {
@@ -75,7 +80,7 @@ impl CompletionVisitor<'_> {
                 loc_body,
                 ..
             }) => {
-                //if we are inside the closure complete it's vars
+                // if we are inside the closure complete it's vars
                 if loc_body.region.contains_pos(self.position) {
                     arguments
                         .iter()
@@ -89,7 +94,7 @@ impl CompletionVisitor<'_> {
         }
     }
 
-    ///Extract any variables made available by the branch of a when_is expression that contains `self.position`
+    /// Extract any variables made available by the branch of a when_is expression that contains `self.position`
     fn when_is_expr(
         &self,
         branches: &[WhenBranch],
@@ -117,10 +122,10 @@ impl CompletionVisitor<'_> {
     fn record_destructure(&self, destructs: &[Loc<RecordDestruct>]) -> Vec<(Symbol, Variable)> {
         destructs
             .iter()
-            .flat_map(|a| match &a.value.typ {
+            .flat_map(|loc| match &loc.value.typ {
                 roc_can::pattern::DestructType::Required
                 | roc_can::pattern::DestructType::Optional(_, _) => {
-                    vec![(a.value.symbol, a.value.var)]
+                    vec![(loc.value.symbol, loc.value.var)]
                 }
                 roc_can::pattern::DestructType::Guard(var, pat) => self.patterns(&pat.value, var),
             })
@@ -130,8 +135,8 @@ impl CompletionVisitor<'_> {
     fn tuple_destructure(&self, destructs: &[Loc<TupleDestruct>]) -> Vec<(Symbol, Variable)> {
         destructs
             .iter()
-            .flat_map(|a| {
-                let (var, pattern) = &a.value.typ;
+            .flat_map(|loc| {
+                let (var, pattern) = &loc.value.typ;
                 self.patterns(&pattern.value, var)
             })
             .collect()
@@ -141,7 +146,7 @@ impl CompletionVisitor<'_> {
         list_elems
             .patterns
             .iter()
-            .flat_map(|a| self.patterns(&a.value, var))
+            .flat_map(|loc| self.patterns(&loc.value, var))
             .collect()
     }
     fn tag_pattern(&self, arguments: &[(Variable, Loc<Pattern>)]) -> Vec<(Symbol, Variable)> {
@@ -157,14 +162,16 @@ impl CompletionVisitor<'_> {
         as_symbol: Symbol,
         var: &Variable,
     ) -> Vec<(Symbol, Variable)> {
-        //Get the variables introduced within the pattern
+        // get the variables introduced within the pattern
         let mut patterns = self.patterns(as_pat, var);
-        //Add the "as" that wraps the whole pattern
+        // add the "as" that wraps the whole pattern
         patterns.push((as_symbol, *var));
         patterns
     }
-    ///Returns a list of symbols defined by this pattern.  
-    ///`pattern_var`: Variable type of the entire pattern. This will be returned if the pattern turns out to be an identifier
+
+    /// Returns a list of symbols defined by this pattern.  
+    /// `pattern_var`: Variable type of the entire pattern. This will be returned if
+    /// the pattern turns out to be an identifier.
     fn patterns(
         &self,
         pattern: &roc_can::pattern::Pattern,
@@ -214,22 +221,27 @@ impl CompletionVisitor<'_> {
                 loc_body,
                 ..
             } => {
-                let mut out = vec![];
-                //Append the function declaration itself for recursive calls
-                out.extend(self.patterns(pattern, expr_var));
+                let mut sym_var_vec = vec![];
+                // append the function declaration itself for recursive calls
+                sym_var_vec.extend(self.patterns(pattern, expr_var));
 
                 if loc_body.region.contains_pos(self.position) {
-                    //also add the arguments if we are inside the function
+                    // also add the arguments if we are inside the function
                     let args = function
                         .value
                         .arguments
                         .iter()
                         .flat_map(|(var, _, pat)| self.patterns(&pat.value, var));
-                    //We add in the pattern for the function declaration
-                    out.extend(args);
-                    trace!("Added function args to completion output =:{:#?}", out);
+                    // we add in the pattern for the function declaration
+                    sym_var_vec.extend(args);
+
+                    trace!(
+                        "Added function args to completion output =:{:#?}",
+                        sym_var_vec
+                    );
                 }
-                out
+
+                sym_var_vec
             }
             DeclarationInfo::Destructure {
                 loc_pattern,

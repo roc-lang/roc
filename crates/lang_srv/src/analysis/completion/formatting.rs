@@ -46,6 +46,7 @@ pub(super) fn module_documentation(
 ) -> Documentation {
     let exposed_string =
         get_module_exposed_list(module_id, interns, modules_info, exposed).unwrap_or_default();
+
     let module_doc = module_docs
         .and_then(|docs| {
             docs.entries.first().and_then(|first_doc| match first_doc {

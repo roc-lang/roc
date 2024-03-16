@@ -175,7 +175,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-///Gives only the module docs for modules that are exposed by the platform or package
+/// Gives only the module docs for modules that are exposed by the platform or package.
 fn get_exposed_module_docs(
     loaded_module: &mut LoadedModule,
 ) -> Vec<(ModuleId, ModuleDocumentation)> {
@@ -183,7 +183,8 @@ fn get_exposed_module_docs(
     // let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
 
     for module_id in loaded_module.exposed_modules.iter() {
-        let docs = loaded_module.docs_by_module.remove(module_id).unwrap_or_else(|| {
+        let docs =
+            loaded_module.docs_by_module.remove(module_id).unwrap_or_else(|| {
                 panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
             });
 
@@ -196,7 +197,7 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-fn render_package_index(docs_by_module: &Vec<(ModuleId, ModuleDocumentation)>) -> String {
+fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> String {
     // The list items containing module links
     let mut module_list_buf = String::new();
 

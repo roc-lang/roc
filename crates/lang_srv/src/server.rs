@@ -364,7 +364,8 @@ mod tests {
         .map(|item| (item.label, item.documentation))
         .collect::<Vec<_>>()
     }
-    ///Gets completion and returns only the label and docs for each completion
+
+    /// gets completion and returns only the label and docs for each completion
     async fn get_basic_completion_info(
         reg: &Registry,
         url: &Url,
@@ -375,17 +376,11 @@ mod tests {
             .map(completion_resp_to_strings)
     }
 
-    ///Gets completion and returns only the label and docs for each completion
+    /// gets completion and returns only the label for each completion
     fn comp_labels(
         completions: Option<Vec<(String, Option<Documentation>)>>,
     ) -> Option<Vec<String>> {
         completions.map(|list| list.into_iter().map(|(labels, _)| labels).collect())
-    }
-    ///Gets completion and returns only the label and docs for each completion
-    fn comp_docs(
-        completions: Option<Vec<(String, Option<Documentation>)>>,
-    ) -> Option<Vec<Option<Documentation>>> {
-        completions.map(|list| list.into_iter().map(|(_, docs)| docs).collect())
     }
 
     const DOC_LIT: &str = indoc! {r#"
@@ -420,15 +415,16 @@ mod tests {
     ) -> Option<Vec<(String, Option<Documentation>)>> {
         let doc = DOC_LIT.to_string() + initial;
         let (inner, url) = test_setup(doc.clone()).await;
-        let reg = &inner.registry;
+        let registry = &inner.registry;
 
         let change = doc.clone() + addition;
         info!("doc is:\n{0}", change);
 
         inner.change(&url, change, 1).await.unwrap();
 
-        get_basic_completion_info(reg, &url, position).await
+        get_basic_completion_info(registry, &url, position).await
     }
+
     async fn completion_test_labels(
         initial: &str,
         addition: &str,
@@ -436,15 +432,8 @@ mod tests {
     ) -> Option<Vec<String>> {
         comp_labels(completion_test(initial, addition, position).await)
     }
-    async fn completion_test_docs(
-        initial: &str,
-        addition: &str,
-        position: Position,
-    ) -> Option<Vec<Option<Documentation>>> {
-        comp_docs(completion_test(initial, addition, position).await)
-    }
 
-    ///Test that completion works properly when we apply an "as" pattern to an identifier
+    /// Test that completion works properly when we apply an "as" pattern to an identifier
     #[tokio::test]
     async fn test_completion_as_identifier() {
         let suffix = DOC_LIT.to_string()
@@ -456,15 +445,15 @@ mod tests {
 
         let (inner, url) = test_setup(suffix.clone()).await;
         let position = Position::new(6, 7);
-        let reg = &inner.registry;
+        let registry = &inner.registry;
 
         let change = suffix.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = comp_labels(get_basic_completion_info(reg, &url, position).await);
+        let comp1 = comp_labels(get_basic_completion_info(registry, &url, position).await);
 
         let c = suffix.clone() + "i";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = comp_labels(get_basic_completion_info(reg, &url, position).await);
+        let comp2 = comp_labels(get_basic_completion_info(registry, &url, position).await);
 
         let actual = [comp1, comp2];
 
@@ -529,7 +518,8 @@ mod tests {
         "#]]
         .assert_debug_eq(&actual);
     }
-    ///Test that completion works properly when we apply an "as" pattern to a record
+
+    /// Test that completion works properly when we apply an "as" pattern to a record
     #[tokio::test]
     async fn test_completion_fun_params() {
         let actual = completion_test_labels(
@@ -551,6 +541,7 @@ mod tests {
         "#]]
         .assert_debug_eq(&actual);
     }
+
     #[tokio::test]
     async fn test_completion_closure() {
         let actual = completion_test_labels(
@@ -571,6 +562,7 @@ mod tests {
         "#]]
         .assert_debug_eq(&actual);
     }
+
     #[tokio::test]
     async fn test_completion_with_docs() {
         let actual = completion_test(
@@ -582,6 +574,7 @@ mod tests {
             Position::new(4, 10),
         )
         .await;
+
         expect![[r#"
             Some(
                 [

@@ -78,6 +78,7 @@ pub enum HeaderType<'a> {
         exposes: &'a [Loc<ExposedName<'a>>],
     },
 }
+
 impl<'a> HeaderType<'a> {
     pub fn get_name(self) -> Option<&'a str> {
         match self {

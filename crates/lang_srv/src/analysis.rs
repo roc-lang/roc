@@ -60,15 +60,19 @@ impl ModulesInfo {
         // example: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
         let exposed = exposes
             .into_iter()
-            .map(|(id, symbols)| (id, Arc::new(symbols)))
+            .map(|(module_id, symbols)| (module_id, Arc::new(symbols)))
             .collect::<HashMap<_, _>>();
-        //Combine the subs from all modules
+
+        // Combine the subs from all modules
         let all_subs = Mutex::new(
             typechecked
                 .iter()
-                .map(|(k, v)| (*k, v.solved_subs.0.clone()))
+                .map(|(module_id, checked_module)| {
+                    (*module_id, checked_module.solved_subs.0.clone())
+                })
                 .collect::<HashMap<_, _>>(),
         );
+
         ModulesInfo {
             subs: all_subs,
             exposed,
@@ -165,6 +169,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         &typechecked,
         docs_by_module,
     ));
+
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
         module_id_to_url: module_id_to_url_from_sources(&sources),

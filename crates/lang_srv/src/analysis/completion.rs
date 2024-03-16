@@ -27,15 +27,18 @@ fn get_completions(
 ) -> Vec<(Symbol, Variable)> {
     let mut visitor = CompletionVisitor {
         position,
-        found_decls: Vec::new(),
+        found_declarations: Vec::new(),
         interns,
         prefix,
     };
     visitor.visit_decls(decls);
-    visitor.found_decls
+    visitor.found_declarations
 }
 
-/// Walks through declarations that would be accessible from the provided position adding them to a list of completion items until all accessible declarations have been fully explored
+#[allow(clippy::too_many_arguments)]
+/// Walks through declarations that would be accessible from the provided
+/// position adding them to a list of completion items until all accessible
+/// declarations have been fully explored.
 pub fn get_completion_items(
     position: Position,
     prefix: String,
@@ -64,7 +67,7 @@ pub(super) fn get_module_completion_items(
         .flat_map(|(mod_id, exposed_symbols)| {
             let mod_name = mod_id.to_ident_str(interns).to_string();
 
-            //Completion for modules themselves
+            // Completion for modules themselves
             if mod_name.starts_with(&prefix) {
                 let item = CompletionItem {
                     label: mod_name.clone(),
@@ -79,8 +82,9 @@ pub(super) fn get_module_completion_items(
                     )),
                     ..Default::default()
                 };
+
                 vec![item]
-            //Complete dot completions for module exports
+            // Complete dot completions for module exports
             } else if prefix.starts_with(&(mod_name + ".")) {
                 get_module_exposed_completion(
                     exposed_symbols,
@@ -93,9 +97,11 @@ pub(super) fn get_module_completion_items(
                 vec![]
             }
         });
+
     if just_modules {
         return module_completions.collect();
     }
+
     module_completions.collect()
 }
 
@@ -109,18 +115,20 @@ fn get_module_exposed_completion(
     let mut completion_docs = docs.map_or(Default::default(), |docs| {
         get_completion_docs(exposed_symbols, docs)
     });
+
     exposed_symbols
         .iter()
-        .map(|(sym, var)| {
-            //We need to fetch the subs for the module that is exposing what we are trying to complete because that will have the type info we need
+        .map(|(symbol, var)| {
+            // We need to fetch the subs for the module that is exposing what we
+            // are trying to complete because that will have the type info we need.
             modules_info
                 .with_subs(mod_id, |subs| {
                     make_completion_item(
                         subs,
                         mod_id,
                         interns,
-                        completion_docs.remove(sym),
-                        sym.as_str(interns).to_string(),
+                        completion_docs.remove(symbol),
+                        symbol.as_str(interns).to_string(),
                         *var,
                     )
                 })
@@ -129,27 +137,37 @@ fn get_module_exposed_completion(
         .collect::<Vec<_>>()
 }
 
-///Efficiently walks the list of docs collecting the docs for  completions as we go. Should be faster than re-walking for every completion
+/// Efficiently walks the list of docs collecting the docs for completions as we go.
+/// Should be faster than re-walking for every completion.
 fn get_completion_docs(
     completions: &[(Symbol, Variable)],
     docs: &ModuleDocumentation,
 ) -> HashMap<Symbol, String> {
-    let mut symbols = completions.iter().map(|(s, _)| s).collect::<Vec<_>>();
+    let mut symbols = completions
+        .iter()
+        .map(|(symbol, _)| symbol)
+        .collect::<Vec<_>>();
+
     docs.entries
         .iter()
         .filter_map(|doc| match doc {
             roc_load::docs::DocEntry::DocDef(DocDef { docs, symbol, .. }) => {
-                let docs = docs.as_ref().map(|a| a.trim().to_string())?;
-                let (idx, _s) = symbols.iter().enumerate().find(|(_i, s)| s == &&symbol)?;
-                symbols.swap_remove(idx);
-                Some((*symbol, docs))
+                let docs_str = docs.as_ref().map(|str| str.trim().to_string())?;
+                let (index, _symbol) = symbols
+                    .iter()
+                    .enumerate()
+                    .find(|(_index, symb)| symb == &&symbol)?;
+
+                symbols.swap_remove(index);
+
+                Some((*symbol, docs_str))
             }
             _ => None,
         })
         .collect()
 }
 
-///Provides a list of completions for Type aliases within the scope.
+/// Provides a list of completions for Type aliases within the scope.
 ///TODO: Use this when we know we are within a type definition
 fn _alias_completions(
     aliases: &MutMap<Symbol, (bool, Alias)>,
@@ -178,8 +196,8 @@ fn make_completion_items(
     docs: Option<&ModuleDocumentation>,
     completions: Vec<(Symbol, Variable)>,
 ) -> Vec<CompletionItem> {
-    let mut completion_docs = docs.map_or(Default::default(), |docs| {
-        get_completion_docs(&completions, docs)
+    let mut completion_docs = docs.map_or(Default::default(), |mod_docs| {
+        get_completion_docs(&completions, mod_docs)
     });
 
     completions
@@ -213,8 +231,8 @@ fn make_completion_item(
     subs: &mut Subs,
     module_id: &ModuleId,
     interns: &Interns,
-    docs: Option<String>,
-    str: String,
+    docs_opt: Option<String>,
+    symbol_str: String,
     var: Variable,
 ) -> CompletionItem {
     let type_str = format_var_type(var, subs, module_id, interns);
@@ -226,38 +244,39 @@ fn make_completion_item(
             | roc_types::subs::FlatType::TagUnion(_, _) => CompletionItemKind::ENUM,
             _ => CompletionItemKind::VARIABLE,
         },
-        a => {
+        other => {
             debug!(
                 "No specific completionKind for variable type: {:?} defaulting to 'Variable'",
-                a
+                other
             );
             CompletionItemKind::VARIABLE
         }
     };
 
     CompletionItem {
-        label: str,
+        label: symbol_str,
         detail: Some(type_str),
         kind: Some(typ),
-        documentation: docs.map(|d| {
+        documentation: docs_opt.map(|docs| {
             lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
                 kind: lsp_types::MarkupKind::Markdown,
-                value: d,
+                value: docs,
             })
         }),
         ..Default::default()
     }
 }
 
-struct FieldCompletion {
-    ///The name of the variable that is a record
+/// E.g. a.b.c.d->{variable_name:"a", field:"d", middle_fields:["b","c"]}
+struct RecFieldCompletion {
+    /// name of variable that is a record
     variable_name: String,
     field: String,
     middle_fields: Vec<String>,
 }
 
-///Finds the types of and names of all the fields of a record
-///`var` should be a `Variable` that you know is a record's type or else it will return an empty list
+/// Finds the types of and names of all the fields of a record.
+/// `var` should be a `Variable` that you know is of type record or else it will return an empty list.
 fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)> {
     let content = subs.get(var);
     match content.content {
@@ -311,16 +330,16 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
     }
 }
 
-///Splits a completion prefix for a field into its components
-///E.g. a.b.c.d->{variable_name:"a",middle_fields:["b","c"],field:"d"}
-fn get_field_completion_parts(symbol_prefix: &str) -> Option<FieldCompletion> {
+/// Splits a completion prefix for a field into its components.
+/// E.g. a.b.c.d->{variable_name:"a",middle_fields:["b","c"],field:"d"}
+fn get_field_completion_parts(symbol_prefix: &str) -> Option<RecFieldCompletion> {
     let mut parts = symbol_prefix.split('.').collect::<Vec<_>>();
     let field = parts.pop().unwrap_or("").to_string();
     let variable_name = parts.remove(0).to_string();
-    //Now that we have the head and tail removed  this is all the intermediate fields
+    // Now that we have the head and tail removed this is all the intermediate fields.
     let middle_fields = parts.into_iter().map(ToString::to_string).collect();
 
-    Some(FieldCompletion {
+    Some(RecFieldCompletion {
         variable_name,
         field,
         middle_fields,
@@ -334,7 +353,7 @@ pub fn field_completion(
     subs: &mut Subs,
     module_id: &ModuleId,
 ) -> Option<Vec<CompletionItem>> {
-    let FieldCompletion {
+    let RecFieldCompletion {
         variable_name,
         field,
         middle_fields,
@@ -345,16 +364,19 @@ pub fn field_completion(
         variable_name, field, middle_fields
     );
 
-    //We get completions here, but all we really want is the info about the variable that is the first part of our record completion.
-    //We are completing the full name of the variable so we should only have one match
+    // We get completions here, but all we really want is the info about the variable that
+    // is the first part of our record completion.
+    // We are completing the full name of the variable so we should only have one match.
     let completion = get_completions(position, declarations, variable_name, interns)
         .into_iter()
-        .map(|(symb, var)| (symb.as_str(interns).to_string(), var))
+        .map(|(symbol, var)| (symbol.as_str(interns).to_string(), var))
         .next()?;
 
-    //If we have a type that has nested records we could have a completion prefix like: "var.field1.field2.fi"
-    //If the document isn't fully typechecked we won't know what the type of field2 is for us to offer completions based on it's fields
-    //Instead we get the type of "var" and then the type of "field1" within var's type and then "field2" within field1's type etc etc, until we have the type of the record we are actually looking for field completions for.
+    // If we have a type that has nested records we could have a completion prefix like: "var.field1.field2.fi".
+    // If the document isn't fully typechecked we won't know what the type of field2 is for us to offer
+    // completions based on it's fields. Instead we get the type of "var" and then the type of "field1" within
+    // var's type and then "field2" within field1's type etc etc, until we have the type of the record we are
+    // actually looking for field completions for.
     let completion_record = middle_fields.iter().fold(completion, |state, chain_field| {
         let fields_vars = find_record_fields(state.1, subs);
         fields_vars
@@ -370,5 +392,6 @@ pub fn field_completion(
 
     let field_completions =
         make_completion_items_string(subs, module_id, interns, field_completions);
+
     Some(field_completions)
 }
