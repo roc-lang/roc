@@ -1592,7 +1592,9 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumToFloatChecked
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
-        | NumCountOneBits => RC::NoRc,
+        | NumCountOneBits
+        | NumF32ToParts
+        | NumF64ToParts => RC::NoRc,
         I128OfDec | NumWithoutDecimalPoint | NumWithDecimalPoint => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,

@@ -2103,6 +2103,8 @@ impl<'a> LowLevelCall<'a> {
             SetJmp | LongJmp | SetLongJmpBuffer => {
                 unreachable!("only inserted in dev backend codegen")
             }
+            NumF32ToParts => todo!("NumF32ToParts"),
+            NumF64ToParts => todo!("NumF64ToParts"),
         }
     }
 

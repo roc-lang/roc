@@ -111,6 +111,8 @@ comptime {
     exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
     exportNumFn(num.greaterThanU128, "greater_than.u128");
     exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
+    exportNumFn(num.f32ToParts, "f32_to_parts");
+    exportNumFn(num.f64ToParts, "f64_to_parts");
 
     inline for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");

@@ -207,6 +207,8 @@ map_symbol_to_lowlevel_and_arity! {
     I128OfDec; I128_OF_DEC; 1,
     NumWithoutDecimalPoint; NUM_WITHOUT_DECIMAL_POINT; 1,
     NumWithDecimalPoint; NUM_WITH_DECIMAL_POINT; 1,
+    NumF32ToParts; NUM_F32_TO_PARTS; 1,
+    NumF64ToParts; NUM_F64_TO_PARTS; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,

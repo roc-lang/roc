@@ -15,6 +15,18 @@ pub fn NumParseResult(comptime T: type) type {
     };
 }
 
+pub const F32Parts = extern struct {
+    fraction: u32,
+    exponent: u8,
+    sign: bool,
+};
+
+pub const F64Parts = extern struct {
+    fraction: u64,
+    exponent: u16,
+    sign: bool,
+};
+
 pub const U256 = struct {
     hi: u128,
     lo: u128,
@@ -629,4 +641,22 @@ pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
+    const u32Value = @as(u32, @bitCast(self));
+    return F32Parts{
+        .fraction = u32Value & 0x7fffff,
+        .exponent = @truncate(u32Value >> 23 & 0xff),
+        .sign = u32Value >> 31 & 1 == 1,
+    };
+}
+
+pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
+    const u64Value = @as(u64, @bitCast(self));
+    return F64Parts{
+        .fraction = u64Value & 0xfffffffffffff,
+        .exponent = @truncate(u64Value >> 52 & 0x7ff),
+        .sign = u64Value >> 63 & 1 == 1,
+    };
 }
