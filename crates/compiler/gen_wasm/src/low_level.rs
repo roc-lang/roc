@@ -2021,6 +2021,10 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::DEC_TO_I128)
             }
             NumWithDecimalPoint => self.load_args_and_call_zig(backend, bitcode::DEC_FROM_I128),
+            NumF32ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_TO_PARTS),
+            NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
+            NumF32FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_PARTS),
+            NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
             And => {
                 self.load_args(backend);
                 backend.code_builder.i32_and();
@@ -2103,10 +2107,6 @@ impl<'a> LowLevelCall<'a> {
             SetJmp | LongJmp | SetLongJmpBuffer => {
                 unreachable!("only inserted in dev backend codegen")
             }
-            NumF32ToParts => todo!("NumF32ToParts"),
-            NumF64ToParts => todo!("NumF64ToParts"),
-            NumF32FromParts => todo!("NumF32FromParts"),
-            NumF64FromParts => todo!("NumF64FromParts"),
         }
     }
 
