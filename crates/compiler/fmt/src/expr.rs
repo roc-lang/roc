@@ -107,6 +107,7 @@ impl<'a> Formattable for Expr<'a> {
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
             RecordBuilder(fields) => is_collection_multiline(fields),
+            Suffixed(subexpr) => subexpr.is_multiline(),
         }
     }
 
@@ -512,6 +513,10 @@ impl<'a> Formattable for Expr<'a> {
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
             IngestedFile(_, _) => {}
+            Suffixed(sub_expr) => {
+                sub_expr.format_with_options(buf, parens, newlines, indent);
+                buf.push('!');
+            }
         }
     }
 }

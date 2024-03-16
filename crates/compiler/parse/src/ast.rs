@@ -267,6 +267,9 @@ pub enum Expr<'a> {
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
 
+    /// An expression followed by `!``
+    Suffixed(&'a Expr<'a>),
+
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
         fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
@@ -1568,6 +1571,7 @@ impl<'a> Malformed for Expr<'a> {
             PrecedenceConflict(_) |
             MultipleRecordBuilders(_) |
             UnappliedRecordBuilder(_) => true,
+            Suffixed(expr) => expr.is_malformed(),
         }
     }
 }
