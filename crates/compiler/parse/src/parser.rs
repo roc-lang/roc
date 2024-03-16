@@ -1801,55 +1801,6 @@ macro_rules! one_of {
     };
 }
 
-/// # Examples
-/// ```
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, word1};
-/// # use roc_region::all::{Loc, Position};
-/// # use roc_parse::ident::lowercase_ident;
-/// # use roc_parse::one_of_with_error;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// #     Other(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = one_of_with_error!(
-///     Problem::Other;
-///     word("hello", Problem::NotFound)
-/// );
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos().offset, 5);
-///
-/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(err, Problem::Other(Position::new(0)));
-/// # }
-/// # foo(&arena);
-/// ```
-#[macro_export]
-macro_rules! one_of_with_error {
-    ($toerror:expr; $p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                valid @ Ok(_) => valid,
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
-                Err((NoProgress, _)) => Err((MadeProgress, $toerror(original_state.pos()))),
-            }
-        }
-    };
-
-    ($toerror:expr; $p1:expr, $($others:expr),+) => {
-        one_of_with_error!($toerror, $p1, one_of_with_error!($($others),+))
-    };
-}
-
 pub fn reset_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,
