@@ -660,3 +660,11 @@ pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
         .sign = u64Value >> 63 & 1 == 1,
     };
 }
+
+pub fn f32FromParts(parts: F32Parts) callconv(.C) f32 {
+    return @as(f32, @bitCast(parts.fraction | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
+}
+
+pub fn f64FromParts(parts: F64Parts) callconv(.C) f64 {
+    return @as(f64, @bitCast(parts.fraction | (@as(u64, parts.exponent) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
+}

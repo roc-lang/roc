@@ -2105,6 +2105,8 @@ impl<'a> LowLevelCall<'a> {
             }
             NumF32ToParts => todo!("NumF32ToParts"),
             NumF64ToParts => todo!("NumF64ToParts"),
+            NumF32FromParts => todo!("NumF32FromParts"),
+            NumF64FromParts => todo!("NumF64FromParts"),
         }
     }
 

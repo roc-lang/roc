@@ -153,7 +153,9 @@ interface Num
         withoutDecimalPoint,
         withDecimalPoint,
         f32ToParts,
-        f64ToParts
+        f64ToParts,
+        f32FromParts,
+        f64FromParts
     ]
     imports [
         Bool.{ Bool },
@@ -1421,3 +1423,7 @@ withDecimalPoint : I128 -> Dec
 f32ToParts: F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 
 f64ToParts: F64 -> { sign : Bool, exponent : U16, fraction : U64 }
+
+f32FromParts: { sign : Bool, exponent : U8, fraction : U32 } -> F32
+
+f64FromParts: { sign : Bool, exponent : U16, fraction : U64 } -> F64

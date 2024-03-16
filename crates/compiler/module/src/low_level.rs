@@ -106,6 +106,8 @@ pub enum LowLevel {
     NumWithDecimalPoint,
     NumF32ToParts,
     NumF64ToParts,
+    NumF32FromParts,
+    NumF64FromParts,
     I128OfDec,
     Eq,
     NotEq,
@@ -345,6 +347,8 @@ map_symbol_to_lowlevel! {
     NumWithDecimalPoint <= NUM_WITH_DECIMAL_POINT;
     NumF32ToParts <= NUM_F32_TO_PARTS;
     NumF64ToParts <= NUM_F64_TO_PARTS;
+    NumF32FromParts <= NUM_F32_FROM_PARTS;
+    NumF64FromParts <= NUM_F64_FROM_PARTS;
     Eq <= BOOL_STRUCTURAL_EQ;
     NotEq <= BOOL_STRUCTURAL_NOT_EQ;
     And <= BOOL_AND;
