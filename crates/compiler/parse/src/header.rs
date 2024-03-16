@@ -98,7 +98,7 @@ impl<'a> HeaderType<'a> {
                 ..
             } => Some(name),
             Self::App { .. } => {
-                //TODO:Eli This can be removed once module params is implimented and app names are no longer strings
+                //TODO:Eli This can be removed once module params is implemented and app names are no longer strings
                 None
             }
         }

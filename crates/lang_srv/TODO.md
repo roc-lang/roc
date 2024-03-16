@@ -1,10 +1,10 @@
 # Improvements to the language server.
 
 ## Performance
-- [ ] Impliment some performance logging for actions like completion goto def hover etc
+- [ ] Implement some performance logging for actions like completion goto def hover etc
 
 ### Completion  
-Currently the way we handle documentation and type info for completion requires us to prform all the computation up front and has no caching. Documentation is also quite inneficient and likely requires a lot of repeated computation which could be slow in files with lots of doc comments.  The langauge server allows us to defer getting the info for a completion until the item is actually selected in the editor, this could speed up completion requests. 
+Currently the way we handle documentation and type info for completion requires us to prform all the computation up front and has no caching. Documentation is also quite inneficient and likely requires a lot of repeated computation which could be slow in files with lots of doc comments.  The language server allows us to defer getting the info for a completion until the item is actually selected in the editor, this could speed up completion requests. 
 We would need to profile this to see how performant it really is.
 
 ## Features
@@ -30,7 +30,7 @@ We would need to profile this to see how performant it really is.
 	- [ ] When creating records
 	- [ ] When describing records inside function params
 
-- [ ] Completion of unimported vars that are exposed by modules within the project (will need to have apropriate indicator and ranking so as not to be annoying)
+- [ ] Completion of unimported vars that are exposed by modules within the project (will need to have appropriate indicator and ranking so as not to be annoying)
  
  
 
