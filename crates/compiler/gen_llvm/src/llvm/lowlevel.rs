@@ -1176,6 +1176,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             arguments!(arg);
             arg
         }
+        NumF32ToParts => todo!("NumF32ToParts"),
+        NumF64ToParts => todo!("NumF64ToParts"),
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 

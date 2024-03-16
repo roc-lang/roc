@@ -2039,6 +2039,16 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
             }
 
+            LowLevel::NumF32ToParts => {
+                let intrinsic = bitcode::NUM_F32_TO_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64ToParts => {
+                let intrinsic = bitcode::NUM_F64_TO_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }

@@ -1270,6 +1270,8 @@ define_builtins! {
         158 NUM_REM_UNCHECKED: "remUnchecked" // traps on division by zero
         159 NUM_WITHOUT_DECIMAL_POINT: "withoutDecimalPoint"
         160 NUM_WITH_DECIMAL_POINT: "withDecimalPoint"
+        161 NUM_F32_TO_PARTS: "f32ToParts"
+        162 NUM_F64_TO_PARTS: "f64ToParts"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
