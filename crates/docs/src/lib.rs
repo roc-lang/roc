@@ -18,7 +18,13 @@ use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod file;
 mod html;
+mod problem;
+mod render;
+
+pub use problem::Problem;
+pub use render::generate;
 
 const LINK_SVG: &str = include_str!("./static/link.svg");
 

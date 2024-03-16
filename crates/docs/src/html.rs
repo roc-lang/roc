@@ -1,17 +1,16 @@
 use const_format::formatcp;
 use core::{fmt, iter};
-use roc_collections::VecMap;
-use roc_module::symbol::{IdentId, IdentIds, Interns, ModuleId};
+use roc_collections::{VecMap, VecSet};
+use roc_module::symbol::{IdentId, IdentIds, Interns, ModuleId, Symbol};
 use roc_types::types::{AliasKind, Type};
 
-pub struct ModuleDocs<'a> {
-    module_name: &'a str,
-    home: ModuleId,
-    home_ident_ids: IdentIds,
-    interns: Interns,
-    headings: &'a [Heading<'a>],
-    entries: &'a [IdentId],
-    base_urls: VecMap<ModuleId, &'a str>,
+pub struct ModuleDocs<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> {
+    pub module_name: &'a str,
+    pub home: ModuleId,
+    pub home_ident_ids: &'a IdentIds,
+    pub interns: &'a Interns,
+    pub package_sidebar_entries: I,
+    pub base_urls: VecMap<ModuleId, &'a str>,
 }
 
 pub struct RecordField<'a> {
@@ -62,7 +61,7 @@ impl fmt::Display for Indentation {
 
 /// A named heading in the sidebar, with some number of
 /// entries beneath it.
-pub struct Heading<'a> {
+pub struct SidebarEntry<'a> {
     /// In the source code, this will appear in a module's `exposes` list like:
     ///
     /// [
@@ -72,34 +71,21 @@ pub struct Heading<'a> {
     ///     Baz,
     ///     Blah,
     /// ]
-    ///
-    /// It gets interpreted as a flat string; Markdown is not allowed in these headers,
-    /// because they will be rendered in the sidebar as text only.
-    text: &'a str,
+    pub link_text: &'a str,
 
-    /// The number of entries that get rendered before this header.
-    /// It's expressed this way because there can be entries before the first
-    /// header, so this tells us how many such entries to render before
-    /// rendering the first header.
-    entries_before: u32,
+    /// These doc comments get interpreted as flat strings; Markdown is not allowed
+    /// in them, because they will be rendered in the sidebar as plain text.
+    pub doc_comment: Option<&'a str>,
 }
 
-impl<'a> ModuleDocs<'a> {
+impl<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> ModuleDocs<'a, I> {
     pub fn render_decl(
         &mut self,
         ident: &str,
-        typ: &Type,
+        typ: &'a Type,
         buf: &mut impl fmt::Write,
     ) -> fmt::Result {
         let module_name = self.module_name;
-
-        // TODO next: wire up file loading to this, so I can verify that if I have InternalHttp it actually gets expanded!
-        //            I'm gonna need all that eventually, so it's best to do it right now before investing more in
-        //            this canonicalized approach. It's critical that I verify that the original problem I'm trying
-        //            to solve is actually going to be solved! Also, remember to do solving too, so we can show
-        //            inferred type annotations for un-annotated things. Just add a `roc docs --infer` flag for now
-        //            which does this. Later, can switch over to just always use --infer
-        let todo = todo!();
 
         write!(
             buf,
@@ -143,72 +129,44 @@ impl<'a> ModuleDocs<'a> {
     }
 
     #[allow(dead_code)]
-    pub fn render_sidebar(&mut self, buf: &mut impl fmt::Write) -> fmt::Result {
-        let mut entries = self.entries.iter().copied();
-
-        for heading in self.headings {
-            for _ in 0..heading.entries_before {
-                match entries.next() {
-                    Some(entry) => {
-                        self.render_sidebar_entry(buf, entry)?;
-                    }
-                    None => {
-                        if cfg!(debug_assertions) {
-                            unreachable!("docs generation tried to render an entry inside a heading, but there were no more entries! This means that entries_before was inaccurately high in that Heading.");
-                        }
-
-                        // In release builds, don't panic, just gracefully continue
-                        // by not rendering the headings. It'll be a bug, but at least
-                        // it won't block the user from seeing *some* docs rendered.
-                    }
-                }
+    pub fn render_sidebar(&self, buf: &mut impl fmt::Write) -> fmt::Result {
+        for SidebarEntry {
+            link_text: module_name,
+            doc_comment,
+        } in self.package_sidebar_entries.clone()
+        {
+            if let Some(heading) = doc_comment {
+                write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n")?;
             }
 
-            self.render_sidebar_heading(buf, heading.text)?;
-        }
-
-        while let Some(entry) = entries.next() {
-            self.render_sidebar_entry(buf, entry)?;
+            // Sidebar entries should all be relative URLs and unqualified names
+            buf.write_str("<a href=\"")?;
+            self.render_relative_url(module_name, buf)?;
+            write!(buf, "\">{}</a>", module_name)?;
         }
 
         Ok(())
     }
 
-    fn render_sidebar_heading(
-        &mut self,
-        buf: &mut impl fmt::Write,
-        heading: &'a str,
-    ) -> fmt::Result {
-        write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n")
-    }
+    fn render_relative_url(&self, text: &str, buf: &mut impl fmt::Write) -> fmt::Result {
+        let module_name = self.module_name;
 
-    fn render_sidebar_entry(&mut self, buf: &mut impl fmt::Write, entry: IdentId) -> fmt::Result {
-        // Sidebar entries should all be relative URLs and unqualified names
-        buf.write_str("<a href=\"")?;
-        self.render_relative_url(entry, buf)?;
-        write!(buf, "\">{}</a>", self.unqualified_name(entry))
-    }
-
-    fn render_relative_url(&self, ident_id: IdentId, buf: &mut impl fmt::Write) -> fmt::Result {
-        write!(
-            buf,
-            // e.g. "Str#isEmpty"
-            "{}#{}",
-            self.module_name,
-            self.unqualified_name(ident_id)
-        )
+        // e.g. "Str#isEmpty"
+        write!(buf, "{module_name}#{text}",)
     }
 
     fn render_type(
         &self,
         buf: &mut impl fmt::Write,
         indent: Indentation,
-        typ: &Type,
+        typ: &'a Type,
         // Whether the type needs to be wrapped in parens (only matters if the rendered type contains spaces,
         // e.g. function application or tags with payloads)
-        wrap_in_parens: WrapInParens,
+        _wrap_in_parens: WrapInParens,
     ) -> fmt::Result {
         use Type::*;
+
+        let todo = (); // TODO use wrap_in_parens
 
         match typ {
             EmptyRec => self.render_record_type(buf, indent, iter::empty()),
@@ -253,19 +211,19 @@ impl<'a> ModuleDocs<'a> {
             ),
             FunctionOrTagUnion(_, _, _) => todo!(),
             ClosureTag {
-                name,
-                captures,
-                ambient_function,
+                name: _,
+                captures: _,
+                ambient_function: _,
             } => todo!(),
-            UnspecializedLambdaSet { unspecialized } => todo!(),
+            UnspecializedLambdaSet { unspecialized: _ } => todo!(),
             DelayedAlias(_) => todo!(),
             Alias {
-                symbol,
-                type_arguments,
-                lambda_set_variables,
-                infer_ext_in_output_types,
-                actual,
-                kind,
+                symbol: _,
+                type_arguments: _,
+                lambda_set_variables: _,
+                infer_ext_in_output_types: _,
+                actual: _,
+                kind: _,
             } => todo!(),
             RecursiveTagUnion(_, _, _) => todo!(),
             Apply(_, _, _) => todo!(),
@@ -400,12 +358,12 @@ impl<'a> ModuleDocs<'a> {
         }
     }
 
-    fn render_function_type<'b>(
+    fn render_function_type(
         &self,
         buf: &mut impl fmt::Write,
         indent: Indentation,
-        mut args: impl ExactSizeIterator<Item = &'b Type>,
-        ret: &Type,
+        mut args: impl ExactSizeIterator<Item = &'a Type>,
+        ret: &'a Type,
     ) -> fmt::Result {
         let args_len = args.len();
 
@@ -498,16 +456,59 @@ impl<'a> ModuleDocs<'a> {
             ""
         })
     }
+
+    // TODO render version as well
+    pub fn render_package_name_link(
+        &self,
+        name: &str,
+        base_url: &str,
+        buf: &mut impl fmt::Write,
+    ) -> fmt::Result {
+        write!(
+            buf,
+            "<h1 class='pkg-full-name'><a href='{base_url}'>{name}</a></h1>"
+        )
+    }
+
+    /// The list items containing module links
+    pub fn render_package_index(
+        &self,
+        entries: impl Iterator<Item = SidebarEntry<'a>>,
+        buf: &mut impl fmt::Write,
+    ) -> fmt::Result {
+        // The HTML for the index page
+        write!(buf, "<h2 class='module-name'>Modules</h2>\n")?;
+
+        for SidebarEntry {
+            link_text: module_name,
+            doc_comment,
+        } in entries
+        {
+            if let Some(heading) = doc_comment {
+                write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n")?;
+            }
+
+            // The anchor tag containing the module link
+            write!(
+                buf,
+                "<a class='index-module-link' href='{module_name}'>{module_name}</a>\n"
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn render_module(
+        &self,
+        _all_exposed_symbols: &VecSet<Symbol>,
+        buf: &mut impl fmt::Write,
+    ) -> fmt::Result {
+        todo!()
+    }
 }
-fn is_multiline(first: &Type) -> bool {
+
+fn is_multiline(_first: &Type) -> bool {
     let todo = todo!();
 }
 
-const LINK_ICON_SVG: &str = r#"
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" fill="currentColor"><!--!
-	Font Awesome Free 6.3.0 by @fontawesome - https://fontawesome.com License -
-	https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License)
-	Copyright 2023 Fonticons, Inc. -->
-	<path d="M562.8 267.7c56.5-56.5 56.5-148 0-204.5c-50-50-128.8-56.5-186.3-15.4l-1.6 1.1c-14.4 10.3-17.7 30.3-7.4 44.6s30.3 17.7 44.6 7.4l1.6-1.1c32.1-22.9 76-19.3 103.8 8.6c31.5 31.5 31.5 82.5 0 114L405.3 334.8c-31.5 31.5-82.5 31.5-114 0c-27.9-27.9-31.5-71.8-8.6-103.8l1.1-1.6c10.3-14.4 6.9-34.4-7.4-44.6s-34.4-6.9-44.6 7.4l-1.1 1.6C189.5 251.2 196 330 246 380c56.5 56.5 148 56.5 204.5 0L562.8 267.7zM43.2 244.3c-56.5 56.5-56.5 148 0 204.5c50 50 128.8 56.5 186.3 15.4l1.6-1.1c14.4-10.3 17.7-30.3 7.4-44.6s-30.3-17.7-44.6-7.4l-1.6 1.1c-32.1 22.9-76 19.3-103.8-8.6C57 372 57 321 88.5 289.5L200.7 177.2c31.5-31.5 82.5-31.5 114 0c27.9 27.9 31.5 71.8 8.6 103.9l-1.1 1.6c-10.3 14.4-6.9 34.4 7.4 44.6s34.4 6.9 44.6-7.4l1.1-1.6C416.5 260.8 410 182 360 132c-56.5-56.5-148-56.5-204.5 0L43.2 244.3z"></path>
-</svg>
-"#;
+const LINK_ICON_SVG: &str = include_str!("static/link.svg");
