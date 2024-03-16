@@ -80,7 +80,7 @@ interface List
 ## ## Types
 ##
 ## A sequential list of values.
-## ```
+## ```roc
 ## [1, 2, 3] # a list of numbers
 ## ["a", "b", "c"] # a list of strings
 ## [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
@@ -112,7 +112,7 @@ interface List
 ## will be immediately freed.
 ##
 ## Let's look at an example.
-## ```
+## ```roc
 ## ratings = [5, 4, 3]
 ##
 ## { foo: ratings, bar: ratings }
@@ -125,7 +125,7 @@ interface List
 ## refcount getting incremented from 1 to 3.
 ##
 ## Let's turn this example into a function.
-## ```
+## ```roc
 ## getRatings = \first ->
 ##     ratings = [first, 4, 3]
 ##
@@ -147,7 +147,7 @@ interface List
 ## list, and that list has a refcount of 2.
 ##
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
-## ```
+## ```roc
 ## getRatings = \first ->
 ##     ratings = [first, 4, 3]
 ##
@@ -161,7 +161,7 @@ interface List
 ## where it started: there is only 1 reference to it.
 ##
 ## Finally let's suppose the final line were changed to this:
-## ```
+## ```roc
 ## List.first (getRatings 5).bar
 ## ```
 ## This call to [List.first] means that even the list in the `bar` field has become
@@ -174,7 +174,7 @@ interface List
 ## and then with a list of lists, to see how they differ.
 ##
 ## Here's the example using a list of numbers.
-## ```
+## ```roc
 ## nums = [1, 2, 3, 4, 5, 6, 7]
 ##
 ## first = List.first nums
@@ -185,7 +185,7 @@ interface List
 ## It makes a list, calls [List.first] and [List.last] on it, and then returns `first`.
 ##
 ## Here's the equivalent code with a list of lists:
-## ```
+## ```roc
 ## lists = [[1], [2, 3], [], [4, 5, 6, 7]]
 ##
 ## first = List.first lists
@@ -216,7 +216,7 @@ interface List
 # separator so List.isEmpty doesn't absorb the above into its doc comment
 
 ##  Check if the list is empty.
-## ```
+## ```roc
 ## List.isEmpty [1, 2, 3]
 ##
 ## List.isEmpty []
@@ -232,7 +232,7 @@ getUnsafe : List a, U64 -> a
 ## Returns an element from a list at the given index.
 ##
 ## Returns `Err OutOfBounds` if the given index exceeds the List's length
-## ```
+## ```roc
 ## expect List.get [100, 200, 300] 1 == Ok 200
 ## expect List.get [100, 200, 300] 5 == Err OutOfBounds
 ## ```
@@ -255,7 +255,7 @@ replace = \list, index, newValue ->
         { list, value: newValue }
 
 ## Replaces the element at the given index with a replacement.
-## ```
+## ```roc
 ## List.set ["a", "b", "c"] 1 "B"
 ## ```
 ## If the given index is outside the bounds of the list, returns the original
@@ -267,7 +267,7 @@ set = \list, index, value ->
     (List.replace list index value).list
 
 ## Updates the element at the given index with the given function.
-## ```
+## ```roc
 ## List.update [1, 2, 3] 1 (\x -> x + 1)
 ## ```
 ## If the given index is outside the bounds of the list, returns the original
@@ -311,7 +311,7 @@ expect
     got == want
 
 ## Add a single element to the end of a list.
-## ```
+## ```roc
 ## List.append [1, 2, 3] 4
 ##
 ## [0, 1, 2]
@@ -326,7 +326,7 @@ append = \list, element ->
 ## If the given [Result] is `Ok`, add it to the end of a list.
 ## Otherwise, return the list unmodified.
 ##
-## ```
+## ```roc
 ## List.appendIfOk [1, 2, 3] (Ok 4)
 ##
 ## [0, 1, 2]
@@ -346,7 +346,7 @@ appendIfOk = \list, result ->
 appendUnsafe : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
-## ```
+## ```roc
 ## List.prepend [1, 2, 3] 0
 ##
 ## [2, 3, 4]
@@ -357,7 +357,7 @@ prepend : List a, a -> List a
 ## If the given [Result] is `Ok`, add it to the beginning of a list.
 ## Otherwise, return the list unmodified.
 ##
-## ```
+## ```roc
 ## List.prepend [1, 2, 3] (Ok 0)
 ##
 ## [2, 3, 4]
@@ -387,7 +387,7 @@ reserve : List a, U64 -> List a
 releaseExcessCapacity : List a -> List a
 
 ## Put two lists together.
-## ```
+## ```roc
 ## List.concat [1, 2, 3] [4, 5]
 ##
 ## [0, 1, 2]
@@ -396,7 +396,7 @@ releaseExcessCapacity : List a -> List a
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
-## ```
+## ```roc
 ## expect List.last [1, 2, 3] == Ok 3
 ## expect List.last [] == Err ListWasEmpty
 ## ```
@@ -409,7 +409,7 @@ last = \list ->
 ## A list with a single element in it.
 ##
 ## This is useful in pipelines, like so:
-## ```
+## ```roc
 ## websites =
 ##     Str.concat domain ".com"
 ##         |> List.single
@@ -430,7 +430,7 @@ repeatHelp = \value, count, accum ->
         accum
 
 ## Returns the list with its elements reversed.
-## ```
+## ```roc
 ## expect List.reverse [1, 2, 3] == [3, 2, 1]
 ## ```
 reverse : List a -> List a
@@ -448,7 +448,7 @@ reverseHelp = \list, left, right ->
 clone : List a -> List a
 
 ## Join the given lists together into one list.
-## ```
+## ```roc
 ## expect List.join [[1], [2, 3], [], [4, 5]] == [1, 2, 3, 4, 5]
 ## expect List.join [[], []] == []
 ## expect List.join [] == []
@@ -471,7 +471,7 @@ contains = \list, needle ->
 ## which updates the `state`. It returns the final `state` at the end.
 ##
 ## You can use it in a pipeline:
-## ```
+## ```roc
 ## [2, 4, 8]
 ##     |> List.walk 0 Num.add
 ## ```
@@ -490,7 +490,7 @@ contains = \list, needle ->
 ## 6     | 8     | 14
 ##
 ## The following returns -6:
-## ```
+## ```roc
 ## [1, 2, 3]
 ##     |> List.walk 0 Num.sub
 ## ```
@@ -639,7 +639,7 @@ all = \list, predicate ->
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ## ```
 ## ## Performance Details
@@ -676,7 +676,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.false`.
-## ```
+## ```roc
 ## List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ## ```
 ## ## Performance Details
@@ -689,7 +689,7 @@ dropIf = \list, predicate ->
 
 ## Run the given function on each element of a list, and return the
 ## number of elements for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## expect List.countIf [1, -2, -3] Num.isNegative == 2
 ## expect List.countIf [1, 2, 3] (\num -> num > 1 ) == 2
 ## ```
@@ -705,7 +705,7 @@ countIf = \list, predicate ->
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
-## ```
+## ```roc
 ## expect List.keepOks ["1", "Two", "23", "Bird"] Str.toI32 == [1, 23]
 ##
 ## expect List.keepOks [["a", "b"], [], ["c", "d", "e"], [] ] List.first == ["a", "c"]
@@ -724,7 +724,7 @@ keepOks = \list, toResult ->
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
-## ```
+## ```roc
 ## List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
 ## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
@@ -742,7 +742,7 @@ keepErrs = \list, toResult ->
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
-## ```
+## ```roc
 ## expect List.map [1, 2, 3] (\num -> num + 1) == [2, 3, 4]
 ##
 ## expect List.map ["", "a", "bc"] Str.isEmpty == [Bool.true, Bool.false, Bool.false]
@@ -755,7 +755,7 @@ map : List a, (a -> b) -> List b
 ##
 ## Some languages have a function named `zip`, which does something similar to
 ## calling [List.map2] passing two lists and `Pair`:
-## ```
+## ```roc
 ## zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
 ## ```
 map2 : List a, List b, (a, b -> c) -> List c
@@ -772,7 +772,7 @@ map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
-## ```
+## ```roc
 ## expect List.mapWithIndex [10, 20, 30] (\num, index -> num + index) == [10, 21, 32]
 ## ```
 mapWithIndex : List a, (a, U64 -> b) -> List b
@@ -797,23 +797,23 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ## Returns a list of all the integers between `start` and `end`.
 ##
 ## To include the `start` and `end` integers themselves, use `At` like so:
-## ```
+## ```roc
 ## List.range { start: At 2, end: At 5 } # returns [2, 3, 4, 5]
 ## ```
 ## To exclude them, use `After` and `Before`, like so:
-## ```
+## ```roc
 ## List.range { start: After 2, end: Before 5 } # returns [3, 4]
 ## ```
 ## You can have the list end at a certain length rather than a certain integer:
-## ```
+## ```roc
 ## List.range { start: At 6, end: Length 4 } # returns [6, 7, 8, 9]
 ## ```
 ## If `step` is specified, each integer increases by that much. (`step: 1` is the default.)
-## ```
+## ```roc
 ## List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
 ## ```
 ## List.range will also generate a reversed list if step is negative or end comes before start:
-## ```
+## ```roc
 ## List.range { start: At 5, end: At 2 } # returns [5, 4, 3, 2]
 ## ```
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
@@ -966,12 +966,12 @@ first = \list ->
         Err _ -> Err ListWasEmpty
 
 ## Returns the given number of elements from the beginning of the list.
-## ```
+## ```roc
 ## List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
 ## ```
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
-## ```
+## ```roc
 ## List.takeFirst [1, 2] 5
 ## ```
 ## To *remove* elements from the beginning of the list, use `List.takeLast`.
@@ -986,12 +986,12 @@ takeFirst = \list, outputLength ->
     List.sublist list { start: 0, len: outputLength }
 
 ## Returns the given number of elements from the end of the list.
-## ```
+## ```roc
 ## List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
 ## ```
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
-## ```
+## ```roc
 ## List.takeLast [1, 2] 5
 ## ```
 ## To *remove* elements from the end of the list, use `List.takeFirst`.
@@ -1132,11 +1132,11 @@ findLastIndex = \list, matches ->
 ## including a total of `len` elements.
 ##
 ## If `start` is outside the bounds of the given list, returns the empty list.
-## ```
+## ```roc
 ## List.sublist [1, 2, 3] { start: 4, len: 0 }
 ## ```
 ## If more elements are requested than exist in the list, returns as many as it can.
-## ```
+## ```roc
 ## List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
 ## ```
 ## > If you want a sublist which goes all the way to the end of the list, no
@@ -1151,7 +1151,7 @@ sublist = \list, config ->
 sublistLowlevel : List elem, U64, U64 -> List elem
 
 ## Intersperses `sep` between the elements of `list`
-## ```
+## ```roc
 ## List.intersperse [1, 2, 3] 9     # [1, 9, 2, 9, 3]
 ## ```
 intersperse : List elem, elem -> List elem
@@ -1211,7 +1211,7 @@ split = \elements, userSplitIndex ->
 
 ## Returns the elements before the first occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
-## ```
+## ```roc
 ## List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Z, Baz] }
 ## ```
 splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
@@ -1227,7 +1227,7 @@ splitFirst = \list, delimiter ->
 
 ## Returns the elements before the last occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
-## ```
+## ```roc
 ## List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Z, Bar], after: [Baz] }
 ## ```
 splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq

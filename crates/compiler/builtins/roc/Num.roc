@@ -159,7 +159,7 @@ interface Num
 ## Represents a number that could be either an [Int] or a [Frac].
 ##
 ## This is useful for functions that can work on either, for example [Num.add], whose type is:
-## ```
+## ```roc
 ## add : Num a, Num a -> Num a
 ## ```
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
@@ -199,7 +199,7 @@ interface Num
 ##
 ## If this default of [I64] is not big enough for your purposes,
 ## you can add an `i128` to the end of the number literal, like so:
-## ```
+## ```roc
 ## Num.toStr 5_000_000_000i128
 ## ```
 ## This `i128` suffix specifies that you want this number literal to be
@@ -268,7 +268,7 @@ Num range := range
 ##
 ## You can optionally put underscores in your [Int] literals.
 ## They have no effect on the number's value, but can make large numbers easier to read.
-## ```
+## ```roc
 ## 1_000_000
 ## ```
 ## Integers come in two flavors: *signed* and *unsigned*.
@@ -335,14 +335,14 @@ Int range : Num (Integer range)
 ##
 ## If you don't specify a type, Roc will default to using [Dec] because it's
 ## the least error-prone overall. For example, suppose you write this:
-## ```
+## ```roc
 ## wasItPrecise = 0.1 + 0.2 == 0.3
 ## ```
 ## The value of `wasItPrecise` here will be `Bool.true`, because Roc uses [Dec]
 ## by default when there are no types specified.
 ##
 ## In contrast, suppose we use `f32` or `f64` for one of these numbers:
-## ```
+## ```roc
 ## wasItPrecise = 0.1f64 + 0.2 == 0.3
 ## ```
 ## Here, `wasItPrecise` will be `Bool.false` because the entire calculation will have
@@ -528,11 +528,11 @@ tau = 2 * pi
 # ------- Functions
 ## Convert a number to a [Str].
 ##
-## ```
+## ```roc
 ## Num.toStr 42
 ## ```
 ## Only [Frac] values will include a decimal point, and they will always include one.
-## ```
+## ```roc
 ## Num.toStr 4.2
 ## Num.toStr 4.0
 ## ```
@@ -550,7 +550,7 @@ compare : Num a, Num a -> [LT, EQ, GT]
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-## ```
+## ```roc
 ## 5
 ##     |> Num.isLt 6
 ## ```
@@ -562,7 +562,7 @@ isLt : Num a, Num a -> Bool
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-## ```
+## ```roc
 ## 6
 ##     |> Num.isGt 5
 ## ```
@@ -625,14 +625,14 @@ toFrac : Num * -> Frac *
 
 ## Returns `Bool.true` if the [Frac] is not a number as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
-## ```
+## ```roc
 ## Num.isNaN (0 / 0)
 ## ```
 isNaN : Frac * -> Bool
 
 ## Returns `Bool.true` if the [Frac] is positive or negative infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
-## ```
+## ```roc
 ## Num.isInfinite (1 / 0)
 ##
 ## Num.isInfinite (-1 / 0)
@@ -641,7 +641,7 @@ isInfinite : Frac * -> Bool
 
 ## Returns `Bool.true` if the [Frac] is not an infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
-## ```
+## ```roc
 ## Num.isFinite 42
 ## ```
 isFinite : Frac * -> Bool
@@ -651,7 +651,7 @@ isFinite : Frac * -> Bool
 ## * For a positive number, returns the same number.
 ## * For a negative number, returns the same number except positive.
 ## * For zero, returns zero.
-## ```
+## ```roc
 ## Num.abs 4
 ##
 ## Num.abs -2.5
@@ -671,7 +671,7 @@ abs : Num a -> Num a
 
 ## Returns the absolute difference between two numbers.
 ##
-## ```
+## ```roc
 ## Num.absDiff 5 3
 ##
 ## Num.absDiff -3 5
@@ -691,7 +691,7 @@ absDiff = \a, b ->
         b - a
 
 ## Returns a negative number when given a positive one, and vice versa.
-## ```
+## ```roc
 ## Num.neg 5
 ##
 ## Num.neg -2.5
@@ -716,13 +716,13 @@ neg : Num a -> Num a
 ## (To add an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
-## ```
+## ```roc
 ## 5 + 7
 ##
 ## Num.add 5 7
 ## ```
 ## `Num.add` can be convenient in pipelines.
-## ```
+## ```roc
 ## Frac.pi
 ##     |> Num.add 1.0
 ## ```
@@ -737,13 +737,13 @@ add : Num a, Num a -> Num a
 ## (To subtract an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
-## ```
+## ```roc
 ## 7 - 5
 ##
 ## Num.sub 7 5
 ## ```
 ## `Num.sub` can be convenient in pipelines.
-## ```
+## ```roc
 ## Frac.pi
 ##     |> Num.sub 2.0
 ## ```
@@ -758,7 +758,7 @@ sub : Num a, Num a -> Num a
 ## (To multiply an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
-## ```
+## ```roc
 ## 5 * 7
 ##
 ## Num.mul 5 7
@@ -766,7 +766,7 @@ sub : Num a, Num a -> Num a
 ##
 ## `Num.mul` can be convenient in pipelines.
 ##
-## ```
+## ```roc
 ## Frac.pi
 ##     |> Num.mul 2.0
 ## ```
@@ -778,7 +778,7 @@ mul : Num a, Num a -> Num a
 
 ## Obtains the smaller between two numbers of the same type.
 ##
-## ```
+## ```roc
 ## Num.min 100 0
 ##
 ## Num.min 3.0 -3.0
@@ -792,7 +792,7 @@ min = \a, b ->
 
 ## Obtains the greater between two numbers of the same type.
 ##
-## ```
+## ```roc
 ## Num.max 100 0
 ##
 ## Num.max 3.0 -3.0
@@ -828,7 +828,7 @@ atan : Frac a -> Frac a
 ## > this standard, deviating from these rules has a significant performance
 ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
-## ```
+## ```roc
 ## Num.sqrt 4.0
 ##
 ## Num.sqrt 1.5
@@ -877,13 +877,13 @@ logChecked = \x ->
 ##
 ## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
 ## one of the functions in this module like #toDec.
-## ```
+## ```roc
 ## 5.0 / 7.0
 ##
 ## Num.div 5 7
 ## ```
 ## `Num.div` can be convenient in pipelines.
-## ```
+## ```roc
 ## Num.pi
 ##     |> Num.div 2.0
 ## ```
@@ -912,7 +912,7 @@ divCeilChecked = \a, b ->
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denominator to this function! If you do,
 ## it will crash.
-## ```
+## ```roc
 ## 5 // 7
 ##
 ## Num.divTrunc 5 7
@@ -941,7 +941,7 @@ divTruncUnchecked : Int a, Int a -> Int a
 ## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
 ## `a % b` is shorthand for `Num.rem a b`.
-## ```
+## ```roc
 ## 5 % 7
 ##
 ## Num.rem 5 7
@@ -992,7 +992,7 @@ bitwiseNot = \n ->
 ##
 ## The least significant bits always become 0. This means that shifting left is
 ## like multiplying by factors of two for unsigned integers.
-## ```
+## ```roc
 ## shiftLeftBy 0b0000_0011 2 == 0b0000_1100
 ##
 ## 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
@@ -1003,7 +1003,7 @@ shiftLeftBy : Int a, U8 -> Int a
 ## Bitwise arithmetic shift of a number by another
 ##
 ## The most significant bits are copied from the current.
-## ```
+## ```roc
 ## shiftRightBy 0b0000_1100 2 == 0b0000_0011
 ##
 ## 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
@@ -1017,7 +1017,7 @@ shiftRightBy : Int a, U8 -> Int a
 ##
 ## The most significant bits always become 0. This means that shifting right is
 ## like dividing by factors of two for unsigned integers.
-## ```
+## ```roc
 ## shiftRightZfBy 0b0010_1000 2 == 0b0000_1010
 ##
 ## 0b0010_1000 |> shiftRightZfBy 2 == 0b0000_1010
@@ -1053,7 +1053,7 @@ powInt : Int a, Int a -> Int a
 
 ## Counts the number of most-significant (leading in a big-Endian sense) zeroes in an integer.
 ##
-## ```
+## ```roc
 ## Num.countLeadingZeroBits 0b0001_1100u8
 ##
 ## 3
@@ -1066,7 +1066,7 @@ countLeadingZeroBits : Int a -> U8
 
 ## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
 ##
-## ```
+## ```roc
 ## Num.countTrailingZeroBits 0b0001_1100u8
 ##
 ## 2
@@ -1079,7 +1079,7 @@ countTrailingZeroBits : Int a -> U8
 
 ## Counts the number of set bits in an integer.
 ##
-## ```
+## ```roc
 ## Num.countOneBits 0b0001_1100u8
 ##
 ## 3

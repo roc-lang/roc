@@ -169,19 +169,33 @@ impl AnalyzedDocument {
             declarations,
             module_id,
             interns,
+            modules_info,
             ..
         } = self.module()?;
 
         let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
+
+        //TODO:Can this be integrated into find closest type? is it even worth it?
+        let docs_opt = self
+            .symbol_at(position)
+            .and_then(|symb| modules_info.docs.get(module_id)?.get_doc_for_symbol(&symb));
+
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 
         let range = region.to_range(self.line_info());
 
+        let type_content = MarkedString::LanguageString(LanguageString {
+            language: "roc".to_string(),
+            value: type_str,
+        });
+
+        let content = vec![Some(type_content), docs_opt.map(MarkedString::String)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
         Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                language: "roc".to_string(),
-                value: type_str,
-            })),
+            contents: HoverContents::Array(content),
             range: Some(range),
         })
     }
@@ -285,6 +299,7 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     module_id,
                     interns,
+                    modules_info.docs.get(module_id),
                     exposed_imports,
                 );
                 Some(completions)
