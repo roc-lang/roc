@@ -113,7 +113,13 @@ pub(super) fn finalizer(
         .zip(field_vars.iter().rev())
         .zip(result_field_vars.iter().rev())
     {
-        let cond_expr = attempt_empty_decode_if_missing(
+        // [Ok field_var,Err DecodeError]
+        // when rec.f0 is
+        //     Err _ ->
+        //         when Decode.decodeWith [] Decode.decoder fmt is
+        //             rec2 -> rec2.result
+        //     Ok a -> Ok a
+        let (attempt_empty_decode_expr, attempt_empty_decode_var) = attempt_empty_decode_if_missing(
             state_record_var,
             env,
             field_var,
@@ -130,7 +136,7 @@ pub(super) fn finalizer(
         let ok_branch = WhenBranch {
             patterns: vec![WhenBranchPattern {
                 pattern: Loc::at_zero(Pattern::AppliedTag {
-                    whole_var: result_field_var,
+                    whole_var: attempt_empty_decode_var,
                     ext_var: Variable::EMPTY_TAG_UNION,
                     tag_name: "Ok".into(),
                     arguments: vec![(field_var, Loc::at_zero(Pattern::Identifier(*symbol)))],
@@ -167,12 +173,12 @@ pub(super) fn finalizer(
         };
 
         body = Expr::When {
-            loc_cond: Box::new(Loc::at_zero(cond_expr)),
-            cond_var: result_field_var,
+            loc_cond: Box::new(Loc::at_zero(attempt_empty_decode_expr)),
+            cond_var: attempt_empty_decode_var,
             expr_var: return_type_var,
             region: Region::zero(),
             branches: vec![ok_branch, err_branch],
-            branches_cond_var: result_field_var,
+            branches_cond_var: attempt_empty_decode_var,
             exhaustive: ExhaustiveMark::known_exhaustive(),
         };
     }
@@ -245,16 +251,16 @@ fn attempt_empty_decode_if_missing(
     fmt_arg_symbol: Symbol,
     decode_err_var: Variable,
     symbol: &Symbol,
-) -> Expr {
+) -> (Expr, Variable) {
+    let (decode_expr, rec_result, rec_dot_result) = decode_with(
+        env,
+        field_var,
+        empty_list(Variable::U8),
+        fmt_arg_var,
+        fmt_arg_symbol,
+        decode_err_var,
+    );
     let decode_when = {
-        let (decode_expr, rec_result, rec_dot_result) = decode_with(
-            env,
-            field_var,
-            empty_list(Variable::U8),
-            fmt_arg_var,
-            fmt_arg_symbol,
-            decode_err_var,
-        );
         let decoder_rec_symb = env.new_symbol("decRec");
 
         let branch = WhenBranch {
@@ -285,7 +291,7 @@ fn attempt_empty_decode_if_missing(
         }
     };
 
-    // when rec.first is
+    // when rec.f0 is
     let cond_expr = Expr::RecordAccess {
         record_var: state_record_var,
         ext_var: env.new_ext_var(ExtensionKind::Record),
@@ -295,7 +301,7 @@ fn attempt_empty_decode_if_missing(
     };
 
     // Example: `Ok x -> Ok x`
-    let ok_branch = ok_to_ok_branch(result_field_var, result_field_var, field_var, symbol, env);
+    let ok_branch = ok_to_ok_branch(result_field_var, rec_dot_result, field_var, symbol, env);
 
     // Example: `_ -> Decode.partial [] Decode.decoder fmt  `
     let err_branch = WhenBranch {
@@ -308,13 +314,14 @@ fn attempt_empty_decode_if_missing(
         redundant: RedundantMark::known_non_redundant(),
     };
 
-    Expr::When {
+    let expr = Expr::When {
         loc_cond: Box::new(Loc::at_zero(cond_expr)),
         cond_var: result_field_var,
-        expr_var: result_field_var,
+        expr_var: rec_dot_result,
         region: Region::zero(),
         branches: vec![ok_branch, err_branch],
         branches_cond_var: result_field_var,
         exhaustive: ExhaustiveMark::known_exhaustive(),
-    }
+    };
+    (expr, rec_dot_result)
 }

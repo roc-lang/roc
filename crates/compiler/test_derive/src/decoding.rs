@@ -125,12 +125,12 @@ fn record_2_fields() {
         assert_snapshot!(golden, @r###"
         # derived for { first : Str, second : Str }
         # Decoder { first : val, second : val1 } fmt where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
-        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
+        # List U8, fmt -[[custom(25)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
         # Specialization lambda sets:
-        #   @<1>: [[custom(22)]]
+        #   @<1>: [[custom(25)]]
         #Derived.decoder_{first,second} =
           custom
-            \#Derived.bytes3, #Derived.fmt3 ->
+            \#Derived.bytes3, #Derived.fmt4 ->
               decodeWith
                 #Derived.bytes3
                 (record
@@ -139,8 +139,8 @@ fn record_2_fields() {
                     when #Derived.field is
                       "first" ->
                         Keep (custom
-                          \#Derived.bytes, #Derived.fmt ->
-                            when decodeWith #Derived.bytes decoder #Derived.fmt is
+                          \#Derived.bytes, #Derived.fmt2 ->
+                            when decodeWith #Derived.bytes decoder #Derived.fmt2 is
                               #Derived.rec ->
                                 {
                                   result: when #Derived.rec.result is
@@ -151,8 +151,8 @@ fn record_2_fields() {
                                 })
                       "second" ->
                         Keep (custom
-                          \#Derived.bytes2, #Derived.fmt2 ->
-                            when decodeWith #Derived.bytes2 decoder #Derived.fmt2 is
+                          \#Derived.bytes2, #Derived.fmt3 ->
+                            when decodeWith #Derived.bytes2 decoder #Derived.fmt3 is
                               #Derived.rec2 ->
                                 {
                                   result: when #Derived.rec2.result is
@@ -162,15 +162,23 @@ fn record_2_fields() {
                                   rest: #Derived.rec2.rest
                                 })
                       _ -> Skip
-                  \#Derived.stateRecord ->
-                    when #Derived.stateRecord.first is
+                  \#Derived.stateRecord, #Derived.fmt ->
+                    when when #Derived.stateRecord.first is
+                        Ok #Derived.first -> Ok #Derived.first
+                        _ ->
+                          when decodeWith [] decoder #Derived.fmt is
+                            #Derived.decRec2 -> #Derived.decRec2.result is
                       Ok #Derived.first ->
-                        when #Derived.stateRecord.second is
+                        when when #Derived.stateRecord.second is
+                            Ok #Derived.second -> Ok #Derived.second
+                            _ ->
+                              when decodeWith [] decoder #Derived.fmt is
+                                #Derived.decRec -> #Derived.decRec.result is
                           Ok #Derived.second ->
                             Ok { second: #Derived.second, first: #Derived.first }
                           _ -> Err TooShort
                       _ -> Err TooShort)
-                #Derived.fmt3
+                #Derived.fmt4
         "###
         )
     })
