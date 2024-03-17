@@ -3,7 +3,7 @@ use roc_can::expr::{
 };
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
-use roc_module::called_via::CalledVia;
+
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -17,13 +17,13 @@ use crate::synth_var;
 use crate::util::{empty_list, ok_to_ok_branch, Env, ExtensionKind};
 
 use super::decodeWith::decode_with;
-use super::wrap_in_decode_custom_decode_with;
+
 // Example:
 // finalizer = \rec ->
-//     when rec.first is
-//         Ok first ->
-//             when rec.second is
-//                 Ok second -> Ok {first, second}
+//     when rec.f0 is
+//         Ok f0  ->
+//             when rec.f1 is
+//                 Ok f1 -> Ok {f0, f1}
 //                 Err NoField -> Err TooShort
 //         Err NoField -> Err TooShort
 
@@ -63,7 +63,7 @@ pub(super) fn finalizer(
         fields_map.insert(field_name.clone(), field);
     }
 
-    // The bottom of the happy path - return the decoded record {first: a, second: b} wrapped with
+    // The bottom of the happy path - return the decoded record {f0: a, f1: b} wrapped with
     // "Ok".
     let return_type_var;
     let mut body = {
@@ -103,8 +103,8 @@ pub(super) fn finalizer(
 
     // Unwrap each result in the decoded state
     //
-    // when rec.first is
-    //     Ok first -> ...happy path...
+    // when rec.f0 is
+    //     Ok f0  -> ...happy path...
     //     Err NoField -> Err TooShort
     for (((symbol, field_name), &field_var), &result_field_var) in pattern_symbols
         .iter()
@@ -113,7 +113,7 @@ pub(super) fn finalizer(
         .zip(field_vars.iter().rev())
         .zip(result_field_vars.iter().rev())
     {
-        // [Ok field_var,Err DecodeError]
+        //[Ok field_var, Err DecodeError]
         // when rec.f0 is
         //     Err _ ->
         //         when Decode.decodeWith [] Decode.decoder fmt is
@@ -172,6 +172,15 @@ pub(super) fn finalizer(
             redundant: RedundantMark::known_non_redundant(),
         };
 
+        // when
+        //    when stateRecord.f0 is
+        //        Ok f0-> Ok f0
+        //        _ ->
+        //            when Decode.decodeWith [] Decode.decoder fmt is
+        //                decRec -> decRec.result
+        // is
+        //     _-> TooShort
+        //     Ok x-> expr
         body = Expr::When {
             loc_cond: Box::new(Loc::at_zero(attempt_empty_decode_expr)),
             cond_var: attempt_empty_decode_var,
@@ -231,7 +240,7 @@ pub(super) fn finalizer(
 /// when rec.f0 is
 ///     Err _ ->
 ///         when Decode.decodeWith [] Decode.decoder fmt is
-///             rec2 -> rec2.result
+///             decRec-> decRec.result
 ///     Ok a -> Ok a
 /// ```
 /// Tries to decode the field with a zero byte input if it missing,  

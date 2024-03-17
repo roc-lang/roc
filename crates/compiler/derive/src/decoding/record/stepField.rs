@@ -14,10 +14,10 @@ use roc_types::subs::{
 use roc_types::types::RecordField;
 
 use crate::synth_var;
-use crate::util::{empty_list, ok_to_ok_branch, Env, ExtensionKind};
+use crate::util::{Env, ExtensionKind};
 
 use super::decodeWith::decode_with;
-use super::wrap_in_decode_custom_decode_with;
+
 // Example:
 // stepField = \state, field ->
 //     when field is
@@ -496,7 +496,8 @@ fn state_record_update(
     decode_err_var: Variable,
     result_field_var: Variable,
 ) -> Expr {
-    let branch_body = {
+    
+    {
         // result: when rec.result is
         //     Ok val -> Ok {state & first: Ok val},
         //     Err err -> Err err
@@ -646,6 +647,5 @@ fn state_record_update(
             record_var: custom_callback_ret_var,
             fields: fields_map,
         }
-    };
-    branch_body
+    }
 }

@@ -218,7 +218,8 @@ pub(crate) fn ok_to_ok_branch(
     symbol: &Symbol,
     env: &mut Env<'_>,
 ) -> WhenBranch {
-    let ok_branch = WhenBranch {
+    
+    WhenBranch {
         patterns: vec![WhenBranchPattern {
             pattern: Loc::at_zero(Pattern::AppliedTag {
                 whole_var: pattern_var,
@@ -236,8 +237,7 @@ pub(crate) fn ok_to_ok_branch(
         }),
         guard: None,
         redundant: RedundantMark::known_non_redundant(),
-    };
-    ok_branch
+    }
 }
 /// `[]`
 /// Creates an empty list of the type provided

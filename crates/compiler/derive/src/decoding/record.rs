@@ -1,20 +1,20 @@
 use roc_can::expr::{
-    AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
+    Expr, Field,
 };
-use roc_can::pattern::Pattern;
+
 use roc_collections::SendMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, ExhaustiveMark, FlatType, LambdaSet, OptVariable, RecordFields, RedundantMark,
-    SubsSlice, TagExt, UnionLambdas, UnionTags, Variable,
+    Content, FlatType, RecordFields,
+    SubsSlice, TagExt, UnionTags, Variable,
 };
 use roc_types::types::RecordField;
 
 use crate::synth_var;
-use crate::util::{empty_list, ok_to_ok_branch, Env, ExtensionKind};
+use crate::util::{Env, ExtensionKind};
 
 use self::finalizer::finalizer;
 use self::stepField::step_field;
