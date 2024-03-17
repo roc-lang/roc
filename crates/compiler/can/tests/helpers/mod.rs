@@ -4,7 +4,7 @@ use self::bumpalo::Bump;
 use roc_can::env::Env;
 use roc_can::expr::Output;
 use roc_can::expr::{canonicalize_expr, Expr};
-use roc_can::operator;
+use roc_can::desugar;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
@@ -52,7 +52,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar_expr(
+    let loc_expr = desugar::desugar_expr(
         arena,
         &loc_expr,
         expr_str,

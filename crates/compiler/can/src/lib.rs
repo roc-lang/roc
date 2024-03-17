@@ -20,7 +20,7 @@ pub mod expected;
 pub mod expr;
 pub mod module;
 pub mod num;
-pub mod operator;
+pub mod desugar;
 pub mod pattern;
 pub mod procedure;
 pub mod scope;
