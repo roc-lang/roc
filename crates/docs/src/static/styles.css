@@ -74,7 +74,6 @@ table tr td {
     font-family: var(--font-mono);
     font-size: 18px;
     font-weight: normal;
-    color: var(--violet);
     width: auto;
     margin-top: 0;
     margin-bottom: 24px;
@@ -82,7 +81,13 @@ table tr td {
     border-left: 2px solid var(--violet);
 }
 
-.entry-name a {
+.entry-name .kw,
+.entry-name .punct {
+    color: var(--violet);
+}
+
+.entry-name a:has(svg) {
+    /* DEPRECATED */
     visibility: hidden;
     display: inline-block;
     width: 18px;
@@ -93,12 +98,18 @@ table tr td {
     color: var(--violet);
 }
 
-.entry-name:hover a {
+.entry-name a:first-of-type {
+    font-weight: bold;
+}
+
+.entry-name:hover a:has(svg) {
+    /* DEPRECATED */
     visibility: visible;
     text-decoration: none;
 }
 
-.entry-name:not(:hover) a {
+.entry-name:not(:hover) a:has(svg) {
+    /* DEPRECATED */
     visibility: hidden;
     transition: visibility 2s;
 }
@@ -180,6 +191,10 @@ main {
     /* fixes issues with horizonatal scroll in cases where word is too long,
   like in one of the examples at https://www.roc-lang.org/builtins/Num#Dec */
     overflow-wrap: break-word;
+}
+
+h3 {
+    cursor: text; /* Makes it more obvious where type annotations can be highlighted */
 }
 
 /* DEPRECATED - Module links on the package index page (/index.html) */
@@ -326,7 +341,7 @@ footer p {
     width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-left: 14px;
+    margin-left: 18px;
     padding-left: 26px;
     border-left: 2px solid var(--violet);
 }

@@ -402,16 +402,7 @@ pub fn load_types(
     // TODO the function kind may need to be parameterizable.
     let function_kind = FunctionKind::LambdaSet;
     let arena = &Bump::new();
-    let LoadedModule {
-        module_id: home,
-        mut can_problems,
-        mut type_problems,
-        mut declarations_by_id,
-        mut solved,
-        interns,
-        exposed_to_host,
-        ..
-    } = roc_load::load_and_typecheck(
+    let loaded_module = roc_load::load_and_typecheck(
         arena,
         full_file_path,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -434,8 +425,20 @@ pub fn load_types(
             todo!("{:?}", problem);
         }
     });
+    let decls = loaded_module
+        .declarations(loaded_module.module_id)
+        .unwrap()
+        .clone();
+    let LoadedModule {
+        module_id: home,
+        mut can_problems,
+        mut type_problems,
+        mut solved,
+        interns,
+        exposed_to_host,
+        ..
+    } = loaded_module;
 
-    let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
 
     let can_problems = can_problems.remove(&home).unwrap_or_default();

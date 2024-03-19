@@ -3037,6 +3037,22 @@ impl Declarations {
 
         collector
     }
+
+    pub fn ann_from_symbol(&self, symbol: Symbol) -> Option<Result<&Annotation, Variable>> {
+        self.symbols
+            .iter()
+            .position(|loc_symbol| loc_symbol.value == symbol)
+            .and_then(|index| match self.annotations.get(index) {
+                Some(Some(ann)) => Some(Ok(ann)),
+                _ => {
+                    if let Some(&var) = self.variables.get(index) {
+                        Some(Err(var))
+                    } else {
+                        None
+                    }
+                }
+            })
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);

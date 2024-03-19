@@ -355,21 +355,21 @@ pub fn infer_queries<'a>(
     allow_can_errors: bool,
     function_kind: FunctionKind,
 ) -> Result<InferredProgram, Box<dyn Error>> {
-    let (
-        LoadedModule {
-            module_id: home,
-            mut can_problems,
-            mut type_problems,
-            mut declarations_by_id,
-            mut solved,
-            interns,
-            abilities_store,
-            ..
-        },
-        src,
-    ) = run_load_and_infer(src, dependencies, options.no_promote, function_kind)?;
-
-    let declarations = declarations_by_id.remove(&home).unwrap();
+    let (loaded_module, src) =
+        run_load_and_infer(src, dependencies, options.no_promote, function_kind)?;
+    let declarations = loaded_module
+        .declarations(loaded_module.module_id)
+        .unwrap()
+        .clone();
+    let LoadedModule {
+        module_id: home,
+        mut can_problems,
+        mut type_problems,
+        mut solved,
+        interns,
+        abilities_store,
+        ..
+    } = loaded_module;
     let subs = solved.inner_mut();
 
     let can_problems = can_problems.remove(&home).unwrap_or_default();

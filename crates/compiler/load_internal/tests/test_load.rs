@@ -256,6 +256,7 @@ fn load_fixture(
 
 fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&str, &str>) {
     let home = loaded_module.module_id;
+    let declarations = loaded_module.declarations(home).unwrap().clone();
     let mut subs = loaded_module.solved.into_inner();
 
     assert_eq!(
@@ -271,8 +272,6 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
     let debug_print = DebugPrint::NOTHING;
 
     let interns = &loaded_module.interns;
-    let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
-
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
 
@@ -400,7 +399,7 @@ fn module_with_deps() {
         .is_empty(),);
 
     let mut def_count = 0;
-    let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
+    let declarations = loaded_module.declarations(home).unwrap();
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
 
@@ -1130,15 +1129,15 @@ fn explicit_builtin_import() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_import/Main.roc ─────────────
-            
+
             The builtin Bool was imported here:
-            
+
             3│  import Bool
                 ^^^^^^^^^^^
-            
+
             Builtins are imported automatically, so you can remove this import.
-            
-            Tip: Learn more about builtins in the tutorial: 
+
+            Tip: Learn more about builtins in the tutorial:
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
         )
@@ -1165,15 +1164,15 @@ fn explicit_builtin_import_empty_exposing() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/empty_exposing_builtin_import/Main.roc ───────
-            
+
             The builtin Bool was imported here:
-            
+
             3│  import Bool exposing []
                 ^^^^^^^^^^^^^^^^^^^^^^^
-            
+
             Builtins are imported automatically, so you can remove this import.
-            
-            Tip: Learn more about builtins in the tutorial: 
+
+            Tip: Learn more about builtins in the tutorial:
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
         )
@@ -1204,16 +1203,16 @@ fn explicit_builtin_type_import() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_type_import/Main.roc ────────
-            
+
             `Dict.Dict` was imported here:
-            
+
             3│  import Dict exposing [Dict, isEmpty]
                                       ^^^^
-            
+
             All types from builtins are automatically exposed, so you can remove
             `Dict` from the exposing list.
-            
-            Tip: Learn more about builtins in the tutorial: 
+
+            Tip: Learn more about builtins in the tutorial:
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
         )
@@ -1717,7 +1716,7 @@ fn module_cyclic_import_transitive() {
             indoc!(
                 r"
                 module []
-                
+
                 import Age
                 "
             ),

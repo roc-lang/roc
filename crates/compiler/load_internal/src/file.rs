@@ -716,8 +716,6 @@ struct State<'a> {
 
     pub ident_ids_by_module: SharedIdentIdsByModule,
 
-    pub declarations_by_id: MutMap<ModuleId, Declarations>,
-
     pub exposed_symbols_by_module: MutMap<ModuleId, VecSet<Symbol>>,
 
     pub timings: MutMap<ModuleId, ModuleTiming>,
@@ -793,7 +791,6 @@ impl<'a> State<'a> {
             derived_module: Default::default(),
             constrained_ident_ids: IdentIds::exposed_builtins(0),
             ident_ids_by_module,
-            declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
@@ -2654,7 +2651,6 @@ fn update<'a>(
                     })?;
 
                 // bookkeeping
-                state.declarations_by_id.insert(module_id, decls);
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
                 // As far as type-checking goes, once we've solved
@@ -3326,8 +3322,6 @@ fn finish(
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
-    let declarations_by_id = state.declarations_by_id;
-
     roc_checkmate::dump_checkmate!(checkmate);
 
     LoadedModule {
@@ -3337,8 +3331,8 @@ fn finish(
         solved,
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
-        declarations_by_id,
         typechecked: state.module_cache.checked,
+        aliases: state.module_cache.aliases,
         dep_idents,
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,

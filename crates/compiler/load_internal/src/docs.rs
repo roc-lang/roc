@@ -32,6 +32,7 @@ impl ModuleDocumentation {
 #[derive(Debug, Clone)]
 pub enum DocEntry {
     DocDef(DocDef),
+    /// DEPRECATED - this turned out to make more sense as doc comments in the `exposes` list instead.
     DetachedDoc(String),
     ModuleDoc(String),
 }

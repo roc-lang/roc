@@ -35,7 +35,6 @@ pub struct LoadedModule {
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
-    pub declarations_by_id: MutMap<ModuleId, Declarations>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
@@ -48,10 +47,10 @@ pub struct LoadedModule {
     pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
     pub typechecked: MutMap<ModuleId, CheckedModule>,
-
     pub imports: MutMap<ModuleId, MutSet<ModuleId>>,
     pub exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
     pub exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
+    pub aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
 }
 
 impl LoadedModule {
@@ -60,6 +59,16 @@ impl LoadedModule {
         let module_name = self.interns.module_name(module_id);
 
         module_name.filename(&self.filename)
+    }
+
+    pub fn aliases(&self, module_id: ModuleId) -> Option<&MutMap<Symbol, (bool, Alias)>> {
+        self.aliases.get(&module_id)
+    }
+
+    pub fn declarations(&self, module_id: ModuleId) -> Option<&Declarations> {
+        self.typechecked
+            .get(&module_id)
+            .map(|checked| &checked.decls)
     }
 
     pub fn total_problems(&self) -> usize {

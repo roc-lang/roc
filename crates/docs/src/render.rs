@@ -1,17 +1,19 @@
 use crate::{
     file::{self, Assets},
-    html::{ModuleDocs, SidebarEntry},
+    html::{self, ModuleDocs, SidebarEntry},
     problem::Problem,
 };
-use bumpalo::Bump;
+use bumpalo::{collections::string::String, Bump};
 use core::fmt::{self, Write};
+use roc_can::expr::Declarations;
 use roc_collections::{VecMap, VecSet};
 use roc_load::{
     docs::{DocEntry, ModuleDocumentation},
     ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading,
 };
-use roc_module::symbol::ModuleId;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
+use roc_types::{subs::Subs, types::Alias};
 use std::path::Path;
 
 pub fn generate<'a>(
@@ -67,22 +69,14 @@ pub fn generate<'a>(
     // Copy over the assets
     file::populate_build_dir(arena, build_dir, &assets)?;
 
-    // TODO get these from the platform's source file rather than hardcoding them!
+    // TODO get this name from somewhere else (e.g. the <h1> in the platform's header docs)
+    // and if that's unavailable, default to "Package" or "Platform" based on which it is.
+    // Also, include a version number (from the source code).
+    //
     // github.com/roc-lang/roc/issues/5712
     let package_name = "Documentation";
-
-    let exposed_symbols_by_module = {
-        // Heurstic (a guess, really): assume an average of 8 exposed symbols per module.
-        let mut map = VecMap::with_capacity(loaded_module.docs_by_module.len() * 8);
-
-        for (module_id, docs) in loaded_module.docs_by_module.iter() {
-            map.insert(module_id, &docs.exposed_symbols);
-        }
-
-        map
-    };
     let home = loaded_module.module_id;
-    let interns = loaded_module.interns;
+    let interns = &loaded_module.interns;
     let todo = (); // TODO do we actually use/need home_ident_ids?
     let home_ident_ids = interns.all_ident_ids.get(&home).unwrap_or_else(|| {
         #[cfg(debug)] {
@@ -94,22 +88,14 @@ pub fn generate<'a>(
             arena.alloc(Default::default())
         }
     });
-    let module_name = interns.module_name(home);
-    let docs_by_id = loaded_module.docs_by_module.iter();
-    // let module_sidebar_entries = home_exposed_symbols.exposed.map(|symbol| {
-    //     let todo = (); // TODO need to do this not on home_exposed_symbols
-    //     let doc_comment = None; // TODO keep these after parsing somehow.
 
-    //     SidebarEntry {
-    //         module_name: module_name.as_str(),
-    //         doc_comment,
-    //     }
-    // });
+    let module_name = interns.module_name(home);
+    let subs = loaded_module.solved.inner();
     let todo = (); // TODO don't have base_urls be empty here:
     let base_urls = Default::default();
     let todo = (); // TODO populate the package doc comment as markdown from the AST
-    let package_doc_comment = "";
-    let package_sidebar_entries = docs_by_id.map(|(_, module_docs)| {
+    let package_doc_comment_html = "";
+    let package_sidebar_entries = loaded_module.docs_by_module.iter().map(|(_, module_docs)| {
         let doc_comment = None; // TODO keep these after parsing somehow.
 
         SidebarEntry {
@@ -118,7 +104,7 @@ pub fn generate<'a>(
                 DocEntry::DocDef(doc_def)
                     if module_docs.exposed_symbols.contains(&doc_def.symbol) =>
                 {
-                    Some(arena.alloc(&doc_def.name))
+                    Some(&doc_def.name)
                 }
                 _ => None,
             }),
@@ -126,23 +112,49 @@ pub fn generate<'a>(
         }
     });
     let module_docs = ModuleDocs {
+        arena,
         module_name,
-        package_doc_comment_html: package_doc_comment,
+        package_doc_comment_html,
         home,
         home_ident_ids,
-        interns: &interns,
+        interns,
         package_sidebar_entries,
         base_urls,
     };
 
     render_to_disk(RenderArgs {
         module_docs,
+        subs,
         arena,
-        base_url: &base_url(user_specified_base_url),
+        user_specified_base_url,
         build_dir,
         package_name,
         docs_by_id: loaded_module.docs_by_module.iter(),
         raw_template_html: assets.raw_template_html.as_ref(),
+        declarations: |module_id| loaded_module.declarations(module_id),
+        exposed_aliases: |module_id| {
+            loaded_module
+                .aliases(module_id)
+                .into_iter()
+                .flatten()
+                .filter_map(|(symbol, (is_exposed, alias))| {
+                    if *is_exposed {
+                        Some((*symbol, alias))
+                    } else {
+                        None
+                    }
+                })
+        },
+        alias_by_symbol: |symbol| {
+            loaded_module
+                .aliases
+                .get(&symbol.module_id())
+                .and_then(|aliases_by_symbol| {
+                    aliases_by_symbol
+                        .get(&symbol)
+                        .map(|(_exposed, alias)| alias)
+                })
+        },
     })
 }
 
@@ -170,62 +182,65 @@ fn load_module_for_docs<'a>(
 struct RenderArgs<
     'a,
     DocsById: Iterator<Item = &'a (ModuleId, ModuleDocumentation)> + Clone,
-    Exposed: Iterator<Item = S> + Clone,
-    SidebarEntries: Iterator<Item = SidebarEntry<'a, Exposed, S>> + Clone,
+    ExposedSidebarEntries: Iterator<Item = S> + Clone,
+    SidebarEntries: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntries, S>> + Clone,
     S: AsRef<str> + fmt::Display,
+    Decls: Fn(ModuleId) -> Option<&'a Declarations>,
+    ExposedAliases: Fn(ModuleId) -> AliasIter,
+    AliasIter: Iterator<Item = (Symbol, &'a Alias)> + Clone,
+    AliasBySymbol: Fn(Symbol) -> Option<&'a Alias>,
+    BaseUrl: AsRef<str>,
 > {
     arena: &'a Bump,
-    base_url: &'a str,
+    subs: &'a Subs,
+    user_specified_base_url: Option<BaseUrl>,
     build_dir: &'a Path,
     package_name: &'a str,
     docs_by_id: DocsById,
     raw_template_html: &'a str,
-    module_docs: ModuleDocs<'a, SidebarEntries, Exposed, S>,
+    declarations: Decls,
+    exposed_aliases: ExposedAliases,
+    module_docs: ModuleDocs<'a, SidebarEntries, ExposedSidebarEntries, S>,
+    alias_by_symbol: AliasBySymbol,
 }
 
 fn render_to_disk<
     'a,
     DocsById: Iterator<Item = &'a (ModuleId, ModuleDocumentation)> + Clone,
-    Exposed: Iterator<Item = S> + Clone,
-    SidebarEntries: Iterator<Item = SidebarEntry<'a, Exposed, S>> + Clone,
+    ExposedSidebarEntries: Iterator<Item = S> + Clone,
+    SidebarEntries: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntries, S>> + Clone,
     S: AsRef<str> + fmt::Display,
+    Decls: Fn(ModuleId) -> Option<&'a Declarations>,
+    ExposedAliases: Fn(ModuleId) -> AliasIter,
+    AliasIter: Iterator<Item = (Symbol, &'a Alias)> + Clone,
+    BaseUrl: AsRef<str>,
+    AliasBySymbol: Fn(Symbol) -> Option<&'a Alias>,
 >(
     RenderArgs {
         arena,
-        base_url,
+        subs,
+        user_specified_base_url,
         build_dir,
         package_name,
         docs_by_id,
         raw_template_html,
+        declarations,
+        exposed_aliases,
         module_docs,
-    }: RenderArgs<'a, DocsById, Exposed, SidebarEntries, S>,
+        alias_by_symbol,
+    }: RenderArgs<
+        'a,
+        DocsById,
+        ExposedSidebarEntries,
+        SidebarEntries,
+        S,
+        Decls,
+        ExposedAliases,
+        AliasIter,
+        AliasBySymbol,
+        BaseUrl,
+    >,
 ) -> Result<(), Problem> {
-    let mut buf = bumpalo::collections::string::String::with_capacity_in(1024, arena);
-
-    // Insert asset urls & sidebar links
-    let mut template_html = raw_template_html
-        .replace("<!-- Prefetch links -->", {
-            for (index, (_, module)) in docs_by_id.clone().enumerate() {
-                if index > 0 {
-                    buf.write_str("\n    ");
-                }
-
-                write!(
-                    &mut buf,
-                    "<link rel='prefetch' href='{}'/>",
-                    module.name.as_str()
-                );
-            }
-
-            buf.as_str()
-        })
-        .replace("<!-- base -->", base_url)
-        .replace("<!-- Module links -->", {
-            buf.clear();
-            module_docs.render_sidebar(&mut buf);
-            buf.as_str()
-        });
-
     let all_exposed_symbols = {
         let mut set = VecSet::default();
 
@@ -236,119 +251,175 @@ fn render_to_disk<
         set
     };
 
-    let mut output = template_html.as_str();
+    let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);
+    let mut module_template_html = String::with_capacity_in(raw_template_html.len() + 2048, arena);
+    let mut sidebar_links = String::with_capacity_in(4096, arena);
 
-    // TODO fix: as is, this overrides an existing index.html
+    let buf = &mut buf;
+    let sidebar_links = &mut sidebar_links;
+
+    module_docs.render_sidebar(sidebar_links);
+
     // Write index.html for package (/index.html)
     {
-        {
-            buf.clear();
+        let mut src = raw_template_html;
 
-            if write!(&mut buf, "<title>{package_name}</title>").is_ok() {
-                output = arena.alloc(output.replace("<!-- Page title -->", buf.as_str()));
-            }
+        {
+            src = advance_past("<!-- base -->", src, buf);
+            write_base_url(user_specified_base_url, buf);
         }
 
         {
-            buf.clear();
+            src = advance_past("<!-- Prefetch links -->", src, buf);
 
-            if module_docs
-                .render_package_name_link(package_name, base_url, &mut buf)
-                .is_ok()
-            {
-                output = arena.alloc(output.replace("<!-- Package Name -->", buf.as_str()));
+            for (index, (_, module)) in docs_by_id.clone().enumerate() {
+                if index > 0 {
+                    buf.push_str("\n    ");
+                }
+
+                let _ = write!(
+                    buf,
+                    "<link rel='prefetch' href='{}'/>",
+                    module.name.as_str()
+                );
             }
         }
 
+        // Set module_template_html to be all the replacements we've made so far,
+        // plus the rest of the source template. We'll use this partially-completed
+        // template later on for the individual modules.
         {
-            buf.clear();
+            module_template_html.push_str(&buf);
+            module_template_html.push_str(&src);
+        }
 
-            let active_module_name = module_docs.module_name;
+        {
+            src = advance_past("<!-- Page title -->", src, buf);
+            let _ = write!(buf, "<title>{package_name}</title>");
+        }
 
-            if !active_module_name.is_empty() {
-                write!(buf, "<h2 class='module-name'>{active_module_name}</h2>");
-            }
+        {
+            src = advance_past("<!-- Module links -->", src, buf);
+            buf.push_str(&sidebar_links);
+        }
+
+        {
+            src = advance_past("<!-- Package Name -->", src, buf);
+            html::render_package_name_link(package_name, buf);
+        }
+
+        {
+            src = advance_past("<!-- Module Docs -->", src, buf);
 
             if module_docs.package_doc_comment_html.is_empty() {
                 buf.push_str("Choose a module from the list to see its documentation.");
             } else {
                 buf.push_str(module_docs.package_doc_comment_html);
             }
-
-            output = arena.alloc(output.replace("<!-- Module Docs -->", buf.as_str()));
         }
 
-        file::write(arena, &build_dir.join("index.html"), &output)?;
+        {
+            // Write the rest of the template into the buffer.
+            buf.push_str(&src);
+
+            // Finally, write the accumulated buffer to disk.
+            file::write(arena, &build_dir.join("index.html"), &buf)?;
+
+            buf.clear(); // We're done with this now. It's ready to be reused!
+        }
     }
 
     // Write each package module's index.html file
-    for module_name in docs_by_id.map(|(_, docs)| docs.name.as_str()) {
-        let mut output = template_html.as_str();
-        let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
-
-        file::create_dir_all(arena, &module_dir)?;
+    for (module_id, docs) in docs_by_id {
+        let mut src = module_template_html.as_str();
 
         {
-            buf.clear();
+            let name = docs.name.as_str();
 
-            if write!(&mut buf, "<title>{module_name} - {package_name}</title>",).is_ok() {
-                output = arena.alloc(output.replace("<!-- Page title -->", buf.as_str()));
-            }
-        }
-
-        {
-            buf.clear();
-
-            if module_docs
-                .render_package_name_link(package_name, base_url, &mut buf)
-                .is_ok()
             {
-                output.replace("<!-- Package Name -->", &buf);
+                src = advance_past("<!-- Page title -->", src, buf);
+                let _ = write!(buf, "<title>{name} - {package_name}</title>",);
+            }
+
+            {
+                src = advance_past("<!-- Module links -->", src, buf);
+                buf.push_str(sidebar_links);
+            }
+
+            {
+                src = advance_past("<!-- Package Name -->", src, buf);
+                html::render_package_name_link(package_name, buf);
             }
         }
 
         {
-            buf.clear();
-
-            if module_docs
-                .render_module(&all_exposed_symbols, &mut buf)
-                .is_ok()
-            {
-                output.replace("<!-- Module Docs -->", &buf);
-            }
+            src = advance_past("<!-- Module Docs -->", src, buf);
+            html::render_module(
+                arena,
+                *module_id,
+                &docs,
+                declarations(*module_id),
+                exposed_aliases(*module_id),
+                &alias_by_symbol,
+                &subs,
+                buf,
+            );
         }
 
-        file::write(arena, &module_dir.join("index.html"), output)?;
+        {
+            // Write the rest of the template into the buffer.
+            buf.push_str(&src);
+        }
+
+        {
+            let name = docs.name.as_str();
+            let module_dir = build_dir.join(name.replace('.', "/").as_str());
+
+            file::create_dir_all(arena, &module_dir)?;
+
+            // Finally, write the accumulated buffer to disk.
+            file::write(arena, &module_dir.join("index.html"), &buf)?;
+        }
+
+        buf.clear(); // We're done with this now. It's ready to be reused in the next iteration of the loop!
     }
 
     Ok(())
 }
 
-fn base_url(user_specified_base_url: Option<impl AsRef<str>>) -> String {
+fn advance_past<'a>(needle: &'static str, src: &'a str, buf: &mut String<'_>) -> &'a str {
+    if let Some(start_index) = src.find(needle) {
+        // Copy over everything up to this point.
+        buf.push_str(&src[..start_index]);
+
+        // Advance past the end of this string.
+        &src[(start_index + needle.len())..]
+    } else {
+        unreachable!( // TODO replace this with a panic in debug builds and a much more concise crash in release
+            "Compiler bug in docs generation code: could not find doc template section {:?} in the template - this should never happen!\n\nNOTE: advance_past must be called on each template section in the order they appear in the template! This improves performance, but means that working on sections out of order can lead to this error.\n\nAt this point, the remaining template was:\n\n{src}",
+            needle
+        );
+    }
+}
+
+fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut String) {
     // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
     match user_specified_base_url {
         Some(root_builtins_path) => {
             let root_builtins_path = root_builtins_path.as_ref();
-            let mut url_str = String::with_capacity(root_builtins_path.len() + 64);
 
             if !root_builtins_path.starts_with('/') {
-                url_str.push('/');
+                buf.push('/');
             }
 
-            url_str.push_str(&root_builtins_path);
+            buf.push_str(&root_builtins_path);
 
             if !root_builtins_path.ends_with('/') {
-                url_str.push('/');
+                buf.push('/');
             }
-
-            url_str
         }
         None => {
-            let mut url_str = String::with_capacity(64);
-
-            url_str.push('/');
-
-            url_str
+            buf.push('/');
         }
     }
 }

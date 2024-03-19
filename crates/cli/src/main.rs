@@ -230,7 +230,7 @@ fn main() -> io::Result<()> {
             if matches.get_flag(FLAG_EXPERIMENTAL) {
                 let arena = Bump::new();
 
-                // TODO make this a CLI flag to the `docs` subcommand instead of an env var
+                let todo = (); // TODO make this a CLI flag to the `docs` subcommand instead of an env var
                 let user_specified_base_url = std::env::var("ROC_DOCS_URL_ROOT").ok();
                 let out_dir = out_dir.as_ref();
 
