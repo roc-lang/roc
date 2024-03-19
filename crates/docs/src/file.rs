@@ -5,6 +5,7 @@ use std::{fs, io::ErrorKind, path::Path};
 pub struct Assets<S: AsRef<str>> {
     pub search_js: S,
     pub styles_css: S,
+    pub favicon_svg: S,
     pub raw_template_html: S,
 }
 
@@ -14,6 +15,15 @@ pub fn populate_build_dir<'a, S: AsRef<str>>(
     assets: &Assets<S>,
 ) -> Result<(), Problem> {
     // Clear out the generated-docs dir (we'll create a fresh one at the end)
+
+    // TODO it would be better UX if, instead of removing the dir and then
+    // recreating it, we:
+    // 1. Try to create the dir (recursively creating intermediate dirs as necessary)
+    // 2. If the final dir already existed, recursively delete its contents, but don't delete the dir itself
+    //
+    // This way, you could leave a http-server instance running in the dir while regenerating its contents,
+    // instead of today where it has to be restarted peridoically because the dir it's running in gets deleted.
+
     remove_dir_all(arena, build_dir)?;
     create_dir_all(arena, build_dir)?;
 
@@ -28,6 +38,11 @@ pub fn populate_build_dir<'a, S: AsRef<str>>(
         arena,
         &build_dir.join("styles.css"),
         assets.styles_css.as_ref(),
+    )?;
+    write(
+        arena,
+        &build_dir.join("favicon.svg"),
+        assets.favicon_svg.as_ref(),
     )?;
 
     Ok(())

@@ -189,13 +189,6 @@ main {
     list-style-type: none;
 }
 
-/* Module links on the package index page (/index.html) */
-.index-module-link {
-    display: inline-block;
-    margin: 0;
-    padding: 0;
-}
-
 section {
     padding: 0px 0px 16px 0px;
     margin: 72px 0px;

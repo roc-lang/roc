@@ -4,10 +4,11 @@ use crate::{
     problem::Problem,
 };
 use bumpalo::Bump;
-use core::fmt::Write;
+use core::fmt::{self, Write};
 use roc_collections::{VecMap, VecSet};
 use roc_load::{
-    docs::ModuleDocumentation, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading,
+    docs::{DocEntry, ModuleDocumentation},
+    ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading,
 };
 use roc_module::symbol::ModuleId;
 use roc_packaging::cache::{self, RocCacheDir};
@@ -29,12 +30,14 @@ pub fn generate<'a>(
     let assets = {
         let search_js = include_str!("./static/search.js");
         let styles_css = include_str!("./static/styles.css");
+        let favicon_svg = include_str!("../../../www/public/favicon.svg");
         let raw_template_html = include_str!("./static/index.html");
 
         Assets {
             search_js,
             styles_css,
             raw_template_html,
+            favicon_svg,
         }
     };
 
@@ -44,16 +47,19 @@ pub fn generate<'a>(
 
         // Construct the absolute path to the static assets
         let workspace_dir = std::env!("ROC_WORKSPACE_DIR");
+        let public_dir = Path::new(workspace_dir).join("www/public");
         let static_dir = Path::new(workspace_dir).join("crates/docs/src/static");
 
         // Read the assets from the filesystem
         let search_js = read_to_string(static_dir.join("search.js")).unwrap();
         let styles_css = read_to_string(static_dir.join("styles.css")).unwrap();
+        let favicon_svg = read_to_string(public_dir.join("favicon.svg")).unwrap();
         let raw_template_html = read_to_string(static_dir.join("index.html")).unwrap();
 
         Assets {
             search_js,
             styles_css,
+            favicon_svg,
             raw_template_html,
         }
     };
@@ -101,16 +107,27 @@ pub fn generate<'a>(
     // });
     let todo = (); // TODO don't have base_urls be empty here:
     let base_urls = Default::default();
+    let todo = (); // TODO populate the package doc comment as markdown from the AST
+    let package_doc_comment = "";
     let package_sidebar_entries = docs_by_id.map(|(_, module_docs)| {
         let doc_comment = None; // TODO keep these after parsing somehow.
 
         SidebarEntry {
             link_text: module_docs.name.as_str(),
+            exposed: module_docs.entries.iter().filter_map(|entry| match entry {
+                DocEntry::DocDef(doc_def)
+                    if module_docs.exposed_symbols.contains(&doc_def.symbol) =>
+                {
+                    Some(arena.alloc(&doc_def.name))
+                }
+                _ => None,
+            }),
             doc_comment,
         }
     });
     let module_docs = ModuleDocs {
         module_name,
+        package_doc_comment_html: package_doc_comment,
         home,
         home_ident_ids,
         interns: &interns,
@@ -153,7 +170,9 @@ fn load_module_for_docs<'a>(
 struct RenderArgs<
     'a,
     DocsById: Iterator<Item = &'a (ModuleId, ModuleDocumentation)> + Clone,
-    SidebarEntries: Iterator<Item = SidebarEntry<'a>> + Clone,
+    Exposed: Iterator<Item = S> + Clone,
+    SidebarEntries: Iterator<Item = SidebarEntry<'a, Exposed, S>> + Clone,
+    S: AsRef<str> + fmt::Display,
 > {
     arena: &'a Bump,
     base_url: &'a str,
@@ -161,13 +180,15 @@ struct RenderArgs<
     package_name: &'a str,
     docs_by_id: DocsById,
     raw_template_html: &'a str,
-    module_docs: ModuleDocs<'a, SidebarEntries>,
+    module_docs: ModuleDocs<'a, SidebarEntries, Exposed, S>,
 }
 
 fn render_to_disk<
     'a,
     DocsById: Iterator<Item = &'a (ModuleId, ModuleDocumentation)> + Clone,
-    SidebarEntries: Iterator<Item = SidebarEntry<'a>> + Clone,
+    Exposed: Iterator<Item = S> + Clone,
+    SidebarEntries: Iterator<Item = SidebarEntry<'a, Exposed, S>> + Clone,
+    S: AsRef<str> + fmt::Display,
 >(
     RenderArgs {
         arena,
@@ -177,7 +198,7 @@ fn render_to_disk<
         docs_by_id,
         raw_template_html,
         module_docs,
-    }: RenderArgs<'a, DocsById, SidebarEntries>,
+    }: RenderArgs<'a, DocsById, Exposed, SidebarEntries, S>,
 ) -> Result<(), Problem> {
     let mut buf = bumpalo::collections::string::String::with_capacity_in(1024, arena);
 
@@ -200,7 +221,7 @@ fn render_to_disk<
         })
         .replace("<!-- base -->", base_url)
         .replace("<!-- Module links -->", {
-            buf.truncate(0);
+            buf.clear();
             module_docs.render_sidebar(&mut buf);
             buf.as_str()
         });
@@ -221,7 +242,7 @@ fn render_to_disk<
     // Write index.html for package (/index.html)
     {
         {
-            buf.truncate(0);
+            buf.clear();
 
             if write!(&mut buf, "<title>{package_name}</title>").is_ok() {
                 output = arena.alloc(output.replace("<!-- Page title -->", buf.as_str()));
@@ -229,7 +250,7 @@ fn render_to_disk<
         }
 
         {
-            buf.truncate(0);
+            buf.clear();
 
             if module_docs
                 .render_package_name_link(package_name, base_url, &mut buf)
@@ -240,24 +261,21 @@ fn render_to_disk<
         }
 
         {
-            buf.truncate(0);
+            buf.clear();
 
-            if module_docs
-                .render_package_index(
-                    docs_by_id.clone().map(|(_, module_docs)| {
-                        let doc_comment = None; // TODO keep these after parsing somehow.
+            let active_module_name = module_docs.module_name;
 
-                        SidebarEntry {
-                            link_text: &module_docs.name,
-                            doc_comment,
-                        }
-                    }),
-                    &mut buf,
-                )
-                .is_ok()
-            {
-                output = arena.alloc(output.replace("<!-- Module Docs -->", buf.as_str()));
+            if !active_module_name.is_empty() {
+                write!(buf, "<h2 class='module-name'>{active_module_name}</h2>");
             }
+
+            if module_docs.package_doc_comment_html.is_empty() {
+                buf.push_str("Choose a module from the list to see its documentation.");
+            } else {
+                buf.push_str(module_docs.package_doc_comment_html);
+            }
+
+            output = arena.alloc(output.replace("<!-- Module Docs -->", buf.as_str()));
         }
 
         file::write(arena, &build_dir.join("index.html"), &output)?;
@@ -271,7 +289,7 @@ fn render_to_disk<
         file::create_dir_all(arena, &module_dir)?;
 
         {
-            buf.truncate(0);
+            buf.clear();
 
             if write!(&mut buf, "<title>{module_name} - {package_name}</title>",).is_ok() {
                 output = arena.alloc(output.replace("<!-- Page title -->", buf.as_str()));
@@ -279,7 +297,7 @@ fn render_to_disk<
         }
 
         {
-            buf.truncate(0);
+            buf.clear();
 
             if module_docs
                 .render_package_name_link(package_name, base_url, &mut buf)
@@ -290,7 +308,7 @@ fn render_to_disk<
         }
 
         {
-            buf.truncate(0);
+            buf.clear();
 
             if module_docs
                 .render_module(&all_exposed_symbols, &mut buf)

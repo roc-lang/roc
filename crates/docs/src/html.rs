@@ -4,12 +4,18 @@ use roc_collections::{VecMap, VecSet};
 use roc_module::symbol::{IdentId, IdentIds, Interns, ModuleId, Symbol};
 use roc_types::types::{AliasKind, Type};
 
-pub struct ModuleDocs<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> {
+pub struct ModuleDocs<
+    'a,
+    Sidebar: Iterator<Item = SidebarEntry<'a, Exposed, S>> + Clone,
+    Exposed: Iterator<Item = S> + Clone,
+    S: AsRef<str> + fmt::Display,
+> {
     pub module_name: &'a str,
+    pub package_doc_comment_html: &'a str,
     pub home: ModuleId,
     pub home_ident_ids: &'a IdentIds,
     pub interns: &'a Interns,
-    pub package_sidebar_entries: I,
+    pub package_sidebar_entries: Sidebar,
     pub base_urls: VecMap<ModuleId, &'a str>,
 }
 
@@ -61,7 +67,7 @@ impl fmt::Display for Indentation {
 
 /// A named heading in the sidebar, with some number of
 /// entries beneath it.
-pub struct SidebarEntry<'a> {
+pub struct SidebarEntry<'a, I: Iterator<Item = S> + Clone, S: AsRef<str> + fmt::Display> {
     /// In the source code, this will appear in a module's `exposes` list like:
     ///
     /// [
@@ -73,12 +79,21 @@ pub struct SidebarEntry<'a> {
     /// ]
     pub link_text: &'a str,
 
+    /// The entries this module exposes (types, values, abilities)
+    pub exposed: I,
+
     /// These doc comments get interpreted as flat strings; Markdown is not allowed
     /// in them, because they will be rendered in the sidebar as plain text.
     pub doc_comment: Option<&'a str>,
 }
 
-impl<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> ModuleDocs<'a, I> {
+impl<
+        'a,
+        Sidebar: Iterator<Item = SidebarEntry<'a, Exposed, S>> + Clone,
+        Exposed: Iterator<Item = S> + Clone,
+        S: AsRef<str> + fmt::Display,
+    > ModuleDocs<'a, Sidebar, Exposed, S>
+{
     pub fn render_decl(
         &mut self,
         ident: &str,
@@ -133,6 +148,7 @@ impl<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> ModuleDocs<'a, I> {
         for SidebarEntry {
             link_text: module_name,
             doc_comment,
+            exposed,
         } in self.package_sidebar_entries.clone()
         {
             if let Some(heading) = doc_comment {
@@ -140,19 +156,19 @@ impl<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> ModuleDocs<'a, I> {
             }
 
             // Sidebar entries should all be relative URLs and unqualified names
-            buf.write_str("<a href=\"")?;
-            self.render_relative_url(module_name, buf)?;
-            write!(buf, "\">{}</a>", module_name)?;
+            write!(
+                buf,
+                "<div class='sidebar-entry'><a class='sidebar-module-link' href='{module_name}'>{module_name}</a><div class='sidebar-sub-entries'>",
+            )?;
+
+            for name in exposed {
+                write!(buf, "<a href='{module_name}#{name}'>{name}</a>",)?;
+            }
+
+            buf.write_str("</div></div>")?;
         }
 
         Ok(())
-    }
-
-    fn render_relative_url(&self, text: &str, buf: &mut impl fmt::Write) -> fmt::Result {
-        let module_name = self.module_name;
-
-        // e.g. "Str#isEmpty"
-        write!(buf, "{module_name}#{text}",)
     }
 
     fn render_type(
@@ -470,45 +486,19 @@ impl<'a, I: Iterator<Item = SidebarEntry<'a>> + Clone> ModuleDocs<'a, I> {
         )
     }
 
-    /// The list items containing module links
-    pub fn render_package_index(
-        &self,
-        entries: impl Iterator<Item = SidebarEntry<'a>>,
-        buf: &mut impl fmt::Write,
-    ) -> fmt::Result {
-        // The HTML for the index page
-        write!(buf, "<h2 class='module-name'>Modules</h2>\n")?;
-
-        for SidebarEntry {
-            link_text: module_name,
-            doc_comment,
-        } in entries
-        {
-            if let Some(heading) = doc_comment {
-                write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n")?;
-            }
-
-            // The anchor tag containing the module link
-            write!(
-                buf,
-                "<a class='index-module-link' href='{module_name}'>{module_name}</a>\n"
-            )?;
-        }
-
-        Ok(())
-    }
-
     pub fn render_module(
         &self,
         _all_exposed_symbols: &VecSet<Symbol>,
         buf: &mut impl fmt::Write,
     ) -> fmt::Result {
-        todo!()
+        buf.write_str("TODO write the module here")
     }
 }
 
 fn is_multiline(_first: &Type) -> bool {
-    let todo = todo!();
+    let todo = ();
+
+    true
 }
 
 const LINK_ICON_SVG: &str = include_str!("static/link.svg");

@@ -14,7 +14,7 @@
 
                 // Re-hide all the sub-entries except for those of the current module
                 let currentModuleName =
-                    document.querySelector(".module-name").textContent;
+                    document.querySelector(".module-name")?.textContent ?? "";
 
                 sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
                     let entryName = entry.querySelector(
