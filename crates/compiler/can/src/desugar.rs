@@ -131,7 +131,7 @@ fn desugar_value_def<'a>(
     }
 }
 
-pub fn desugar_defs<'a>(
+pub fn desugar_defs_node_values<'a>(
     arena: &'a Bump,
     defs: &mut roc_parse::ast::Defs<'a>,
     src: &'a str,
@@ -141,6 +141,84 @@ pub fn desugar_defs<'a>(
     for value_def in defs.value_defs.iter_mut() {
         *value_def = desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
     }
+}
+
+fn desugar_defs_node_suffixed<'a>(
+    _arena: &'a Bump,
+    _src: &'a str,
+    _line_info: &mut Option<LineInfo>,
+    _module_path: &str,
+    loc_expr: &'a Loc<Expr<'a>>,
+) -> &'a Loc<Expr<'a>> {
+    match loc_expr.value {
+        Defs(defs, _loc_ret) => {
+            match search_suffixed_defs(&defs.value_defs, 0) {
+                FindSuffixedDefs::NoneFound => loc_expr, 
+                FindSuffixedDefs::FirstSuffixedAtIndex(index) => {
+                    if defs.value_defs.len() == 1 {
+                        assert!(index == 0, "we have only one value_def and so it must be Suffixed ");
+                        // We have only one value_def and it must be Suffixed 
+                        // replace Defs with an Apply(Task.await) and Closure of loc_return
+
+                        dbg!("We have only one value_def and it must be Suffixed", loc_expr.value);
+
+                        loc_expr
+                    } else if index == 0 {
+                        assert!(defs.value_defs.len() > 1, "we know we have other Defs that will need to be considered");
+                        // We have a Suffixed in first index, and also other nodes in Defs
+                        // pop the first Suffixed and recurse on Defs (without first) to handle any other Suffixed
+                        // the result will be wrapped in an Apply(Task.await) and Closure
+
+                        dbg!("We have a Suffixed in first index, and also other nodes in Defs", loc_expr.value);
+
+                        loc_expr
+                    } else {
+                        // The first Suffixed is in the middle of our Defs
+                        // We will keep the value_defs before the Suffixed in our Defs node
+                        // We take the value_defs after the Suffixed and create a new Defs node using the current loc_return
+                        // Then recurse on the new Defs node, wrap the result in an Apply(Task.await) and Closure,
+                        // which will become the new loc_return
+
+                        dbg!("The first Suffixed is in the middle of our Defs", loc_expr.value);
+                        
+                        loc_expr
+                    }
+                }
+            }
+        },
+        _ => unreachable!("should only be passed a Defs node as it is called from within desugar_expr for Defs"),
+    }
+}
+
+enum FindSuffixedDefs {
+    NoneFound,
+    FirstSuffixedAtIndex(usize),
+}
+
+fn search_suffixed_defs<'a>(value_defs: &std::vec::Vec<ValueDef<'a>>, index: usize) -> FindSuffixedDefs {
+
+    use roc_parse::ast::ValueDef::Body;
+
+    if index < value_defs.len() {
+        match value_defs.get(index) {
+            Some(Body(_, expr)) =>
+                match expr.value {
+                    Apply(sub_expr,_,_) => {
+                        match sub_expr.value {
+                            roc_parse::ast::Expr::Suffixed(_) => {
+                                FindSuffixedDefs::FirstSuffixedAtIndex(index)
+                            }
+                            _ => search_suffixed_defs(value_defs, index + 1),
+                        }
+                    }
+                    _ => search_suffixed_defs(value_defs, index + 1),
+                }
+            _ => search_suffixed_defs(value_defs, index + 1),
+        }
+    } else {
+        FindSuffixedDefs::NoneFound
+    }
+
 }
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
@@ -362,12 +440,19 @@ pub fn desugar_expr<'a>(
             module_path,
         ),
         Defs(defs, loc_ret) => {
-            let mut defs = (*defs).clone();
-            desugar_defs(arena, &mut defs, src, line_info, module_path);
 
+            let mut defs = (*defs).clone();
+            desugar_defs_node_values(arena, &mut defs, src, line_info, module_path);
             let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
 
-            arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))
+            // Desugar any Suffixed nodes
+            desugar_defs_node_suffixed(
+                arena,
+                src,
+                line_info,
+                module_path,
+                arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
+            )            
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
@@ -619,7 +704,14 @@ pub fn desugar_expr<'a>(
             })
         }
         LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
-        Suffixed(_) => todo!(),
+        Suffixed(expr) => {
+            // This is desugared in Defs, leave the node here
+            // Any nodes that don't get desugared will be caught by canonicalize_expr
+            arena.alloc(Loc {
+                value: Suffixed(expr),
+                region: loc_expr.region,
+            })            
+        }
     }
 }
 
