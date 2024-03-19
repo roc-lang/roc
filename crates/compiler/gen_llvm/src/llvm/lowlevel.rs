@@ -1172,7 +1172,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
         }
-        I128OfDec | NumWithoutDecimalPoint | NumWithDecimalPoint => {
+        NumWithoutDecimalPoint | NumWithDecimalPoint => {
             arguments!(arg);
             arg
         }

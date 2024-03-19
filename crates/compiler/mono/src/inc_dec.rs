@@ -1345,7 +1345,6 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits
-        | I128OfDec
         | NumWithoutDecimalPoint
         | NumWithDecimalPoint
         | NumF32ToParts
