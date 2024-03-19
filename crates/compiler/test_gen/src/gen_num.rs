@@ -3681,3 +3681,53 @@ fn num_max() {
     assert_evals_to!(r"Num.max Num.minI64 Num.maxI64", i64::MAX, i64);
     assert_evals_to!(r"Num.max Num.maxI64 Num.minI64", i64::MAX, i64);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn with_decimal_point() {
+    assert_evals_to!(
+        r"Num.withDecimalPoint 0",
+        RocDec::from_str("0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withDecimalPoint 123000000000000000000",
+        RocDec::from_str("123.0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withDecimalPoint Num.maxI128",
+        RocDec::from_str("170141183460469231731.687303715884105727").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withDecimalPoint Num.minI128",
+        RocDec::from_str("-170141183460469231731.687303715884105728").unwrap(),
+        RocDec
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn without_decimal_point() {
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint 0",
+        RocDec::from_str("0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint 123.000000000000000000",
+        123000000000000000000,
+        i128
+    );
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint 170141183460469231731.687303715884105727",
+        i128::MAX,
+        i128
+    );
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint -170141183460469231731.687303715884105728",
+        i128::MIN,
+        i128
+    );
+}
