@@ -494,6 +494,26 @@ impl<'a> Defs<'a> {
         })
     }
 
+    pub fn remove_value_def(&mut self, index: usize) {
+        match self
+            .tags
+            .get(index)
+            .expect("got an invalid index for Defs")
+            .split()
+        {
+            Ok(type_index) => {
+                self.type_defs.remove(type_index.index());
+            }
+            Err(value_index) => {
+                self.value_defs.remove(value_index.index());
+            }
+        }
+        self.tags.remove(index);
+        self.regions.remove(index);
+        self.space_after.remove(index);
+        self.space_before.remove(index);
+    }
+
     /// NOTE assumes the def itself is pushed already!
     fn push_def_help(
         &mut self,
@@ -548,6 +568,33 @@ impl<'a> Defs<'a> {
         let type_def_index = Index::push_new(&mut self.type_defs, type_def);
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
+    }
+
+    // Find the first definition that is a Apply Suffixed
+    // We need the tag_index so we can use it to remove the value
+    // We need the value index to know if it is the first
+    pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
+        for (tag_index, tag) in self.tags.iter().enumerate() {
+            let index = match tag.split() {
+                Ok(_) => break,
+                Err(value_index) => value_index.index(),
+            };
+
+            match &self.value_defs[index] {
+                ValueDef::Body(_, expr) => match expr.value {
+                    Expr::Apply(sub_expr, _, _) => match sub_expr.value {
+                        Expr::Suffixed(_) => {
+                            return Some((tag_index, index));
+                        }
+                        _ => break,
+                    },
+                    _ => break,
+                },
+                _ => break,
+            }
+        }
+
+        None
     }
 }
 
