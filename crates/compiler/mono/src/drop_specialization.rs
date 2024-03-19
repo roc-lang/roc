@@ -1597,7 +1597,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumF64ToParts
         | NumF32FromParts
         | NumF64FromParts => RC::NoRc,
-        I128OfDec | NumWithoutDecimalPoint | NumWithDecimalPoint => RC::NoRc,
+        NumWithoutDecimalPoint | NumWithDecimalPoint => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,

@@ -108,7 +108,6 @@ pub enum LowLevel {
     NumF64ToParts,
     NumF32FromParts,
     NumF64FromParts,
-    I128OfDec,
     Eq,
     NotEq,
     And,
@@ -342,7 +341,6 @@ map_symbol_to_lowlevel! {
     NumCountLeadingZeroBits <= NUM_COUNT_LEADING_ZERO_BITS;
     NumCountTrailingZeroBits <= NUM_COUNT_TRAILING_ZERO_BITS;
     NumCountOneBits <= NUM_COUNT_ONE_BITS;
-    I128OfDec <= I128_OF_DEC;
     NumWithoutDecimalPoint <= NUM_WITHOUT_DECIMAL_POINT;
     NumWithDecimalPoint <= NUM_WITH_DECIMAL_POINT;
     NumF32ToParts <= NUM_F32_TO_PARTS;

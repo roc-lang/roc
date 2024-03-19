@@ -204,7 +204,6 @@ map_symbol_to_lowlevel_and_arity! {
     NumCountLeadingZeroBits; NUM_COUNT_LEADING_ZERO_BITS; 1,
     NumCountTrailingZeroBits; NUM_COUNT_TRAILING_ZERO_BITS; 1,
     NumCountOneBits; NUM_COUNT_ONE_BITS; 1,
-    I128OfDec; I128_OF_DEC; 1,
     NumWithoutDecimalPoint; NUM_WITHOUT_DECIMAL_POINT; 1,
     NumWithDecimalPoint; NUM_WITH_DECIMAL_POINT; 1,
     NumF32ToParts; NUM_F32_TO_PARTS; 1,

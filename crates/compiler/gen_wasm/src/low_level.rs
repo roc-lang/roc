@@ -2017,9 +2017,7 @@ impl<'a> LowLevelCall<'a> {
             NumToFloatChecked => {
                 todo!("implement toF32Checked and toF64Checked");
             }
-            I128OfDec | NumWithoutDecimalPoint => {
-                self.load_args_and_call_zig(backend, bitcode::DEC_TO_I128)
-            }
+            NumWithoutDecimalPoint => self.load_args_and_call_zig(backend, bitcode::DEC_TO_I128),
             NumWithDecimalPoint => self.load_args_and_call_zig(backend, bitcode::DEC_FROM_I128),
             NumF32ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_TO_PARTS),
             NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
