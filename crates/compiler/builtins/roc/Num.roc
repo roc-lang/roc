@@ -1414,15 +1414,21 @@ toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
 
 ## Turns a [Dec] into its [I128] representation by removing the decimal point.
+## This is equivalent to multiplying the [Dec] by 10^18.
 withoutDecimalPoint : Dec -> I128
 
 ## Turns a [I128] into the coresponding [Dec] by adding the decimal point.
+## This is equivalent to dividing the [I128] by 10^18.
 withDecimalPoint : I128 -> Dec
 
+## Splits a [F32] into its components according to IEEE 754 standard.
 f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 
+## Splits a [F64] into its components according to IEEE 754 standard.
 f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
 
+## Compine parts of a [F32] according to IEEE 754 standard.
 f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 
+## Compine parts of a [F46] according to IEEE 754 standard.
 f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
