@@ -3731,3 +3731,105 @@ fn without_decimal_point() {
         i128
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_to_parts() {
+    assert_evals_to!(r"Num.f32ToParts 0", (0, 0, false), (u32, u8, bool));
+    assert_evals_to!(
+        r"Num.f32ToParts Num.maxF32",
+        (0x7FFFFF, 0xFE, false),
+        (u32, u8, bool)
+    );
+    assert_evals_to!(
+        r"Num.f32ToParts Num.minF32",
+        (0x7FFFFF, 0xFE, true),
+        (u32, u8, bool)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_to_parts() {
+    assert_evals_to!(r"Num.f64ToParts 0", (0, 0, false), (u64, u16, bool));
+    assert_evals_to!(
+        r"Num.f64ToParts Num.maxF64",
+        (0xFFFFFFFFFFFFF, 0x7FE, false),
+        (u64, u16, bool)
+    );
+    assert_evals_to!(
+        r"Num.f64ToParts Num.minF64",
+        (0xFFFFFFFFFFFFF, 0x7FE, true),
+        (u64, u16, bool)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_from_parts() {
+    assert_evals_to!(
+        r"
+    Num.f32FromParts {
+        sign: Bool.false,
+        exponent: 0,
+        fraction: 0
+    }",
+        0.0,
+        f32
+    );
+    assert_evals_to!(
+        r"
+    Num.f32FromParts {
+        sign: Bool.false,
+        exponent: 0xFE,
+        fraction: 0x7FFFFF
+    }",
+        f32::MAX,
+        f32
+    );
+    assert_evals_to!(
+        r"
+    Num.f32FromParts {
+        sign: Bool.true,
+        exponent: 0xFE,
+        fraction: 0x7FFFFF
+    }",
+        f32::MIN,
+        f32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_from_parts() {
+    assert_evals_to!(
+        r"
+    Num.f64FromParts {
+        sign: Bool.false,
+        exponent: 0,
+        fraction: 0
+    }",
+        0.0,
+        f64
+    );
+    assert_evals_to!(
+        r"
+    Num.f64FromParts {
+        sign: Bool.false,
+        exponent: 0x7FE,
+        fraction: 0xFFFFFFFFFFFFF
+    }",
+        f64::MAX,
+        f64
+    );
+    assert_evals_to!(
+        r"
+    Num.f64FromParts {
+        sign: Bool.true,
+        exponent: 0x7FE,
+        fraction: 0xFFFFFFFFFFFFF
+    }",
+        f64::MIN,
+        f64
+    );
+}
