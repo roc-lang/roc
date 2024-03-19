@@ -219,8 +219,6 @@ fn desugar_defs_node_suffixed<'a>(
                         // Remove the suffixed def
                         copied_defs.remove_value_def(tag_index);
 
-                        dbg!(&copied_defs);
-
                         // Recurse using new Defs to get new expression
                         let new_loc_expr = desugar_defs_node_suffixed(
                             arena,
@@ -501,7 +499,6 @@ pub fn desugar_expr<'a>(
             module_path,
         ),
         Defs(defs, loc_ret) => {
-
             let mut defs = (*defs).clone();
             desugar_defs_node_values(arena, &mut defs, src, line_info, module_path);
             let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);

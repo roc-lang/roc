@@ -494,6 +494,7 @@ impl<'a> Defs<'a> {
         })
     }
 
+    // TODO QUESTION DO WE NEED TO REMOVE ANYTHING FROM SPACES FIELD?
     pub fn remove_value_def(&mut self, index: usize) {
         match self
             .tags
@@ -502,10 +503,38 @@ impl<'a> Defs<'a> {
             .split()
         {
             Ok(type_index) => {
-                self.type_defs.remove(type_index.index());
+
+                let index = type_index.index(); 
+
+                // remove from vec
+                self.type_defs.remove(index);
+
+                // update all of the remaining indexes in type_defs 
+                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+
+                    // only update later indexes into type_defs
+                    if tag_index > index && tag.split().is_ok() {
+                        tag.decrement_index();
+                    }
+                }
+
             }
             Err(value_index) => {
-                self.value_defs.remove(value_index.index());
+
+                let index: usize = value_index.index(); 
+
+                // remove from vec
+                self.value_defs.remove(index);
+
+                // update all of the remaining indexes in value_defs 
+                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+
+                    // only update later indexes into value_defs
+                    if tag_index > index && tag.split().is_err() {
+                        tag.decrement_index();
+                    }
+                }
+
             }
         }
         self.tags.remove(index);
