@@ -1441,12 +1441,12 @@ pub fn canonicalize_expr<'a>(
                 bad_expr
             );
         }
-        bad_expr    @ ast::Expr::Suffixed(_) => {
+        bad_expr @ ast::Expr::Suffixed(_) => {
             internal_error!(
                 "A suffixed expression did not get desugared somehow: {:#?}",
                 bad_expr
             );
-        },
+        }
     };
 
     // At the end, diff used_idents and defined_idents to see which were unused.

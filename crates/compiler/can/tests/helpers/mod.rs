@@ -1,10 +1,10 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
+use roc_can::desugar;
 use roc_can::env::Env;
 use roc_can::expr::Output;
 use roc_can::expr::{canonicalize_expr, Expr};
-use roc_can::desugar;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};

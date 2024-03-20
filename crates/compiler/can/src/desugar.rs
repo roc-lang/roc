@@ -145,9 +145,6 @@ pub fn desugar_defs_node_values<'a>(
 
 fn desugar_defs_node_suffixed<'a>(
     arena: &'a Bump,
-    src: &'a str,
-    line_info: &mut Option<LineInfo>,
-    module_path: &str,
     loc_expr: &'a Loc<Expr<'a>>,
 ) -> &'a Loc<Expr<'a>> {
     match loc_expr.value {
@@ -223,9 +220,6 @@ fn desugar_defs_node_suffixed<'a>(
                         // Recurse using new Defs to get new expression
                         let new_loc_expr = desugar_defs_node_suffixed(
                             arena,
-                            src,
-                            line_info,
-                            module_path,
                             arena.alloc(Loc::at(
                                 loc_expr.region,
                                 Defs(arena.alloc(copied_defs), loc_ret),
@@ -269,12 +263,9 @@ fn desugar_defs_node_suffixed<'a>(
 
                         // If there are no defs after, then just use loc_ret as we dont need a Defs node
                         let defs_after_suffixed_desugared = {
-                            if after.len() > 0 {
+                            if !after.is_empty() {
                                 desugar_defs_node_suffixed(
                                     arena,
-                                    src,
-                                    line_info,
-                                    module_path,
                                     arena.alloc(Loc::at(
                                         loc_expr.region,
                                         Defs(arena.alloc(after), loc_ret),
@@ -590,9 +581,6 @@ pub fn desugar_expr<'a>(
             // Desugar any Suffixed nodes
             desugar_defs_node_suffixed(
                 arena,
-                src,
-                line_info,
-                module_path,
                 arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
             )
         }

@@ -494,7 +494,6 @@ impl<'a> Defs<'a> {
         })
     }
 
-    // TODO QUESTION DO WE NEED TO REMOVE ANYTHING FROM SPACES FIELD?
     pub fn remove_value_def(&mut self, index: usize) {
         match self
             .tags
