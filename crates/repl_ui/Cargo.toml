@@ -14,6 +14,7 @@ roc_parse = { path = "../compiler/parse" }
 roc_region = { path = "../compiler/region" }
 roc_repl_eval = { path = "../repl_eval" }
 roc_reporting = { path = "../reporting" }
+roc_module = { path = "../compiler/module" }
 roc_target = { path = "../compiler/roc_target" }
 
 bumpalo.workspace = true
