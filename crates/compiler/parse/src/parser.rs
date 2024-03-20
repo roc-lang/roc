@@ -827,7 +827,8 @@ where
 /// # Examples
 /// ## Success Case
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -847,8 +848,9 @@ where
 ///
 /// ## Error Case
 /// ```
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, allocated, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
@@ -885,7 +887,8 @@ where
 ///
 /// ## Success Case
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -904,7 +907,8 @@ where
 /// ```
 /// ## Failure Case
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -943,7 +947,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, then, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -989,7 +994,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, keyword_e};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -1296,7 +1302,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, optional, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -1344,7 +1351,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_parse::loc;
 /// # use roc_region::all::{Loc, Position};
@@ -1389,11 +1397,11 @@ macro_rules! loc {
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_parse::ident::lowercase_ident;
 /// # use roc_parse::skip_first;
-/// # use roc_region::all::{Loc, Position};
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
@@ -1429,11 +1437,11 @@ macro_rules! skip_first {
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_parse::ident::lowercase_ident;
 /// # use roc_parse::skip_second;
-/// # use roc_region::all::{Loc, Position};
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
@@ -1524,11 +1532,10 @@ macro_rules! collection_trailing_sep_e {
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress, word};
-/// # use roc_parse::ident::lowercase_ident;
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress};
 /// # use roc_parse::succeed;
-/// # use roc_region::all::{Loc, Position};
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
@@ -1555,10 +1562,10 @@ macro_rules! succeed {
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress, word, fail_when};
-/// # use roc_parse::ident::lowercase_ident;
-/// # use roc_region::all::{Loc, Position};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, fail_when};
+/// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -1597,9 +1604,10 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress, fail};
-/// # use roc_region::all::{Loc, Position};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, fail};
+/// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -1628,10 +1636,10 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, word1};
-/// # use roc_region::all::{Loc, Position};
-/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_region::all::Position;
 /// # use roc_parse::and;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
@@ -1746,10 +1754,10 @@ macro_rules! absolute_indented_seq {
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, word1};
-/// # use roc_region::all::{Loc, Position};
-/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_region::all::Position;
 /// # use roc_parse::one_of;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
@@ -1848,9 +1856,10 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, specialize};
-/// # use roc_region::all::{Loc, Position};
+/// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -1889,9 +1898,10 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_ref};
-/// # use roc_region::all::{Loc, Position};
+/// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -1928,8 +1938,9 @@ where
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -1946,8 +1957,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -1984,8 +1996,9 @@ where
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word1};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2002,8 +2015,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word1};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2041,8 +2055,9 @@ where
 /// # Example
 ///
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word1_indent};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2059,8 +2074,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word1, word1_indent};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2105,8 +2121,9 @@ where
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word2};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2123,8 +2140,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word2};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2164,8 +2182,9 @@ where
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word3};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2182,8 +2201,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word3};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2239,8 +2259,9 @@ macro_rules! word1_check_indent {
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::map;
@@ -2261,8 +2282,9 @@ macro_rules! word1_check_indent {
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::map;
@@ -2299,8 +2321,9 @@ macro_rules! map {
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::map_with_arena;
@@ -2321,8 +2344,9 @@ macro_rules! map {
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::map_with_arena;
@@ -2424,12 +2448,13 @@ macro_rules! zero_or_more {
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::one_or_more;
-/// # use bumpalo::{Bump, vec};
+/// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
@@ -2449,12 +2474,13 @@ macro_rules! zero_or_more {
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::one_or_more;
-/// # use bumpalo::{Bump, vec};
+/// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
@@ -2514,12 +2540,13 @@ macro_rules! one_or_more {
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::debug;
-/// # use bumpalo::{Bump, vec};
+/// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
@@ -2551,12 +2578,13 @@ macro_rules! debug {
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
 /// # use roc_region::all::Position;
 /// # use roc_parse::either;
-/// # use bumpalo::{Bump, vec};
+/// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
@@ -2582,12 +2610,13 @@ macro_rules! debug {
 ///
 /// ## Failure Case
 ///
-/// ```rust
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
 /// # use roc_region::all::Position;
 /// # use roc_parse::either;
-/// # use bumpalo::{Bump, vec};
+/// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
@@ -2631,12 +2660,13 @@ macro_rules! either {
 /// and keeping only whatever was parsed in between them.
 ///
 /// # Example
-/// ```rust
-/// # use roc_parse::state::{State};
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, word1};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, word1};
 /// # use roc_region::all::Position;
 /// # use roc_parse::{between, skip_first, skip_second};
-/// # use bumpalo::{Bump, vec};
+/// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
@@ -2671,8 +2701,9 @@ macro_rules! between {
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, and, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2691,8 +2722,9 @@ macro_rules! between {
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, and, word};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2731,7 +2763,8 @@ where
 ///
 /// # Examples
 /// ```
-/// # use roc_parse::state::{State};
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
 /// # use roc_region::all::{Loc, Position};
 /// # use bumpalo::Bump;
@@ -2766,8 +2799,9 @@ where
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, map_with_arena};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2787,8 +2821,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, map_with_arena};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2829,8 +2864,9 @@ where
 ///
 /// # Example
 /// ## Success case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, backtrackable};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
@@ -2849,8 +2885,9 @@ where
 /// ```
 ///
 /// ## Failure case
-/// ```rust
-/// # use roc_parse::state::{State};
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, word, backtrackable};
 /// # use roc_region::all::Position;
 /// # use bumpalo::Bump;
