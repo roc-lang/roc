@@ -164,11 +164,6 @@ fn desugar_defs_node_suffixed<'a>(
                             "we have only one value_def and so it must be Suffixed "
                         );
 
-                        dbg!(
-                            "We have only one value_def and it must be Suffixed",
-                            loc_expr.value
-                        );
-
                         // Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
                         let (suffixed_sub_apply_loc, pattern) = unwrap_suffixed_def_and_pattern(
                             arena,
@@ -210,11 +205,6 @@ fn desugar_defs_node_suffixed<'a>(
                         assert!(
                             defs.value_defs.len() > 1,
                             "we know we have other Defs that will need to be considered"
-                        );
-
-                        dbg!(
-                            "We have a Suffixed in first index, and also other nodes in Defs",
-                            loc_expr.value
                         );
 
                         // Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
@@ -270,17 +260,70 @@ fn desugar_defs_node_suffixed<'a>(
                         ))
                     } else {
                         // The first Suffixed is in the middle of our Defs
-                        // We will keep the value_defs before the Suffixed in our Defs node
-                        // We take the value_defs after the Suffixed and create a new Defs node using the current loc_return
+                        // We will keep the defs before the Suffixed in our Defs node
+                        // We take the defs after the Suffixed and create a new Defs node using the current loc_return
                         // Then recurse on the new Defs node, wrap the result in an Apply(Task.await) and Closure,
                         // which will become the new loc_return
 
-                        dbg!(
-                            "The first Suffixed is in the middle of our Defs",
-                            loc_expr.value
+                        let (before, after) = defs.split_values_either_side_of(tag_index);
+
+                        // If there are no defs after, then just use loc_ret as we dont need a Defs node
+                        let defs_after_suffixed_desugared = {
+                            if after.len() > 0 {
+                                desugar_defs_node_suffixed(
+                                    arena,
+                                    src,
+                                    line_info,
+                                    module_path,
+                                    arena.alloc(Loc::at(
+                                        loc_expr.region,
+                                        Defs(arena.alloc(after), loc_ret),
+                                    )),
+                                )
+                            } else {
+                                loc_ret
+                            }
+                        };
+
+                        // Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
+                        let (suffixed_sub_apply_loc, pattern) = unwrap_suffixed_def_and_pattern(
+                            arena,
+                            loc_expr.region,
+                            defs.value_defs[value_index],
                         );
 
-                        loc_expr
+                        // Create Closure for the result of the recursion,
+                        // use the pattern from our Suffixed Def as closure arument
+                        let closure_expr =
+                            Closure(arena.alloc([*pattern]), defs_after_suffixed_desugared);
+
+                        // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
+                        let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, suffixed_sub_apply_loc)));
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
+
+                        let new_loc_return = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            Apply(
+                                arena.alloc(Loc {
+                                    region: loc_expr.region,
+                                    value: Var {
+                                        module_name: ModuleName::TASK,
+                                        ident: "await",
+                                    },
+                                }),
+                                arena.alloc(task_await_apply_args),
+                                CalledVia::Space,
+                            ),
+                        ));
+
+                        arena.alloc(Loc::at(
+                            loc_expr.region,
+                            Defs(arena.alloc(before), new_loc_return),
+                        ))
                     }
                 }
             }

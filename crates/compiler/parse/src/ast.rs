@@ -503,38 +503,32 @@ impl<'a> Defs<'a> {
             .split()
         {
             Ok(type_index) => {
-
-                let index = type_index.index(); 
+                let index = type_index.index();
 
                 // remove from vec
                 self.type_defs.remove(index);
 
-                // update all of the remaining indexes in type_defs 
+                // update all of the remaining indexes in type_defs
                 for (tag_index, tag) in self.tags.iter_mut().enumerate() {
-
                     // only update later indexes into type_defs
                     if tag_index > index && tag.split().is_ok() {
                         tag.decrement_index();
                     }
                 }
-
             }
             Err(value_index) => {
-
-                let index: usize = value_index.index(); 
+                let index: usize = value_index.index();
 
                 // remove from vec
                 self.value_defs.remove(index);
 
-                // update all of the remaining indexes in value_defs 
+                // update all of the remaining indexes in value_defs
                 for (tag_index, tag) in self.tags.iter_mut().enumerate() {
-
                     // only update later indexes into value_defs
                     if tag_index > index && tag.split().is_err() {
                         tag.decrement_index();
                     }
                 }
-
             }
         }
         self.tags.remove(index);
@@ -605,7 +599,7 @@ impl<'a> Defs<'a> {
     pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
         for (tag_index, tag) in self.tags.iter().enumerate() {
             let index = match tag.split() {
-                Ok(_) => break,
+                Ok(_) => continue,
                 Err(value_index) => value_index.index(),
             };
 
@@ -615,15 +609,32 @@ impl<'a> Defs<'a> {
                         Expr::Suffixed(_) => {
                             return Some((tag_index, index));
                         }
-                        _ => break,
+                        _ => continue,
                     },
-                    _ => break,
+                    _ => continue,
                 },
-                _ => break,
+                _ => continue,
             }
         }
 
         None
+    }
+
+    // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
+    pub fn split_values_either_side_of(&self, index: usize) -> (Self, Self) {
+        let mut before = self.clone();
+        let mut after = self.clone();
+
+        before.tags = self.tags[0..index].to_vec();
+
+        if index + 1 > self.tags.len() {
+            after.tags = self.tags.clone();
+            after.tags.clear();
+        } else {
+            after.tags = self.tags[(index + 1)..].to_vec();
+        }
+
+        (before, after)
     }
 }
 
