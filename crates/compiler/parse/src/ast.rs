@@ -597,22 +597,16 @@ impl<'a> Defs<'a> {
     // We need the value index to know if it is the first
     pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
         for (tag_index, tag) in self.tags.iter().enumerate() {
-            let index = match tag.split() {
-                Ok(_) => continue,
-                Err(value_index) => value_index.index(),
-            };
+            if let Err(value_index) = tag.split() {
+                let index = value_index.index();
 
-            match &self.value_defs[index] {
-                ValueDef::Body(_, expr) => match expr.value {
-                    Expr::Apply(sub_expr, _, _) => match sub_expr.value {
-                        Expr::Suffixed(_) => {
+                if let ValueDef::Body(_, expr) = &self.value_defs[index] {
+                    if let Expr::Apply(sub_expr, _, _) = expr.value {
+                        if let Expr::Suffixed(_) = sub_expr.value {
                             return Some((tag_index, index));
                         }
-                        _ => continue,
-                    },
-                    _ => continue,
-                },
-                _ => continue,
+                    }
+                }
             }
         }
 
@@ -620,21 +614,26 @@ impl<'a> Defs<'a> {
     }
 
     // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
-    pub fn split_values_either_side_of(&self, index: usize) -> (Self, Self) {
+    pub fn split_values_either_side_of(&self, index: usize) -> SplitDefsAround {
         let mut before = self.clone();
         let mut after = self.clone();
 
         before.tags = self.tags[0..index].to_vec();
 
-        if index + 1 > self.tags.len() {
+        if index >= self.tags.len() {
             after.tags = self.tags.clone();
             after.tags.clear();
         } else {
             after.tags = self.tags[(index + 1)..].to_vec();
         }
 
-        (before, after)
+        SplitDefsAround { before, after }
     }
+}
+
+pub struct SplitDefsAround<'a> {
+    pub before: Defs<'a>,
+    pub after: Defs<'a>,
 }
 
 /// Should always be a zero-argument `Apply`; we'll check this in canonicalization

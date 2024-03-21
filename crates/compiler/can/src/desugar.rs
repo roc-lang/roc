@@ -156,7 +156,7 @@ fn desugar_defs_node_suffixed<'a>(
                         // We have only one value_def and it must be Suffixed
                         // replace Defs with an Apply(Task.await) and Closure of loc_return
 
-                        assert!(
+                        debug_assert!(
                             value_index == 0,
                             "we have only one value_def and so it must be Suffixed "
                         );
@@ -169,7 +169,7 @@ fn desugar_defs_node_suffixed<'a>(
                         );
 
                         // Create Closure for the result of the recursion,
-                        // use the pattern from our Suffixed Def as closure arument
+                        // use the pattern from our Suffixed Def as closure argument
                         let closure_expr = Closure(arena.alloc([*pattern]), loc_ret);
 
                         // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
@@ -199,7 +199,7 @@ fn desugar_defs_node_suffixed<'a>(
                         // pop the first Suffixed and recurse on Defs (without first) to handle any other Suffixed
                         // the result will be wrapped in an Apply(Task.await) and Closure
 
-                        assert!(
+                        debug_assert!(
                             defs.value_defs.len() > 1,
                             "we know we have other Defs that will need to be considered"
                         );
@@ -227,7 +227,7 @@ fn desugar_defs_node_suffixed<'a>(
                         );
 
                         // Create Closure for the result of the recursion,
-                        // use the pattern from our Suffixed Def as closure arument
+                        // use the pattern from our Suffixed Def as closure argument
                         let closure_expr = Closure(arena.alloc([*pattern]), new_loc_expr);
 
                         // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
@@ -259,7 +259,10 @@ fn desugar_defs_node_suffixed<'a>(
                         // Then recurse on the new Defs node, wrap the result in an Apply(Task.await) and Closure,
                         // which will become the new loc_return
 
-                        let (before, after) = defs.split_values_either_side_of(tag_index);
+                        let (before, after) = {
+                            let values = defs.split_values_either_side_of(tag_index);
+                            (values.before, values.after)
+                        };
 
                         // If there are no defs after, then just use loc_ret as we dont need a Defs node
                         let defs_after_suffixed_desugared = {
@@ -284,7 +287,7 @@ fn desugar_defs_node_suffixed<'a>(
                         );
 
                         // Create Closure for the result of the recursion,
-                        // use the pattern from our Suffixed Def as closure arument
+                        // use the pattern from our Suffixed Def as closure argument
                         let closure_expr =
                             Closure(arena.alloc([*pattern]), defs_after_suffixed_desugared);
 
