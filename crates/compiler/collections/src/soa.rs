@@ -186,6 +186,6 @@ impl<T, U> EitherIndex<T, U> {
     }
 
     pub fn decrement_index(&mut self) {
-        self.index.saturating_sub(1);
+        self.index = self.index.saturating_sub(1);
     }
 }

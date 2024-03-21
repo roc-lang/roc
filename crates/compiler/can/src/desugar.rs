@@ -191,7 +191,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
-                                CalledVia::Space,
+                                CalledVia::BangSuffix,
                             ),
                         ))
                     } else if value_index == 0 {
@@ -249,7 +249,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
-                                CalledVia::Space,
+                                CalledVia::BangSuffix,
                             ),
                         ))
                     } else {
@@ -310,7 +310,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
-                                CalledVia::Space,
+                                CalledVia::BangSuffix,
                             ),
                         ));
 
