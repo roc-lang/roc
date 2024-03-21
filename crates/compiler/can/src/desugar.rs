@@ -339,6 +339,7 @@ fn unwrap_suffixed_def_and_pattern<'a>(
 ) {
     match value_def {
         ValueDef::Body(pattern, suffixed_expression) => match suffixed_expression.value {
+            // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
             Apply(sub_loc, suffixed_args, called_via) => match sub_loc.value {
                 Suffixed(sub_expr) => (
                     Apply(
@@ -350,6 +351,8 @@ fn unwrap_suffixed_def_and_pattern<'a>(
                 ),
                 _ => unreachable!("should have a suffixed Apply inside Body def"),
             },
+            // The Suffixed has NIL arguments applied e.g. `Stdin.line!`
+            Suffixed(sub_expr) => (*sub_expr, pattern),
             _ => {
                 unreachable!("should have a suffixed Apply inside Body def")
             }

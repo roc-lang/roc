@@ -601,10 +601,16 @@ impl<'a> Defs<'a> {
                 let index = value_index.index();
 
                 if let ValueDef::Body(_, expr) = &self.value_defs[index] {
+                    // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
                     if let Expr::Apply(sub_expr, _, _) = expr.value {
                         if let Expr::Suffixed(_) = sub_expr.value {
                             return Some((tag_index, index));
                         }
+                    }
+
+                    // The Suffixed has NO arguments applied e.g. `Stdin.line!`
+                    if let Expr::Suffixed(_) = expr.value {
+                        return Some((tag_index, index));
                     }
                 }
             }
