@@ -217,7 +217,7 @@ fn start_phase<'a>(
                     //
                     // At the end of this loop, dep_idents contains all the information to
                     // resolve a symbol from another module: if it's in here, that means
-                    // we have both imported the module and the ident was exported by that mdoule.
+                    // we have both imported the module and the ident was exported by that module.
                     for dep_id in deps_by_name.values() {
                         // We already verified that these are all present,
                         // so unwrapping should always succeed here.
@@ -702,7 +702,7 @@ struct State<'a> {
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
-    pub toplevel_expects: ToplevelExpects,
+    pub toplevel_expects: MutMap<ModuleId, ToplevelExpects>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -784,7 +784,7 @@ impl<'a> State<'a> {
             dependencies,
             procedures: MutMap::default(),
             host_exposed_lambda_sets: std::vec::Vec::new(),
-            toplevel_expects: ToplevelExpects::default(),
+            toplevel_expects: MutMap::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_modules: &[],
             exposed_types,
@@ -2537,6 +2537,10 @@ fn update<'a>(
             }
 
             report_unused_imported_modules(&mut state, module_id, &constrained_module);
+            state
+                .module_cache
+                .exposed_imports
+                .insert(module_id, constrained_module.module.exposed_imports.clone());
 
             state
                 .module_cache
@@ -2583,6 +2587,10 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
+            state
+                .module_cache
+                .exposes
+                .insert(module_id, solved_module.exposed_vars_by_symbol.clone());
 
             let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
                 let modules = state.arc_modules.lock();
@@ -2779,8 +2787,9 @@ fn update<'a>(
 
             let subs = solved_subs.into_inner();
 
-            state.toplevel_expects.pure.extend(toplevel_expects.pure);
-            state.toplevel_expects.fx.extend(toplevel_expects.fx);
+            if !toplevel_expects.pure.is_empty() || !toplevel_expects.fx.is_empty() {
+                state.toplevel_expects.insert(module_id, toplevel_expects);
+            }
 
             state
                 .module_cache
@@ -3331,7 +3340,7 @@ fn finish(
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
-    mut documentation: VecMap<ModuleId, ModuleDocumentation>,
+    documentation: VecMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
     //
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
@@ -3370,18 +3379,6 @@ fn finish(
 
     roc_checkmate::dump_checkmate!(checkmate);
 
-    let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
-
-    for module_id in state.exposed_modules.iter() {
-        let docs = documentation.remove(module_id).unwrap_or_else(|| {
-            panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
-        });
-
-        docs_by_module.push(docs);
-    }
-
-    debug_assert_eq!(documentation.len(), 0);
-
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -3395,11 +3392,15 @@ fn finish(
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         exposed_types_storage,
+        exposed_modules: state.exposed_modules.into(),
         resolved_implementations,
         sources,
         timings: state.timings,
-        docs_by_module,
+        docs_by_module: documentation,
         abilities_store,
+        exposed_imports: state.module_cache.exposed_imports,
+        imports: state.module_cache.imports,
+        exposes: state.module_cache.exposes,
     }
 }
 
@@ -5392,36 +5393,22 @@ fn canonicalize_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-    let module_docs = match header_type {
-        HeaderType::App { .. } => None,
-        HeaderType::Platform { .. } | HeaderType::Package { .. } => {
-            // TODO: actually generate docs for platform and package modules.
-            None
-        }
-        HeaderType::Interface { name, .. }
-        | HeaderType::Builtin { name, .. }
-        | HeaderType::Hosted { name, .. }
-            if exposed_module_ids.contains(&parsed.module_id) =>
-        {
+    let module_docs = {
+        let module_name = header_type.get_name();
+        module_name.map(|module_name| {
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
-            let docs = crate::docs::generate_module_docs(
+            crate::docs::generate_module_docs(
                 scope,
                 module_id,
                 module_ids,
-                name.as_str().into(),
+                module_name.into(),
                 &parsed_defs_for_docs,
                 exposed_module_ids,
                 module_output.exposed_symbols.clone(),
                 parsed.header_comments,
-            );
-
-            Some(docs)
-        }
-        HeaderType::Interface { .. } | HeaderType::Builtin { .. } | HeaderType::Hosted { .. } => {
-            // This module isn't exposed by the platform, so don't generate docs for it!
-            None
-        }
+            )
+        })
     };
 
     // _before has an underscore because it's unused in --release builds

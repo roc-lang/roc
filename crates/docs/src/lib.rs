@@ -8,7 +8,7 @@ use roc_collections::VecSet;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ident::{parse_ident, Accessor, Ident};
 use roc_parse::keyword;
@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
 pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
-    let loaded_module = load_module_for_docs(root_file);
+    let mut loaded_module = load_module_for_docs(root_file);
+    let exposed_module_docs = get_exposed_module_docs(&mut loaded_module);
 
     // TODO get these from the platform's source file rather than hardcoding them!
     // github.com/roc-lang/roc/issues/5712
@@ -95,8 +96,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
         .raw_template_html
         .replace(
             "<!-- Prefetch links -->",
-            loaded_module
-                .docs_by_module
+            exposed_module_docs
                 .iter()
                 .map(|(_, module)| {
                     let href = module.name.as_str();
@@ -110,13 +110,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
         .replace("<!-- base -->", &base_url())
         .replace(
             "<!-- Module links -->",
-            render_sidebar(loaded_module.docs_by_module.iter().map(|(_, docs)| docs)).as_str(),
+            render_sidebar(exposed_module_docs.iter().map(|(_, docs)| docs)).as_str(),
         );
 
     let all_exposed_symbols = {
         let mut set = VecSet::default();
 
-        for (_, docs) in loaded_module.docs_by_module.iter() {
+        for (_, docs) in exposed_module_docs.iter() {
             set.insert_all(docs.exposed_symbols.iter().copied());
         }
 
@@ -137,7 +137,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             )
             .replace(
                 "<!-- Module Docs -->",
-                render_package_index(&loaded_module).as_str(),
+                render_package_index(&exposed_module_docs).as_str(),
             );
 
         fs::write(build_dir.join("index.html"), rendered_package).unwrap_or_else(|error| {
@@ -146,7 +146,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     }
 
     // Write each package module's index.html file
-    for (_, module_docs) in loaded_module.docs_by_module.iter() {
+    for (_, module_docs) in exposed_module_docs.iter() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
 
@@ -175,15 +175,33 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
+/// Gives only the module docs for modules that are exposed by the platform or package.
+fn get_exposed_module_docs(
+    loaded_module: &mut LoadedModule,
+) -> Vec<(ModuleId, ModuleDocumentation)> {
+    let mut exposed_docs = Vec::with_capacity(loaded_module.exposed_modules.len());
+    // let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
+
+    for module_id in loaded_module.exposed_modules.iter() {
+        let docs =
+            loaded_module.docs_by_module.remove(module_id).unwrap_or_else(|| {
+                panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
+            });
+
+        exposed_docs.push(docs);
+    }
+    exposed_docs
+}
+
 fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-fn render_package_index(root_module: &LoadedModule) -> String {
+fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> String {
     // The list items containing module links
     let mut module_list_buf = String::new();
 
-    for (_, module) in root_module.docs_by_module.iter() {
+    for (_, module) in docs_by_module.iter() {
         // The anchor tag containing the module link
         let mut link_buf = String::new();
 
@@ -283,6 +301,15 @@ fn render_module_documentation(
 
                     buf.push_str("</section>");
                 }
+            }
+            DocEntry::ModuleDoc(docs) => {
+                markdown_to_html(
+                    &mut buf,
+                    all_exposed_symbols,
+                    &module.scope,
+                    docs,
+                    root_module,
+                );
             }
             DocEntry::DetachedDoc(docs) => {
                 markdown_to_html(

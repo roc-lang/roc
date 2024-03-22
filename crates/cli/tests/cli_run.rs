@@ -16,6 +16,7 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use regex::Regex;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
@@ -199,7 +200,7 @@ mod cli_run {
                 vec.into_iter()
             };
 
-            let out = match cli_mode {
+            let cmd_output = match cli_mode {
                 CliMode::RocBuild => {
                     run_roc_on_failure_is_panic(
                         file,
@@ -295,41 +296,48 @@ mod cli_run {
                 }
             };
 
-            let mut actual = strip_colors(&out.stdout);
-
-            // e.g. "1 failed and 0 passed in 123 ms."
-            if let Some(split) = actual.rfind("passed in ") {
-                let (before_first_digit, _) = actual.split_at(split);
-                actual = format!("{before_first_digit}passed in <ignored for test> ms.");
-            }
-
             let self_path = file.display().to_string();
-            actual = actual.replace(&self_path, "<ignored for tests>");
 
-            if !actual.ends_with(expected_ending) {
+            let actual_cmd_stdout = ignore_test_timings(&strip_colors(&cmd_output.stdout))
+                .replace(&self_path, "<ignored for tests>");
+
+            if !actual_cmd_stdout.ends_with(expected_ending) {
                 panic!(
                     "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
-                    expected_ending, actual, out.stderr
+                    expected_ending, actual_cmd_stdout, cmd_output.stderr
                 );
             }
 
-            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
+            if !cmd_output.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
-                    out.status, out.stderr
+                    cmd_output.status, cmd_output.stderr
                 );
             }
         }
     }
 
+    fn ignore_test_timings(cmd_output: &str) -> String {
+        let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
+        let replacement = " in <ignored for test> ms.";
+        regex.replace_all(cmd_output, replacement).to_string()
+    }
+
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    // not currently used
-    // fn test_roc_expect(dir_name: &str, roc_filename: &str) {
-    //     let path = file_path_from_root(dir_name, roc_filename);
-    //     let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
-    //     assert!(out.status.success());
-    // }
+    fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
+        let path = file_path_from_root(dir_name, roc_filename);
+        check_output_with_stdin(
+            &path,
+            &[],
+            flags,
+            &[],
+            &[],
+            expected_ending,
+            UseValgrind::Yes,
+            TestCliCommands::Test,
+        );
+    }
 
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
@@ -547,14 +555,14 @@ mod cli_run {
         // on the building of the platform
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
 
                 This expectation failed:
 
@@ -580,14 +588,14 @@ mod cli_run {
         );
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
 
                 This expectation failed:
 
@@ -599,7 +607,7 @@ mod cli_run {
                 a : Num *
                 a = 1
 
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
 
                 This expectation failed:
 
@@ -611,7 +619,7 @@ mod cli_run {
                 a : Num *
                 a = 1
 
-                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
 
                 This expectation failed:
 
@@ -630,11 +638,47 @@ mod cli_run {
                 b = 2
 
 
-
-                1 failed and 0 passed in <ignored for test> ms."#
+                1 failed and 0 passed in <ignored for test> ms.
+                "#
             ),
             UseValgrind::Yes,
             TestCliCommands::Test,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &[],
+            indoc!(
+                r#"
+                0 failed and 3 passed in <ignored for test> ms.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects_verbose() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &["--verbose"],
+            indoc!(
+                r#"
+                Compiled in <ignored for test> ms.
+
+                Direct.roc:
+                    0 failed and 2 passed in <ignored for test> ms.
+
+                Transitive.roc:
+                    0 failed and 1 passed in <ignored for test> ms.
+                "#
+            ),
         );
     }
 
@@ -659,7 +703,7 @@ mod cli_run {
     )]
     fn fibonacci() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "fibonacci.roc",
             "",
             UseValgrind::Yes,
@@ -698,7 +742,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "quicksort.roc",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,

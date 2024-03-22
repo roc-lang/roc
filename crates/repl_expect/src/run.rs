@@ -11,7 +11,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_can::expr::ExpectLookup;
-use roc_collections::{MutSet, VecMap};
+use roc_collections::{MutMap, MutSet, VecMap};
 use roc_error_macros::internal_error;
 use roc_gen_llvm::{
     llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
@@ -620,7 +620,7 @@ pub fn expect_mono_module_to_dylib<'a>(
 ) -> Result<
     (
         libloading::Library,
-        ExpectFunctions<'a>,
+        MutMap<ModuleId, ExpectFunctions<'a>>,
         STLayoutInterner<'a>,
     ),
     libloading::Error,
@@ -666,50 +666,68 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let capacity = toplevel_expects.pure.len() + toplevel_expects.fx.len();
-    let mut expect_symbols = BumpVec::with_capacity_in(capacity, env.arena);
-
-    expect_symbols.extend(toplevel_expects.pure.keys().copied());
-    expect_symbols.extend(toplevel_expects.fx.keys().copied());
+    let expects_symbols = toplevel_expects
+        .iter()
+        .map(|(module_id, expects)| {
+            (
+                *module_id,
+                bumpalo::collections::Vec::from_iter_in(
+                    expects
+                        .pure
+                        .keys()
+                        .copied()
+                        .chain(expects.fx.keys().copied()),
+                    env.arena,
+                ),
+            )
+        })
+        .collect();
 
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         &layout_interner,
         opt_level,
-        expect_symbols.into_bump_slice(),
+        expects_symbols,
         procedures,
     );
 
-    let expects_fx = bumpalo::collections::Vec::from_iter_in(
-        toplevel_expects
-            .fx
-            .into_iter()
-            .zip(expect_names.iter().skip(toplevel_expects.pure.len()))
-            .map(|((symbol, region), name)| ToplevelExpect {
-                symbol,
-                region,
-                name,
-            }),
-        env.arena,
-    );
+    let mut modules_expects: MutMap<ModuleId, ExpectFunctions> = MutMap::default();
 
-    let expects_pure = bumpalo::collections::Vec::from_iter_in(
-        toplevel_expects
-            .pure
-            .into_iter()
-            .zip(expect_names.iter())
-            .map(|((symbol, region), name)| ToplevelExpect {
-                symbol,
-                region,
-                name,
-            }),
-        env.arena,
-    );
+    for (module_id, expects) in toplevel_expects.into_iter() {
+        let expect_names = expect_names.get(&module_id).unwrap();
 
-    let expects = ExpectFunctions {
-        pure: expects_pure,
-        fx: expects_fx,
-    };
+        let expects_fx = bumpalo::collections::Vec::from_iter_in(
+            expects
+                .fx
+                .into_iter()
+                .zip(expect_names.iter().skip(expects.pure.len()))
+                .map(|((symbol, region), name)| ToplevelExpect {
+                    symbol,
+                    region,
+                    name,
+                }),
+            env.arena,
+        );
+
+        let expects_pure =
+            bumpalo::collections::Vec::from_iter_in(
+                expects.pure.into_iter().zip(expect_names.iter()).map(
+                    |((symbol, region), name)| ToplevelExpect {
+                        symbol,
+                        region,
+                        name,
+                    },
+                ),
+                env.arena,
+            );
+
+        let expect_funs = ExpectFunctions {
+            pure: expects_pure,
+            fx: expects_fx,
+        };
+
+        modules_expects.insert(module_id, expect_funs);
+    }
 
     env.dibuilder.finalize();
 
@@ -735,5 +753,6 @@ pub fn expect_mono_module_to_dylib<'a>(
         env.module.print_to_file(path).unwrap();
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, layout_interner))
+    llvm_module_to_dylib(env.module, &target, opt_level)
+        .map(|dy_lib| (dy_lib, modules_expects, layout_interner))
 }

@@ -31,14 +31,16 @@ impl Problems {
     pub fn print_error_warning_count(&self, total_time: std::time::Duration) {
         const GREEN: &str = ANSI_STYLE_CODES.green;
         const YELLOW: &str = ANSI_STYLE_CODES.yellow;
+        const RESET: &str = ANSI_STYLE_CODES.reset;
 
         println!(
-            "{}{}\x1B[39m {} and {}{}\x1B[39m {} found in {} ms",
+            "{}{}{} {} and {}{}{} {} found in {} ms",
             match self.errors {
                 0 => GREEN,
                 _ => YELLOW,
             },
             self.errors,
+            RESET,
             match self.errors {
                 1 => "error",
                 _ => "errors",
@@ -48,6 +50,7 @@ impl Problems {
                 _ => YELLOW,
             },
             self.warnings,
+            RESET,
             match self.warnings {
                 1 => "warning",
                 _ => "warnings",

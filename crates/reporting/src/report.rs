@@ -254,7 +254,6 @@ pub struct StyleCodes {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
-    pub color_reset: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
@@ -266,7 +265,6 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
-    color_reset: "\u{1b}[39m",
 };
 
 macro_rules! html_color {
@@ -284,7 +282,6 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "<span class='bold'>",
     underline: "<span class='underline'>",
     reset: "</span>",
-    color_reset: "</span>",
 };
 
 // useful for tests
@@ -297,7 +294,6 @@ pub fn strip_colors(str: &str) -> String {
         .replace(ANSI_STYLE_CODES.bold, "")
         .replace(ANSI_STYLE_CODES.underline, "")
         .replace(ANSI_STYLE_CODES.reset, "")
-        .replace(ANSI_STYLE_CODES.color_reset, "")
 }
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers

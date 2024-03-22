@@ -1441,6 +1441,12 @@ pub fn canonicalize_expr<'a>(
                 bad_expr
             );
         }
+        bad_expr @ ast::Expr::Suffixed(_) => {
+            internal_error!(
+                "A suffixed expression did not get desugared somehow: {:#?}",
+                bad_expr
+            );
+        }
     };
 
     // At the end, diff used_idents and defined_idents to see which were unused.
@@ -2506,6 +2512,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             ast::RecordBuilderField::SpaceBefore(_, _)
             | ast::RecordBuilderField::SpaceAfter(_, _) => false,
         }),
+        ast::Expr::Suffixed(_) => todo!(),
     }
 }
 

@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, info};
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -13,7 +13,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analysis::completion::{field_completion, get_completion_items},
+    analysis::completion::{field_completion, get_completion_items, get_module_completion_items},
     convert::{ToRange, ToRocPosition},
 };
 
@@ -169,19 +169,33 @@ impl AnalyzedDocument {
             declarations,
             module_id,
             interns,
+            modules_info,
             ..
         } = self.module()?;
 
         let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
+
+        //TODO:Can this be integrated into find closest type? is it even worth it?
+        let docs_opt = self
+            .symbol_at(position)
+            .and_then(|symb| modules_info.docs.get(module_id)?.get_doc_for_symbol(&symb));
+
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 
         let range = region.to_range(self.line_info());
 
+        let type_content = MarkedString::LanguageString(LanguageString {
+            language: "roc".to_string(),
+            value: type_str,
+        });
+
+        let content = vec![Some(type_content), docs_opt.map(MarkedString::String)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
         Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                language: "roc".to_string(),
-                value: type_str,
-            })),
+            contents: HoverContents::Array(content),
             range: Some(range),
         })
     }
@@ -223,29 +237,73 @@ impl AnalyzedDocument {
             interns,
             subs,
             declarations,
+            exposed_imports,
+            imports,
+            modules_info,
             ..
         } = self.module()?;
 
-        let is_field_completion = symbol_prefix.contains('.');
-        if is_field_completion {
-            field_completion(
-                position,
-                symbol_prefix,
-                declarations,
-                interns,
-                &mut subs.clone(),
-                module_id,
-            )
+        let is_field_or_module_completion = symbol_prefix.contains('.');
+
+        if is_field_or_module_completion {
+            // If the second to last section is capitalised we know we are completing a
+            // module inside an import of a module, e.g.: My.Module.function
+            let is_module_completion = symbol_prefix
+                .split('.')
+                .nth_back(1) // second to last
+                .and_then(|str| str.chars().nth(0).map(|c| c.is_uppercase()))
+                .unwrap_or(false);
+
+            if is_module_completion {
+                info!("Getting module dot completion...");
+                Some(get_module_completion_items(
+                    symbol_prefix,
+                    interns,
+                    imports,
+                    modules_info,
+                    true,
+                ))
+            } else {
+                info!("Getting record dot completion...");
+                field_completion(
+                    position,
+                    symbol_prefix,
+                    declarations,
+                    interns,
+                    &mut subs.clone(),
+                    module_id,
+                )
+            }
         } else {
-            let completions = get_completion_items(
-                position,
-                symbol_prefix,
-                declarations,
-                &mut subs.clone(),
-                module_id,
-                interns,
-            );
-            Some(completions)
+            let is_module_or_type_completion = symbol_prefix
+                .chars()
+                .nth(0)
+                .map_or(false, |c| c.is_uppercase());
+
+            if is_module_or_type_completion {
+                info!("Getting module completion...");
+                let completions = get_module_completion_items(
+                    symbol_prefix,
+                    interns,
+                    imports,
+                    modules_info,
+                    true,
+                );
+                Some(completions)
+            } else {
+                info!("Getting variable completion...");
+                let completions = get_completion_items(
+                    position,
+                    symbol_prefix,
+                    declarations,
+                    &mut subs.clone(),
+                    module_id,
+                    interns,
+                    modules_info.docs.get(module_id),
+                    exposed_imports,
+                );
+                Some(completions)
+            }
         }
     }
 }
