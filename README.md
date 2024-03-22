@@ -5,7 +5,7 @@
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://roc-lang.org/tutorial)
 - [**docs** for the standard library](https://www.roc-lang.org/builtins)
-- [**examples**](https://github.com/roc-lang/examples/tree/main/examples)
+- [**examples**](https://www.roc-lang.org/examples)
 - [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/www/content/faq.md)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
