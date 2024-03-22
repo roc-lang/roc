@@ -22,8 +22,8 @@ fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
-    let target_info = roc_target::TargetInfo::default_x86_64();
-    let interner = STLayoutInterner::with_capacity(4, target_info);
+    let target = roc_target::Target::LinuxX64;
+    let interner = STLayoutInterner::with_capacity(4, target);
 
     let t = &[Layout::U8] as &[_];
     let tt = [t, t];

@@ -16,7 +16,7 @@ use roc_mono::layout::{
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::subs::{
     Content, FlatType, GetSubsSlice, RecordFields, Subs, TagExt, TupleElems, UnionTags, Variable,
 };
@@ -26,7 +26,7 @@ use crate::{ReplApp, ReplAppMemory};
 struct Env<'a, 'env> {
     arena: &'a Bump,
     subs: &'env Subs,
-    target_info: TargetInfo,
+    target: Target,
     interns: &'a Interns,
     layout_cache: LayoutCache<'a>,
 }
@@ -49,14 +49,14 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     subs: &Subs,
     interns: &'a Interns,
     layout_interner: TLLayoutInterner<'a>,
-    target_info: TargetInfo,
+    target: Target,
 ) -> Expr<'a> {
     let mut env = Env {
         arena,
         subs,
-        target_info,
+        target,
         interns,
-        layout_cache: LayoutCache::new(layout_interner, target_info),
+        layout_cache: LayoutCache::new(layout_interner, target),
     };
 
     match layout {
@@ -338,7 +338,7 @@ fn tag_id_from_recursive_ptr<'a, M: ReplAppMemory>(
     union_layout: UnionLayout<'a>,
     rec_addr: usize,
 ) -> (i64, usize) {
-    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
+    let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target);
 
     if tag_in_ptr {
         let (tag_id, data_addr) = mem.deref_pointer_with_tag_id(rec_addr);
@@ -416,7 +416,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 Expr::Str(StrLiteral::PlainLine(arena_str))
             };
 
-            match app.call_function_returns_roc_str(env.target_info, main_fn_name, body) {
+            match app.call_function_returns_roc_str(env.target, main_fn_name, body) {
                 Some(string) => string,
                 None => Expr::REPL_RUNTIME_CRASH,
             }
@@ -628,8 +628,8 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, LayoutRepr::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = mem.deref_usize(addr);
-            let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
-            let _cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
+            let len = mem.deref_usize(addr + env.target.ptr_width() as usize);
+            let _cap = mem.deref_usize(addr + 2 * env.target.ptr_width() as usize);
 
             list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
         }

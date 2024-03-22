@@ -18,16 +18,16 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::{LayoutIds, STLayoutInterner};
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_wasm_module::parse::ParseError;
 use roc_wasm_module::{Align, LocalId, ValueType, WasmModule};
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::code_builder::CodeBuilder;
 
-const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
+const TARGET: Target = Target::Wasm32;
 const PTR_SIZE: u32 = {
-    let value = TARGET_INFO.ptr_width() as u32;
+    let value = TARGET.ptr_width() as u32;
 
     // const assert that our pointer width is actually 4
     // the code relies on the pointer width being exactly 4
@@ -135,7 +135,7 @@ pub fn build_app_module<'a, 'r>(
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
+        CodeGenHelp::new(env.arena, Target::Wasm32, env.module_id),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {

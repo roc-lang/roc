@@ -11,7 +11,7 @@ use roc_parse::{join_alias_to_body, join_ann_to_body};
 use roc_region::all::Loc;
 use roc_repl_eval::gen::{compile_to_mono, Problems};
 use roc_reporting::report::Palette;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 #[derive(Debug, Clone, PartialEq)]
 struct PastDef {
@@ -54,7 +54,7 @@ impl ReplState {
         &mut self,
         arena: &'a Bump,
         line: &str,
-        target_info: TargetInfo,
+        target: Target,
         palette: Palette,
     ) -> ReplAction<'a> {
         let pending_past_def;
@@ -170,7 +170,7 @@ impl ReplState {
             arena,
             self.past_defs.iter().map(|def| def.src.as_str()),
             src,
-            target_info,
+            target,
             palette,
         );
 

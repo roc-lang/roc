@@ -67,7 +67,8 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     let arena = Bump::new();
     let cwd = std::env::current_dir().unwrap();
     let source = roc_builtins::roc::module_source(module_id);
-    let target_info = roc_target::TargetInfo::default_x86_64();
+    // This is just for typechecking. Target shouldn't matter.
+    let target = roc_target::Target::LinuxX64;
     let function_kind = roc_solve::FunctionKind::LambdaSet;
 
     let res_module = roc_load_internal::file::load_and_typecheck_str(
@@ -76,7 +77,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         source,
         cwd,
         Default::default(),
-        target_info,
+        target,
         function_kind,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,

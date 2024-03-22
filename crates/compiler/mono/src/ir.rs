@@ -31,7 +31,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::subs::{
     instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
     StorageSubs, Subs, Variable, VariableSubsSlice,
@@ -1354,7 +1354,7 @@ pub struct Env<'a, 'i> {
     pub expectation_subs: Option<&'i mut Subs>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub target_info: TargetInfo,
+    pub target: Target,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
     // TODO: WorldAbilities and exposed_by_module share things, think about how to combine them

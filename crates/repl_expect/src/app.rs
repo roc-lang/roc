@@ -1,7 +1,7 @@
 use roc_parse::ast::Expr;
 use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_std::RocStr;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 pub(crate) struct ExpectMemory {
     pub(crate) start: *const u8,
@@ -118,7 +118,7 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
 
     fn call_function_returns_roc_str<T, F>(
         &mut self,
-        _target_info: TargetInfo,
+        _target: Target,
         main_fn_name: &str,
         transform: F,
     ) -> Option<T>

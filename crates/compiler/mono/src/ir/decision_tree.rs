@@ -1779,7 +1779,7 @@ fn test_to_comparison<'a>(
                     let real_len = env.unique_symbol();
                     let test_len = env.unique_symbol();
 
-                    let usize_layout = Layout::usize(env.target_info);
+                    let usize_layout = Layout::usize(env.target);
 
                     stores.push((real_len, usize_layout, real_len_expr));
                     stores.push((test_len, usize_layout, test_len_expr));
@@ -2337,7 +2337,7 @@ fn decide_to_branching<'a>(
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
-                    cond_layout: Layout::usize(env.target_info),
+                    cond_layout: Layout::usize(env.target),
                     cond_symbol: len_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch: (default_branch_info, env.arena.alloc(default_branch)),
@@ -2355,7 +2355,7 @@ fn decide_to_branching<'a>(
                 Stmt::Let(
                     len_symbol,
                     len_expr,
-                    Layout::usize(env.target_info),
+                    Layout::usize(env.target),
                     env.arena.alloc(switch),
                 )
             } else {

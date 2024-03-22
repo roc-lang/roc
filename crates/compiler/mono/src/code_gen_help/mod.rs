@@ -3,7 +3,7 @@ use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 use crate::ir::{
     BranchInfo, Call, CallSpecId, CallType, Expr, JoinPointId, Literal, ModifyRc, PassedFunction,
@@ -93,20 +93,20 @@ pub struct Context<'a> {
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
     home: ModuleId,
-    target_info: TargetInfo,
+    target: Target,
     layout_isize: InLayout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
-    pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
-        let layout_isize = Layout::isize(target_info);
+    pub fn new(arena: &'a Bump, target: Target, home: ModuleId) -> Self {
+        let layout_isize = Layout::isize(target);
 
         CodeGenHelp {
             arena,
             home,
-            target_info,
+            target,
             layout_isize,
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,

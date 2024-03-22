@@ -14,8 +14,7 @@ use roc_module::symbol::Interns;
 use roc_mono::ir::{Call, CallSpecId, Expr, UpdateModeId};
 use roc_mono::ir::{Proc, ProcLayout, Stmt};
 use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, STLayoutInterner};
-use roc_target::TargetInfo;
-use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
+use roc_target::Target;
 
 // This is used by some code below which is currently commented out.
 // See that code for more details!
@@ -27,7 +26,7 @@ pub fn build_module<'a, 'r>(
     env: &'r Env<'a>,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
-    target: &Triple,
+    target: Target,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
     let module_object = build_module_help(env, interns, layout_interner, target, procedures);
@@ -49,21 +48,17 @@ fn build_module_help<'a, 'r>(
     env: &'r Env<'a>,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
-    target: &Triple,
+    target: Target,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
     match target {
-        Triple {
-            architecture: TargetArch::X86_64,
-            binary_format: TargetBF::Elf,
-            ..
-        } if cfg!(feature = "target-x86_64") => {
+        Target::LinuxX64 if cfg!(feature = "target-x86_64") => {
             let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            >(env, target, interns, layout_interner);
             // Newer version of `ld` require `.note.GNU-stack` for security reasons.
             // It specifies that we will not execute code stored on the stack.
             let mut object =
@@ -75,17 +70,13 @@ fn build_module_help<'a, 'r>(
             );
             build_object(procedures, backend, object)
         }
-        Triple {
-            architecture: TargetArch::X86_64,
-            binary_format: TargetBF::Macho,
-            ..
-        } if cfg!(feature = "target-x86_64") => {
+        Target::MacX64 if cfg!(feature = "target-x86_64") => {
             let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -96,53 +87,39 @@ fn build_module_help<'a, 'r>(
                 ),
             )
         }
-        Triple {
-            architecture: TargetArch::X86_64,
-            binary_format: TargetBF::Coff,
-            ..
-        } if cfg!(feature = "target-x86_64") => {
+        Target::WinX64 if cfg!(feature = "target-x86_64") => {
             let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64WindowsFastcall,
-            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
             )
         }
-        Triple {
-            architecture: TargetArch::Aarch64(_),
-            binary_format: TargetBF::Elf,
-            ..
-        } if cfg!(feature = "target-aarch64") => {
-            let backend =
-                new_backend_64bit::<
-                    aarch64::AArch64GeneralReg,
-                    aarch64::AArch64FloatReg,
-                    aarch64::AArch64Assembler,
-                    aarch64::AArch64Call,
-                >(env, TargetInfo::default_aarch64(), interns, layout_interner);
+        Target::LinuxArm64 if cfg!(feature = "target-aarch64") => {
+            let backend = new_backend_64bit::<
+                aarch64::AArch64GeneralReg,
+                aarch64::AArch64FloatReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
         }
-        Triple {
-            architecture: TargetArch::Aarch64(_),
-            binary_format: TargetBF::Macho,
-            ..
-        } if cfg!(feature = "target-aarch64") => {
-            let backend =
-                new_backend_64bit::<
-                    aarch64::AArch64GeneralReg,
-                    aarch64::AArch64FloatReg,
-                    aarch64::AArch64Assembler,
-                    aarch64::AArch64Call,
-                >(env, TargetInfo::default_aarch64(), interns, layout_interner);
+        Target::MacArm64 if cfg!(feature = "target-aarch64") => {
+            let backend = new_backend_64bit::<
+                aarch64::AArch64GeneralReg,
+                aarch64::AArch64FloatReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -394,7 +371,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
-        let reloc = create_relocation(backend.target_info(), sym_id, offset + proc_offset);
+        let reloc = create_relocation(backend.target(), sym_id, offset + proc_offset);
 
         match output.add_relocation(text_section, reloc) {
             Ok(obj) => obj,
@@ -405,8 +382,8 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     }
 }
 
-fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> write::Relocation {
-    let (encoding, size, addend, kind) = match target_info.architecture {
+fn create_relocation(target: Target, symbol: SymbolId, offset: u64) -> write::Relocation {
+    let (encoding, size, addend, kind) = match target.architecture() {
         roc_target::Architecture::Aarch32 => todo!(),
         roc_target::Architecture::Aarch64 => {
             if cfg!(target_os = "macos") {
@@ -957,7 +934,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
-    let target_info = backend.target_info();
+    let target = backend.target();
     let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc, layout_ids);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
     for reloc in relocs.iter() {
@@ -1078,7 +1055,7 @@ fn build_proc<'a, B: Backend<'a>>(
                 add_undefined_rc_proc(output, name, &rc_proc_names);
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    create_relocation(target_info, sym_id, offset + proc_offset)
+                    create_relocation(target, sym_id, offset + proc_offset)
                 } else {
                     internal_error!("failed to find fn symbol for {:?}", name);
                 }

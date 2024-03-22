@@ -1,4 +1,4 @@
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 use super::{InLayout, LayoutRepr, UnionLayout};
 
@@ -27,16 +27,16 @@ impl Erased {
         false
     }
 
-    pub fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
-        (target_info.ptr_width() as u32) * 3
+    pub fn stack_size_without_alignment(&self, target: Target) -> u32 {
+        (target.ptr_width() as u32) * 3
     }
 
-    pub fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
-        target_info.ptr_width() as u32
+    pub fn alignment_bytes(&self, target: Target) -> u32 {
+        target.ptr_width() as u32
     }
 
-    pub fn allocation_alignment_bytes(&self, target_info: TargetInfo) -> u32 {
-        target_info.ptr_width() as u32
+    pub fn allocation_alignment_bytes(&self, target: Target) -> u32 {
+        target.ptr_width() as u32
     }
 
     pub fn is_refcounted(&self) -> bool {

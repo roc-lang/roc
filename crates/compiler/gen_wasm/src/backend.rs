@@ -31,8 +31,7 @@ use crate::layout::{ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
 use crate::{
-    copy_memory, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE,
-    TARGET_INFO,
+    copy_memory, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE, TARGET,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -1651,8 +1650,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             return;
         }
 
-        let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
-        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+        let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET);
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET);
         let (data_size, data_alignment) =
             union_layout.data_size_and_alignment(self.layout_interner);
 
@@ -1774,7 +1773,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
         };
 
-        if union_layout.stores_tag_id_as_data(TARGET_INFO) {
+        if union_layout.stores_tag_id_as_data(TARGET) {
             let id_offset = union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
@@ -1788,7 +1787,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 U0 | U1 | U8 => self.code_builder.i32_load8_u(id_align, id_offset),
                 U16 => self.code_builder.i32_load16_u(id_align, id_offset),
             }
-        } else if union_layout.stores_tag_id_in_pointer(TARGET_INFO) {
+        } else if union_layout.stores_tag_id_in_pointer(TARGET) {
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
             self.code_builder.i32_const(3);
@@ -1847,7 +1846,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             StoredValue::Local { local_id, .. } => (local_id, 0),
         };
 
-        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET);
 
         let from_addr_val = if stores_tag_id_in_pointer {
             self.code_builder.get_local(tag_local_id);
@@ -1912,7 +1911,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             StoredValue::Local { local_id, .. } => (*local_id, 0),
         };
 
-        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET);
 
         let from_offset = tag_offset + field_offset;
 

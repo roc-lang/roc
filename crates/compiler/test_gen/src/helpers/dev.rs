@@ -56,7 +56,7 @@ pub fn helper(
     }
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_x86_64(),
+        target: roc_target::Target::LinuxX64,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,

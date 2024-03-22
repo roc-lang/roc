@@ -15,18 +15,16 @@ use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_std::RocStr;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 use roc_types::subs::Subs;
-use target_lexicon::Triple;
 
 pub fn eval_llvm(
     mut loaded: MonomorphizedModule<'_>,
-    target: &Triple,
+    target: Target,
     opt_level: OptLevel,
 ) -> Option<ReplOutput> {
     let arena = Bump::new();
-    let target_info = TargetInfo::from(target);
 
     debug_assert_eq!(loaded.exposed_to_host.top_level_values.len(), 1);
     let (main_fn_symbol, main_fn_var) = loaded
@@ -81,7 +79,7 @@ pub fn eval_llvm(
         &subs,
         &interns,
         layout_interner.into_global().fork(),
-        target_info,
+        target,
     );
 
     let expr_str = format_answer(&arena, expr).to_string();
@@ -180,12 +178,10 @@ impl ReplAppMemory for CliMemory {
 )]
 fn mono_module_to_dylib_llvm<'a>(
     arena: &'a Bump,
-    target: &Triple,
+    target: Target,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
 ) -> Result<(libloading::Library, &'a str, Subs, STLayoutInterner<'a>), libloading::Error> {
-    let target_info = TargetInfo::from(target);
-
     let MonomorphizedModule {
         procedures,
         host_exposed_lambda_sets,
@@ -217,7 +213,7 @@ fn mono_module_to_dylib_llvm<'a>(
         context: &context,
         interns,
         module,
-        target_info,
+        target,
         mode: LlvmBackendMode::GenTest, // so roc_panic is generated
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
@@ -286,7 +282,7 @@ fn mono_module_to_dylib_llvm<'a>(
 )]
 fn mono_module_to_dylib_asm<'a>(
     arena: &'a Bump,
-    target: &Triple,
+    target: Target,
     loaded: MonomorphizedModule<'a>,
     _opt_level: OptLevel,
 ) -> Result<(libloading::Library, &'a str, Subs, STLayoutInterner<'a>), libloading::Error> {
@@ -294,8 +290,6 @@ fn mono_module_to_dylib_asm<'a>(
     let dir = tempfile::tempdir().unwrap();
 
     let app_o_file = dir.path().join("app.o");
-
-    let _target_info = TargetInfo::from(target);
 
     let MonomorphizedModule {
         module_id,
@@ -317,14 +311,8 @@ fn mono_module_to_dylib_asm<'a>(
         mode: roc_gen_dev::AssemblyBackendMode::Repl,
     };
 
-    let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(
-        &env,
-        &mut interns,
-        &mut layout_interner,
-        &target,
-        procedures,
-    );
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let module_out = module_object
         .write()
@@ -342,7 +330,7 @@ fn mono_module_to_dylib_asm<'a>(
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     let (mut child, dylib_path) = roc_build::link::link(
-        &target,
+        target,
         app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.

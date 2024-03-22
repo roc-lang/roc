@@ -112,7 +112,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         fi,
         &doc_info.source,
         src_dir,
-        roc_target::TargetInfo::default_x86_64(),
+        roc_target::Target::LinuxX64,
         roc_load::FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::Generic,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),

@@ -1794,8 +1794,9 @@ mod test {
             panic!("zig build-exe failed: {command_str}");
         }
 
-        let preprocessed_host_filename =
-            dir.join(preprocessed_host_filename(&Triple::host()).unwrap());
+        let preprocessed_host_filename = dir.join(preprocessed_host_filename(
+            Triple::host().try_into().unwrap(),
+        ));
 
         preprocess_windows(
             &dir.join("host.exe"),
