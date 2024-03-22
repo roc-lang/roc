@@ -999,7 +999,13 @@ fn markdown_to_html(
                 arena.reset();
 
                 match parse_ident(&arena, state, 0) {
-                    Ok((_, Ident::Access { module_name, parts }, _)) => {
+                    Ok((
+                        _,
+                        Ident::Access {
+                            module_name, parts, ..
+                        },
+                        _,
+                    )) => {
                         let mut iter = parts.iter();
 
                         match iter.next() {
