@@ -20,7 +20,7 @@ use roc_mono::{
     },
     list_element_layout,
 };
-use roc_target::{PtrWidth, TargetInfo};
+use roc_target::{PtrWidth, Target};
 
 use crate::llvm::{
     bitcode::{
@@ -129,7 +129,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Str.joinWith : List Str, Str -> Str
             arguments!(list, string);
 
-            match env.target_info.ptr_width() {
+            match env.target.ptr_width() {
                 PtrWidth::Bytes4 => {
                     // list and string are both stored as structs on the stack on 32-bit targets
                     call_str_bitcode_fn(
@@ -197,7 +197,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             };
 
             use roc_target::Architecture::*;
-            let result = match env.target_info.architecture {
+            let result = match env.target.architecture() {
                 Aarch32 | X86_32 => {
                     let zig_function = env.module.get_function(intrinsic).unwrap();
                     let zig_function_type = zig_function.get_type();
@@ -283,14 +283,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     };
 
                     use roc_target::OperatingSystem::*;
-                    let cc_return_by_pointer = match env.target_info.operating_system {
+                    let cc_return_by_pointer = match env.target.operating_system() {
                         Windows => {
                             // there is just one return register on Windows
-                            (width + 1) as usize > env.target_info.ptr_size()
+                            (width + 1) as usize > env.target.ptr_size()
                         }
                         _ => {
                             // on other systems we have two return registers
-                            (width + 1) as usize > 2 * env.target_info.ptr_size()
+                            (width + 1) as usize > 2 * env.target.ptr_size()
                         }
                     };
 
@@ -415,7 +415,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .new_build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
             use roc_target::Architecture::*;
-            match env.target_info.architecture {
+            match env.target.architecture() {
                 Aarch32 | X86_32 => {
                     arguments!(list);
                     let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
@@ -1299,7 +1299,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             let value_ptr = match layout_interner.runtime_representation(data_layout) {
                 LayoutRepr::Union(union_layout)
-                    if union_layout.stores_tag_id_in_pointer(env.target_info) =>
+                    if union_layout.stores_tag_id_in_pointer(env.target) =>
                 {
                     tag_pointer_clear_tag_id(env, ptr)
                 }
@@ -1898,7 +1898,7 @@ fn dec_split_into_words<'ctx>(
 fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
     use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
-    match env.target_info.operating_system {
+    match env.target.operating_system() {
         Windows => {
             let dec_type = zig_dec_type(env);
 
@@ -1917,8 +1917,8 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
 
             alloca.into()
         }
-        Unix => {
-            if matches!(env.target_info.architecture, X86_32 | X86_64) {
+        Linux | Mac => {
+            if matches!(env.target.architecture(), X86_32 | X86_64) {
                 internal_error!("X86 unix does not pass with a dec alloc instead it splits into high and low halves");
             }
             let i64_type = env.context.i64_type();
@@ -1937,21 +1937,15 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
             env.builder
                 .new_build_load(i64_type.array_type(2), alloca, "load as array")
         }
-        Wasi => unimplemented!(),
+        Freestanding => unimplemented!(),
     }
 }
 
 fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
-    use roc_target::Architecture::*;
-    use roc_target::OperatingSystem::*;
-
     let dec = dec.into_int_value();
 
-    match env.target_info {
-        TargetInfo {
-            architecture: X86_64 | X86_32,
-            operating_system: Unix,
-        } => {
+    match env.target {
+        Target::LinuxX32 | Target::LinuxX64 | Target::MacX64 => {
             let (low, high) = dec_split_into_words(env, dec);
 
             call_str_bitcode_fn(
@@ -1962,10 +1956,7 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
                 bitcode::DEC_TO_STR,
             )
         }
-        TargetInfo {
-            architecture: Wasm32,
-            operating_system: Unix,
-        } => call_str_bitcode_fn(
+        Target::Wasm32 => call_str_bitcode_fn(
             env,
             &[],
             &[dec.into()],
@@ -1987,22 +1978,13 @@ fn dec_unary_op<'ctx>(
     fn_name: &str,
     dec: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_target::Architecture::*;
-    use roc_target::OperatingSystem::*;
-
     let dec = dec.into_int_value();
-    match env.target_info {
-        TargetInfo {
-            architecture: X86_64 | X86_32,
-            operating_system: Unix,
-        } => {
+    match env.target {
+        Target::LinuxX32 | Target::LinuxX64 | Target::MacX64 => {
             let (low, high) = dec_split_into_words(env, dec);
             call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
         }
-        TargetInfo {
-            architecture: Wasm32,
-            operating_system: Unix,
-        } => call_bitcode_fn(env, &[dec.into()], fn_name),
+        Target::Wasm32 => call_bitcode_fn(env, &[dec.into()], fn_name),
         _ => call_bitcode_fn(env, &[dec_alloca(env, dec)], fn_name),
     }
 }
@@ -2013,17 +1995,11 @@ fn dec_binary_op<'ctx>(
     dec1: BasicValueEnum<'ctx>,
     dec2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_target::Architecture::*;
-    use roc_target::OperatingSystem::*;
-
     let dec1 = dec1.into_int_value();
     let dec2 = dec2.into_int_value();
 
-    match env.target_info {
-        TargetInfo {
-            architecture: X86_64 | X86_32,
-            operating_system: Unix,
-        } => {
+    match env.target {
+        Target::LinuxX32 | Target::LinuxX64 | Target::MacX64 => {
             let (low1, high1) = dec_split_into_words(env, dec1);
             let (low2, high2) = dec_split_into_words(env, dec2);
             let lowr_highr = call_bitcode_fn(
@@ -2043,10 +2019,7 @@ fn dec_binary_op<'ctx>(
                 .build_load(env.context.i128_type(), ptr, "to_i128")
                 .unwrap()
         }
-        TargetInfo {
-            architecture: Wasm32,
-            operating_system: Unix,
-        } => call_bitcode_fn(env, &[dec1.into(), dec2.into()], fn_name),
+        Target::Wasm32 => call_bitcode_fn(env, &[dec1.into(), dec2.into()], fn_name),
         _ => call_bitcode_fn(
             env,
             &[dec_alloca(env, dec1), dec_alloca(env, dec2)],
@@ -2061,20 +2034,14 @@ fn dec_binop_with_overflow<'ctx>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> StructValue<'ctx> {
-    use roc_target::Architecture::*;
-    use roc_target::OperatingSystem::*;
-
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
     let return_alloca = env.builder.new_build_alloca(return_type, "return_alloca");
 
-    match env.target_info {
-        TargetInfo {
-            architecture: X86_64 | X86_32,
-            operating_system: Unix,
-        } => {
+    match env.target {
+        Target::LinuxX32 | Target::LinuxX64 | Target::MacX64 => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
             call_void_bitcode_fn(
@@ -2089,10 +2056,7 @@ fn dec_binop_with_overflow<'ctx>(
                 fn_name,
             );
         }
-        TargetInfo {
-            architecture: Wasm32,
-            operating_system: Unix,
-        } => {
+        Target::Wasm32 => {
             call_void_bitcode_fn(
                 env,
                 &[return_alloca.into(), lhs.into(), rhs.into()],
@@ -2123,17 +2087,11 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_target::Architecture::*;
-    use roc_target::OperatingSystem::*;
-
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    match env.target_info {
-        TargetInfo {
-            architecture: X86_64 | X86_32,
-            operating_system: Unix,
-        } => {
+    match env.target {
+        Target::LinuxX32 | Target::LinuxX64 | Target::MacX64 => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
             call_bitcode_fn(
@@ -2147,10 +2105,7 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
                 fn_name,
             )
         }
-        TargetInfo {
-            architecture: Wasm32,
-            operating_system: Unix,
-        } => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
+        Target::Wasm32 => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
         _ => call_bitcode_fn(env, &[dec_alloca(env, lhs), dec_alloca(env, rhs)], fn_name),
     }
 }
@@ -2432,7 +2387,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[target_int_width][arg_width]
                 };
 
-                let result = match env.target_info.ptr_width() {
+                let result = match env.target.ptr_width() {
                     PtrWidth::Bytes4 => {
                         let zig_function = env.module.get_function(intrinsic).unwrap();
                         let zig_function_type = zig_function.get_type();
@@ -2489,12 +2444,11 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     }
                     PtrWidth::Bytes8 => {
                         let return_by_pointer = {
-                            if env.target_info.operating_system
-                                == roc_target::OperatingSystem::Windows
+                            if env.target.operating_system() == roc_target::OperatingSystem::Windows
                             {
-                                target_int_width.stack_size() as usize >= env.target_info.ptr_size()
+                                target_int_width.stack_size() as usize >= env.target.ptr_size()
                             } else {
-                                target_int_width.stack_size() as usize > env.target_info.ptr_size()
+                                target_int_width.stack_size() as usize > env.target.ptr_size()
                             }
                         };
                         if return_by_pointer {

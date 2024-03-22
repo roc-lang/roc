@@ -1181,7 +1181,7 @@ fn specialize_list<'a, 'i>(
                                 newer_continuation = arena.alloc(Stmt::Let(
                                     index_symbol,
                                     Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
-                                    Layout::isize(layout_interner.target_info()),
+                                    Layout::isize(layout_interner.target()),
                                     index,
                                 ));
                             }

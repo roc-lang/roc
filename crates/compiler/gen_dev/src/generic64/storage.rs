@@ -14,7 +14,7 @@ use roc_mono::{
         Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
     },
 };
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::cmp::max;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -92,7 +92,7 @@ pub struct StorageManager<
     phantom_cc: PhantomData<CC>,
     phantom_asm: PhantomData<ASM>,
     pub(crate) env: &'r Env<'a>,
-    pub(crate) target_info: TargetInfo,
+    pub(crate) target: Target,
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<GeneralReg, FloatReg>>,
 
@@ -137,13 +137,13 @@ pub fn new_storage_manager<
     CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
     env: &'r Env<'a>,
-    target_info: TargetInfo,
+    target: Target,
 ) -> StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC> {
     StorageManager {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
         env,
-        target_info,
+        target,
         symbol_storage_map: MutMap::default(),
         allocation_map: MutMap::default(),
         join_param_map: MutMap::default(),

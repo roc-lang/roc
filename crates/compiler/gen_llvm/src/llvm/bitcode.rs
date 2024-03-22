@@ -37,7 +37,7 @@ pub fn call_bitcode_fn<'ctx>(
             panic!("LLVM error: Did not get return value from bitcode function {fn_name:?}")
         });
 
-    if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+    if env.target.operating_system() == roc_target::OperatingSystem::Windows {
         // On windows zig uses a vector type <2xi64> instead of a i128 value
         let vec_type = env.context.i64_type().vec_type(2);
         if ret.get_type() == vec_type.into() {
@@ -70,7 +70,7 @@ fn call_bitcode_fn_help<'ctx>(
     let it = args
         .iter()
         .map(|x| {
-            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+            if env.target.operating_system() == roc_target::OperatingSystem::Windows {
                 if x.get_type() == env.context.i128_type().into() {
                     let parent = env
                         .builder
@@ -1067,7 +1067,7 @@ pub(crate) fn call_str_bitcode_fn<'ctx>(
     use bumpalo::collections::Vec;
     use roc_target::Architecture::*;
 
-    match env.target_info.architecture {
+    match env.target.architecture() {
         Aarch32 | X86_32 => {
             let mut arguments: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(other_arguments.len() + 2 * strings.len(), env.arena);
@@ -1123,7 +1123,7 @@ pub(crate) fn call_list_bitcode_fn<'ctx>(
     use bumpalo::collections::Vec;
     use roc_target::Architecture::*;
 
-    match env.target_info.architecture {
+    match env.target.architecture() {
         Aarch32 | X86_32 => {
             let mut arguments: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(other_arguments.len() + 2 * lists.len(), env.arena);
