@@ -2,6 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{fmt_str_literal, format_sq_literal};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
+use roc_error_macros::internal_error;
 use roc_parse::ast::{Base, CommentOrNewline, Pattern, PatternAs};
 
 pub fn fmt_pattern<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, indent: u16, parens: Parens) {
@@ -81,6 +82,7 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::Tuple(patterns) | Pattern::List(patterns) => {
                 patterns.iter().any(|p| p.is_multiline())
             }
+            Pattern::Stmt(_) => true,
         }
     }
 
@@ -279,6 +281,10 @@ impl<'a> Formattable for Pattern<'a> {
 
                 buf.push_str(ident);
             }
+
+            // Statement e.g. Suffixed with optional `{}=`
+            // e.g. `Stdout.line! "Hello World"`
+            Stmt(_) => internal_error!("should be desugared in parser into alternate pattern"),
         }
     }
 }

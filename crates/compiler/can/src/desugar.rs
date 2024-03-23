@@ -1093,6 +1093,8 @@ fn desugar_pattern<'a>(
         SpaceAfter(sub_pattern, _spaces) => {
             desugar_pattern(arena, *sub_pattern, src, line_info, module_path)
         }
+
+        Stmt(_) => unreachable!("should have been handled in the parser"),
     }
 }
 
