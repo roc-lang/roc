@@ -381,7 +381,9 @@ fn loc_ident_pattern_help<'a>(
                     Ok((MadeProgress, loc_pat, state))
                 }
             }
-            Ident::Access { module_name, parts } => {
+            Ident::Access {
+                module_name, parts, ..
+            } => {
                 // Plain identifiers (e.g. `foo`) are allowed in patterns, but
                 // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
 
