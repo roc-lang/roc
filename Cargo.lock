@@ -2531,6 +2531,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_region",

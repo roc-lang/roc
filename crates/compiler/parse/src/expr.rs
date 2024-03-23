@@ -626,6 +626,40 @@ pub fn parse_single_def<'a>(
             // a hacky way to get expression-based error messages. TODO fix this
             Ok((NoProgress, None, initial))
         }
+        // Check if we have a Statement with Suffixed first,
+        // re-parse the state as an expression
+        // and then use a `{}=` pattern for the ValueDef::Body.
+        Ok((
+            MadeProgress,
+            Loc {
+                region,
+                value: Pattern::Stmt(_),
+                ..
+            },
+            _,
+        )) => {
+            let parse_def_expr =
+                space0_before_e(increment_min_indent(expr_start(options)), EExpr::IndentEnd);
+
+            let (_, loc_def_expr, updated_state) =
+                parse_def_expr.parse(arena, state, min_indent)?;
+
+            let loc_pattern = Loc::at(region, Pattern::RecordDestructure(Collection::empty()));
+
+            let value_def = ValueDef::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_expr));
+
+            let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+
+            Ok((
+                MadeProgress,
+                Some(SingleDef {
+                    type_or_value: Either::Second(value_def),
+                    region,
+                    spaces_before: spaces_before_current,
+                }),
+                updated_state,
+            ))
+        }
         Ok((_, loc_pattern, state)) => {
             // First let's check whether this is an ability definition.
             let opt_tag_and_args: Option<(&str, Region, &[Loc<Pattern>])> = match loc_pattern.value
