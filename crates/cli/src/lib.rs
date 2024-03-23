@@ -818,14 +818,14 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if triple.operating_system == target_lexicon::OperatingSystem::Windows
-        && !(matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("surgical"))
-    {
-        // TODO remove when https://github.com/roc-lang/roc/issues/6602 has been resolved
-        // This will default the linker to legacy on Windows unless `--linker=surgical` is passed
-        LinkingStrategy::Legacy
     } else if !roc_linker::supported(link_type, &triple)
         || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
+        || (
+            // TODO remove when https://github.com/roc-lang/roc/issues/6602 has been resolved
+            // This will default the linker to legacy on Windows unless `--linker=surgical` is passed
+            triple.operating_system == target_lexicon::OperatingSystem::Windows
+                && matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) != Some("surgical")
+        )
     {
         LinkingStrategy::Legacy
     } else {
