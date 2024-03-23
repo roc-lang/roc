@@ -1427,8 +1427,8 @@ f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 ## Splits a [F64] into its components according to IEEE 754 standard.
 f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
 
-## Compine parts of a [F32] according to IEEE 754 standard.
+## Combine parts of a [F32] according to IEEE 754 standard.
 f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 
-## Compine parts of a [F46] according to IEEE 754 standard.
+## Combine parts of a [F64] according to IEEE 754 standard.
 f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
