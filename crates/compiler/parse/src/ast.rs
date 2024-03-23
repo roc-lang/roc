@@ -881,6 +881,10 @@ impl<'a> PatternAs<'a> {
 pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
+    QualifiedIdentifier {
+        module_name: &'a str,
+        ident: &'a str,
+    },
 
     Tag(&'a str),
 
@@ -932,10 +936,9 @@ pub enum Pattern<'a> {
     // Malformed
     Malformed(&'a str),
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    QualifiedIdentifier {
-        module_name: &'a str,
-        ident: &'a str,
-    },
+
+    // Statement e.g. `Stdout.line! "Hello"`
+    Stmt(&'a str),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1135,6 +1138,8 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
+
+            Stmt(_) => todo!(),
         }
     }
 }
@@ -1782,6 +1787,8 @@ impl<'a> Malformed for Pattern<'a> {
             Malformed(_) |
             MalformedIdent(_, _) |
             QualifiedIdentifier { .. } => true,
+
+            Stmt(_) => todo!(),
         }
     }
 }
