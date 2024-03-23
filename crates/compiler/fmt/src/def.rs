@@ -357,9 +357,19 @@ pub fn fmt_defs(buf: &mut Buf, defs: &Defs, indent: u16) {
 }
 
 pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
-    pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
-    buf.indent(indent);
-    buf.push_str(" =");
+    // Check if this is an assignment into the unit/empty record, format as a Statement
+    let is_statement = if let Pattern::RecordDestructure(collection) = pattern {
+        collection.is_empty()
+    } else {
+        false
+    };
+
+    // Don't format the `{} =` for defs with this pattern
+    if !is_statement {
+        pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
+        buf.indent(indent);
+        buf.push_str(" =");
+    }
 
     if body.is_multiline() {
         match body {

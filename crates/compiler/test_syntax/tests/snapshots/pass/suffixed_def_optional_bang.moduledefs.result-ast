@@ -1,0 +1,91 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+    ],
+    regions: [
+        @0-19,
+        @20-45,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 RecordDestructure(
+                [],
+            ),
+            @0-19 Apply(
+                @0-4 Suffixed(
+                    Var {
+                        module_name: "A",
+                        ident: "x",
+                    },
+                ),
+                [
+                    @8-13 Str(
+                        PlainLine(
+                            "Foo",
+                        ),
+                    ),
+                    @17-19 List(
+                        [],
+                    ),
+                ],
+                Space,
+            ),
+        ),
+        Body(
+            @20-24 RecordDestructure(
+                [],
+            ),
+            @20-45 Apply(
+                @20-24 Suffixed(
+                    Var {
+                        module_name: "B",
+                        ident: "y",
+                    },
+                ),
+                [
+                    @27-32 Str(
+                        PlainLine(
+                            "Bar",
+                        ),
+                    ),
+                    @34-45 Closure(
+                        [
+                            @35-36 Identifier(
+                                "a",
+                            ),
+                        ],
+                        @40-45 BinOps(
+                            [
+                                (
+                                    @40-41 Var {
+                                        module_name: "",
+                                        ident: "x",
+                                    },
+                                    @42-43 Plus,
+                                ),
+                            ],
+                            @44-45 Var {
+                                module_name: "",
+                                ident: "y",
+                            },
+                        ),
+                    ),
+                ],
+                Space,
+            ),
+        ),
+    ],
+}

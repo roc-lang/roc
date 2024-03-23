@@ -6,6 +6,7 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use roc_error_macros::internal_error;
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -882,6 +883,8 @@ pub fn canonicalize_pattern<'a>(
             let problem = MalformedPatternProblem::QualifiedIdentifier;
             malformed_pattern(env, problem, region)
         }
+
+        Stmt(_) => internal_error!("should have been handled in the parser"),
     };
 
     Loc {

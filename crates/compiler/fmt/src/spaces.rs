@@ -837,6 +837,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
                 opt_pattern_as
                     .map(|(_, pattern_as)| ([].as_ref(), pattern_as.remove_spaces(arena))),
             ),
+            Pattern::Stmt(a) => Pattern::Stmt(a),
         }
     }
 }

@@ -12,6 +12,7 @@ use crate::string_literal::StrLikeLiteral;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_region::all::{Loc, Region};
 
 /// Different patterns are supported in different circumstances.
@@ -48,6 +49,11 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
         let (_, pattern, state) = loc_pattern_help_help().parse(arena, state, min_indent)?;
 
         let pattern_state = state.clone();
+
+        // Return early with the suffixed statement
+        if let Pattern::Stmt(_) = pattern.value {
+            return Ok((MadeProgress, pattern, pattern_state));
+        }
 
         let (pattern_spaces, state) =
             match space0_e(EPattern::AsKeyword).parse(arena, state, min_indent) {
@@ -383,6 +389,39 @@ fn loc_ident_pattern_help<'a>(
                     }
                 } else {
                     Ok((MadeProgress, loc_pat, state))
+                }
+            }
+            // Parse a statement that begins with a suffixed identifier, e.g. `Stdout.line! "Hello"`
+            Ident::Access {
+                module_name,
+                parts,
+                suffixed,
+                ..
+            } if suffixed => {
+                if module_name.is_empty() && parts.len() == 1 {
+                    if let Accessor::RecordField(var) = &parts[0] {
+                        return Ok((
+                            MadeProgress,
+                            Loc {
+                                region: loc_ident.region,
+                                value: Pattern::Stmt(var),
+                            },
+                            state,
+                        ));
+                    } else {
+                        internal_error!("unexpected suffixed TupleIndex");
+                    }
+                } else if let Accessor::RecordField(var) = &parts[0] {
+                    return Ok((
+                        MadeProgress,
+                        Loc {
+                            region: loc_ident.region,
+                            value: Pattern::Stmt(arena.alloc(format!("{}.{}", module_name, var))),
+                        },
+                        state,
+                    ));
+                } else {
+                    internal_error!("unexpected suffixed TupleIndex");
                 }
             }
             Ident::Access {
