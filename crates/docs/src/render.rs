@@ -77,6 +77,10 @@ pub fn generate<'a>(
     let package_name = "Documentation";
     let home = loaded_module.module_id;
     let interns = &loaded_module.interns;
+
+    let todo = (); // TODO use the abilities store to somehow obtain which abilities a given opaque type implements
+    let abilities = &loaded_module.abilities_store;
+
     let todo = (); // TODO do we actually use/need home_ident_ids?
     let home_ident_ids = interns.all_ident_ids.get(&home).unwrap_or_else(|| {
         #[cfg(debug)] {

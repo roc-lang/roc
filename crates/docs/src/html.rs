@@ -490,8 +490,6 @@ pub fn render_module<'a>(
 
                     // Resolve as many aliases as necessary
                     loop {
-                        // Print `:` for type aliases, but print nothing for opaque types
-                        // because we don't expose the internal structure of opaque types.
                         match alias.kind {
                             AliasKind::Structural => {
                                 // If this is an alias of another alias, inline the other alias so you can
@@ -507,14 +505,6 @@ pub fn render_module<'a>(
                                 // mismatch, reading the source code, asking editor tooling to infer it, etc.)
                                 if let Type::DelayedAlias(alias_common) = &alias.typ {
                                     if let Some(new_alias) = alias_by_symbol(alias_common.symbol) {
-                                        dbg!(
-                                            "RESOLVING ALIAS FROM/TO",
-                                            name,
-                                            &alias.kind,
-                                            &alias.typ,
-                                            &new_alias.kind,
-                                            &new_alias.typ
-                                        );
                                         alias = new_alias;
                                         continue;
                                     }
@@ -536,6 +526,9 @@ pub fn render_module<'a>(
                                 let todo = (); // TODO render the alias body, including the logic for expanding InternalPath etc.
                             }
                             AliasKind::Opaque => {
+                                // We print `:` for type aliases, but print nothing for opaque types
+                                // because we don't expose the internal structure of opaque types.
+
                                 let todo = (); // TODO print `implements` for this opaque type, if it implements any abilities
                             }
                         }
