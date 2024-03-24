@@ -1,0 +1,108 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+    ],
+    regions: [
+        @25-44,
+        @92-131,
+    ],
+    space_before: [
+        Slice(start = 0, length = 1),
+        Slice(start = 1, length = 3),
+    ],
+    space_after: [
+        Slice(start = 1, length = 0),
+        Slice(start = 4, length = 0),
+    ],
+    spaces: [
+        LineComment(
+            " valid as a single line",
+        ),
+        Newline,
+        Newline,
+        LineComment(
+            " valid as a multi-line, with increased ident",
+        ),
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @25-29 RecordDestructure(
+                [],
+            ),
+            @25-44 Apply(
+                @25-29 Suffixed(
+                    Var {
+                        module_name: "A",
+                        ident: "x",
+                    },
+                ),
+                [
+                    @33-38 Str(
+                        PlainLine(
+                            "Foo",
+                        ),
+                    ),
+                    @42-44 List(
+                        [],
+                    ),
+                ],
+                Space,
+            ),
+        ),
+        Body(
+            @92-96 RecordDestructure(
+                [],
+            ),
+            @92-131 Apply(
+                @92-96 Suffixed(
+                    Var {
+                        module_name: "B",
+                        ident: "y",
+                    },
+                ),
+                [
+                    @106-111 SpaceBefore(
+                        Str(
+                            PlainLine(
+                                "Bar",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @120-131 SpaceBefore(
+                        Closure(
+                            [
+                                @121-122 Identifier(
+                                    "a",
+                                ),
+                            ],
+                            @126-131 BinOps(
+                                [
+                                    (
+                                        @126-127 Var {
+                                            module_name: "",
+                                            ident: "x",
+                                        },
+                                        @128-129 Plus,
+                                    ),
+                                ],
+                                @130-131 Var {
+                                    module_name: "",
+                                    ident: "y",
+                                },
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                Space,
+            ),
+        ),
+    ],
+}

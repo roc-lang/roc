@@ -321,25 +321,25 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
 
 fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     line_min_indent(move |arena, state: State<'a>, min_indent: u32| {
-        let (_, expr, state) = loc_possibly_negative_or_negated_term(options)
+        let (_, expr, state, new_min_indent) = loc_possibly_negative_or_negated_term(options)
             .parse(arena, state, min_indent)
             .map(|(progress, expr, state)| {
-                // If the next thing after the expression is a `!`, then it's Suffixed
-                if state.bytes().starts_with(b"!") {
-                    (
-                        progress,
-                        Loc::at(expr.region, Expr::Suffixed(arena.alloc(expr.value))),
-                        state.advance(1),
-                    )
+                // For multi-line suffixed expressions, the following lines need to be indented e.g.
+                // ```roc
+                // Stdout.line
+                //     "Hello World"
+                // ```
+                if let Expr::Suffixed(_) = expr.value {
+                    (progress, expr, state, min_indent + 1)
                 } else {
-                    (progress, expr, state)
+                    (progress, expr, state, min_indent)
                 }
             })?;
 
         let initial_state = state.clone();
         let end = state.pos();
 
-        match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
+        match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), new_min_indent) {
             Err((_, _)) => Ok((MadeProgress, expr.value, state)),
             Ok((_, spaces_before_op, state)) => {
                 let expr_state = ExprState {
@@ -350,7 +350,14 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     end,
                 };
 
-                parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
+                parse_expr_end(
+                    new_min_indent,
+                    options,
+                    expr_state,
+                    arena,
+                    state,
+                    initial_state,
+                )
             }
         }
     })
@@ -637,6 +644,24 @@ pub fn parse_single_def<'a>(
                 ..
             },
             _,
+        ))
+        | Ok((
+            MadeProgress,
+            Loc {
+                region,
+                value: Pattern::SpaceAfter(Pattern::Stmt(_), _),
+                ..
+            },
+            _,
+        ))
+        | Ok((
+            MadeProgress,
+            Loc {
+                region,
+                value: Pattern::SpaceBefore(Pattern::Stmt(_), _),
+                ..
+            },
+            _,
         )) => {
             let parse_def_expr =
                 space0_before_e(increment_min_indent(expr_start(options)), EExpr::IndentEnd);
@@ -710,19 +735,77 @@ pub fn parse_single_def<'a>(
 
                     let (_, loc_def_expr, state) =
                         parse_def_expr.parse(arena, state, min_indent)?;
+
                     let value_def =
                         ValueDef::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_expr));
                     let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
-                    Ok((
-                        MadeProgress,
-                        Some(SingleDef {
-                            type_or_value: Either::Second(value_def),
-                            region,
-                            spaces_before: spaces_before_current,
-                        }),
-                        state,
-                    ))
+                    // Handle the specific case when the first line of an assignment is actually a suffixed statement
+                    match loc_def_expr.value {
+                        Expr::SpaceBefore(
+                            Expr::Apply(
+                                Loc {
+                                    value: Expr::Suffixed(_),
+                                    ..
+                                },
+                                _,
+                                _,
+                            ),
+                            _,
+                        )
+                        | Expr::Apply(
+                            Loc {
+                                value: Expr::Suffixed(_),
+                                ..
+                            },
+                            _,
+                            _,
+                        ) => {
+                            // Extract the suffixed value and make it a Body(`{}=`, Apply(Suffixed(...))) instead
+                            // we will keep the pattern `loc_pattern` for the new Defs
+                            let mut defs = Defs::default();
+                            defs.push_value_def(
+                                ValueDef::Body(
+                                    arena.alloc(Loc::at(
+                                        region,
+                                        Pattern::RecordDestructure(Collection::empty()),
+                                    )),
+                                    arena.alloc(Loc::at(
+                                        region,
+                                        loc_def_expr.value.extract_spaces().item,
+                                    )),
+                                ),
+                                region,
+                                &[],
+                                &[],
+                            );
+
+                            let (progress, expr, state_post_defs) =
+                                parse_defs_expr(options, min_indent, defs, arena, state.clone())?;
+
+                            return Ok((
+                                progress,
+                                Some(SingleDef {
+                                    type_or_value: Either::Second(ValueDef::Body(
+                                        arena.alloc(loc_pattern),
+                                        arena.alloc(Loc::at(region, expr)),
+                                    )),
+                                    region,
+                                    spaces_before: spaces_before_current,
+                                }),
+                                state_post_defs,
+                            ));
+                        }
+                        _ => Ok((
+                            MadeProgress,
+                            Some(SingleDef {
+                                type_or_value: Either::Second(value_def),
+                                region,
+                                spaces_before: spaces_before_current,
+                            }),
+                            state,
+                        )),
+                    }
                 }
                 Ok((_, BinOp::IsAliasType, state)) => {
                     // the increment_min_indent here is probably _wrong_, since alias_signature_with_space_before does
