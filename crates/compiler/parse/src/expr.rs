@@ -742,7 +742,9 @@ pub fn parse_single_def<'a>(
 
                     // Handle the specific case when the first line of an assignment is actually a suffixed statement
                     match loc_def_expr.value {
-                        Expr::SpaceBefore(
+                        Expr::Suffixed(_)
+                        | Expr::SpaceBefore(Expr::Suffixed(_), _)
+                        | Expr::SpaceBefore(
                             Expr::Apply(
                                 Loc {
                                     value: Expr::Suffixed(_),
