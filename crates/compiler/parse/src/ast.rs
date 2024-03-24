@@ -1130,7 +1130,13 @@ impl<'a> Pattern<'a> {
                 }
             }
 
-            Stmt(_) => todo!(),
+            Stmt(str_x) => {
+                if let Stmt(str_y) = other {
+                    str_x == str_y
+                } else {
+                    false
+                }
+            }
         }
     }
 }
