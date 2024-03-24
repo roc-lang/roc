@@ -1770,7 +1770,8 @@ impl<'a> Malformed for Pattern<'a> {
         match self {
             Identifier(_) |
             Tag(_) |
-            OpaqueRef(_) => false,
+            OpaqueRef(_) |
+            Stmt(_) => false,
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
@@ -1793,8 +1794,6 @@ impl<'a> Malformed for Pattern<'a> {
             Malformed(_) |
             MalformedIdent(_, _) |
             QualifiedIdentifier { .. } => true,
-
-            Stmt(_) => todo!(),
         }
     }
 }
