@@ -1,0 +1,3 @@
+line! "Foo"
+
+read "Bar"
