@@ -825,7 +825,7 @@ where
 /// The new parser acts the same if its inner parser fails
 ///
 /// # Examples
-/// ## Success Case
+///
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
@@ -838,34 +838,18 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// let parser_inner = word("hello", Problem::NotFound);
-/// let parser = allocated(parser_inner);
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// let alloc_parser = allocated(parser_inner);
 ///
+/// // Success case
+/// let (progress, output, state) = alloc_parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, &());
 /// assert_eq!(state.pos(), Position::new(5));
-/// ```
 ///
-/// ## Error Case
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, allocated, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser_inner = word("bye", Problem::NotFound);
-/// let parser_error = parser_inner.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// let alloc_parser = allocated(parser_inner);
-///
-/// assert_eq!(
-///     parser_error,
-///     alloc_parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err()
-/// );
+/// // Error case
+/// let (progress, err) = alloc_parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
 /// ```
 pub fn allocated<'a, P, Val, Error>(parser: P) -> impl Parser<'a, &'a Val, Error>
 where
@@ -885,7 +869,6 @@ where
 ///
 /// # Examples
 ///
-/// ## Success Case
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
@@ -899,28 +882,15 @@ where
 /// # let arena = Bump::new();
 /// let parser1 = word("hello", Problem::NotFound);
 /// let parser = and_then(parser1, move |p,b| word(", ", Problem::NotFound));
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 ///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, ());
 /// assert_eq!(state.pos(), Position::new(7));
-/// ```
-/// ## Failure Case
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser1 = word("hello", Problem::NotFound);
-/// let parser = and_then(parser1, move |p,b| word("!! ", Problem::NotFound));
-/// let (progress, problem) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
 ///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::NoProgress);
 /// assert_eq!(problem, Problem::NotFound(Position::new(5)));
 /// ```
@@ -1937,7 +1907,7 @@ where
 /// Matches an entire `str` and moves the state's position forward if it succeeds
 ///
 /// # Example
-/// ## Success case
+///
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
@@ -1950,30 +1920,17 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// let parser = word("hello", Problem::NotFound);
+///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, ());
 /// assert_eq!(state.pos(), Position::new(5));
-/// ```
 ///
-/// ## Failure case
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = word("bye", Problem::NotFound);
-/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(
-///     actual,
-///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
-/// );
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
 /// ```
 pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
 where
@@ -1995,7 +1952,7 @@ where
 /// Matches a single `u8` and moves the state's position forward if it succeeds
 ///
 /// # Example
-/// ## Success case
+///
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
@@ -2008,30 +1965,17 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// let parser = word1(b'h', Problem::NotFound);
+///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, ());
 /// assert_eq!(state.pos(), Position::new(1));
-/// ```
 ///
-/// ## Failure case
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word1};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = word1(b'?', Problem::NotFound);
-/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(
-///     actual,
-///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
-/// );
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
 /// ```
 pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
@@ -2054,26 +1998,6 @@ where
 ///
 /// # Example
 ///
-/// ## Success case
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word1_indent};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = word1_indent(b'h', Problem::NotFound);
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos(), Position::new(1));
-/// ```
-///
-/// ## Failure case
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
@@ -2087,13 +2011,19 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// let parser = word1_indent(b'h', Problem::WrongIndentLevel);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+///
+/// // Error case
 /// let state = State::new(" hello, world".as_bytes());
 /// let _ = word1(b' ', Problem::NotFound).parse(&arena, state.clone(), 0).unwrap();
-/// let actual = parser.parse(&arena, state, 0).unwrap_err();
-/// assert_eq!(
-///     actual,
-///     (Progress::NoProgress, Problem::WrongIndentLevel(Position::zero())),
-/// );
+/// let (progress, problem) = parser.parse(&arena, state, 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::WrongIndentLevel(Position::zero()));
 /// ```
 pub fn word1_indent<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
@@ -2120,7 +2050,7 @@ where
 /// Matches two `u8` in a row.
 ///
 /// # Example
-/// ## Success case
+///
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
@@ -2133,30 +2063,17 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// let parser = word2(b'h', b'e', Problem::NotFound);
+///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, ());
 /// assert_eq!(state.pos(), Position::new(2));
-/// ```
 ///
-/// ## Failure case
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word2};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = word2(b'b', b'y', Problem::NotFound);
-/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(
-///     actual,
-///     (Progress::NoProgress, Problem::NotFound(Position::zero())),
-/// );
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
 /// ```
 pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
