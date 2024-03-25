@@ -323,16 +323,16 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
     line_min_indent(move |arena, state: State<'a>, min_indent: u32| {
         let (_, expr, state, new_min_indent) = loc_possibly_negative_or_negated_term(options)
             .parse(arena, state, min_indent)
-            .map(|(progress, expr, state)| {
+            .map(|(progress, loc_expr, state)| {
                 // For multi-line suffixed expressions, the following lines need to be indented e.g.
                 // ```roc
                 // Stdout.line
                 //     "Hello World"
                 // ```
-                if let Expr::Suffixed(_) = expr.value {
-                    (progress, expr, state, min_indent + 1)
+                if is_loc_expr_suffixed(loc_expr) {
+                    (progress, loc_expr, state, min_indent + 1)
                 } else {
-                    (progress, expr, state, min_indent)
+                    (progress, loc_expr, state, min_indent)
                 }
             })?;
 
@@ -741,29 +741,8 @@ pub fn parse_single_def<'a>(
                     let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
                     // Handle the specific case when the first line of an assignment is actually a suffixed statement
-                    match loc_def_expr.value {
-                        Expr::Suffixed(_)
-                        | Expr::SpaceBefore(Expr::Suffixed(_), _)
-                        | Expr::SpaceBefore(
-                            Expr::Apply(
-                                Loc {
-                                    value: Expr::Suffixed(_),
-                                    ..
-                                },
-                                _,
-                                _,
-                            ),
-                            _,
-                        )
-                        | Expr::Apply(
-                            Loc {
-                                value: Expr::Suffixed(_),
-                                ..
-                            },
-                            _,
-                            _,
-                        ) => {
-                            // Extract the suffixed value and make it a Body(`{}=`, Apply(Suffixed(...))) instead
+                    if is_loc_expr_suffixed(loc_def_expr) {
+                        // Take the suffixed value and make it a e.g. Body(`{}=`, Apply(Suffixed(...)))
                             // we will keep the pattern `loc_pattern` for the new Defs
                             let mut defs = Defs::default();
                             defs.push_value_def(
@@ -798,7 +777,8 @@ pub fn parse_single_def<'a>(
                                 state_post_defs,
                             ));
                         }
-                        _ => Ok((
+
+                    Ok((
                             MadeProgress,
                             Some(SingleDef {
                                 type_or_value: Either::Second(value_def),
@@ -806,8 +786,7 @@ pub fn parse_single_def<'a>(
                                 spaces_before: spaces_before_current,
                             }),
                             state,
-                        )),
-                    }
+                    ))
                 }
                 Ok((_, BinOp::IsAliasType, state)) => {
                     // the increment_min_indent here is probably _wrong_, since alias_signature_with_space_before does
@@ -1198,6 +1177,14 @@ fn parse_defs_expr<'a>(
                 }
             }
         }
+    }
+}
+
+fn is_loc_expr_suffixed<'a>(loc_expr: Loc<Expr<'a>>) -> bool {
+    match loc_expr.value.extract_spaces().item {
+        Expr::Suffixed(_) => true,
+        Expr::Apply(sub_loc_expr, _, _) => is_loc_expr_suffixed(*sub_loc_expr),
+        _ => false,
     }
 }
 
