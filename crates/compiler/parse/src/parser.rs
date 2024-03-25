@@ -976,14 +976,16 @@ where
 /// # let arena = Bump::new();
 /// let parser = keyword_e("when", Problem::NotFound);
 ///
-/// let (progress, err) = parser.parse(&arena, State::new("whence".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("when".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, ());
 /// assert_eq!(state.pos().offset, 4);
+///
+/// Error case
+/// let (progress, err) = parser.parse(&arena, State::new("whence".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
 /// ```
 pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
 where
@@ -1284,15 +1286,17 @@ where
 /// # let arena = Bump::new();
 /// let parser = optional(word("hello", Problem::NotFound));
 ///
-/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(output, None);
-/// assert_eq!(state.pos().offset, 0);
-///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(output, Some(()));
 /// assert_eq!(state.pos().offset, 5);
+///
+/// // Error case
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, None);
+/// assert_eq!(state.pos().offset, 0);
 /// ```
 pub fn optional<'a, P, T, E>(parser: P) -> impl Parser<'a, Option<T>, E>
 where
@@ -1545,10 +1549,12 @@ macro_rules! succeed {
 /// # let arena = Bump::new();
 /// let parser = fail_when(Problem::OtherProblem, word("hello", Problem::NotFound));
 ///
+/// // Success case
 /// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(err, Problem::OtherProblem(Position::new(0)));
 ///
+/// // Error case
 /// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::NoProgress);
 /// assert_eq!(err, Problem::NotFound(Position::new(0)));
@@ -2252,8 +2258,6 @@ macro_rules! map_with_arena {
 
 /// Applies the parser as many times as possible.
 /// This parser will only fail if the inner parser makes partial progress.
-///
-/// No examples can be written, since when this macro expands, it uses private methods.
 #[macro_export]
 macro_rules! zero_or_more {
     ($parser:expr) => {
