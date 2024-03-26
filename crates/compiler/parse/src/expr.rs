@@ -10,10 +10,10 @@ use crate::blankspace::{
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
-    sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, word1, word1_indent,
-    word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
-    EType, EWhen, Either, ParseResult, Parser,
+    self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
+    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, specialize_err, specialize_err_ref, then,
+    two_bytes, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord,
+    EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -80,10 +80,10 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
     then(
         loc!(collection_trailing_sep_e!(
-            word1(b'(', EInParens::Open),
-            specialize_ref(EInParens::Expr, loc_expr(false)),
-            word1(b',', EInParens::End),
-            word1(b')', EInParens::End),
+            byte(b'(', EInParens::Open),
+            specialize_err_ref(EInParens::Expr, loc_expr(false)),
+            byte(b',', EInParens::End),
+            byte(b')', EInParens::End),
             Expr::SpaceBefore
         )),
         move |arena, state, _, loc_elements| {
@@ -118,7 +118,7 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
 fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     map_with_arena!(
         loc!(and!(
-            specialize(EExpr::InParens, loc_expr_in_parens_help()),
+            specialize_err(EExpr::InParens, loc_expr_in_parens_help()),
             record_field_access_chain()
         )),
         move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Accessor<'a>>)>| {
@@ -144,8 +144,8 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
 
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Accessor<'a>>, EExpr<'a>> {
     zero_or_more!(skip_first!(
-        word1(b'.', EExpr::Access),
-        specialize(
+        byte(b'.', EExpr::Access),
+        specialize_err(
             |_, pos| EExpr::Access(pos),
             one_of!(
                 map!(lowercase_ident(), Accessor::RecordField),
@@ -162,15 +162,18 @@ fn loc_term_or_underscore_or_conditional<'a>(
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize(EExpr::If, if_expr_help(options))),
-        loc!(specialize(EExpr::When, when::expr_help(options))),
-        loc!(specialize(EExpr::Str, string_like_literal_help())),
-        loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Closure, closure_help(options))),
+        loc!(specialize_err(EExpr::If, if_expr_help(options))),
+        loc!(specialize_err(EExpr::When, when::expr_help(options))),
+        loc!(specialize_err(EExpr::Str, string_like_literal_help())),
+        loc!(specialize_err(
+            EExpr::Number,
+            positive_number_literal_help()
+        )),
+        loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(crash_kw()),
         loc!(underscore_expression()),
         loc!(record_literal_help()),
-        loc!(specialize(EExpr::List, list_literal_help())),
+        loc!(specialize_err(EExpr::List, list_literal_help())),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
@@ -185,12 +188,15 @@ fn loc_term_or_underscore<'a>(
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize(EExpr::Str, string_like_literal_help())),
-        loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Closure, closure_help(options))),
+        loc!(specialize_err(EExpr::Str, string_like_literal_help())),
+        loc!(specialize_err(
+            EExpr::Number,
+            positive_number_literal_help()
+        )),
+        loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(underscore_expression()),
         loc!(record_literal_help()),
-        loc!(specialize(EExpr::List, list_literal_help())),
+        loc!(specialize_err(EExpr::List, list_literal_help())),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
@@ -201,11 +207,14 @@ fn loc_term_or_underscore<'a>(
 fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize(EExpr::Str, string_like_literal_help())),
-        loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Closure, closure_help(options))),
+        loc!(specialize_err(EExpr::Str, string_like_literal_help())),
+        loc!(specialize_err(
+            EExpr::Number,
+            positive_number_literal_help()
+        )),
+        loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(record_literal_help()),
-        loc!(specialize(EExpr::List, list_literal_help())),
+        loc!(specialize_err(EExpr::List, list_literal_help())),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
@@ -217,9 +226,10 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let start = state.pos();
 
-        let (_, _, next_state) = word1(b'_', EExpr::Underscore).parse(arena, state, min_indent)?;
+        let (_, _, next_state) = byte(b'_', EExpr::Underscore).parse(arena, state, min_indent)?;
 
-        let lowercase_ident_expr = { specialize(move |_, _| EExpr::End(start), lowercase_ident()) };
+        let lowercase_ident_expr =
+            { specialize_err(move |_, _| EExpr::End(start), lowercase_ident()) };
 
         let (_, output, final_state) =
             optional(lowercase_ident_expr).parse(arena, next_state, min_indent)?;
@@ -233,7 +243,7 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let (_, _, next_state) = crate::parser::keyword_e(crate::keyword::CRASH, EExpr::Crash)
+        let (_, _, next_state) = crate::parser::keyword(crate::keyword::CRASH, EExpr::Crash)
             .parse(arena, state, min_indent)?;
 
         Ok((MadeProgress, Expr::Crash, next_state))
@@ -255,10 +265,10 @@ fn loc_possibly_negative_or_negated_term<'a>(
             Ok((MadeProgress, loc_expr, state))
         },
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
-        loc!(specialize(EExpr::Number, number_literal_help())),
+        loc!(specialize_err(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
             and!(
-                loc!(word1(b'!', EExpr::Start)),
+                loc!(byte(b'!', EExpr::Start)),
                 space0_before_e(loc_term(options), EExpr::IndentStart)
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
@@ -298,11 +308,11 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
 fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of![
-        loc!(specialize(EExpr::If, if_expr_help(options))),
-        loc!(specialize(EExpr::When, when::expr_help(options))),
-        loc!(specialize(EExpr::Expect, expect_help(options))),
-        loc!(specialize(EExpr::Dbg, dbg_help(options))),
-        loc!(specialize(EExpr::Closure, closure_help(options))),
+        loc!(specialize_err(EExpr::If, if_expr_help(options))),
+        loc!(specialize_err(EExpr::When, when::expr_help(options))),
+        loc!(specialize_err(EExpr::Expect, expect_help(options))),
+        loc!(specialize_err(EExpr::Dbg, dbg_help(options))),
+        loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(expr_operator_chain(options)),
         fail_expr_start_e()
     ]
@@ -576,8 +586,8 @@ pub fn parse_single_def<'a>(
 
     let start = state.pos();
 
-    let parse_expect_vanilla = crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect);
-    let parse_expect_fx = crate::parser::keyword_e(crate::keyword::EXPECT_FX, EExpect::Expect);
+    let parse_expect_vanilla = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
+    let parse_expect_fx = crate::parser::keyword(crate::keyword::EXPECT_FX, EExpect::Expect);
     let parse_expect = either!(parse_expect_fx, parse_expect_vanilla);
 
     match space0_after_e(crate::pattern::loc_pattern_help(), EPattern::IndentEnd).parse(
@@ -1073,7 +1083,7 @@ fn parse_defs_expr<'a>(
 }
 
 fn alias_signature_with_space_before<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EExpr<'a>> {
-    increment_min_indent(specialize(
+    increment_min_indent(specialize_err(
         EExpr::Type,
         space0_before_e(type_annotation::located(false), EType::TIndentStart),
     ))
@@ -1088,14 +1098,14 @@ fn opaque_signature_with_space_before<'a>() -> impl Parser<
     EExpr<'a>,
 > {
     and!(
-        specialize(
+        specialize_err(
             EExpr::Type,
             space0_before_e(
                 type_annotation::located_opaque_signature(true),
                 EType::TIndentStart,
             ),
         ),
-        optional(backtrackable(specialize(
+        optional(backtrackable(specialize_err(
             EExpr::Type,
             space0_before_e(type_annotation::implements_abilities(), EType::TIndentStart,),
         )))
@@ -1221,7 +1231,7 @@ fn finish_parsing_alias_or_opaque<'a>(
 
         match expr_to_pattern_help(arena, &call.value) {
             Ok(good) => {
-                let parser = specialize(
+                let parser = specialize_err(
                     EExpr::Type,
                     space0_before_e(
                         set_min_indent(indented_more, type_annotation::located(false)),
@@ -1277,14 +1287,14 @@ mod ability {
         map!(
             // Require the type to be more indented than the name
             absolute_indented_seq!(
-                specialize(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
+                specialize_err(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
                 skip_first!(
                     and!(
                         // TODO: do we get anything from picking up spaces here?
                         space0_e(EAbility::DemandName),
-                        word1(b':', EAbility::DemandColon)
+                        byte(b':', EAbility::DemandColon)
                     ),
-                    specialize(EAbility::Type, type_annotation::located(true))
+                    specialize_err(EAbility::Type, type_annotation::located(true))
                 )
             ),
             |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| {
@@ -1757,10 +1767,10 @@ fn parse_expr_end<'a>(
                     if options.accept_multi_backpassing && state.bytes().starts_with(b",") {
                         state = state.advance(1);
 
-                        let (_, mut patterns, state) = specialize_ref(
+                        let (_, mut patterns, state) = specialize_err_ref(
                             EExpr::Pattern,
                             crate::parser::sep_by0(
-                                word1(b',', EPattern::Start),
+                                byte(b',', EPattern::Start),
                                 space0_around_ee(
                                     crate::pattern::loc_pattern_help(),
                                     EPattern::Start,
@@ -1787,7 +1797,7 @@ fn parse_expr_end<'a>(
 
                         patterns.insert(0, loc_pattern);
 
-                        match word2(b'<', b'-', EExpr::BackpassArrow).parse(
+                        match two_bytes(b'<', b'-', EExpr::BackpassArrow).parse(
                             arena,
                             state.clone(),
                             min_indent,
@@ -2064,16 +2074,16 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
         // After the first token, all other tokens must be indented past the start of the line
         indented_seq!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
-            word1_indent(b'\\', EClosure::Start),
+            byte_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
             and!(
                 // Parse the params
                 // Params are comma-separated
                 sep_by1_e(
-                    word1(b',', EClosure::Comma),
+                    byte(b',', EClosure::Comma),
                     space0_around_ee(
-                        specialize(EClosure::Pattern, closure_param()),
+                        specialize_err(EClosure::Pattern, closure_param()),
                         EClosure::IndentArg,
                         EClosure::IndentArrow,
                     ),
@@ -2081,10 +2091,10 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body
-                    word2(b'-', b'>', EClosure::Arrow),
+                    two_bytes(b'-', b'>', EClosure::Arrow),
                     // Parse the body
                     space0_before_e(
-                        specialize_ref(EClosure::Body, expr_start(options)),
+                        specialize_err_ref(EClosure::Body, expr_start(options)),
                         EClosure::IndentBody
                     )
                 )
@@ -2107,9 +2117,9 @@ mod when {
         map_with_arena!(
             and!(
                 indented_seq!(
-                    parser::keyword_e(keyword::WHEN, EWhen::When),
+                    parser::keyword(keyword::WHEN, EWhen::When),
                     space0_around_e_no_after_indent_check(
-                        specialize_ref(EWhen::Condition, expr_start(options)),
+                        specialize_err_ref(EWhen::Condition, expr_start(options)),
                         EWhen::IndentCondition,
                     )
                 ),
@@ -2118,7 +2128,7 @@ mod when {
                 //
                 // We require that branches are indented relative to the line containing the `is`.
                 indented_seq!(
-                    parser::keyword_e(keyword::IS, EWhen::Is),
+                    parser::keyword(keyword::IS, EWhen::Is),
                     branches(options)
                 )
             ),
@@ -2215,10 +2225,10 @@ mod when {
             one_of![
                 map!(
                     skip_first!(
-                        parser::keyword_e(keyword::IF, EWhen::IfToken),
+                        parser::keyword(keyword::IF, EWhen::IfToken),
                         // TODO we should require space before the expression but not after
                         space0_around_ee(
-                            specialize_ref(
+                            specialize_err_ref(
                                 EWhen::IfGuard,
                                 increment_min_indent(expr_start(options))
                             ),
@@ -2239,7 +2249,7 @@ mod when {
                 backtrackable(space0_e(EWhen::IndentPattern)).parse(arena, state, min_indent)?;
 
             let (_, loc_pattern, state) = space0_after_e(
-                specialize(EWhen::Pattern, crate::pattern::loc_pattern_help()),
+                specialize_err(EWhen::Pattern, crate::pattern::loc_pattern_help()),
                 EWhen::IndentPattern,
             )
             .parse(arena, state, min_indent)?;
@@ -2284,7 +2294,7 @@ mod when {
                             let pattern_indent_column = state.column();
 
                             let parser =
-                                sep_by1(word1(b'|', EWhen::Bar), branch_single_alternative());
+                                sep_by1(byte(b'|', EWhen::Bar), branch_single_alternative());
 
                             match parser.parse(arena, state.clone(), pattern_indent) {
                                 Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
@@ -2317,9 +2327,9 @@ mod when {
     fn branch_result<'a>(indent: u32) -> impl Parser<'a, Loc<Expr<'a>>, EWhen<'a>> {
         move |arena, state, _min_indent| {
             skip_first!(
-                word2(b'-', b'>', EWhen::Arrow),
+                two_bytes(b'-', b'>', EWhen::Arrow),
                 space0_before_e(
-                    specialize_ref(EWhen::Branch, loc_expr(true)),
+                    specialize_err_ref(EWhen::Branch, loc_expr(true)),
                     EWhen::IndentBranch,
                 )
             )
@@ -2333,19 +2343,19 @@ fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
         and!(
             skip_second!(
                 space0_around_ee(
-                    specialize_ref(EIf::Condition, loc_expr(true)),
+                    specialize_err_ref(EIf::Condition, loc_expr(true)),
                     EIf::IndentCondition,
                     EIf::IndentThenToken,
                 ),
-                parser::keyword_e(keyword::THEN, EIf::Then)
+                parser::keyword(keyword::THEN, EIf::Then)
             ),
             space0_around_ee(
-                specialize_ref(EIf::ThenBranch, loc_expr(true)),
+                specialize_err_ref(EIf::ThenBranch, loc_expr(true)),
                 EIf::IndentThenBranch,
                 EIf::IndentElseToken,
             )
         ),
-        parser::keyword_e(keyword::ELSE, EIf::Else)
+        parser::keyword(keyword::ELSE, EIf::Else)
     )
 }
 
@@ -2354,10 +2364,10 @@ fn expect_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpe
         let start_column = state.column();
 
         let (_, _, state) =
-            parser::keyword_e(keyword::EXPECT, EExpect::Expect).parse(arena, state, min_indent)?;
+            parser::keyword(keyword::EXPECT, EExpect::Expect).parse(arena, state, min_indent)?;
 
         let (_, condition, state) = space0_before_e(
-            specialize_ref(
+            specialize_err_ref(
                 EExpect::Condition,
                 set_min_indent(start_column + 1, expr_start(options)),
             ),
@@ -2366,7 +2376,7 @@ fn expect_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpe
         .parse(arena, state, start_column + 1)
         .map_err(|(_, f)| (MadeProgress, f))?;
 
-        let parse_cont = specialize_ref(
+        let parse_cont = specialize_err_ref(
             EExpect::Continuation,
             space0_before_e(expr_start(options), EExpr::IndentEnd),
         );
@@ -2384,10 +2394,10 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
         let start_column = state.column();
 
         let (_, _, state) =
-            parser::keyword_e(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
+            parser::keyword(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
 
         let (_, condition, state) = space0_before_e(
-            specialize_ref(
+            specialize_err_ref(
                 EExpect::Condition,
                 set_min_indent(start_column + 1, expr_start(options)),
             ),
@@ -2396,7 +2406,7 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
         .parse(arena, state, start_column + 1)
         .map_err(|(_, f)| (MadeProgress, f))?;
 
-        let parse_cont = specialize_ref(
+        let parse_cont = specialize_err_ref(
             EExpect::Continuation,
             space0_before_e(expr_start(options), EExpr::IndentEnd),
         );
@@ -2412,7 +2422,7 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
 fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<'a>> {
     move |arena: &'a Bump, state, min_indent| {
         let (_, _, state) =
-            parser::keyword_e(keyword::IF, EIf::If).parse(arena, state, min_indent)?;
+            parser::keyword(keyword::IF, EIf::If).parse(arena, state, min_indent)?;
 
         let mut branches = Vec::with_capacity_in(1, arena);
 
@@ -2428,7 +2438,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
             // NOTE this drops spaces between the `else` and the `if`
             let optional_if = and!(
                 backtrackable(space0_e(EIf::IndentIf)),
-                parser::keyword_e(keyword::IF, EIf::If)
+                parser::keyword(keyword::IF, EIf::If)
             );
 
             match optional_if.parse(arena, state.clone(), min_indent) {
@@ -2441,7 +2451,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
         };
 
         let (_, else_branch, state) = space0_before_e(
-            specialize_ref(EIf::ElseBranch, expr_start(options)),
+            specialize_err_ref(EIf::ElseBranch, expr_start(options)),
             EIf::IndentElseBranch,
         )
         .parse(arena, state_final_else, min_indent)
@@ -2549,10 +2559,10 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
     map_with_arena!(
         collection_trailing_sep_e!(
-            word1(b'[', EList::Open),
-            specialize_ref(EList::Expr, loc_expr(false)),
-            word1(b',', EList::End),
-            word1(b']', EList::End),
+            byte(b'[', EList::Open),
+            specialize_err_ref(EList::Expr, loc_expr(false)),
+            byte(b',', EList::End),
+            byte(b']', EList::End),
             Expr::SpaceBefore
         ),
         |arena, elements: Collection<'a, _>| {
@@ -2680,14 +2690,14 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
 
     map_with_arena!(
         and!(
-            specialize(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
+            specialize_err(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
             and!(
                 spaces(),
                 optional(either!(
-                    and!(word1(b':', ERecord::Colon), record_field_expr()),
+                    and!(byte(b':', ERecord::Colon), record_field_expr()),
                     and!(
-                        word1(b'?', ERecord::QuestionMark),
-                        spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                        byte(b'?', ERecord::QuestionMark),
+                        spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
                     )
                 ))
             )
@@ -2731,10 +2741,10 @@ fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> 
             spaces(),
             either!(
                 and!(
-                    word2(b'<', b'-', ERecord::Arrow),
-                    spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                    two_bytes(b'<', b'-', ERecord::Arrow),
+                    spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
                 ),
-                specialize_ref(ERecord::Expr, loc_expr(false))
+                specialize_err_ref(ERecord::Expr, loc_expr(false))
             )
         ),
         |arena: &'a bumpalo::Bump, (spaces, either)| {
@@ -2755,7 +2765,7 @@ fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> 
 }
 
 fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
-    specialize(
+    specialize_err(
         |_, pos| ERecord::Updateable(pos),
         map_with_arena!(parse_ident, ident_to_expr),
     )
@@ -2768,7 +2778,7 @@ struct RecordHelp<'a> {
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
     between!(
-        word1(b'{', ERecord::Open),
+        byte(b'{', ERecord::Open),
         reset_min_indent(record!(RecordHelp {
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
@@ -2780,22 +2790,22 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                     // (and not e.g. an `Expr::Access`) and extract its string.
                     loc!(record_updateable_identifier()),
                 ),
-                word1(b'&', ERecord::Ampersand)
+                byte(b'&', ERecord::Ampersand)
             ))),
             fields: collection_inner!(
                 loc!(record_field()),
-                word1(b',', ERecord::End),
+                byte(b',', ERecord::End),
                 RecordField::SpaceBefore
             ),
         })),
-        word1(b'}', ERecord::End)
+        byte(b'}', ERecord::End)
     )
 }
 
 fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     then(
         and!(
-            specialize(EExpr::Record, record_help()),
+            specialize_err(EExpr::Record, record_help()),
             // there can be field access, e.g. `{ x : 4 }.x`
             record_field_access_chain()
         ),
