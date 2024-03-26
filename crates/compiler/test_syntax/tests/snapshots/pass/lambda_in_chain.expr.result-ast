@@ -37,9 +37,10 @@ BinOps(
                     [
                         @37-54 Closure(
                             [
-                                @38-42 Identifier(
-                                    "byte",
-                                ),
+                                @38-42 Identifier {
+                                    ident: "byte",
+                                    suffixed: 0,
+                                },
                             ],
                             @46-54 BinOps(
                                 [

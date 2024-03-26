@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                    suffixed: 0,
+                },
                 @4-13 BinOps(
                     [
                         (

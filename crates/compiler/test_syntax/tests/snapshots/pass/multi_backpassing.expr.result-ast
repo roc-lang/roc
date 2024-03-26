@@ -1,11 +1,13 @@
 Backpassing(
     [
-        @0-1 Identifier(
-            "x",
-        ),
-        @3-4 Identifier(
-            "y",
-        ),
+        @0-1 Identifier {
+            ident: "x",
+            suffixed: 0,
+        },
+        @3-4 Identifier {
+            ident: "y",
+            suffixed: 0,
+        },
     ],
     @8-23 Apply(
         @8-17 Var {

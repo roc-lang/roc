@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                    suffixed: 0,
+                },
                 @3-4 SpaceBefore(
                     BoundVariable(
                         "c",
