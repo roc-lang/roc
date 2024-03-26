@@ -1428,7 +1428,10 @@ f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
 
 ## Combine parts of a [F32] according to IEEE 754 standard.
+## The fraction should not be bigger than 0x007F_FFFF, any bigger value will be truncated.
 f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 
 ## Combine parts of a [F64] according to IEEE 754 standard.
+## The fraction should not be bigger than 0x000F_FFFF_FFFF_FFFF, any bigger value will be truncated.
+## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
 f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
