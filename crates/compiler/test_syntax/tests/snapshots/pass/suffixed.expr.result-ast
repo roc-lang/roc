@@ -1,6 +1,5 @@
-Suffixed(
-    Var {
-        module_name: "Stdout",
-        ident: "line",
-    },
-)
+Var {
+    module_name: "Stdout",
+    ident: "line",
+    suffixed: 3,
+}

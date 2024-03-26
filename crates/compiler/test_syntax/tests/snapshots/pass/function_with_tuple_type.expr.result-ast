@@ -87,6 +87,7 @@ Defs(
                             @33-34 Var {
                                 module_name: "",
                                 ident: "x",
+                                suffixed: 0,
                             },
                             @36-41 BinOps(
                                 [
@@ -94,6 +95,7 @@ Defs(
                                         @36-37 Var {
                                             module_name: "",
                                             ident: "x",
+                                            suffixed: 0,
                                         },
                                         @38-39 Plus,
                                     ),
@@ -113,6 +115,7 @@ Defs(
             @44-45 Var {
                 module_name: "",
                 ident: "f",
+                suffixed: 0,
             },
             [
                 @46-48 Num(

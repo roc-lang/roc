@@ -46,6 +46,7 @@ When(
             value: @40-41 Var {
                 module_name: "",
                 ident: "x",
+                suffixed: 0,
             },
             guard: None,
         },
@@ -86,6 +87,7 @@ When(
                 @64-65 Var {
                     module_name: "",
                     ident: "b",
+                    suffixed: 0,
                 },
             ),
             guard: None,

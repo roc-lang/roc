@@ -28,5 +28,6 @@ Defs(
     @4-5 Var {
         module_name: "",
         ident: "i",
+        suffixed: 0,
     },
 )

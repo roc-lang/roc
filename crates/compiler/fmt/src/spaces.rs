@@ -692,7 +692,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
             Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
-            Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
+            Expr::Var { module_name, ident, suffixed } => Expr::Var { module_name, ident, suffixed },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
