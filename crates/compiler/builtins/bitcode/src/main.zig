@@ -49,6 +49,7 @@ comptime {
     exportDecFn(dec.tanC, "tan");
     exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.fromI128, "from_i128");
     exportDecFn(dec.toStr, "to_str");
 
     inline for (INTEGERS) |T| {
@@ -110,6 +111,10 @@ comptime {
     exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
     exportNumFn(num.greaterThanU128, "greater_than.u128");
     exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
+    exportNumFn(num.f32ToParts, "f32_to_parts");
+    exportNumFn(num.f64ToParts, "f64_to_parts");
+    exportNumFn(num.f32FromParts, "f32_from_parts");
+    exportNumFn(num.f64FromParts, "f64_from_parts");
 
     inline for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");

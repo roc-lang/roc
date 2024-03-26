@@ -200,40 +200,40 @@ procedure List.91 (#Derived_gen.30, #Derived_gen.31, #Derived_gen.32, #Derived_g
     jump List.595 #Derived_gen.30 #Derived_gen.31 #Derived_gen.32 #Derived_gen.33 #Derived_gen.34;
 
 procedure Num.127 (#Attr.2):
-    let Num.274 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.274;
-
-procedure Num.137 (#Attr.2, #Attr.3):
-    let Num.279 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
-    ret Num.279;
-
-procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.278 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.278;
-
-procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.275 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.275;
-
-procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.280 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    let Num.280 : U8 = lowlevel NumIntCast #Attr.2;
     ret Num.280;
 
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+procedure Num.137 (#Attr.2, #Attr.3):
+    let Num.285 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
+    ret Num.285;
+
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.284 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.284;
+
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.281 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.281;
+
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.286 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
     ret Num.286;
 
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.292;
+
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.288 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.288;
+    let Num.294 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.294;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.287 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.287;
+    let Num.293 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.293;
 
 procedure Str.12 (#Attr.2):
     let Str.241 : List U8 = lowlevel StrToUtf8 #Attr.2;

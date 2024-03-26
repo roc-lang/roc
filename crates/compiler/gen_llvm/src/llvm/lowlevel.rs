@@ -1172,9 +1172,69 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
         }
-        I128OfDec => {
-            arguments!(dec);
-            dec_unary_op(env, bitcode::DEC_TO_I128, dec)
+        NumWithoutDecimalPoint | NumWithDecimalPoint => {
+            // Dec uses an I128 under the hood, so no conversion is needed.
+            arguments!(arg);
+            arg
+        }
+        NumF32ToParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F32_TO_PARTS;
+            call_bitcode_fn_and_cast_result(env, &[arg], fn_name, layout_interner, layout)
+        }
+        NumF64ToParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F64_TO_PARTS;
+            call_bitcode_fn_and_cast_result(env, &[arg], fn_name, layout_interner, layout)
+        }
+        NumF32FromParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F32_FROM_PARTS;
+
+            let roc_call_alloca = env
+                .builder
+                .new_build_alloca(arg.get_type(), "roc_call_alloca");
+            env.builder.new_build_store(roc_call_alloca, arg);
+
+            let fn_val = env.module.get_function(fn_name).unwrap();
+            let zig_param_type = fn_val.get_params()[0].get_type();
+            let zig_value =
+                env.builder
+                    .new_build_load(zig_param_type, roc_call_alloca, "zig_value");
+
+            call_bitcode_fn(env, &[zig_value], fn_name)
+        }
+        NumF64FromParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F64_FROM_PARTS;
+
+            let roc_call_alloca = env
+                .builder
+                .new_build_alloca(arg.get_type(), "roc_call_alloca");
+            env.builder.new_build_store(roc_call_alloca, arg);
+
+            let fn_val = env.module.get_function(fn_name).unwrap();
+
+            let zig_params_types: Vec<_> =
+                fn_val.get_params().iter().map(|p| p.get_type()).collect();
+
+            let zig_record_type = env.context.struct_type(&zig_params_types, false);
+            let zig_recode_value = env
+                .builder
+                .new_build_load(zig_record_type, roc_call_alloca, "zig_value")
+                .into_struct_value();
+
+            let zig_value_0 = env
+                .builder
+                .build_extract_value(zig_recode_value, 0, "zig_value_0")
+                .unwrap();
+
+            let zig_value_1 = env
+                .builder
+                .build_extract_value(zig_recode_value, 1, "zig_value_1")
+                .unwrap();
+
+            call_bitcode_fn(env, &[zig_value_0, zig_value_1], fn_name)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1344,6 +1404,28 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
         SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
+}
+
+fn call_bitcode_fn_and_cast_result<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+    layout_interner: &STLayoutInterner<'_>,
+    layout: InLayout<'_>,
+) -> BasicValueEnum<'ctx> {
+    let zig_result = call_bitcode_fn(env, args, fn_name);
+    let zig_return_alloca = env
+        .builder
+        .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
+    env.builder.new_build_store(zig_return_alloca, zig_result);
+
+    load_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(layout),
+        zig_return_alloca,
+        "f64_to_parts_result",
+    )
 }
 
 fn intwidth_from_layout(layout: InLayout) -> IntWidth {

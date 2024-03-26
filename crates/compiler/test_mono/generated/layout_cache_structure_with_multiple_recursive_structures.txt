@@ -29,12 +29,12 @@ procedure List.91 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
     jump List.575 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.270 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.270;
+    let Num.276 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.276;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.269 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.269;
+    let Num.275 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.275;
 
 procedure Test.7 (Test.11, Test.12):
     let Test.17 : {[<rnu>C *self, <null>], [<rnu><null>, C {[<rnu>C *self, <null>], *self}]} = Struct {Test.12, Test.11};
