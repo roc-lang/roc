@@ -662,9 +662,9 @@ pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
 }
 
 pub fn f32FromParts(parts: F32Parts) callconv(.C) f32 {
-    return @as(f32, @bitCast(parts.fraction | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
+    return @as(f32, @bitCast(parts.fraction & 0x7fffff | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
 }
 
 pub fn f64FromParts(parts: F64Parts) callconv(.C) f64 {
-    return @as(f64, @bitCast(parts.fraction | (@as(u64, parts.exponent) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
+    return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
 }
