@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
+                @0-3 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 @6-9 Apply(
                     "",
                     "Int",
@@ -26,18 +27,20 @@ Defs(
                 ),
             ),
             AnnotatedBody {
-                ann_pattern: @0-3 Identifier(
-                    "foo",
-                ),
+                ann_pattern: @0-3 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 ann_type: @6-9 Apply(
                     "",
                     "Int",
                     [],
                 ),
                 comment: None,
-                body_pattern: @10-13 Identifier(
-                    "foo",
-                ),
+                body_pattern: @10-13 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 body_expr: @16-17 Num(
                     "4",
                 ),

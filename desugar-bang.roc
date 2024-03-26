@@ -4,12 +4,12 @@ app "desugar-bang"
     }
     imports [
         cli.Stdout,
+        cli.Stderr,
+        cli.Task.{ Task },
+        cli.Cmd,
     ]
     provides [main] to cli
 
-main =
-    Stdout.line!
-        "Foo"
-
-        "Bar"
-    |> Stdout.line
+main = 
+    Stdout.line! "Foo"
+    Stdout.line! "Bar"

@@ -25,12 +25,14 @@ SpaceBefore(
                 Body(
                     @18-26 RecordDestructure(
                         [
-                            @20-21 Identifier(
-                                "x",
-                            ),
-                            @23-25 Identifier(
-                                "y",
-                            ),
+                            @20-21 Identifier {
+                                ident: "x",
+                                suffixed: 0,
+                            },
+                            @23-25 Identifier {
+                                ident: "y",
+                                suffixed: 0,
+                            },
                         ],
                     ),
                     @29-30 Num(
@@ -38,9 +40,10 @@ SpaceBefore(
                     ),
                 ),
                 Body(
-                    @31-32 Identifier(
-                        "y",
-                    ),
+                    @31-32 Identifier {
+                        ident: "y",
+                        suffixed: 0,
+                    },
                     @35-36 Num(
                         "6",
                     ),

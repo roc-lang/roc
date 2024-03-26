@@ -18,12 +18,14 @@ Defs(
                 header: TypeHeader {
                     name: @0-4 "Blah",
                     vars: [
-                        @5-6 Identifier(
-                            "a",
-                        ),
-                        @7-8 Identifier(
-                            "b",
-                        ),
+                        @5-6 Identifier {
+                            ident: "a",
+                            suffixed: 0,
+                        },
+                        @7-8 Identifier {
+                            ident: "b",
+                            suffixed: 0,
+                        },
                     ],
                 },
                 ann: @11-26 Apply(

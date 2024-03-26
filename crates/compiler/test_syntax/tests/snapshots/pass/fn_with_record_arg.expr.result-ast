@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-5 Identifier(
-                    "table",
-                ),
+                @0-5 Identifier {
+                    ident: "table",
+                    suffixed: 0,
+                },
                 @8-44 Function(
                     [
                         @8-35 Record {
@@ -54,9 +55,10 @@ Defs(
                 ),
             ),
             AnnotatedBody {
-                ann_pattern: @0-5 Identifier(
-                    "table",
-                ),
+                ann_pattern: @0-5 Identifier {
+                    ident: "table",
+                    suffixed: 0,
+                },
                 ann_type: @8-44 Function(
                     [
                         @8-35 Record {
@@ -91,16 +93,18 @@ Defs(
                     ),
                 ),
                 comment: None,
-                body_pattern: @45-50 Identifier(
-                    "table",
-                ),
+                body_pattern: @45-50 Identifier {
+                    ident: "table",
+                    suffixed: 0,
+                },
                 body_expr: @53-89 Closure(
                     [
                         @54-62 RecordDestructure(
                             [
-                                @55-61 Identifier(
-                                    "height",
-                                ),
+                                @55-61 Identifier {
+                                    ident: "height",
+                                    suffixed: 0,
+                                },
                             ],
                         ),
                     ],

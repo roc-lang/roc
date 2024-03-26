@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-6 Identifier(
-                    "myList",
-                ),
+                @0-6 Identifier {
+                    ident: "myList",
+                    suffixed: 0,
+                },
                 @9-25 List(
                     [
                         @15-16 SpaceBefore(

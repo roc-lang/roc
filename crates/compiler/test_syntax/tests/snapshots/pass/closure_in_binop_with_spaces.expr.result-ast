@@ -13,9 +13,10 @@ BinOps(
         @2-7 SpaceAfter(
             Closure(
                 [
-                    @3-4 Identifier(
-                        "s",
-                    ),
+                    @3-4 Identifier {
+                        ident: "s",
+                        suffixed: 0,
+                    },
                 ],
                 @6-7 Var {
                     module_name: "",

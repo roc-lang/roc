@@ -10,9 +10,10 @@ When(
                 @19-38 SpaceBefore(
                     List(
                         [
-                            @20-25 Identifier(
-                                "first",
-                            ),
+                            @20-25 Identifier {
+                                ident: "first",
+                                suffixed: 0,
+                            },
                             @27-37 ListRest(
                                 Some(
                                     (

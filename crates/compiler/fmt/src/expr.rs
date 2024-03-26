@@ -107,7 +107,6 @@ impl<'a> Formattable for Expr<'a> {
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
             RecordBuilder(fields) => is_collection_multiline(fields),
-            Suffixed(subexpr) => subexpr.is_multiline(),
         }
     }
 
@@ -168,7 +167,11 @@ impl<'a> Formattable for Expr<'a> {
             Str(literal) => {
                 fmt_str_literal(buf, *literal, indent);
             }
-            Var { module_name, ident } => {
+            Var {
+                module_name,
+                ident,
+                suffixed,
+            } => {
                 buf.indent(indent);
                 if !module_name.is_empty() {
                     buf.push_str(module_name);
@@ -176,6 +179,11 @@ impl<'a> Formattable for Expr<'a> {
                 }
 
                 buf.push_str(ident);
+
+                let count: u8 = *suffixed;
+                for _ in 0..count {
+                    buf.push('!');
+                }
             }
             Underscore(name) => {
                 buf.indent(indent);
@@ -513,10 +521,6 @@ impl<'a> Formattable for Expr<'a> {
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
             IngestedFile(_, _) => {}
-            Suffixed(sub_expr) => {
-                sub_expr.format_with_options(buf, parens, newlines, indent);
-                buf.push('!');
-            }
         }
     }
 }

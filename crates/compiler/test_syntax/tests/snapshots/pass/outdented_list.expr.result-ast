@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                    suffixed: 0,
+                },
                 @4-17 List(
                     [
                         @8-9 SpaceBefore(

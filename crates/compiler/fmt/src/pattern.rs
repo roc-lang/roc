@@ -2,7 +2,6 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{fmt_str_literal, format_sq_literal};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
-use roc_error_macros::internal_error;
 use roc_parse::ast::{Base, CommentOrNewline, Pattern, PatternAs};
 
 pub fn fmt_pattern<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, indent: u16, parens: Parens) {
@@ -65,7 +64,7 @@ impl<'a> Formattable for Pattern<'a> {
                 }
             },
 
-            Pattern::Identifier(_)
+            Pattern::Identifier { .. }
             | Pattern::Tag(_)
             | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
@@ -82,7 +81,6 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::Tuple(patterns) | Pattern::List(patterns) => {
                 patterns.iter().any(|p| p.is_multiline())
             }
-            Pattern::Stmt(_) => true,
         }
     }
 
@@ -90,9 +88,16 @@ impl<'a> Formattable for Pattern<'a> {
         use self::Pattern::*;
 
         match self {
-            Identifier(string) => {
+            Identifier {
+                ident: string,
+                suffixed,
+            } => {
                 buf.indent(indent);
-                buf.push_str(string)
+                buf.push_str(string);
+
+                for _ in 0..*suffixed {
+                    buf.push('!');
+                }
             }
             Tag(name) | OpaqueRef(name) => {
                 buf.indent(indent);
@@ -272,19 +277,23 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            QualifiedIdentifier { module_name, ident } => {
+            QualifiedIdentifier {
+                module_name,
+                ident,
+                suffixed,
+            } => {
                 buf.indent(indent);
                 if !module_name.is_empty() {
                     buf.push_str(module_name);
                     buf.push('.');
                 }
 
+                for _ in 0..*suffixed {
+                    buf.push('!');
+                }
+
                 buf.push_str(ident);
             }
-
-            // Statement e.g. Suffixed with optional `{}=`
-            // e.g. `Stdout.line! "Hello World"`
-            Stmt(_) => internal_error!("should be desugared in parser into alternate pattern"),
         }
     }
 }

@@ -51,8 +51,11 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
         let pattern_state = state.clone();
 
         // Return early with the suffixed statement
-        if let Pattern::BangSuffixed(_,_) = pattern.value {
-            return Ok((MadeProgress, pattern, pattern_state));
+        match pattern.value {
+            Pattern::Identifier { suffixed, .. } if suffixed > 0 => {
+                return Ok((MadeProgress, pattern, pattern_state))
+            }
+            _ => {}
         }
 
         let (pattern_spaces, state) =
@@ -144,7 +147,15 @@ fn loc_tag_pattern_arg<'a>(
 
         let Loc { region, value } = loc_pat;
 
-        if stop_on_has_kw && matches!(value, Pattern::Identifier(crate::keyword::IMPLEMENTS)) {
+        if stop_on_has_kw
+            && matches!(
+                value,
+                Pattern::Identifier {
+                    ident: crate::keyword::IMPLEMENTS,
+                    ..
+                }
+            )
+        {
             Err((NoProgress, EPattern::End(original_state.pos())))
         } else {
             Ok((
@@ -166,7 +177,10 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
         |_arena, state, progress, pattern| {
             if matches!(
                 pattern.value,
-                Pattern::Identifier(crate::keyword::IMPLEMENTS)
+                Pattern::Identifier {
+                    ident: crate::keyword::IMPLEMENTS,
+                    ..
+                }
             ) {
                 Ok((
                     progress,
@@ -400,14 +414,17 @@ fn loc_ident_pattern_help<'a>(
             } if suffixed > 0 => {
                 if module_name.is_empty() && parts.len() == 1 {
                     if let Accessor::RecordField(var) = &parts[0] {
-                        return Ok((
+                        Ok((
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::BangSuffixed(var, suffixed),
+                                value: Pattern::Identifier {
+                                    ident: var,
+                                    suffixed,
+                                },
                             },
                             state,
-                        ));
+                        ))
                     } else {
                         internal_error!("unexpected suffixed TupleIndex");
                     }
@@ -416,7 +433,11 @@ fn loc_ident_pattern_help<'a>(
                         MadeProgress,
                         Loc {
                             region: loc_ident.region,
-                            value: Pattern::BangSuffixed(arena.alloc(format!("{}.{}", module_name, var)), suffixed),
+                            value: Pattern::QualifiedIdentifier {
+                                module_name,
+                                ident: var,
+                                suffixed,
+                            },
                         },
                         state,
                     ));
@@ -442,7 +463,10 @@ fn loc_ident_pattern_help<'a>(
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Identifier(var),
+                                value: Pattern::Identifier {
+                                    ident: var,
+                                    suffixed: 0,
+                                },
                             },
                             state,
                         ));
@@ -603,9 +627,18 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             None => {
                 let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(value)), spaces)
+                    Pattern::SpaceAfter(
+                        arena.alloc(Pattern::Identifier {
+                            ident: value,
+                            suffixed: 0,
+                        }),
+                        spaces,
+                    )
                 } else {
-                    Pattern::Identifier(value)
+                    Pattern::Identifier {
+                        ident: value,
+                        suffixed: 0,
+                    }
                 };
 
                 Ok((MadeProgress, Loc::at(region, value), state))

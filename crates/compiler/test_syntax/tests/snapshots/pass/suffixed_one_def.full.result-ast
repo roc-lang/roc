@@ -98,7 +98,7 @@ Full {
             Index(2147483648),
         ],
         regions: [
-            @155-184,
+            @155-215,
         ],
         space_before: [
             Slice(start = 0, length = 2),
@@ -113,76 +113,57 @@ Full {
         type_defs: [],
         value_defs: [
             Body(
-                @155-159 Identifier(
-                    "main",
-                ),
-                @155-184 Defs(
-                    Defs {
-                        tags: [
-                            Index(2147483648),
-                        ],
-                        regions: [
-                            @155-184,
-                        ],
-                        space_before: [
-                            Slice(start = 0, length = 0),
-                        ],
-                        space_after: [
-                            Slice(start = 0, length = 0),
-                        ],
-                        spaces: [],
-                        type_defs: [],
-                        value_defs: [
-                            Body(
-                                @155-184 RecordDestructure(
-                                    [],
-                                ),
-                                @155-184 Apply(
-                                    @166-178 Suffixed(
-                                        Var {
+                @155-159 Identifier {
+                    ident: "main",
+                    suffixed: 0,
+                },
+                @166-215 SpaceBefore(
+                    BinOps(
+                        [
+                            (
+                                @166-195 SpaceAfter(
+                                    Apply(
+                                        @166-178 Var {
                                             module_name: "Stdout",
                                             ident: "line",
+                                            suffixed: 1,
                                         },
+                                        [
+                                            @179-184 Str(
+                                                PlainLine(
+                                                    "Foo",
+                                                ),
+                                            ),
+                                            @190-195 SpaceBefore(
+                                                Str(
+                                                    PlainLine(
+                                                        "Bar",
+                                                    ),
+                                                ),
+                                                [
+                                                    Newline,
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                        Space,
                                     ),
                                     [
-                                        @179-184 Str(
-                                            PlainLine(
-                                                "Foo",
-                                            ),
-                                        ),
+                                        Newline,
                                     ],
-                                    Space,
                                 ),
+                                @201-203 Pizza,
                             ),
                         ],
-                    },
-                    @190-215 SpaceBefore(
-                        BinOps(
-                            [
-                                (
-                                    @190-195 SpaceAfter(
-                                        Str(
-                                            PlainLine(
-                                                "Bar",
-                                            ),
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                    @201-203 Pizza,
-                                ),
-                            ],
-                            @204-215 Var {
-                                module_name: "Stdout",
-                                ident: "line",
-                            },
-                        ),
-                        [
-                            Newline,
-                            Newline,
-                        ],
+                        @204-215 Var {
+                            module_name: "Stdout",
+                            ident: "line",
+                            suffixed: 0,
+                        },
                     ),
+                    [
+                        Newline,
+                    ],
                 ),
             ),
         ],

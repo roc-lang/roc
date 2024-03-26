@@ -15,18 +15,21 @@ Defs {
     type_defs: [],
     value_defs: [
         Body(
-            @0-4 Identifier(
-                "main",
-            ),
+            @0-4 Identifier {
+                ident: "main",
+                suffixed: 0,
+            },
             @12-50 SpaceBefore(
                 Backpassing(
                     [
-                        @12-16 Identifier(
-                            "arg1",
-                        ),
-                        @18-22 Identifier(
-                            "arg2",
-                        ),
+                        @12-16 Identifier {
+                            ident: "arg1",
+                            suffixed: 0,
+                        },
+                        @18-22 Identifier {
+                            ident: "arg2",
+                            suffixed: 0,
+                        },
                     ],
                     @26-30 Apply(
                         @26-27 Var {

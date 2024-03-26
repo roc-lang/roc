@@ -73,7 +73,8 @@ impl ReplState {
                 match value_def {
                     ValueDef::Annotation(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident, suffixed: _ },
                             ..
                         },
                         _,
@@ -87,7 +88,8 @@ impl ReplState {
                     }
                     ValueDef::Body(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident, suffixed: _ },
                             ..
                         },
                         _,
@@ -95,7 +97,8 @@ impl ReplState {
                     | ValueDef::AnnotatedBody {
                         body_pattern:
                             Loc {
-                                value: Pattern::Identifier(ident),
+                                // TODO is this right for suffixed
+                                value: Pattern::Identifier { ident, suffixed: _ },
                                 ..
                             },
                         ..
@@ -131,6 +134,7 @@ impl ReplState {
                     ValueDef::ExpectFx { .. } => {
                         todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                     }
+                    ValueDef::Stmt(_) => todo!(),
                 }
             }
             ParseOutcome::TypeDef(TypeDef::Alias {

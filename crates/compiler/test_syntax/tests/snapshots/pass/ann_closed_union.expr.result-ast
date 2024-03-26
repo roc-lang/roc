@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
+                @0-3 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 @6-27 TagUnion {
                     ext: None,
                     tags: [
@@ -40,9 +41,10 @@ Defs(
                 },
             ),
             AnnotatedBody {
-                ann_pattern: @0-3 Identifier(
-                    "foo",
-                ),
+                ann_pattern: @0-3 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 ann_type: @6-27 TagUnion {
                     ext: None,
                     tags: [
@@ -63,9 +65,10 @@ Defs(
                     ],
                 },
                 comment: None,
-                body_pattern: @28-31 Identifier(
-                    "foo",
-                ),
+                body_pattern: @28-31 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 body_expr: @34-38 Tag(
                     "True",
                 ),

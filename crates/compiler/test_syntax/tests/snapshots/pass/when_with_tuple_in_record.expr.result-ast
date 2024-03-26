@@ -30,9 +30,10 @@ When(
                                         @30-31 NumLiteral(
                                             "1",
                                         ),
-                                        @33-34 Identifier(
-                                            "x",
-                                        ),
+                                        @33-34 Identifier {
+                                            ident: "x",
+                                            suffixed: 0,
+                                        },
                                     ],
                                 ),
                             ),
@@ -62,9 +63,10 @@ When(
                                         @50-51 Underscore(
                                             "",
                                         ),
-                                        @53-54 Identifier(
-                                            "b",
-                                        ),
+                                        @53-54 Identifier {
+                                            ident: "b",
+                                            suffixed: 0,
+                                        },
                                     ],
                                 ),
                             ),

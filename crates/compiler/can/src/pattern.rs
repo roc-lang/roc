@@ -6,7 +6,6 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
-use roc_error_macros::internal_error;
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -266,7 +265,11 @@ pub fn canonicalize_def_header_pattern<'a>(
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
-        Identifier(name) => {
+        // TODO should we use suffixed here?
+        Identifier {
+            ident: name,
+            suffixed: _,
+        } => {
             match scope.introduce_or_shadow_ability_member(
                 pending_abilities_in_scope,
                 (*name).into(),
@@ -374,12 +377,14 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => {
-            match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
-                Ok(symbol) => Pattern::Identifier(symbol),
-                Err(pattern) => pattern,
-            }
-        }
+        // TODO do we need to use suffixed here?
+        Identifier {
+            ident: name,
+            suffixed: _,
+        } => match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
+            Ok(symbol) => Pattern::Identifier(symbol),
+            Err(pattern) => pattern,
+        },
         Underscore(name) => {
             // An underscored identifier can't be used, but we'll still add it to the scope
             // for better error messages if someone tries to use it.
@@ -629,7 +634,11 @@ pub fn canonicalize_pattern<'a>(
 
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
-                    Identifier(label) => {
+                    // TODO should we use suffixed here?
+                    Identifier {
+                        ident: label,
+                        suffixed: _,
+                    } => {
                         match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
                                 output.references.insert_bound(symbol);
@@ -883,8 +892,6 @@ pub fn canonicalize_pattern<'a>(
             let problem = MalformedPatternProblem::QualifiedIdentifier;
             malformed_pattern(env, problem, region)
         }
-
-        Stmt(_) => internal_error!("should have been handled in the parser"),
     };
 
     Loc {

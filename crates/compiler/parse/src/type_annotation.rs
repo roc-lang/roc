@@ -70,7 +70,13 @@ fn check_type_alias<'a>(
             var_names.reserve(vars.len());
             for var in vars {
                 if let TypeAnnotation::BoundVariable(v) = var.value {
-                    var_names.push(Loc::at(var.region, Pattern::Identifier(v)));
+                    var_names.push(Loc::at(
+                        var.region,
+                        Pattern::Identifier {
+                            ident: v,
+                            suffixed: 0,
+                        },
+                    ));
                 } else {
                     return Err(ETypeInlineAlias::ArgumentNotLowercase(var.region.start()));
                 }
