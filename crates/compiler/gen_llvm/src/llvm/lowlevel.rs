@@ -1177,93 +1177,57 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             arg
         }
         NumF32ToParts => {
-            // Splits a [F32] into its components according to IEEE 754 standard.
-            // F32 -> { sign : Bool, exponent : U8, fraction : U32 }
-
-            // temp for inspiration
-            /*pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
-                const u32Value = @as(u32, @bitCast(self));
-                return F32Parts{
-                    .fraction = u32Value & 0x7fffff,
-                    .exponent = @truncate(u32Value >> 23 & 0xff),
-                    .sign = u32Value >> 31 & 1 == 1,
-                };
-            } */
             arguments!(arg);
-            let float_val = arg.into_float_value();
-
-            let float_bits = env.builder.new_build_bitcast(
-                float_val, 
-                env.context.i32_type(), 
-                "float_as_int"
-            ).into_int_value();
-            
-            let sign_bit = env.builder.new_build_right_shift(
-                float_bits,
-                env.context.i32_type().const_int(31, false),
-                false,
-                "sign_bit"
-            );
-        
-            let exponent_mask = env.context.i32_type().const_int(0x7F80_0000, false);
-            let exponent_bits = env.builder.new_build_and(
-                float_bits, 
-                exponent_mask,
-                "exponent_bits"
-            );
-            let exponent = env.builder.new_build_right_shift(
-                exponent_bits,
-                env.context.i32_type().const_int(23, false),
-                false,
-                "exponent"
-            );
-        
-            let fraction_mask = env.context.i32_type().const_int(0x007F_FFFF, false);  
-            let fraction = env.builder.new_build_and(
-                float_bits,
-                fraction_mask,
-                "fraction"
-            );
-
-            // Not sure if order is correct
-            let fields = [Layout::BOOL, Layout::U16, Layout::U64];
-            // Not sure if order is correct
-            let (sign_index, exponent_index, fraction_index) = (0, 1, 2);
-
-            let result_layout = LayoutRepr::Struct(env.arena.alloc(fields));
-
-            let result_struct_type =
-                basic_type_from_layout(env, layout_interner, result_layout).into_struct_type();
-        
-            let result = result_struct_type.const_zero();
-
-            // We have sign_bit, not sure how to convert it to Roc Bool representation
-            let sign = sign_bit;
-
-            let result = env
+            let zig_result = call_bitcode_fn(env, &[arg], bitcode::NUM_F32_TO_PARTS);
+            let zig_return_alloca = env
                 .builder
-                .build_insert_value(result, sign, sign_index, "insert_sign")
-                .unwrap();
+                .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
+            env.builder.new_build_store(zig_return_alloca, zig_result);
 
-            let result = env
-                .builder
-                .build_insert_value(result, exponent, exponent_index, "insert_exponent")
-                .unwrap();
+            let roc_return_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .ptr_type(AddressSpace::default());
 
-            let result = env
-                .builder
-                .build_insert_value(result, fraction, fraction_index, "insert_fraction")
-                .unwrap();
+            let roc_return_alloca = env.builder.new_build_pointer_cast(
+                zig_return_alloca,
+                roc_return_type,
+                "cast_to_roc",
+            );
 
-            use_roc_value(
+            load_roc_value(
                 env,
                 layout_interner,
-                result_layout,
-                result.into_struct_value().into(),
-                "use_f32_to_parts_result_record",
+                layout_interner.get_repr(layout),
+                roc_return_alloca,
+                "f64_to_parts_result",
             )
         }
-        NumF64ToParts => todo!("NumF64ToParts"),
+        NumF64ToParts => {
+            arguments!(arg);
+            let zig_result = call_bitcode_fn(env, &[arg], bitcode::NUM_F64_TO_PARTS);
+            let zig_return_alloca = env
+                .builder
+                .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
+            env.builder.new_build_store(zig_return_alloca, zig_result);
+
+            let roc_return_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .ptr_type(AddressSpace::default());
+
+            let roc_return_alloca = env.builder.new_build_pointer_cast(
+                zig_return_alloca,
+                roc_return_type,
+                "cast_to_roc",
+            );
+
+            load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                roc_return_alloca,
+                "f64_to_parts_result",
+            )
+        }
         NumF32FromParts => todo!("NumF32FromParts"),
         NumF64FromParts => todo!("NumF64FromParts"),
         Eq => {
