@@ -2,6 +2,7 @@ When(
     @5-6 Var {
         module_name: "",
         ident: "n",
+        suffixed: 0,
     },
     [
         WhenBranch {
@@ -31,6 +32,7 @@ When(
                         @24-25 Var {
                             module_name: "",
                             ident: "n",
+                            suffixed: 0,
                         },
                         @26-27 Plus,
                     ),
@@ -38,6 +40,7 @@ When(
                 @28-29 Var {
                     module_name: "",
                     ident: "m",
+                    suffixed: 0,
                 },
             ),
             guard: None,

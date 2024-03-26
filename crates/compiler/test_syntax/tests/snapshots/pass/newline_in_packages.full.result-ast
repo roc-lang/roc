@@ -108,6 +108,7 @@ Full {
                         @210-221 Var {
                             module_name: "Stdout",
                             ident: "line",
+                            suffixed: 0,
                         },
                         [
                             @222-246 Str(

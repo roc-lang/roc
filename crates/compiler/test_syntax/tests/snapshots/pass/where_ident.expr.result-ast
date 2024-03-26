@@ -75,6 +75,7 @@ Defs(
             Var {
                 module_name: "",
                 ident: "where",
+                suffixed: 0,
             },
             "where",
         ),

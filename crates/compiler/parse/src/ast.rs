@@ -289,6 +289,7 @@ pub enum Expr<'a> {
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
+        suffixed: u8, // how many `!` suffixes, for example `doTheThing!!` executes a Task that returns a Task
     },
 
     Underscore(&'a str),
@@ -1395,11 +1396,13 @@ impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
         ident: "<function>",
+        suffixed: 0,
     };
 
     pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
         module_name: "",
         ident: "*",
+        suffixed: 0,
     };
 
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {

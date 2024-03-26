@@ -32,6 +32,7 @@ Defs {
                         @26-27 Var {
                             module_name: "",
                             ident: "f",
+                            suffixed: 0,
                         },
                         [
                             @28-30 Record(

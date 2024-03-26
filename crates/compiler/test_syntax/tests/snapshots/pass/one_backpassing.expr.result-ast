@@ -15,6 +15,7 @@ SpaceBefore(
                 @30-31 Var {
                     module_name: "",
                     ident: "y",
+                    suffixed: 0,
                 },
             ),
         ),
@@ -22,6 +23,7 @@ SpaceBefore(
             Var {
                 module_name: "",
                 ident: "x",
+                suffixed: 0,
             },
             [
                 Newline,

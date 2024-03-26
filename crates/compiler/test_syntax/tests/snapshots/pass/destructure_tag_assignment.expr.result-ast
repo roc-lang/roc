@@ -46,6 +46,7 @@ Defs(
         Var {
             module_name: "",
             ident: "str",
+            suffixed: 0,
         },
         [
             Newline,

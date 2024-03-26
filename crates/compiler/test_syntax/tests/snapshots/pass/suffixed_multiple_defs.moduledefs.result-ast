@@ -9,35 +9,26 @@ Defs {
     ],
     space_before: [
         Slice(start = 0, length = 1),
-        Slice(start = 1, length = 3),
+        Slice(start = 1, length = 0),
     ],
     space_after: [
         Slice(start = 1, length = 0),
-        Slice(start = 4, length = 0),
+        Slice(start = 1, length = 0),
     ],
     spaces: [
         LineComment(
             " valid as a single line",
         ),
-        Newline,
-        Newline,
-        LineComment(
-            " valid as a multi-line, with increased ident",
-        ),
     ],
     type_defs: [],
     value_defs: [
-        Body(
-            @25-29 RecordDestructure(
-                [],
-            ),
+        Stmt(
             @25-44 Apply(
-                @25-29 Suffixed(
-                    Var {
-                        module_name: "A",
-                        ident: "x",
-                    },
-                ),
+                @25-29 Var {
+                    module_name: "A",
+                    ident: "x",
+                    suffixed: 1,
+                },
                 [
                     @33-38 Str(
                         PlainLine(
@@ -51,57 +42,64 @@ Defs {
                 Space,
             ),
         ),
-        Body(
-            @92-96 RecordDestructure(
-                [],
-            ),
-            @92-131 Apply(
-                @92-96 Suffixed(
-                    Var {
+        Stmt(
+            @92-131 SpaceBefore(
+                Apply(
+                    @92-96 Var {
                         module_name: "B",
                         ident: "y",
+                        suffixed: 1,
                     },
-                ),
-                [
-                    @106-111 SpaceBefore(
-                        Str(
-                            PlainLine(
-                                "Bar",
-                            ),
-                        ),
-                        [
-                            Newline,
-                        ],
-                    ),
-                    @120-131 SpaceBefore(
-                        Closure(
-                            [
-                                @121-122 Identifier(
-                                    "a",
+                    [
+                        @106-111 SpaceBefore(
+                            Str(
+                                PlainLine(
+                                    "Bar",
                                 ),
+                            ),
+                            [
+                                Newline,
                             ],
-                            @126-131 BinOps(
+                        ),
+                        @120-131 SpaceBefore(
+                            Closure(
                                 [
-                                    (
-                                        @126-127 Var {
-                                            module_name: "",
-                                            ident: "x",
-                                        },
-                                        @128-129 Plus,
+                                    @121-122 Identifier(
+                                        "a",
                                     ),
                                 ],
-                                @130-131 Var {
-                                    module_name: "",
-                                    ident: "y",
-                                },
+                                @126-131 BinOps(
+                                    [
+                                        (
+                                            @126-127 Var {
+                                                module_name: "",
+                                                ident: "x",
+                                                suffixed: 0,
+                                            },
+                                            @128-129 Plus,
+                                        ),
+                                    ],
+                                    @130-131 Var {
+                                        module_name: "",
+                                        ident: "y",
+                                        suffixed: 0,
+                                    },
+                                ),
                             ),
+                            [
+                                Newline,
+                            ],
                         ),
-                        [
-                            Newline,
-                        ],
+                    ],
+                    Space,
+                ),
+                [
+                    Newline,
+                    Newline,
+                    LineComment(
+                        " valid as a multi-line, with increased ident",
                     ),
                 ],
-                Space,
             ),
         ),
     ],

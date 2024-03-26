@@ -121,6 +121,7 @@ Defs(
                     @40-41 Var {
                         module_name: "",
                         ident: "x",
+                        suffixed: 0,
                     },
                 ),
             },
@@ -131,6 +132,7 @@ Defs(
             @43-44 Var {
                 module_name: "",
                 ident: "f",
+                suffixed: 0,
             },
             [
                 @45-51 Tuple(

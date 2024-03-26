@@ -98,11 +98,13 @@ Defs(
                     @50-53 Var {
                         module_name: "",
                         ident: "try",
+                        suffixed: 0,
                     },
                     [
                         @54-57 Var {
                             module_name: "",
                             ident: "foo",
+                            suffixed: 0,
                         },
                         @59-73 ParensAround(
                             Closure(

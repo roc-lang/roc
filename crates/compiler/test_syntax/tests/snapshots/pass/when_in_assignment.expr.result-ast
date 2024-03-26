@@ -23,6 +23,7 @@ Defs(
                     @9-10 Var {
                         module_name: "",
                         ident: "n",
+                        suffixed: 0,
                     },
                     [
                         WhenBranch {
