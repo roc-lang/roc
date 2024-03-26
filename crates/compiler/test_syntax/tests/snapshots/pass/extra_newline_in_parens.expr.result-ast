@@ -33,6 +33,7 @@ Defs(
                 Var {
                     module_name: "",
                     ident: "a",
+                    suffixed: 0,
                 },
                 [
                     Newline,

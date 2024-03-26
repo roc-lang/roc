@@ -1,3 +1,0 @@
-line! "Foo"
-
-read "Bar"

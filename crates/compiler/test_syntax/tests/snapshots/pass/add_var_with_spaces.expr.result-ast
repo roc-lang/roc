@@ -4,6 +4,7 @@ BinOps(
             @0-1 Var {
                 module_name: "",
                 ident: "x",
+                suffixed: 0,
             },
             @2-3 Plus,
         ),

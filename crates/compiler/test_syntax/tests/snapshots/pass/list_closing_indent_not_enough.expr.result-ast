@@ -38,6 +38,7 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "a",
+                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,
@@ -47,6 +48,7 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "b",
+                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,

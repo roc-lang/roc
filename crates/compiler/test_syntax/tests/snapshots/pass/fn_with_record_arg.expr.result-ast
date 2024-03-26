@@ -123,6 +123,7 @@ Defs(
         Var {
             module_name: "",
             ident: "table",
+            suffixed: 0,
         },
         [
             Newline,

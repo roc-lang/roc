@@ -4,6 +4,7 @@ UnaryOp(
             @2-6 Var {
                 module_name: "",
                 ident: "whee",
+                suffixed: 0,
             },
             [
                 @8-10 Num(
@@ -12,6 +13,7 @@ UnaryOp(
                 @11-14 Var {
                     module_name: "",
                     ident: "foo",
+                    suffixed: 0,
                 },
             ],
             Space,

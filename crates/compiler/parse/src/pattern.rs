@@ -51,7 +51,7 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
         let pattern_state = state.clone();
 
         // Return early with the suffixed statement
-        if let Pattern::Stmt(_) = pattern.value {
+        if let Pattern::BangSuffixed(_,_) = pattern.value {
             return Ok((MadeProgress, pattern, pattern_state));
         }
 
@@ -397,14 +397,14 @@ fn loc_ident_pattern_help<'a>(
                 parts,
                 suffixed,
                 ..
-            } if suffixed => {
+            } if suffixed > 0 => {
                 if module_name.is_empty() && parts.len() == 1 {
                     if let Accessor::RecordField(var) = &parts[0] {
                         return Ok((
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Stmt(var),
+                                value: Pattern::BangSuffixed(var, suffixed),
                             },
                             state,
                         ));
@@ -416,7 +416,7 @@ fn loc_ident_pattern_help<'a>(
                         MadeProgress,
                         Loc {
                             region: loc_ident.region,
-                            value: Pattern::Stmt(arena.alloc(format!("{}.{}", module_name, var))),
+                            value: Pattern::BangSuffixed(arena.alloc(format!("{}.{}", module_name, var)), suffixed),
                         },
                         state,
                     ));

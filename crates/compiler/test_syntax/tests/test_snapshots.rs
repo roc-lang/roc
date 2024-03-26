@@ -224,8 +224,6 @@ mod test_snapshots {
         fail/record_type_open_indent.expr,
         fail/record_type_tab.expr,
         fail/single_no_end.expr,
-        fail/suffixed_same_ident.expr,
-        fail/suffixed_single_def.expr,
         fail/tab_crash.header,
         fail/tag_union_end.expr,
         fail/tag_union_lowercase_tag_name.expr,
@@ -447,6 +445,7 @@ mod test_snapshots {
         pass/suffixed_multiple_defs.moduledefs,
         pass/suffixed_nested.expr,
         pass/suffixed_one_def.full,
+        pass/suffixed_optional_last.full,
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
@@ -741,6 +740,7 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -757,6 +757,7 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -772,6 +773,7 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -787,11 +789,13 @@ mod test_snapshots {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             let expr2 = arena.alloc(Var {
                 module_name: "",
                 ident: "project",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;

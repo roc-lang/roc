@@ -96,6 +96,7 @@ Defs(
         Var {
             module_name: "",
             ident: "x",
+            suffixed: 0,
         },
         [
             Newline,

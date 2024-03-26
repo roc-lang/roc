@@ -29,6 +29,7 @@ Defs(
                         @18-19 Var {
                             module_name: "",
                             ident: "n",
+                            suffixed: 0,
                         },
                         [
                             WhenBranch {

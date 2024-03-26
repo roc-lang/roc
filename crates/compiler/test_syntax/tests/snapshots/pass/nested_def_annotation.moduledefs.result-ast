@@ -95,6 +95,7 @@ Defs {
                                                     @81-85 Var {
                                                         module_name: "",
                                                         ident: "num1",
+                                                        suffixed: 0,
                                                     },
                                                     @86-88 NotEquals,
                                                 ),
@@ -102,6 +103,7 @@ Defs {
                                             @89-93 Var {
                                                 module_name: "",
                                                 ident: "num2",
+                                                suffixed: 0,
                                             },
                                         ),
                                         [
@@ -117,6 +119,7 @@ Defs {
                             @99-111 Var {
                                 module_name: "",
                                 ident: "wrappedNotEq",
+                                suffixed: 0,
                             },
                             [
                                 @112-113 Num(

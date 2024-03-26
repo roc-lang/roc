@@ -4,6 +4,7 @@ ParensAround(
             @6-7 Var {
                 module_name: "",
                 ident: "x",
+                suffixed: 0,
             },
             [
                 WhenBranch {

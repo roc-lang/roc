@@ -33,12 +33,14 @@ Defs(
                             @6-7 Var {
                                 module_name: "",
                                 ident: "g",
+                                suffixed: 0,
                             },
                             @5-6 Negate,
                         ),
                         @8-9 Var {
                             module_name: "",
                             ident: "a",
+                            suffixed: 0,
                         },
                     ],
                     Space,
@@ -50,6 +52,7 @@ Defs(
         Var {
             module_name: "",
             ident: "a",
+            suffixed: 0,
         },
         [
             Newline,

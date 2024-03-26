@@ -4,6 +4,7 @@ RecordAccess(
             Var {
                 module_name: "",
                 ident: "rec",
+                suffixed: 0,
             },
             "abc",
         ),

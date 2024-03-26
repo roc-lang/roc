@@ -13,6 +13,7 @@ When(
                         @17-19 Var {
                             module_name: "",
                             ident: "rx",
+                            suffixed: 0,
                         },
                     ],
                     Space,
@@ -67,10 +68,12 @@ When(
                     @65-75 Var {
                         module_name: "Bool",
                         ident: "false",
+                        suffixed: 0,
                     },
                     @76-78 Var {
                         module_name: "",
                         ident: "ry",
+                        suffixed: 0,
                     },
                 ],
                 Space,

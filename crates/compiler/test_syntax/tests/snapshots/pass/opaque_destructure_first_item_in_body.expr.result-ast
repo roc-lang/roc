@@ -30,6 +30,7 @@ Defs(
                     @12-14 Var {
                         module_name: "",
                         ident: "id",
+                        suffixed: 0,
                     },
                     [
                         @16-21 ParensAround(
@@ -56,6 +57,7 @@ Defs(
             @23-25 Var {
                 module_name: "",
                 ident: "it",
+                suffixed: 0,
             },
             [
                 @26-28 Record(

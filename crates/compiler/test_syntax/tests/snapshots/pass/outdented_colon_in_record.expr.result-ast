@@ -23,6 +23,7 @@ Defs(
                     @4-7 Var {
                         module_name: "",
                         ident: "foo",
+                        suffixed: 0,
                     },
                     [
                         @8-22 Record(
@@ -38,6 +39,7 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "blah",
+                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,
@@ -64,6 +66,7 @@ Defs(
         Var {
             module_name: "",
             ident: "x",
+            suffixed: 0,
         },
         [
             Newline,

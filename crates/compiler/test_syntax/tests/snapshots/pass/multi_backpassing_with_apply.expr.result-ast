@@ -17,6 +17,7 @@ Backpassing(
     @10-11 Var {
         module_name: "",
         ident: "a",
+        suffixed: 0,
     },
     @12-13 SpaceBefore(
         Tag(

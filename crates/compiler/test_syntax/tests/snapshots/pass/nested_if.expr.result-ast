@@ -4,6 +4,7 @@ If(
             @3-5 Var {
                 module_name: "",
                 ident: "t1",
+                suffixed: 0,
             },
             @13-14 SpaceBefore(
                 SpaceAfter(
@@ -23,6 +24,7 @@ If(
             @23-25 Var {
                 module_name: "",
                 ident: "t2",
+                suffixed: 0,
             },
             @33-34 SpaceBefore(
                 SpaceAfter(
