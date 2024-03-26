@@ -93,9 +93,10 @@ Full {
         type_defs: [],
         value_defs: [
             Body(
-                @98-102 Identifier(
-                    "main",
-                ),
+                @98-102 Identifier {
+                    ident: "main",
+                    suffixed: 0,
+                },
                 @105-124 Apply(
                     @105-116 Var {
                         module_name: "Stdout",

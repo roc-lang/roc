@@ -56,7 +56,11 @@ fn new_op_call_expr<'a>(
             let args = arena.alloc([left, right]);
 
             let loc_expr = arena.alloc(Loc {
-                value: Expr::Var { module_name, ident },
+                value: Expr::Var {
+                    module_name,
+                    ident,
+                    suffixed: 0,
+                },
                 region: loc_op.region,
             });
 
@@ -128,6 +132,8 @@ fn desugar_value_def<'a>(
                 preceding_comment: *preceding_comment,
             }
         }
+
+        Stmt(_) => todo!(),
     }
 }
 
@@ -188,6 +194,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     value: Var {
                                         module_name: ModuleName::TASK,
                                         ident: "await",
+                                        suffixed: 0, // TODO this isn't right
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
@@ -246,6 +253,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     value: Var {
                                         module_name: ModuleName::TASK,
                                         ident: "await",
+                                        suffixed: 0, // TODO this isn't right
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
@@ -307,6 +315,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     value: Var {
                                         module_name: ModuleName::TASK,
                                         ident: "await",
+                                        suffixed: 0, // TODO this isn't right
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
@@ -337,28 +346,29 @@ fn unwrap_suffixed_def_and_pattern<'a>(
     roc_parse::ast::Expr<'a>,
     &'a Loc<roc_parse::ast::Pattern<'a>>,
 ) {
-    match value_def {
-        ValueDef::Body(pattern, suffixed_expression) => match suffixed_expression.value {
-            // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
-            Apply(sub_loc, suffixed_args, called_via) => match sub_loc.value {
-                Suffixed(sub_expr) => (
-                    Apply(
-                        arena.alloc(Loc::at(region, *sub_expr)),
-                        suffixed_args,
-                        called_via,
-                    ),
-                    pattern,
-                ),
-                _ => unreachable!("should have a suffixed Apply inside Body def"),
-            },
-            // The Suffixed has NIL arguments applied e.g. `Stdin.line!`
-            Suffixed(sub_expr) => (*sub_expr, pattern),
-            _ => {
-                unreachable!("should have a suffixed Apply inside Body def")
-            }
-        },
-        _ => unreachable!("should have a suffixed Body def"),
-    }
+    todo!()
+    // match value_def {
+    //     ValueDef::Body(pattern, suffixed_expression) => match suffixed_expression.value {
+    //         // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
+    //         Apply(sub_loc, suffixed_args, called_via) => match sub_loc.value {
+    //             Suffixed(sub_expr) => (
+    //                 Apply(
+    //                     arena.alloc(Loc::at(region, *sub_expr)),
+    //                     suffixed_args,
+    //                     called_via,
+    //                 ),
+    //                 pattern,
+    //             ),
+    //             _ => unreachable!("should have a suffixed Apply inside Body def"),
+    //         },
+    //         // The Suffixed has NIL arguments applied e.g. `Stdin.line!`
+    //         Suffixed(sub_expr) => (*sub_expr, pattern),
+    //         _ => {
+    //             unreachable!("should have a suffixed Apply inside Body def")
+    //         }
+    //     },
+    //     _ => unreachable!("should have a suffixed Body def"),
+    // }
 }
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
@@ -699,10 +709,12 @@ pub fn desugar_expr<'a>(
                 Negate => Var {
                     module_name: ModuleName::NUM,
                     ident: "neg",
+                    suffixed: 0,
                 },
                 Not => Var {
                     module_name: ModuleName::BOOL,
                     ident: "not",
+                    suffixed: 0,
                 },
             };
             let loc_fn_var = arena.alloc(Loc { region, value });
@@ -800,6 +812,7 @@ pub fn desugar_expr<'a>(
             let inspect_fn = Var {
                 module_name: ModuleName::INSPECT,
                 ident: "toStr",
+                suffixed: 0,
             };
             let loc_inspect_fn_var = arena.alloc(Loc {
                 value: inspect_fn,
@@ -840,30 +853,30 @@ pub fn desugar_expr<'a>(
             })
         }
         LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
-        Suffixed(expr) => {
-            // Rewrite `Suffixed(BinOps([args...], Var(...)))` to `BinOps([args...], Suffixed(Var(...)))`
-            // This is to handle cases like e.g. `"Hello" |> line!`
-            if let BinOps(args, sub_expr) = expr {
-                return desugar_expr(
-                    arena,
-                    arena.alloc(Loc::at(
-                        loc_expr.region,
-                        BinOps(
-                            args,
-                            arena.alloc(Loc::at(sub_expr.region, Suffixed(&sub_expr.value))),
-                        ),
-                    )),
-                    src,
-                    line_info,
-                    module_path,
-                );
-            }
+        // Suffixed(expr) => {
+        //     // Rewrite `Suffixed(BinOps([args...], Var(...)))` to `BinOps([args...], Suffixed(Var(...)))`
+        //     // This is to handle cases like e.g. `"Hello" |> line!`
+        //     if let BinOps(args, sub_expr) = expr {
+        //         return desugar_expr(
+        //             arena,
+        //             arena.alloc(Loc::at(
+        //                 loc_expr.region,
+        //                 BinOps(
+        //                     args,
+        //                     arena.alloc(Loc::at(sub_expr.region, Suffixed(&sub_expr.value))),
+        //                 ),
+        //             )),
+        //             src,
+        //             line_info,
+        //             module_path,
+        //         );
+        //     }
 
-            // Suffixed are also desugared in Defs
-            // Any nodes that don't get desugared will be caught by canonicalize_expr
-            // and we can handle those cases as required
-            loc_expr
-        }
+        //     // Suffixed are also desugared in Defs
+        //     // Any nodes that don't get desugared will be caught by canonicalize_expr
+        //     // and we can handle those cases as required
+        //     loc_expr
+        // }
     }
 }
 
@@ -949,6 +962,7 @@ fn desugar_field<'a>(
                 value: Var {
                     module_name: "",
                     ident: loc_str.value,
+                    suffixed: 0,
                 },
                 region: loc_str.region,
             };
@@ -1009,7 +1023,7 @@ fn desugar_pattern<'a>(
     use roc_parse::ast::Pattern::*;
 
     match pattern {
-        Identifier(_)
+        Identifier { .. }
         | Tag(_)
         | OpaqueRef(_)
         | NumLiteral(_)
@@ -1093,8 +1107,6 @@ fn desugar_pattern<'a>(
         SpaceAfter(sub_pattern, _spaces) => {
             desugar_pattern(arena, *sub_pattern, src, line_info, module_path)
         }
-
-        Stmt(_) => unreachable!("should have been handled in the parser"),
     }
 }
 
@@ -1131,6 +1143,7 @@ fn record_builder_arg<'a>(
                         value: Expr::Var {
                             module_name: "",
                             ident: arena.alloc("#".to_owned() + label.value),
+                            suffixed: 0,
                         },
                     });
 
@@ -1170,7 +1183,10 @@ fn record_builder_arg<'a>(
 
     for label in apply_field_names.iter().rev() {
         let name = arena.alloc("#".to_owned() + label.value);
-        let ident = roc_parse::ast::Pattern::Identifier(name);
+        let ident = roc_parse::ast::Pattern::Identifier {
+            ident: name,
+            suffixed: 0,
+        };
 
         let arg_pattern = arena.alloc(Loc {
             value: ident,

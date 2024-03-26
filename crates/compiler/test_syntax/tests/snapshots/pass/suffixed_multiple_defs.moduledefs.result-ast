@@ -64,9 +64,10 @@ Defs {
                         @120-131 SpaceBefore(
                             Closure(
                                 [
-                                    @121-122 Identifier(
-                                        "a",
-                                    ),
+                                    @121-122 Identifier {
+                                        ident: "a",
+                                        suffixed: 0,
+                                    },
                                 ],
                                 @126-131 BinOps(
                                     [

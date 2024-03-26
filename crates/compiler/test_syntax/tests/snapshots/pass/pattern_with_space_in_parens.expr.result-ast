@@ -39,9 +39,10 @@ When(
                                     "Del",
                                 ),
                                 [
-                                    @42-44 Identifier(
-                                        "ry",
-                                    ),
+                                    @42-44 Identifier {
+                                        ident: "ry",
+                                        suffixed: 0,
+                                    },
                                 ],
                             ),
                             @47-48 Underscore(

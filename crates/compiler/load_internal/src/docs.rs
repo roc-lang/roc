@@ -212,7 +212,12 @@ fn generate_entry_docs(
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
-                    if let Pattern::Identifier(identifier) = loc_pattern.value {
+                    // TODO is this right for suffixed??
+                    if let Pattern::Identifier {
+                        ident: identifier,
+                        suffixed: _,
+                    } = loc_pattern.value
+                    {
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let name = identifier.to_string();
@@ -233,7 +238,12 @@ fn generate_entry_docs(
                     ann_type,
                     ..
                 } => {
-                    if let Pattern::Identifier(identifier) = ann_pattern.value {
+                    // TODO is this right for suffixed??
+                    if let Pattern::Identifier {
+                        ident: identifier,
+                        suffixed: _,
+                    } = ann_pattern.value
+                    {
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let doc_def = DocDef {
@@ -249,7 +259,12 @@ fn generate_entry_docs(
                 }
 
                 ValueDef::Body(pattern, _) => {
-                    if let Pattern::Identifier(identifier) = pattern.value {
+                    // TODO is this right for suffixed??
+                    if let Pattern::Identifier {
+                        ident: identifier,
+                        suffixed: _,
+                    } = pattern.value
+                    {
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let doc_def = DocDef {
@@ -275,6 +290,8 @@ fn generate_entry_docs(
                 ValueDef::ExpectFx { .. } => {
                     // Don't generate docs for `expect-fx`s
                 }
+
+                ValueDef::Stmt(_) => todo!(),
             },
 
             Ok(type_index) => match &defs.type_defs[type_index.index()] {
@@ -285,7 +302,12 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier(ident_name) = var.value {
+                        // TODO is this right for suffixed??
+                        if let Pattern::Identifier {
+                            ident: ident_name,
+                            suffixed: _,
+                        } = var.value
+                        {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -319,7 +341,12 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier(ident_name) = var.value {
+                        // TODO is this right for suffixed??
+                        if let Pattern::Identifier {
+                            ident: ident_name,
+                            suffixed: _,
+                        } = var.value
+                        {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -343,7 +370,12 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier(ident_name) = var.value {
+                        // TODO is this right for suffixed??
+                        if let Pattern::Identifier {
+                            ident: ident_name,
+                            suffixed: _,
+                        } = var.value
+                        {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -605,7 +637,8 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
                 .vars
                 .iter()
                 .filter_map(|loc_pattern| match loc_pattern.value {
-                    ast::Pattern::Identifier(ident) => Some(ident.to_string()),
+                    // TODO is this right for suffixed??
+                    ast::Pattern::Identifier { ident, suffixed: _ } => Some(ident.to_string()),
                     _ => None,
                 })
                 .collect(),

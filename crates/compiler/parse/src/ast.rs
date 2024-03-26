@@ -267,9 +267,6 @@ pub enum Expr<'a> {
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
 
-    /// An expression followed by `!``
-    Suffixed(&'a Expr<'a>),
-
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
         fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
@@ -347,6 +344,25 @@ pub enum Expr<'a> {
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
     MultipleRecordBuilders(&'a Loc<Expr<'a>>),
     UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
+}
+
+pub fn is_loc_expr_suffixed(loc_expr: Loc<Expr>) -> bool {
+    match loc_expr.value.extract_spaces().item {
+        // expression without arguments, `read!`
+        Expr::Var { suffixed, .. } => suffixed > 0,
+
+        // expression with arguments, `line! "Foo"`
+        Expr::Apply(sub_loc_expr, _, _) => is_loc_expr_suffixed(*sub_loc_expr),
+        _ => false,
+    }
+}
+
+pub fn is_valid_suffixed_statement(loc_expr: Loc<Expr>) -> bool {
+    match loc_expr.extract_spaces().item {
+        Expr::Var { suffixed, .. } => suffixed > 0,
+        Expr::Apply(sub_loc_expr, _, _) => is_valid_suffixed_statement(*sub_loc_expr),
+        _ => false,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -459,6 +475,8 @@ pub enum ValueDef<'a> {
         condition: &'a Loc<Expr<'a>>,
         preceding_comment: Region,
     },
+
+    Stmt(&'a Loc<Expr<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -493,6 +511,47 @@ impl<'a> Defs<'a> {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    // We could have a type annotation as the last tag,
+    // this helper ensures we refer to the last value_def
+    // and that we remove the correct tag
+    pub fn last_value_suffixed(&self) -> Option<(Self, &'a Loc<Expr<'a>>)> {
+        let value_indexes =
+            self.tags
+                .clone()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(tag_index, tag)| match tag.split() {
+                    Ok(_) => None,
+                    Err(value_index) => Some((tag_index, value_index.index())),
+                });
+
+        if let Some((tag_index, value_index)) = value_indexes.last() {
+            match self.value_defs[value_index] {
+                ValueDef::Body(
+                    Loc {
+                        value: Pattern::RecordDestructure(collection),
+                        ..
+                    },
+                    loc_expr,
+                ) if collection.is_empty() && is_loc_expr_suffixed(*loc_expr) => {
+                    let mut new_defs = self.clone();
+                    new_defs.remove_value_def(tag_index);
+
+                    return Some((new_defs, loc_expr));
+                }
+                ValueDef::Stmt(loc_expr) if is_loc_expr_suffixed(*loc_expr) => {
+                    let mut new_defs = self.clone();
+                    new_defs.remove_value_def(tag_index);
+
+                    return Some((new_defs, loc_expr));
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
     pub fn remove_value_def(&mut self, index: usize) {
@@ -601,16 +660,8 @@ impl<'a> Defs<'a> {
             if let Err(value_index) = tag.split() {
                 let index = value_index.index();
 
-                if let ValueDef::Body(_, expr) = &self.value_defs[index] {
-                    // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
-                    if let Expr::Apply(sub_expr, _, _) = expr.value {
-                        if let Expr::Suffixed(_) = sub_expr.value {
-                            return Some((tag_index, index));
-                        }
-                    }
-
-                    // The Suffixed has NO arguments applied e.g. `Stdin.line!`
-                    if let Expr::Suffixed(_) = expr.value {
+                if let ValueDef::Body(_, loc_expr) = &self.value_defs[index] {
+                    if is_loc_expr_suffixed(**loc_expr) {
                         return Some((tag_index, index));
                     }
                 }
@@ -872,10 +923,14 @@ impl<'a> PatternAs<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
-    Identifier(&'a str),
+    Identifier {
+        ident: &'a str,
+        suffixed: u8,
+    },
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,
+        suffixed: u8,
     },
 
     Tag(&'a str),
@@ -928,10 +983,9 @@ pub enum Pattern<'a> {
     // Malformed
     Malformed(&'a str),
     MalformedIdent(&'a str, crate::ident::BadIdent),
-
-    // Statement e.g. `Stdout.line! "Hello"`
-    Stmt(&'a str),
 }
+
+// pub fn contains_bang_suffixed
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Base {
@@ -996,11 +1050,22 @@ impl<'a> Pattern<'a> {
             //      { x, y } : { x : Int, y ? Bool }
             //      { x, y ? False } = rec
             OptionalField(x, _) => match other {
-                Identifier(y) | OptionalField(y, _) => x == y,
+                Identifier {
+                    ident: y,
+                    suffixed: 0,
+                }
+                | OptionalField(y, _) => x == y,
                 _ => false,
             },
-            Identifier(x) => match other {
-                Identifier(y) | OptionalField(y, _) => x == y,
+            Identifier {
+                ident: x,
+                suffixed: a,
+            } => match other {
+                Identifier {
+                    ident: y,
+                    suffixed: b,
+                } => x == y && a == b,
+                OptionalField(y, _) => x == y,
                 _ => false,
             },
             NumLiteral(x) => {
@@ -1061,13 +1126,15 @@ impl<'a> Pattern<'a> {
             QualifiedIdentifier {
                 module_name: a,
                 ident: x,
+                suffixed: i,
             } => {
                 if let QualifiedIdentifier {
                     module_name: b,
                     ident: y,
+                    suffixed: j,
                 } = other
                 {
-                    a == b && x == y
+                    a == b && x == y && i == j
                 } else {
                     false
                 }
@@ -1125,14 +1192,6 @@ impl<'a> Pattern<'a> {
 
             MalformedIdent(str_x, _) => {
                 if let MalformedIdent(str_y, _) = other {
-                    str_x == str_y
-                } else {
-                    false
-                }
-            }
-
-            Stmt(str_x) => {
-                if let Stmt(str_y) = other {
                     str_x == str_y
                 } else {
                     false
@@ -1437,7 +1496,14 @@ macro_rules! impl_extract_spaces {
                 match self {
                     $t::SpaceBefore(item, before) => {
                         match item {
-                            $t::SpaceBefore(_, _) => todo!(),
+                            $t::SpaceBefore(_, _) => {
+                                // TODO this probably isn't right, but was causing a panic with just todo!()
+                                Spaces {
+                                    before,
+                                    item: **item,
+                                    after: &[],
+                                }
+                            },
                             $t::SpaceAfter(item, after) => {
                                 Spaces {
                                     before,
@@ -1667,7 +1733,6 @@ impl<'a> Malformed for Expr<'a> {
             PrecedenceConflict(_) |
             MultipleRecordBuilders(_) |
             UnappliedRecordBuilder(_) => true,
-            Suffixed(expr) => expr.is_malformed(),
         }
     }
 }
@@ -1762,10 +1827,9 @@ impl<'a> Malformed for Pattern<'a> {
         use Pattern::*;
 
         match self {
-            Identifier(_) |
+            Identifier{ .. } |
             Tag(_) |
-            OpaqueRef(_) |
-            Stmt(_) => false,
+            OpaqueRef(_) => false,
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
@@ -1903,6 +1967,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
+            ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
         }
     }
 }

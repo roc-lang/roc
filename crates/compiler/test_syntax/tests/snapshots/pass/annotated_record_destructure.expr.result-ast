@@ -18,12 +18,14 @@ Defs(
             Annotation(
                 @0-8 RecordDestructure(
                     [
-                        @2-3 Identifier(
-                            "x",
-                        ),
-                        @5-7 Identifier(
-                            "y",
-                        ),
+                        @2-3 Identifier {
+                            ident: "x",
+                            suffixed: 0,
+                        },
+                        @5-7 Identifier {
+                            ident: "y",
+                            suffixed: 0,
+                        },
                     ],
                 ),
                 @11-14 Apply(
@@ -35,12 +37,14 @@ Defs(
             AnnotatedBody {
                 ann_pattern: @0-8 RecordDestructure(
                     [
-                        @2-3 Identifier(
-                            "x",
-                        ),
-                        @5-7 Identifier(
-                            "y",
-                        ),
+                        @2-3 Identifier {
+                            ident: "x",
+                            suffixed: 0,
+                        },
+                        @5-7 Identifier {
+                            ident: "y",
+                            suffixed: 0,
+                        },
                     ],
                 ),
                 ann_type: @11-14 Apply(
@@ -51,12 +55,14 @@ Defs(
                 comment: None,
                 body_pattern: @15-23 RecordDestructure(
                     [
-                        @17-18 Identifier(
-                            "x",
-                        ),
-                        @20-21 Identifier(
-                            "y",
-                        ),
+                        @17-18 Identifier {
+                            ident: "x",
+                            suffixed: 0,
+                        },
+                        @20-21 Identifier {
+                            ident: "y",
+                            suffixed: 0,
+                        },
                     ],
                 ),
                 body_expr: @26-49 Record(
