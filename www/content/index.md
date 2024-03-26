@@ -146,6 +146,7 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
+    <li><a href="https://github.com/krzysztofgb">Krzysztof G.</a>
     <li><a href="https://github.com/smores56">Sam Mohr</a>
     <li><a href="https://github.com/megakilo">Steven Chen</a>
     <li><a href="https://github.com/asteroidb612">Drew Lazzeri</a>

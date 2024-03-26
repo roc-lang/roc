@@ -2,7 +2,7 @@ use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, loc, reset_min_indent, specialize_ref, then, word1, BadInputError, ESingleQuote,
+    allocated, byte, loc, reset_min_indent, specialize_err_ref, then, BadInputError, ESingleQuote,
     EString, Parser,
 };
 use crate::state::State;
@@ -175,11 +175,11 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
 
         let mut preceded_by_dollar = false;
 
-        while let Some(&byte) = bytes.next() {
+        while let Some(&one_byte) = bytes.next() {
             // This is for the byte we just grabbed from the iterator.
             segment_parsed_bytes += 1;
 
-            match byte {
+            match one_byte {
                 b'"' if !is_single_quote => {
                     if segment_parsed_bytes == 1 && segments.is_empty() {
                         // special case of the empty string
@@ -375,11 +375,11 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
                             let (_progress, loc_expr, new_state) = skip_second!(
-                                specialize_ref(
+                                specialize_err_ref(
                                     EString::Format,
                                     loc(allocated(reset_min_indent(expr::expr_help())))
                                 ),
-                                word1(b')', EString::FormatEnd)
+                                byte(b')', EString::FormatEnd)
                             )
                             .parse(arena, state, min_indent)?;
 
@@ -404,9 +404,9 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
                             let (_progress, loc_digits, new_state) = between!(
-                                word1(b'(', EString::CodePtOpen),
+                                byte(b'(', EString::CodePtOpen),
                                 loc(ascii_hex_digits()),
-                                word1(b')', EString::CodePtEnd)
+                                byte(b')', EString::CodePtEnd)
                             )
                             .parse(arena, state, min_indent)?;
 
@@ -484,11 +484,11 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
 
                     // Parse an arbitrary expression, followed by ')'
                     let (_progress, loc_expr, new_state) = skip_second!(
-                        specialize_ref(
+                        specialize_err_ref(
                             EString::Format,
                             loc(allocated(reset_min_indent(expr::expr_help())))
                         ),
-                        word1(b')', EString::FormatEnd)
+                        byte(b')', EString::FormatEnd)
                     )
                     .parse(arena, state, min_indent)?;
 
@@ -510,7 +510,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
 
             // iff the '$' is followed by '(', this is string interpolation.
             // We'll check for the '(' on the next iteration of the loop.
-            preceded_by_dollar = byte == b'$';
+            preceded_by_dollar = one_byte == b'$';
         }
 
         // We ran out of characters before finding a closed quote
