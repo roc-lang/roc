@@ -54,7 +54,6 @@ use crate::llvm::{
         LLVM_SUB_WITH_OVERFLOW,
     },
     refcounting::PointerToRefcount,
-    struct_::struct_from_fields,
 };
 
 use super::{build::Env, convert::zig_dec_type};
