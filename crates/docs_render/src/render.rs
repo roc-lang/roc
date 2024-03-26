@@ -4,57 +4,16 @@ use core::{
     fmt::{self, Write},
     iter,
 };
-use roc_types::types::{AliasKind, Type};
-
-pub struct RecordField<'a> {
-    field_name: &'a str,
-    value_type: &'a Type,
-    is_required: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct Indentation {
-    level: u32,
-}
-
-#[derive(Clone, Copy)]
-enum WrapInParens {
-    Unnecessary,
-    NeededIfWhitespace,
-}
-
-impl Indentation {
-    const INDENT_STR: &str = "    ";
-
-    pub fn increment(self) -> Self {
-        Self {
-            level: self.level.saturating_add(1),
-        }
-    }
-
-    pub fn decrement(self) -> Self {
-        Self {
-            level: self.level.saturating_sub(1),
-        }
-    }
-}
-
-impl fmt::Display for Indentation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Always start with a newline before indenting
-        f.write_char('\n')?;
-
-        for _ in 0..self.level {
-            f.write_str(Self::INDENT_STR)?;
-        }
-
-        Ok(())
-    }
-}
+use roc_docs_types::TypeAnnotation; // TODO move this into its own no_std, no deps crate
+use roc_module::symbol::{IdentId, ModuleId}; // TODO move these into their own no_std, no deps crates
+use roc_types::{
+    subs::Variable,                  // TODO move this into its own no_std, no deps crate
+    types::{Alias, AliasKind, Type}, // TODO move this to top-level roc_types, and make it no_std and no deps
+};
 
 /// A named heading in the sidebar, with some number of
 /// entries beneath it.
-pub struct SidebarEntry<'a, I: Iterator<Item = S> + Clone, S: AsRef<str> + fmt::Display> {
+pub struct SidebarEntry<'a, StrIter> {
     /// In the source code, this will appear in a module's `exposes` list like:
     ///
     /// [
@@ -67,94 +26,73 @@ pub struct SidebarEntry<'a, I: Iterator<Item = S> + Clone, S: AsRef<str> + fmt::
     pub link_text: &'a str,
 
     /// The entries this module exposes (types, values, abilities)
-    pub exposed: I,
+    pub exposed: StrIter,
 
     /// These doc comments get interpreted as flat strings; Markdown is not allowed
     /// in them, because they will be rendered in the sidebar as plain text.
     pub doc_comment: Option<&'a str>,
 }
 
-pub struct Docs<
-    'a,
-    ModuleId,
-    Symbol,
-    DocsById,
-    ExposedSidebarEntries,
-    SidebarEntries,
-    Decls,
-    ExposedAliases,
-    AliasIter,
-    AliasBySymbol,
-    Sidebar,
-    ExposedSidebarEntry,
-    GetBaseUrl,
-    WriteToDisk,
-    NameFromIdentId,
-> {
-    pub arena: &'a Bump,
-    pub module_name: &'a str,
-    pub package_doc_comment_html: &'a str,
-    pub home: ModuleId,
-    pub interns: &'a Interns,
-    pub package_sidebar_entries: Sidebar,
-    pub base_url: GetBaseUrl,
-    pub user_specified_base_url: Option<&'a str>,
-    pub package_name: &'a str,
-    pub docs_by_id: DocsById,
-    pub raw_template_html: &'a str,
-    pub declarations: Decls,
-    pub exposed_aliases: ExposedAliases,
-    pub alias_by_symbol: AliasBySymbol,
-    pub write_to_disk: WriteToDisk,
-    pub name_from_ident_id: NameFromIdentId,
+pub struct RecordField<'a> {
+    field_name: &'a str,
+    value_type: &'a Type,
+    is_required: bool,
 }
 
-impl<
-        'a,
-        ModuleId: 'a,
-        Symbol,
-        IdentId,
-        DocsById: Iterator<Item = &'a (ModuleId, ModuleDocumentation)> + Clone,
-        ExposedSidebarEntries: Iterator<Item = &'a str> + Clone,
-        SidebarEntries: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntries, &'a str>> + Clone,
-        Decls: Fn(ModuleId) -> Option<&'a Declarations>,
-        ExposedAliases: Fn(ModuleId) -> AliasIter,
-        AliasIter: Iterator<Item = (Symbol, &'a Alias)> + Clone,
-        AliasBySymbol: Fn(Symbol) -> Option<&'a Alias>,
-        Sidebar: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntry, &'a str>> + Clone,
-        ExposedSidebarEntry: Iterator<Item = &'a str> + Clone,
-        GetBaseUrl: Fn(ModuleId) -> &'a str,
-        WriteToDisk: Fn(&'a str, &'a str) -> Result<(), Problem>,
-        NameFromIdentId: Fn(IdentId, ModuleId) -> &'a str,
-        Problem,
-    >
-    Docs<
-        'a,
-        ModuleId,
-        Symbol,
-        DocsById,
-        ExposedSidebarEntries,
-        SidebarEntries,
-        Decls,
-        ExposedAliases,
-        AliasIter,
-        AliasBySymbol,
-        Sidebar,
-        ExposedSidebarEntry,
-        GetBaseUrl,
-        WriteToDisk,
-        NameFromIdentId,
-    >
+pub struct BodyEntry<'a, IdentId> {
+    pub entry_name: &'a str,
+    pub ident_id: IdentId,
+    pub type_vars_names: &'a [&'a str],
+    pub type_annotation: TypeAnnotation,
+    pub docs: Option<&'a str>,
+}
+
+pub trait Docs<
+    'a,
+    ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
+    Sidebar: Iterator<Item = SidebarEntry<'a, StrIter>>,
+    StrIter: Iterator<Item = &'a str>,
+    BodyEntries: Iterator<Item = BodyEntry<'a, IdentId>>,
+>
 {
-    pub fn render_to_disk(&self) -> Result<(), Problem> {
-        let arena = self.arena;
-        let raw_template_html = self.raw_template_html;
+    // Required constants
+    fn package_name(&self) -> &'a str;
+    fn user_specified_base_url(&self) -> Option<&'a str>;
+    fn raw_template_html(&self) -> &'a str;
+    fn package_doc_comment_html(&self) -> &'a str;
+
+    // Required iterators
+    fn module_names(&self) -> ModuleNames;
+    fn package_sidebar_entries(&self) -> Sidebar;
+    fn body_entries(&self) -> BodyEntries;
+
+    // Required lookups
+    fn base_url(&self, module_id: ModuleId) -> &'a str;
+    fn module_name(&self, module_id: ModuleId) -> &'a str;
+    fn ident_name(&self, module_id: ModuleId, ident_id: IdentId) -> &'a str;
+    fn opt_type(
+        &self,
+        module_id: ModuleId,
+        ident_id: IdentId,
+    ) -> Option<Result<&'a Type, Variable>>;
+    fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<&'a Alias>;
+
+    // Implementation
+    fn render_to_disk<Problem>(
+        &self,
+        arena: &'a Bump,
+        // Takes the module name to be used as the directory name (or None if this is the root index.html),
+        // as well as the contents of the file.
+        write_to_disk: impl Fn(Option<&str>, &str) -> Result<(), Problem>,
+    ) -> Result<(), Problem> {
+        let package_doc_comment_html = self.package_doc_comment_html();
+        let raw_template_html = self.raw_template_html();
+        let package_name = self.package_name();
         let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);
         let mut module_template_html =
             String::with_capacity_in(raw_template_html.len() + 2048, arena);
         let mut sidebar_links = String::with_capacity_in(4096, arena);
 
-        let buf = &mut buf;
         let sidebar_links = &mut sidebar_links;
 
         self.render_sidebar(sidebar_links);
@@ -164,23 +102,19 @@ impl<
             let mut src = raw_template_html;
 
             {
-                src = advance_past("<!-- base -->", src, buf);
-                write_base_url(self.user_specified_base_url, buf);
+                src = advance_past("<!-- base -->", src, &mut buf);
+                write_base_url(self.user_specified_base_url(), &mut buf);
             }
 
             {
-                src = advance_past("<!-- Prefetch links -->", src, buf);
+                src = advance_past("<!-- Prefetch links -->", src, &mut buf);
 
-                for (index, (_, module)) in self.docs_by_id.clone().enumerate() {
+                for (index, (_, module_name)) in self.module_names().enumerate() {
                     if index > 0 {
                         buf.push_str("\n    ");
                     }
 
-                    let _ = write!(
-                        buf,
-                        "<link rel='prefetch' href='{}'/>",
-                        module.name.as_str()
-                    );
+                    let _ = write!(buf, "<link rel='prefetch' href='{module_name}'/>",);
                 }
             }
 
@@ -193,27 +127,27 @@ impl<
             }
 
             {
-                src = advance_past("<!-- Page title -->", src, buf);
+                src = advance_past("<!-- Page title -->", src, &mut buf);
                 let _ = write!(buf, "<title>{package_name}</title>");
             }
 
             {
-                src = advance_past("<!-- Module links -->", src, buf);
+                src = advance_past("<!-- Module links -->", src, &mut buf);
                 buf.push_str(&sidebar_links);
             }
 
             {
-                src = advance_past("<!-- Package Name -->", src, buf);
-                html::render_package_name_link(package_name, buf);
+                src = advance_past("<!-- Package Name -->", src, &mut buf);
+                render_package_name_link(package_name, &mut buf);
             }
 
             {
-                src = advance_past("<!-- Module Docs -->", src, buf);
+                src = advance_past("<!-- Module Docs -->", src, &mut buf);
 
-                if module_docs.package_doc_comment_html.is_empty() {
+                if package_doc_comment_html.is_empty() {
                     buf.push_str("Choose a module from the list to see its documentation.");
                 } else {
-                    buf.push_str(module_docs.package_doc_comment_html);
+                    buf.push_str(package_doc_comment_html);
                 }
             }
 
@@ -222,46 +156,36 @@ impl<
                 buf.push_str(&src);
 
                 // Finally, write the accumulated buffer to disk.
-                file::write(arena, &build_dir.join("index.html"), &buf)?;
+                write_to_disk(None, &buf)?;
 
                 buf.clear(); // We're done with this now. It's ready to be reused!
             }
         }
 
         // Write each package module's index.html file
-        for (module_id, docs) in docs_by_id {
+        for (module_id, module_name) in self.module_names() {
             let mut src = module_template_html.as_str();
 
             {
-                let name = docs.name.as_str();
-
                 {
-                    src = advance_past("<!-- Page title -->", src, buf);
-                    let _ = write!(buf, "<title>{name} - {package_name}</title>",);
+                    src = advance_past("<!-- Page title -->", src, &mut buf);
+                    let _ = write!(buf, "<title>{module_name} - {package_name}</title>",);
                 }
 
                 {
-                    src = advance_past("<!-- Module links -->", src, buf);
+                    src = advance_past("<!-- Module links -->", src, &mut buf);
                     buf.push_str(sidebar_links);
                 }
 
                 {
-                    src = advance_past("<!-- Package Name -->", src, buf);
-                    html::render_package_name_link(package_name, buf);
+                    src = advance_past("<!-- Package Name -->", src, &mut buf);
+                    render_package_name_link(package_name, &mut buf);
                 }
             }
 
             {
-                src = advance_past("<!-- Module Docs -->", src, buf);
-                html::render_module(
-                    arena,
-                    *module_id,
-                    &docs,
-                    declarations(*module_id),
-                    exposed_aliases(*module_id),
-                    &alias_by_symbol,
-                    buf,
-                );
+                src = advance_past("<!-- Module Docs -->", src, &mut buf);
+                self.render_module(arena, *module_id, &mut buf);
             }
 
             {
@@ -270,13 +194,8 @@ impl<
             }
 
             {
-                let name = docs.name.as_str();
-                let module_dir = build_dir.join(name.replace('.', "/").as_str());
-
-                file::create_dir_all(arena, &module_dir)?;
-
                 // Finally, write the accumulated buffer to disk.
-                file::write(arena, &module_dir.join("index.html"), &buf)?;
+                write_to_disk(Some(module_name), &buf)?;
             }
 
             buf.clear(); // We're done with this now. It's ready to be reused in the next iteration of the loop!
@@ -285,12 +204,12 @@ impl<
         Ok(())
     }
 
-    pub fn render_sidebar(&self, buf: &mut String<'_>) {
+    fn render_sidebar(&self, buf: &mut String<'_>) {
         for SidebarEntry {
             link_text: module_name,
             doc_comment,
             exposed,
-        } in self.package_sidebar_entries.clone()
+        } in self.package_sidebar_entries()
         {
             if let Some(heading) = doc_comment {
                 let _ = write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n");
@@ -567,279 +486,239 @@ impl<
     }
 
     fn render_absolute_url(&self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
-        match self.base_urls.get(&module_id) {
-            Some(base_url) => {
-                let _ = write!(
-                    buf,
-                    // e.g. "https://example.com/Str#isEmpty"
-                    "{base_url}{}#{}",
-                    self.interns.module_name(module_id),
-                    self.unqualified_name(ident_id)
-                );
-            }
-            None => {
-                if cfg!(debug_assertions) {
-                    unreachable!("docs generation tried to get a base URL for ModuleId {:?} but it was not found in base_urls. This should never happen!", module_id);
-                }
+        let base_url = self.base_url(module_id);
 
-                // In release builds, don't panic, just gracefully continue.
-                // It'll be a bug, but at least
-                // it won't block the user from seeing *some* docs rendered.
-            }
-        }
+        let _ = write!(
+            buf,
+            // e.g. "https://example.com/Str#isEmpty"
+            "{base_url}{}#{}",
+            self.module_name(module_id),
+            self.ident_name(module_id, ident_id)
+        );
     }
 
-    fn unqualified_name(&self, ident_id: IdentId) -> &str {
-        self.name_from_ident_id(ident_id, self.home)
+    fn render_module(&self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'_>) {
+        let indent = Indentation::default();
+        let module_name = self.module_name(module_id);
+        let _ = write!(
+            buf,
+            "<h2 class='module-name'><a href='/{module_name}'>{module_name}</a></h2>"
+        );
+
+        for entry in self.body_entries() {
+            let name = entry.entry_name;
+            let ident_id = entry.ident_id;
+            let type_ann = entry.type_annotation;
+
+            let _ = write!(
+                        buf,
+                        "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a>"
+                    );
+
+            if matches!(type_ann, TypeAnnotation::Ability { .. }) {
+                // Ability declarations don't have ":" after the name, just `implements`
+                buf.push_str(" <span class='kw'>implements</span>");
+                let todo = (); // TODO render ability declaration here
+            } else if let Some(mut alias) = self.opt_alias(module_id, ident_id) {
+                // This is a type entry (either a type alias or an opaque type)
+
+                // Print all the variables in the type right after the name,
+                // separated by spaces - e.g. the `ok` and `err` in:
+                //
+                //     Result ok err :
+                for loc_alias_var in alias.type_variables.iter() {
+                    let _ = write!(buf, " {}", loc_alias_var.value.name.as_str());
+                }
+
+                // Resolve as many aliases as necessary
+                loop {
+                    match alias.kind {
+                        AliasKind::Structural => {
+                            // If this is an alias of another alias, inline the other alias so you can
+                            // see what the actual underlying type is.
+                            //
+                            // DESIGN NOTE: in the future, we might want to do this only when
+                            // this alias resolves to another alias which is in an unexposed module,
+                            // e.g. the alias Http.Request is exposed, but it's an alias to
+                            // InternalHttp.Request, which is not exposed because the InternalHttp
+                            // module is not exposed. (In that case, it's very important that we
+                            // inline the annotation because otherwise you just don't see anything,
+                            // and you can't tell what the alias is aliasing without inducing a type
+                            // mismatch, reading the source code, asking editor tooling to infer it, etc.)
+                            if let Type::DelayedAlias(alias_common) = &alias.typ {
+                                if let Some(new_alias) = self.opt_alias(
+                                    alias_common.symbol.module_id(),
+                                    alias_common.symbol.ident_id(),
+                                ) {
+                                    alias = new_alias;
+                                    continue;
+                                }
+                            }
+
+                            match type_ann {
+                                TypeAnnotation::NoTypeAnn => {
+                                    let todo = (); // TODO if this turns out to be an alias of an internal opaque type (after expansion), do the AliasKind::Opaque logic instead (including not printing ":")
+
+                                    dbg!("alias", name, &alias.typ);
+                                }
+                                _ann => {
+                                    dbg!("body", name, &_ann);
+                                    let todo = (); // TODO this is the body; actually render each of the other types into HTML here!
+                                }
+                            }
+                            buf.push_str(" <span class='kw'>:</span>");
+
+                            let todo = (); // TODO render the alias body, including the logic for expanding InternalPath etc.
+                        }
+                        AliasKind::Opaque => {
+                            // We print `:` for type aliases, but print nothing for opaque types
+                            // because we don't expose the internal structure of opaque types.
+
+                            let todo = (); // TODO print `implements` for this opaque type, if it implements any abilities
+                        }
+                    }
+
+                    // By default, break here. We only `continue` earlier on if we need to continue resolving an alias.
+                    break;
+                }
+
+                // If we have any ability restrictions on the type alias variables, print them at the end.
+                let num_bound_vars = alias.type_variables.iter().fold(0, |count, loc_alias_var| {
+                    count + loc_alias_var.value.opt_bound_abilities.is_some() as usize
+                });
+
+                if num_bound_vars > 0 {
+                    let _ = write!(buf, "{indent}<span class='kw'>where</span>");
+
+                    // if there are multiple variables, print each variable on its own line.
+                    let is_multiline = num_bound_vars > 1;
+
+                    let indent = if is_multiline {
+                        indent.increment()
+                    } else {
+                        indent
+                    };
+
+                    for loc_alias_var in alias.type_variables.iter() {
+                        if let Some(ability_set) = &loc_alias_var.value.opt_bound_abilities {
+                            let type_var = loc_alias_var.value.name.as_str();
+
+                            if is_multiline {
+                                let _ = write!(buf, "{indent}");
+                            } else {
+                                buf.push_str(" ");
+                            };
+
+                            let _ = write!(
+                                buf,
+                                "<span class='type-var'>{type_var}</span> <span class='kw'>implements</span> "
+                            );
+
+                            for (index, symbol) in ability_set.sorted_iter().enumerate() {
+                                if index > 0 {
+                                    buf.push_str("&amp; ");
+                                }
+
+                                let ident_id = symbol.ident_id();
+                                let module_id = symbol.module_id();
+                                let (ability_name, todo) = ("<todo>", ()); // TODO get IdentIds for this module_id and use that to print the ident_id
+
+                                let todo = (); // TODO make this <a> link to the Ability's docs
+                                let _ = write!(
+                                    buf,
+                                    "<a class='ability' href='#todo'>{ability_name}</a>",
+                                );
+                            }
+
+                            // Put trailing commas at the end of each `implements` line
+                            if is_multiline {
+                                buf.push_str(",");
+                            }
+                        }
+                    }
+                }
+            } else if let Some(ann_result) = self.opt_type(module_id, ident_id) {
+                buf.push_str(" <span class='kw'>:</span>");
+
+                // This is a value entry (either a function or a non-function constant)
+                match ann_result {
+                    Ok(ann) => {
+                        // dbg!("decl ann", &ann.signature);
+                    }
+                    Err(var) => {
+                        // dbg!("decl var", var);
+                    }
+                }
+            } else {
+                // We should always have a variable, but if we don't, then in release builds
+                // we gracefully recover by not rendering a type. In debug builds, we panic.
+                #[cfg(debug_assertions)]
+                {
+                    unreachable!("Tried to render docs for IdentId ({:?}) in module {module_name} which had no corresponding Variable. This should never happen!", ident_id);
+                }
+            }
+
+            buf.push_str("</h3>");
+
+            if let Some(doc_str) = entry.docs {
+                let todo = (); // TODO render markdown
+                buf.push_str(doc_str);
+            }
+
+            buf.push_str("</section>");
+        }
+
+        // for (
+        //     var,
+        // ) in exposed
+        // {
+        //     let _ = write!(
+        //         buf,
+        //         "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a> :"
+        //     );
+
+        //     // match typ {
+        //     //     Type::Alias {
+        //     //         kind: AliasKind::Opaque,
+        //     //         ..
+        //     //     } => {
+        //     //         buf.push_str(":= ");
+        //     //         self.render_type(buf, Indentation::default(), typ, WrapInParens::Unnecessary)
+        //     //     }
+        //     //     // If this decl is just type alais to a type from another module (commonly `Foo : InternalFoo`),
+        //     //     // then render the actual type rather than linking to the other module's alias.
+        //     //     //
+        //     //     // We could make the rule be "only do this if the linked type is not exposed" but that's more
+        //     //     // complicated than the simpler rule of "if it's an alias of another type, always render the
+        //     //     // final type it aliases to," and we can always adjust later if there turns out to be some
+        //     //     // use case where that's not the behavior we want.
+        //     //     Type::Alias {
+        //     //         kind: AliasKind::Structural,
+        //     //         symbol,
+        //     //         actual,
+        //     //         ..
+        //     //     } if symbol.module_id() != self.home => {
+        //     //         buf.push_str(": ");
+        //     //         self.render_type(
+        //     //             buf,
+        //     //             Indentation::default(),
+        //     //             actual,
+        //     //             WrapInParens::Unnecessary,
+        //     //         )
+        //     //     }
+        //     //     typ => {
+        //     //         buf.push_str(": ");
+        //     //         self.render_type(buf, Indentation::default(), typ, WrapInParens::Unnecessary)
+        //     //     }
+        //     // }
+
+        //     buf.push_str("</section>");
+        // }
     }
 }
 
 pub fn render_package_name_link(name: &str, buf: &mut String<'_>) {
     let _ = write!(buf, "<h1 class='pkg-full-name'><a href='/'>{name}</a></h1>");
-}
-
-pub fn render_module<'a>(
-    arena: &Bump,
-    module_id: ModuleId,
-    docs: &ModuleDocumentation,
-    decls: Option<&Declarations>,
-    aliases: impl Iterator<Item = (Symbol, &'a Alias)> + Clone,
-    alias_by_symbol: impl Fn(Symbol) -> Option<&'a Alias>,
-    buf: &mut String<'_>,
-) {
-    let indent = Indentation::default();
-    let module_name = docs.name.as_str();
-    let _ = write!(
-        buf,
-        "<h2 class='module-name'><a href='/{module_name}'>{module_name}</a></h2>"
-    );
-
-    let find_alias = |needle_symbol| {
-        aliases.clone().find_map(|(symbol, alias)| {
-            if symbol == needle_symbol {
-                Some(alias)
-            } else {
-                None
-            }
-        })
-    };
-
-    let find_decl_ann =
-        |needle_symbol| decls.and_then(|decls| decls.ann_from_symbol(needle_symbol));
-
-    for entry in docs.entries.iter() {
-        if let DocEntry::DocDef(doc_def) = entry {
-            if docs.exposed_symbols.contains(&doc_def.symbol) {
-                let name = doc_def.name.as_str();
-                let symbol = doc_def.symbol;
-
-                let _ = write!(
-                    buf,
-                    "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a>"
-                );
-
-                let type_ann = &doc_def.type_annotation;
-
-                if matches!(type_ann, TypeAnnotation::Ability { .. }) {
-                    // Ability declarations don't have ":" after the name, just `implements`
-                    buf.push_str(" <span class='kw'>implements</span>");
-                    let todo = (); // TODO render ability declaration here
-                } else if let Some(mut alias) = find_alias(symbol) {
-                    // This is a type entry (either a type alias or an opaque type)
-
-                    // Print all the variables in the type right after the name,
-                    // separated by spaces - e.g. the `ok` and `err` in:
-                    //
-                    //     Result ok err :
-                    for loc_alias_var in alias.type_variables.iter() {
-                        let _ = write!(buf, " {}", loc_alias_var.value.name.as_str());
-                    }
-
-                    // Resolve as many aliases as necessary
-                    loop {
-                        match alias.kind {
-                            AliasKind::Structural => {
-                                // If this is an alias of another alias, inline the other alias so you can
-                                // see what the actual underlying type is.
-                                //
-                                // DESIGN NOTE: in the future, we might want to do this only when
-                                // this alias resolves to another alias which is in an unexposed module,
-                                // e.g. the alias Http.Request is exposed, but it's an alias to
-                                // InternalHttp.Request, which is not exposed because the InternalHttp
-                                // module is not exposed. (In that case, it's very important that we
-                                // inline the annotation because otherwise you just don't see anything,
-                                // and you can't tell what the alias is aliasing without inducing a type
-                                // mismatch, reading the source code, asking editor tooling to infer it, etc.)
-                                if let Type::DelayedAlias(alias_common) = &alias.typ {
-                                    if let Some(new_alias) = alias_by_symbol(alias_common.symbol) {
-                                        alias = new_alias;
-                                        continue;
-                                    }
-                                }
-
-                                match &doc_def.type_annotation {
-                                    TypeAnnotation::NoTypeAnn => {
-                                        let todo = (); // TODO if this turns out to be an alias of an internal opaque type (after expansion), do the AliasKind::Opaque logic instead (including not printing ":")
-
-                                        dbg!("alias", name, &alias.typ);
-                                    }
-                                    _ann => {
-                                        dbg!("body", name, &_ann);
-                                        let todo = (); // TODO this is the body; actually render each of the other types into HTML here!
-                                    }
-                                }
-                                buf.push_str(" <span class='kw'>:</span>");
-
-                                let todo = (); // TODO render the alias body, including the logic for expanding InternalPath etc.
-                            }
-                            AliasKind::Opaque => {
-                                // We print `:` for type aliases, but print nothing for opaque types
-                                // because we don't expose the internal structure of opaque types.
-
-                                let todo = (); // TODO print `implements` for this opaque type, if it implements any abilities
-                            }
-                        }
-
-                        // By default, break here. We only `continue` earlier on if we need to continue resolving an alias.
-                        break;
-                    }
-
-                    // If we have any ability restrictions on the type alias variables, print them at the end.
-                    let num_bound_vars =
-                        alias.type_variables.iter().fold(0, |count, loc_alias_var| {
-                            count + loc_alias_var.value.opt_bound_abilities.is_some() as usize
-                        });
-
-                    if num_bound_vars > 0 {
-                        let _ = write!(buf, "{indent}<span class='kw'>where</span>");
-
-                        // if there are multiple variables, print each variable on its own line.
-                        let is_multiline = num_bound_vars > 1;
-
-                        let indent = if is_multiline {
-                            indent.increment()
-                        } else {
-                            indent
-                        };
-
-                        for loc_alias_var in alias.type_variables.iter() {
-                            if let Some(ability_set) = &loc_alias_var.value.opt_bound_abilities {
-                                let type_var = loc_alias_var.value.name.as_str();
-
-                                if is_multiline {
-                                    let _ = write!(buf, "{indent}");
-                                } else {
-                                    buf.push_str(" ");
-                                };
-
-                                let _ = write!(
-                                    buf,
-                                    "<span class='type-var'>{type_var}</span> <span class='kw'>implements</span> "
-                                );
-
-                                for (index, symbol) in ability_set.sorted_iter().enumerate() {
-                                    if index > 0 {
-                                        buf.push_str("&amp; ");
-                                    }
-
-                                    let ident_id = symbol.ident_id();
-                                    let module_id = symbol.module_id();
-                                    let (ability_name, todo) = ("<todo>", ()); // TODO get IdentIds for this module_id and use that to print the ident_id
-
-                                    let todo = (); // TODO make this <a> link to the Ability's docs
-                                    let _ = write!(
-                                        buf,
-                                        "<a class='ability' href='#todo'>{ability_name}</a>",
-                                    );
-                                }
-
-                                // Put trailing commas at the end of each `implements` line
-                                if is_multiline {
-                                    buf.push_str(",");
-                                }
-                            }
-                        }
-                    }
-                } else if let Some(ann_result) = find_decl_ann(symbol) {
-                    buf.push_str(" <span class='kw'>:</span>");
-
-                    // This is a value entry (either a function or a non-function constant)
-                    match ann_result {
-                        Ok(ann) => {
-                            // dbg!("decl ann", &ann.signature);
-                        }
-                        Err(var) => {
-                            // dbg!("decl var", var);
-                        }
-                    }
-                } else {
-                    // We should always have a variable, but if we don't, then in release builds
-                    // we gracefully recover by not rendering a type. In debug builds, we panic.
-                    #[cfg(debug_assertions)]
-                    {
-                        let symbol = doc_def.symbol;
-                        unreachable!("Tried to render docs for a symbol ({symbol}) in module {module_name} which had no corresponding Variable. This should never happen!");
-                    }
-                }
-
-                buf.push_str("</h3>");
-
-                if let Some(doc_str) = &doc_def.docs {
-                    let todo = (); // TODO render markdown
-                    buf.push_str(doc_str);
-                }
-
-                buf.push_str("</section>");
-            }
-        }
-    }
-
-    // for (
-    //     var,
-    // ) in exposed
-    // {
-    //     let _ = write!(
-    //         buf,
-    //         "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a> :"
-    //     );
-
-    //     // match typ {
-    //     //     Type::Alias {
-    //     //         kind: AliasKind::Opaque,
-    //     //         ..
-    //     //     } => {
-    //     //         buf.push_str(":= ");
-    //     //         self.render_type(buf, Indentation::default(), typ, WrapInParens::Unnecessary)
-    //     //     }
-    //     //     // If this decl is just type alais to a type from another module (commonly `Foo : InternalFoo`),
-    //     //     // then render the actual type rather than linking to the other module's alias.
-    //     //     //
-    //     //     // We could make the rule be "only do this if the linked type is not exposed" but that's more
-    //     //     // complicated than the simpler rule of "if it's an alias of another type, always render the
-    //     //     // final type it aliases to," and we can always adjust later if there turns out to be some
-    //     //     // use case where that's not the behavior we want.
-    //     //     Type::Alias {
-    //     //         kind: AliasKind::Structural,
-    //     //         symbol,
-    //     //         actual,
-    //     //         ..
-    //     //     } if symbol.module_id() != self.home => {
-    //     //         buf.push_str(": ");
-    //     //         self.render_type(
-    //     //             buf,
-    //     //             Indentation::default(),
-    //     //             actual,
-    //     //             WrapInParens::Unnecessary,
-    //     //         )
-    //     //     }
-    //     //     typ => {
-    //     //         buf.push_str(": ");
-    //     //         self.render_type(buf, Indentation::default(), typ, WrapInParens::Unnecessary)
-    //     //     }
-    //     // }
-
-    //     buf.push_str("</section>");
-    // }
 }
 
 fn is_multiline(_first: &Type) -> bool {
@@ -882,5 +761,45 @@ fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut St
         None => {
             buf.push('/');
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Indentation {
+    level: u32,
+}
+
+#[derive(Clone, Copy)]
+enum WrapInParens {
+    Unnecessary,
+    NeededIfWhitespace,
+}
+
+impl Indentation {
+    const INDENT_STR: &str = "    ";
+
+    pub fn increment(self) -> Self {
+        Self {
+            level: self.level.saturating_add(1),
+        }
+    }
+
+    pub fn decrement(self) -> Self {
+        Self {
+            level: self.level.saturating_sub(1),
+        }
+    }
+}
+
+impl fmt::Display for Indentation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Always start with a newline before indenting
+        f.write_char('\n')?;
+
+        for _ in 0..self.level {
+            f.write_str(Self::INDENT_STR)?;
+        }
+
+        Ok(())
     }
 }

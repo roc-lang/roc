@@ -1117,3 +1117,19 @@ fn name_from_ident_id(&self, ident_id: IdentId, ident_ids: &'a IdentIds) -> &'a 
             ""
         })
 }
+
+fn write_to_disk<'a>(
+    arena: &'a Bump,
+    opt_module_name: Option<&'a str>,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), Problem> {
+    if let Some(module_name) = opt_module_name {
+        let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
+
+        file::create_dir_all(arena, &module_dir)?;
+
+        file::write(arena, &module_dir.join("index.html"), contents)
+    } else {
+        file::write(arena, &build_dir.join("index.html"), contents)
+    }
+}

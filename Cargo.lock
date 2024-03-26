@@ -2552,7 +2552,19 @@ dependencies = [
  "const_format",
  "pretty_assertions",
  "pulldown-cmark",
+ "roc_docs_types",
+ "roc_module",
  "roc_types",
+]
+
+[[package]]
+name = "roc_docs_types"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "const_format",
+ "pretty_assertions",
+ "pulldown-cmark",
 ]
 
 [[package]]
