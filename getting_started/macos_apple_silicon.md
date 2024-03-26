@@ -56,3 +56,9 @@ you'll need to install one or more of these platform languages too.
 
     ./roc examples/platform-switching/rocLovesC.roc
     ```
+
+## Next Steps
+
+- [editor setup](https://www.roc-lang.org/install#editor-extensions)
+- [tutorial](https://www.roc-lang.org/tutorial)
+- [examples](https://www.roc-lang.org/examples)

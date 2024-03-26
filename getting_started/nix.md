@@ -46,3 +46,9 @@ nix flake init --template github:roc-lang/roc#simple --refresh
         );
 }
 ```
+
+## Next Steps
+
+- [editor setup](https://www.roc-lang.org/install#editor-extensions)
+- [tutorial](https://www.roc-lang.org/tutorial)
+- [examples](https://www.roc-lang.org/examples)

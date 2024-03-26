@@ -1829,18 +1829,6 @@ fn parse_expr_end<'a>(
             }
         }
     }
-    .map(|(progress, expr, state)| {
-        // If the next thing after the expression is a `!`, then it's Suffixed
-        if state.bytes().starts_with(b"!") {
-            (
-                progress,
-                Expr::Suffixed(arena.alloc(expr)),
-                state.advance(1),
-            )
-        } else {
-            (progress, expr, state)
-        }
-    })
 }
 
 pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -2510,12 +2498,19 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
-        Ident::Access { module_name, parts } => {
+        Ident::Access {
+            module_name,
+            parts,
+            suffixed,
+        } => {
             let mut iter = parts.iter();
 
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
+                Some(Accessor::RecordField(ident)) if suffixed => {
+                    Expr::Suffixed(arena.alloc(Expr::Var { module_name, ident }))
+                }
                 Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
                 Some(Accessor::TupleIndex(_)) => {
                     // TODO: make this state impossible to represent in Ident::Access,

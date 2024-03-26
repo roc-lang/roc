@@ -22,9 +22,9 @@ Here are some Getting Started guides for different operating systems:
 
 ### [Editor Extensions](#editor-extensions) {#editor-extensions}
 
-There is currently a [VS Code extension](https://marketplace.visualstudio.com/items?itemName=IvanDemchenko.roc-lang-unofficial) for Roc which includes instructions in its README for how to enable a Roc language server.
+[VS Code extension](https://marketplace.visualstudio.com/items?itemName=IvanDemchenko.roc-lang-unofficial) ❗ make sure to follow ["Configuring language server"](https://github.com/ivan-demchenko/roc-vscode-unofficial?tab=readme-ov-file#configuring-language-server). 
 
-Currently that language server has to be built from source; it would be a fantastic contribution if anyone could get it incorporated it into the extension directly. If you'd like to help with this, just make a post in [the "new contributors" topic on Zulip](https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/new.20contributors) and say hello!
+It would be a fantastic contribution for the language server to be set up automatically. If you'd like to help with this, just make a post in [the "new contributors" topic on Zulip](https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/new.20contributors) and say hello!
 
 ### [Tutorial](#tutorial) {#tutorial}
 

@@ -92,6 +92,10 @@ pub enum CalledVia {
     /// This call is the result of desugaring a Record Builder field.
     /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
     RecordBuilder,
+
+    /// This call is the result of desugaring a Task.await from `!` syntax
+    /// e.g. Stdout.line! "Hello" becomes Task.await (Stdout.line "Hello") \{} -> ...
+    BangSuffix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

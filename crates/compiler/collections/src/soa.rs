@@ -184,4 +184,8 @@ impl<T, U> EitherIndex<T, U> {
             Err(Index::new(self.index ^ Self::MASK))
         }
     }
+
+    pub fn decrement_index(&mut self) {
+        self.index = self.index.saturating_sub(1);
+    }
 }
