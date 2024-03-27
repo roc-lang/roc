@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_highlight_doc_comments() {
-        let text = "## a\n##b\n##c";
+        let text = "## a\n##b\n##c\n##\n";
         let tokens = highlight(text);
         assert_eq!(
             tokens,
@@ -422,14 +422,17 @@ mod tests {
                     Region::between(Position::new(0), Position::new(4)),
                     Token::DocComment
                 ),
-                // the next two are line comments because there's not a space at the beginning
                 Loc::at(
                     Region::between(Position::new(5), Position::new(8)),
-                    Token::LineComment
+                    Token::DocComment
                 ),
                 Loc::at(
                     Region::between(Position::new(9), Position::new(12)),
-                    Token::LineComment
+                    Token::DocComment
+                ),
+                Loc::at(
+                    Region::between(Position::new(13), Position::new(15)),
+                    Token::DocComment
                 ),
             ]
         );

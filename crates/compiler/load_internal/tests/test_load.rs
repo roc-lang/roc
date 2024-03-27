@@ -450,7 +450,10 @@ fn load_docs() {
     let expected = vec![
         (None, Some("An interface for docs tests\n")),
         (Some("User"), Some("This is a user\n")),
-        (Some("makeUser"), Some("Makes a user\n")),
+        (
+            Some("makeUser"),
+            Some("Makes a user\n\nTakes a name Str.\n"),
+        ),
         (Some("getName"), Some("Gets the user's name\n")),
         (Some("getNameExposed"), None),
     ]
