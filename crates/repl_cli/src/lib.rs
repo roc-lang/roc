@@ -5,6 +5,7 @@ use bumpalo::Bump;
 use const_format::concatcp;
 use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::{self};
 use roc_repl_eval::gen::Problems;
 use roc_repl_ui::colors::{CYAN, END_COL};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
@@ -13,8 +14,10 @@ use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
 use roc_target::TargetInfo;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
+use rustyline::Editor;
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
+use std::path::Path;
 use target_lexicon::Triple;
 
 use crate::cli_gen::eval_llvm;
@@ -36,7 +39,6 @@ pub struct ReplHelper {
 
 pub fn main() -> i32 {
     use rustyline::error::ReadlineError;
-    use rustyline::Editor;
 
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
@@ -46,6 +48,14 @@ pub fn main() -> i32 {
     let mut editor = Editor::<ReplHelper>::new();
     let repl_helper = ReplHelper::default();
     editor.set_helper(Some(repl_helper));
+
+    let history_cache = cache::roc_cache_dir().as_path().join(".repl_history");
+    if editor.load_history(&history_cache).is_err() {
+        println!("No previous history loaded.");
+    } else {
+        println!("History loaded successfully.");
+    }
+
     let target = Triple::host();
     let target_info = TargetInfo::from(&target);
     let mut arena = Bump::new();
@@ -87,14 +97,17 @@ pub fn main() -> i32 {
             }
             Err(ReadlineError::Eof) => {
                 // End of input; we're done!
+                save_history(&mut editor, &history_cache);
                 return 0;
             }
             Err(ReadlineError::Interrupted) => {
                 eprintln!("CTRL-C");
+                save_history(&mut editor, &history_cache);
                 return 1;
             }
             Err(err) => {
                 eprintln!("REPL error: {err:?}");
+                save_history(&mut editor, &history_cache);
                 return 1;
             }
         }
@@ -108,6 +121,14 @@ pub fn evaluate(
 ) -> String {
     let opt_output = opt_mono.and_then(|mono| eval_llvm(mono, target, OptLevel::Normal));
     format_output(ANSI_STYLE_CODES, opt_output, problems)
+}
+
+fn save_history(editor: &mut Editor<ReplHelper>, history_cache: &Path) {
+    if editor.save_history(&history_cache).is_err() {
+        eprintln!("Failed saving history.");
+    } else {
+        println!("History saved successfully.");
+    }
 }
 
 #[derive(Default)]

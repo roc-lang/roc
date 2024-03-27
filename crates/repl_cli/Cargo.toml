@@ -32,6 +32,7 @@ roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
 roc_error_macros = { path = "../error_macros" }
 roc_repl_ui = { path = "../repl_ui" }
+roc_packaging = {path = "../packaging"}
 
 tempfile.workspace = true
 bumpalo.workspace = true
