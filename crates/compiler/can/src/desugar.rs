@@ -133,6 +133,7 @@ fn desugar_value_def<'a>(
             }
         }
 
+        // We'll need to desugar into `Body({}=, ...)`
         Stmt(_) => todo!(),
     }
 }

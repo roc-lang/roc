@@ -353,14 +353,23 @@ pub fn is_loc_expr_suffixed(loc_expr: Loc<Expr>) -> bool {
 
         // expression with arguments, `line! "Foo"`
         Expr::Apply(sub_loc_expr, _, _) => is_loc_expr_suffixed(*sub_loc_expr),
-        _ => false,
-    }
-}
 
-pub fn is_valid_suffixed_statement(loc_expr: Loc<Expr>) -> bool {
-    match loc_expr.extract_spaces().item {
-        Expr::Var { suffixed, .. } => suffixed > 0,
-        Expr::Apply(sub_loc_expr, _, _) => is_valid_suffixed_statement(*sub_loc_expr),
+        // expression in a pipeline, `"hi" |> say!`
+        Expr::BinOps(chain, sub_loc_expr) => {
+            let sum: isize = chain
+                .into_iter()
+                .map(|(chain_loc_expr, _)| -> isize {
+                    if is_loc_expr_suffixed(*chain_loc_expr) {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .sum();
+
+            is_loc_expr_suffixed(*sub_loc_expr) || sum > 0
+        }
+
         _ => false,
     }
 }

@@ -98,7 +98,7 @@ Full {
             Index(2147483648),
         ],
         regions: [
-            @155-215,
+            @155-212,
         ],
         space_before: [
             Slice(start = 0, length = 2),
@@ -117,53 +117,128 @@ Full {
                     ident: "main",
                     suffixed: 0,
                 },
-                @166-215 SpaceBefore(
-                    BinOps(
-                        [
-                            (
-                                @166-195 SpaceAfter(
-                                    Apply(
-                                        @166-178 Var {
-                                            module_name: "Stdout",
-                                            ident: "line",
+                @155-212 Defs(
+                    Defs {
+                        tags: [
+                            Index(2147483648),
+                            Index(2147483649),
+                        ],
+                        regions: [
+                            @155-212,
+                            @241-284,
+                        ],
+                        space_before: [
+                            Slice(start = 0, length = 0),
+                            Slice(start = 0, length = 0),
+                        ],
+                        space_after: [
+                            Slice(start = 0, length = 0),
+                            Slice(start = 0, length = 0),
+                        ],
+                        spaces: [],
+                        type_defs: [],
+                        value_defs: [
+                            Stmt(
+                                @199-212 SpaceBefore(
+                                    BinOps(
+                                        [
+                                            (
+                                                @199-204 Str(
+                                                    PlainLine(
+                                                        "Foo",
+                                                    ),
+                                                ),
+                                                @205-207 Pizza,
+                                            ),
+                                        ],
+                                        @208-212 Var {
+                                            module_name: "A",
+                                            ident: "x",
                                             suffixed: 1,
                                         },
+                                    ),
+                                    [
+                                        Newline,
+                                        LineComment(
+                                            " is this a valid statement?",
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Stmt(
+                                @241-284 SpaceBefore(
+                                    BinOps(
                                         [
-                                            @179-184 Str(
-                                                PlainLine(
-                                                    "Foo",
-                                                ),
-                                            ),
-                                            @190-195 SpaceBefore(
-                                                Str(
+                                            (
+                                                @241-246 Str(
                                                     PlainLine(
                                                         "Bar",
                                                     ),
                                                 ),
-                                                [
-                                                    Newline,
-                                                    Newline,
-                                                ],
+                                                @247-249 Pizza,
                                             ),
                                         ],
-                                        Space,
+                                        @250-284 Apply(
+                                            @250-254 Var {
+                                                module_name: "B",
+                                                ident: "y",
+                                                suffixed: 1,
+                                            },
+                                            [
+                                                @264-284 SpaceBefore(
+                                                    Record(
+                                                        [
+                                                            @266-282 RequiredValue(
+                                                                @266-272 "config",
+                                                                [],
+                                                                @274-282 Str(
+                                                                    PlainLine(
+                                                                        "config",
+                                                                    ),
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    [
+                                                        Newline,
+                                                    ],
+                                                ),
+                                            ],
+                                            Space,
+                                        ),
                                     ),
                                     [
                                         Newline,
+                                        Newline,
+                                        LineComment(
+                                            " what about this?",
+                                        ),
                                     ],
                                 ),
-                                @201-203 Pizza,
                             ),
                         ],
-                        @204-215 Var {
-                            module_name: "Stdout",
-                            ident: "line",
-                            suffixed: 0,
-                        },
+                    },
+                    @290-299 SpaceBefore(
+                        Apply(
+                            @290-293 Var {
+                                module_name: "C",
+                                ident: "z",
+                                suffixed: 0,
+                            },
+                            [
+                                @294-299 Str(
+                                    PlainLine(
+                                        "Bar",
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
+                        [
+                            Newline,
+                            Newline,
+                        ],
                     ),
-                    [
-                        Newline,
-                    ],
                 ),
             ),
         ],
