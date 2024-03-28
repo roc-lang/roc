@@ -8,8 +8,11 @@ app "desugar-bang"
     provides [main] to cli
 
 main =
-    Stdout.line!
-        "Foo"
+    # is this a valid statement?
+    "Foo" |> A.x!
+    # what about this?
+    "Bar"
+    |> B.y!
+        { config: "config" }
 
-        "Bar"
-    |> Stdout.line
+    C.z "Bar"
