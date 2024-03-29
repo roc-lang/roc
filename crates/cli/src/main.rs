@@ -241,7 +241,11 @@ fn main() -> io::Result<()> {
                     user_specified_base_url,
                 ) {
                     Ok(()) => {
-                        println!("🎉 Docs generated in {}", out_dir.display());
+                        println!(
+                            "🎉 Docs generated into {} in {} ms",
+                            build_dir.display(),
+                            end_time
+                        );
                     }
                     Err(problem) => {
                         use roc_docs::Problem::*;

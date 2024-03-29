@@ -1,15 +1,6 @@
+use crate::render_type::{Indentation, TypeRenderer};
 use bumpalo::{collections::string::String, Bump};
-use const_format::formatcp;
-use core::{
-    fmt::{self, Write},
-    iter,
-};
-use roc_docs_types::TypeAnnotation; // TODO move this into its own no_std, no deps crate
-use roc_module::symbol::{IdentId, ModuleId}; // TODO move these into their own no_std, no deps crates
-use roc_types::{
-    subs::Variable,                  // TODO move this into its own no_std, no deps crate
-    types::{Alias, AliasKind, Type}, // TODO move this to top-level roc_types, and make it no_std and no deps
-};
+use core::fmt::{self, Write};
 
 /// A named heading in the sidebar, with some number of
 /// entries beneath it.
@@ -33,26 +24,33 @@ pub struct SidebarEntry<'a, StrIter> {
     pub doc_comment: Option<&'a str>,
 }
 
-pub struct RecordField<'a> {
+pub struct RecordField<'a, Type> {
     field_name: &'a str,
-    value_type: &'a Type,
+    value_type: Type,
     is_required: bool,
 }
 
-pub struct BodyEntry<'a, IdentId> {
+pub struct BodyEntry<'a, Type: fmt::Debug, IdentId: PartialEq + fmt::Debug> {
     pub entry_name: &'a str,
     pub ident_id: IdentId,
     pub type_vars_names: &'a [&'a str],
-    pub type_annotation: TypeAnnotation,
+    pub type_annotation: Type,
     pub docs: Option<&'a str>,
 }
 
 pub trait Docs<
     'a,
+    ModuleId: PartialEq + Copy + fmt::Debug + 'a,
+    IdentId: PartialEq + fmt::Debug + 'a,
+    Type: fmt::Debug + 'a,
+    Alias,
+    TypeVisitor: roc_docs_types::TypeVisitor<Type>,
     ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
-    Sidebar: Iterator<Item = SidebarEntry<'a, StrIter>>,
-    StrIter: Iterator<Item = &'a str>,
-    BodyEntries: Iterator<Item = BodyEntry<'a, IdentId>>,
+    Sidebar: Iterator<Item = &'a SidebarEntry<'a, StrIter>>,
+    StrIter: Iterator<Item = &'a &'a str> + 'a,
+    BodyEntries: Iterator<Item = &'a BodyEntry<'a, Type, IdentId>>,
+    VisitAbleVars: Iterator<Item = &'a (&'a str, TypesIter)>,
+    TypesIter: Iterator<Item = &'a Type> + 'a,
 >
 {
     // Required constants
@@ -70,12 +68,9 @@ pub trait Docs<
     fn base_url(&self, module_id: ModuleId) -> &'a str;
     fn module_name(&self, module_id: ModuleId) -> &'a str;
     fn ident_name(&self, module_id: ModuleId, ident_id: IdentId) -> &'a str;
-    fn opt_type(
-        &self,
-        module_id: ModuleId,
-        ident_id: IdentId,
-    ) -> Option<Result<&'a Type, Variable>>;
-    fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<&'a Alias>;
+    fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Type>;
+    fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Alias>;
+    fn visit_type(&self, renderer: &mut TypeRenderer<'_>, typ: Type);
 
     // Implementation
     fn render_to_disk<Problem>(
@@ -221,268 +216,30 @@ pub trait Docs<
                 "<div class='sidebar-entry'><a class='sidebar-module-link' href='{module_name}'>{module_name}</a><div class='sidebar-sub-entries'>",
             );
 
-            for name in exposed {
-                let _ = write!(buf, "<a href='{module_name}#{name}'>{name}</a>",);
-            }
+            // for name in exposed {
+            //     let _ = write!(buf, "<a href='{module_name}#{name}'>{name}</a>",);
+            // }
 
             buf.push_str("</div></div>");
         }
     }
 
-    fn render_type(
-        &self,
-        buf: &mut String<'_>,
-        indent: Indentation,
-        typ: &'a Type,
-        // Whether the type needs to be wrapped in parens (only matters if the rendered type contains spaces,
-        // e.g. function application or tags with payloads)
-        _wrap_in_parens: WrapInParens,
-    ) {
-        use Type::*;
+    fn render_type<F: Fn(&Self, Type)>(&self, arena: &'a Bump, buf: &'a mut String<'a>, typ: Type)
+    where
+        Self: Sized,
+    {
+        use roc_docs_types::TypeVisitor;
 
-        let todo = (); // TODO use wrap_in_parens
+        // TODO call this right after we've rendered a ":" or ":=" or "implements"
+        // (actually maybe "implements" should be different since that's not a type?)
+        let mut renderer = TypeRenderer::new(arena, buf);
 
-        match typ {
-            EmptyRec => self.render_record_type(buf, indent, iter::empty()),
-            EmptyTagUnion => self.render_tag_union_type(buf, indent, iter::empty()),
-            Function(args, _closure_size, ret) => {
-                if is_multiline(typ) {
-                    buf.push_str("(\n");
-                    self.render_function_type(buf, indent.increment(), args.iter(), &*ret);
-                    let _ = write!(buf, "{indent}(\n");
-                } else {
-                    buf.push_str("(");
-                    self.render_function_type(buf, indent, args.iter(), &*ret);
-                    buf.push_str(")");
-                }
-            }
-            Record(fields, _ext) => self.render_record_type(
-                buf,
-                indent,
-                fields.iter().map(|(field_name, field)| {
-                    use roc_types::types::RecordField::*;
-
-                    match field {
-                        Required(typ) | RigidRequired(typ) | Demanded(typ) => RecordField {
-                            field_name: field_name.as_str(),
-                            value_type: typ,
-                            is_required: true,
-                        },
-                        Optional(typ) | RigidOptional(typ) => RecordField {
-                            field_name: field_name.as_str(),
-                            value_type: typ,
-                            is_required: false,
-                        },
-                    }
-                }),
-            ),
-            Tuple(_, _) => todo!(),
-            TagUnion(tags, _ext) => self.render_tag_union_type(
-                buf,
-                indent,
-                tags.iter()
-                    .map(|(tag_name, payloads)| (tag_name.0.as_str(), payloads.as_slice())),
-            ),
-            FunctionOrTagUnion(_, _, _) => todo!(),
-            ClosureTag {
-                name: _,
-                captures: _,
-                ambient_function: _,
-            } => todo!(),
-            UnspecializedLambdaSet { unspecialized: _ } => todo!(),
-            DelayedAlias(_) => todo!(),
-            Alias {
-                symbol: _,
-                type_arguments: _,
-                lambda_set_variables: _,
-                infer_ext_in_output_types: _,
-                actual: _,
-                kind: _,
-            } => todo!(),
-            RecursiveTagUnion(_, _, _) => todo!(),
-            Apply(_, _, _) => todo!(),
-            Variable(_) => todo!(),
-            RangedNumber(_) => todo!(),
-            Error => todo!(),
-        }
-    }
-
-    fn render_record_type(
-        &self,
-        buf: &mut String<'_>,
-        indent: Indentation,
-        mut fields: impl ExactSizeIterator<Item = RecordField<'a>>,
-    ) {
-        const BRACES_CLASS_NAME: &str = "literal";
-        const OPEN_BRACE_HTML: &str = formatcp!("<span class='{BRACES_CLASS_NAME}'>{{</span>");
-        const CLOSE_BRACE_HTML: &str = formatcp!("<span class='{BRACES_CLASS_NAME}'>}}</span>");
-
-        match fields.next() {
-            None => {
-                // Empty records are just "{}"
-                let _ = write!(buf, "<span class='{BRACES_CLASS_NAME}'>{{}}</span>");
-            }
-            Some(RecordField {
-                field_name,
-                value_type,
-                is_required,
-            }) if fields.len() == 1 && !is_multiline(value_type) => {
-                let colon_or_question_mark = if is_required { ":" } else { "?" };
-
-                // If the record has one field, and that field's value is single-line,
-                // then we print the record on one line with spaces inside the braces
-                let _ = write!(
-                    buf,
-                    "{OPEN_BRACE_HTML} {field_name} {colon_or_question_mark} "
-                );
-                self.render_type(buf, indent, value_type, WrapInParens::Unnecessary);
-                let _ = write!(buf, " {CLOSE_BRACE_HTML}");
-            }
-            Some(first) => {
-                // Multi-field records are on multiple lines, with each line indented and ending in a trailing comma
-                let _ = write!(buf, "{indent}{OPEN_BRACE_HTML}");
-
-                {
-                    // Indent one extra level while we're inside the braces.
-                    let indent = indent.increment();
-
-                    for RecordField {
-                        field_name,
-                        value_type,
-                        is_required,
-                    } in iter::once(first).chain(fields)
-                    {
-                        let colon_or_question_mark = if is_required { ":" } else { "?" };
-
-                        let _ = write!(buf, "{indent}{field_name} {colon_or_question_mark} ");
-
-                        if is_multiline(value_type) {
-                            buf.push_str("\n");
-                        } else {
-                            buf.push_str(" ");
-                        }
-
-                        self.render_type(buf, indent, value_type, WrapInParens::Unnecessary);
-
-                        // Put a trailing comma at the end of each line.
-                        buf.push_str(",");
-                    }
-                }
-
-                // The closing brace goes on its own line, indented.
-                let _ = write!(buf, "{indent}{CLOSE_BRACE_HTML}");
-            }
-        }
-    }
-
-    fn render_tag_union_type(
-        &self,
-        buf: &mut String<'_>,
-        indent: Indentation,
-        mut tags: impl ExactSizeIterator<Item = (&'a str, &'a [Type])>,
-    ) {
-        const BRACES_CLASS_NAME: &str = "literal";
-        const TAG_CLASS_NAME: &str = "literal";
-        const OPEN_BRACE_HTML: &str = formatcp!("<span class='{BRACES_CLASS_NAME}'>[</span>");
-        const CLOSE_BRACE_HTML: &str = formatcp!("<span class='{BRACES_CLASS_NAME}'>]</span>");
-
-        match tags.next() {
-            None => {
-                // Empty tag unions are just "[]"
-                let _ = write!(buf, "<span class='{BRACES_CLASS_NAME}'>[]</span>");
-            }
-            Some((tag, payloads)) if tags.len() == 1 && !payloads.iter().any(is_multiline) => {
-                // Single-line tag unions don't have spaces inside the braces
-                let _ = write!(
-                    buf,
-                    "{OPEN_BRACE_HTML}<span class='{TAG_CLASS_NAME}'>{tag}</span>"
-                );
-
-                for typ in payloads.iter() {
-                    buf.push_str(" ");
-                    self.render_type(buf, indent, typ, WrapInParens::NeededIfWhitespace);
-                }
-
-                buf.push_str(CLOSE_BRACE_HTML);
-            }
-            Some(first) => {
-                // Multi-tag unions are on multiple lines, with each line indented and ending in a trailing comma
-                let _ = write!(buf, "{indent}{OPEN_BRACE_HTML}");
-
-                {
-                    // Indent one extra level while we're inside the braces.
-                    let indent = indent.increment();
-
-                    for (tag, payloads) in iter::once(first).chain(tags) {
-                        let _ = write!(buf, "{indent}<span class='{TAG_CLASS_NAME}'>{tag}</span>");
-
-                        for typ in payloads.iter() {
-                            buf.push_str(" ");
-                            self.render_type(buf, indent, typ, WrapInParens::NeededIfWhitespace);
-                        }
-
-                        // Put a trailing comma at the end of each line.
-                        let _ = buf.push_str(",");
-                    }
-                }
-
-                // The closing brace goes on its own line, indented.
-                let _ = write!(buf, "{indent}{CLOSE_BRACE_HTML}");
-            }
-        }
-    }
-
-    fn render_function_type(
-        &self,
-        buf: &mut String<'_>,
-        indent: Indentation,
-        mut args: impl ExactSizeIterator<Item = &'a Type>,
-        ret: &'a Type,
-    ) {
-        let args_len = args.len();
-
-        // Render args as multiline if the function has more than 3 args, or if any args are multiline
-        if args_len > 3 || args.any(is_multiline) {
-            let indent = indent.increment();
-
-            for (index, arg) in args.enumerate() {
-                let _ = write!(buf, "\n{indent}");
-
-                self.render_type(buf, indent, arg, WrapInParens::Unnecessary);
-
-                if index < args_len - 1 {
-                    // Put a comma at the end of each line except the last one,
-                    // because the -> is next.
-                    buf.push_str(",");
-                }
-            }
-
-            let _ = write!(buf, "\n{indent}->");
-        } else {
-            for (index, arg) in args.enumerate() {
-                self.render_type(buf, indent, arg, WrapInParens::Unnecessary);
-
-                if index < args_len - 1 {
-                    // Put a comma at the end of each line except the last one,
-                    // because the -> is next.
-                    buf.push_str(", ");
-                }
-            }
-
-            buf.push_str(" ->");
-        }
-
-        let indent = if is_multiline(ret) {
-            let _ = write!(buf, "\n{indent}");
-
-            indent.increment()
-        } else {
-            buf.push_str(" ");
-
-            indent
-        };
-
-        self.render_type(buf, indent, ret, WrapInParens::Unnecessary);
+        renderer.render(
+            |renderer, typ| {
+                self.visit_type(renderer, typ);
+            },
+            typ,
+        );
     }
 
     fn render_absolute_url(&self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
@@ -498,6 +255,7 @@ pub trait Docs<
     }
 
     fn render_module(&self, arena: &'a Bump, module_id: ModuleId, buf: &mut String<'_>) {
+        /*
         let indent = Indentation::default();
         let module_name = self.module_name(module_id);
         let _ = write!(
@@ -515,7 +273,7 @@ pub trait Docs<
                         "<section><h3 id='{name}' class='entry-name'><a href='{module_name}#{name}'>{name}</a>"
                     );
 
-            if matches!(type_ann, TypeAnnotation::Ability { .. }) {
+            if matches!(type_ann, Type::Ability { .. }) {
                 // Ability declarations don't have ":" after the name, just `implements`
                 buf.push_str(" <span class='kw'>implements</span>");
                 let todo = (); // TODO render ability declaration here
@@ -714,6 +472,8 @@ pub trait Docs<
 
         //     buf.push_str("</section>");
         // }
+            */
+        todo!();
     }
 }
 
@@ -721,11 +481,11 @@ pub fn render_package_name_link(name: &str, buf: &mut String<'_>) {
     let _ = write!(buf, "<h1 class='pkg-full-name'><a href='/'>{name}</a></h1>");
 }
 
-fn is_multiline(_first: &Type) -> bool {
-    let todo = ();
+// fn is_multiline(_first: &Type) -> bool {
+//     let todo = ();
 
-    true
-}
+//     true
+// }
 
 fn advance_past<'a>(needle: &'static str, src: &'a str, buf: &mut String<'_>) -> &'a str {
     if let Some(start_index) = src.find(needle) {
@@ -764,42 +524,37 @@ fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut St
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct Indentation {
-    level: u32,
-}
-
-#[derive(Clone, Copy)]
-enum WrapInParens {
-    Unnecessary,
-    NeededIfWhitespace,
-}
-
-impl Indentation {
-    const INDENT_STR: &str = "    ";
-
-    pub fn increment(self) -> Self {
-        Self {
-            level: self.level.saturating_add(1),
-        }
-    }
-
-    pub fn decrement(self) -> Self {
-        Self {
-            level: self.level.saturating_sub(1),
-        }
-    }
-}
-
-impl fmt::Display for Indentation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Always start with a newline before indenting
-        f.write_char('\n')?;
-
-        for _ in 0..self.level {
-            f.write_str(Self::INDENT_STR)?;
-        }
-
-        Ok(())
-    }
-}
+// fn render_type_inner<
+//     'a,
+//     ModuleId: PartialEq + fmt::Debug + 'a,
+//     IdentId: PartialEq + fmt::Debug,
+//     ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
+//     Sidebar: Iterator<Item = SidebarEntry<'a, StrIter>>,
+//     StrIter: Iterator<Item = &'a str>,
+//     Type: fmt::Debug,
+//     Alias,
+//     BodyEntries: Iterator<Item = BodyEntry<'a, Type, IdentId>>,
+//     TypeVisitor: roc_docs_types::TypeVisitor<&'a str, StrIter, VisitType, VisitAbleVars>,
+//     VisitType: Fn(&mut TypeVisitor),
+//     VisitAbleVars: Iterator<Item = (&'a str, TypesIter)>,
+//     TypesIter: Iterator<Item = Type>,
+// >(
+//     capture: &impl Docs<
+//         'a,
+//         ModuleId,
+//         IdentId,
+//         ModuleNames,
+//         Sidebar,
+//         StrIter,
+//         Type,
+//         Alias,
+//         BodyEntries,
+//         TypeVisitor,
+//         VisitType,
+//         VisitAbleVars,
+//         TypesIter,
+//     >,
+//     typ: Type,
+// ) {
+//     capture.visit_type(typ)
+// }

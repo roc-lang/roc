@@ -11,6 +11,7 @@ version.workspace = true
 roc_builtins = { path = "../compiler/builtins" }
 roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight" }
+roc_can = { path = "../compiler/can" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_packaging = { path = "../packaging" }
@@ -20,6 +21,8 @@ roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
+roc_docs_render = { path = "../docs_render" }
+roc_docs_types = { path = "../docs_types" }
 
 bumpalo.workspace = true
 const_format.workspace = true

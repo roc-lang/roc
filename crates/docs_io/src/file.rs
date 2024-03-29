@@ -1,6 +1,10 @@
 use crate::problem::Problem;
 use bumpalo::Bump;
-use std::{fs, io::ErrorKind, path::Path};
+use std::{
+    fs,
+    io::{self, ErrorKind},
+    path::Path,
+};
 
 pub struct Assets<S: AsRef<str>> {
     pub search_js: S,
@@ -16,16 +20,9 @@ pub fn populate_build_dir<'a, S: AsRef<str>>(
 ) -> Result<(), Problem> {
     // Clear out the generated-docs dir (we'll create a fresh one at the end)
 
-    // TODO it would be better UX if, instead of removing the dir and then
-    // recreating it, we:
-    // 1. Try to create the dir (recursively creating intermediate dirs as necessary)
-    // 2. If the final dir already existed, recursively delete its contents, but don't delete the dir itself
-    //
-    // This way, you could leave a http-server instance running in the dir while regenerating its contents,
-    // instead of today where it has to be restarted peridoically because the dir it's running in gets deleted.
-
-    remove_dir_all(arena, build_dir)?;
-    create_dir_all(arena, build_dir)?;
+    if let CreationOutcome::AlreadyExisted = create_dir_all(arena, build_dir)? {
+        delete_dir_contents(arena, build_dir)?;
+    }
 
     // Write CSS, JS, and favicon
     // (The HTML requires more work!)
@@ -48,30 +45,66 @@ pub fn populate_build_dir<'a, S: AsRef<str>>(
     Ok(())
 }
 
-pub fn create_dir_all<'a>(_arena: &'a Bump, dir: &Path) -> Result<(), Problem> {
-    // TODO in the future, this will make use of the arena when we're using bump-allocated paths.
-    fs::create_dir_all(dir).or_else(|io_err| {
-        // If we failed to create the directory because it already exists, that's fine.
-        match io_err.kind() {
-            ErrorKind::AlreadyExists => Ok(()),
-            _ => Err(Problem::FailedToCreateDir(dir.to_path_buf(), io_err)),
-        }
-    })
+#[derive(Debug)]
+pub enum CreationOutcome {
+    AlreadyExisted,
+    DidNotExist,
 }
 
-pub fn remove_dir_all<'a>(_arena: &'a Bump, dir: &Path) -> Result<(), Problem> {
+fn create_dir_all<'a>(_arena: &'a Bump, dir: &Path) -> Result<CreationOutcome, Problem> {
     // TODO in the future, this will make use of the arena when we're using bump-allocated paths.
-    fs::remove_dir_all(dir).or_else(|io_err| {
-        // If we failed to delete the directory because it already doesn't exist, that's fine.
-        match io_err.kind() {
-            ErrorKind::NotFound => Ok(()),
-            _ => return Err(Problem::FailedToDeleteDir(dir.to_path_buf(), io_err)),
+    match fs::create_dir_all(dir) {
+        Ok(_) => Ok(CreationOutcome::DidNotExist),
+        Err(io_err) => {
+            // If we failed to create the directory because it already exists, that's fine.
+            match io_err.kind() {
+                ErrorKind::AlreadyExists => Ok(CreationOutcome::AlreadyExisted),
+                _ => Err(Problem::FailedToCreateDir(dir.to_path_buf(), io_err)),
+            }
         }
-    })
+    }
 }
 
-pub fn write<'a>(_arena: &'a Bump, file: &Path, contents: impl AsRef<[u8]>) -> Result<(), Problem> {
+fn delete_dir_contents<'a>(arena: &'a Bump, dir: &Path) -> Result<(), Problem> {
+    let to_problem = |io_err: io::Error| Problem::FailedToDeleteDir(dir.to_path_buf(), io_err);
+
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir).map_err(to_problem)? {
+            let entry = entry.map_err(to_problem)?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                delete_dir_contents(arena, &path)?;
+                fs::remove_dir(&path).map_err(to_problem)?;
+            } else {
+                fs::remove_file(&path).map_err(to_problem)?;
+            }
+        }
+    } else {
+        fs::remove_dir_all(dir)
+            .or_else(|io_err| {
+                // If we failed to delete the directory because it already doesn't exist, that's fine.
+                match io_err.kind() {
+                    ErrorKind::NotFound => Ok(()),
+                    _ => Err(io_err),
+                }
+            })
+            .map_err(to_problem)?;
+
+        create_dir_all(arena, dir)?;
+    }
+
+    Ok(())
+}
+
+pub fn write<'a>(
+    _arena: &'a Bump,
+    file_path: impl AsRef<Path>,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), Problem> {
+    let file_path = file_path.as_ref();
+
     // TODO in the future, this will make use of the arena when we're using bump-allocated paths.
-    fs::write(&file, contents.as_ref())
-        .map_err(|io_err| Problem::FailedToWrite(file.to_path_buf(), io_err))
+    fs::write(file_path, contents.as_ref())
+        .map_err(|io_err| Problem::FailedToWrite(file_path.to_path_buf(), io_err))
 }

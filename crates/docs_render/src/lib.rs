@@ -1,6 +1,8 @@
 //! Generates html documentation from Roc files. Used for things like
 //! [roc-lang.org/builtins/Num](https://www.roc-lang.org/builtins/Num).
 
-mod render;
+mod render_package;
+mod render_type;
 
-pub use render::Docs;
+pub use render_package::{BodyEntry, Docs, RecordField, SidebarEntry};
+pub use render_type::TypeRenderer;
