@@ -72,18 +72,23 @@ impl<'a> Env<'a> {
 
         let module_name = ModuleName::from(module_name_str);
 
-        match self.module_ids.get_id(&module_name) {
-            Some(module_id) => self.qualified_lookup_help(scope, module_id, ident, region),
-            None => Err(RuntimeError::ModuleNotImported {
-                module_name,
-                imported_modules: self
-                    .module_ids
-                    .available_modules()
-                    .map(|string| string.as_ref().into())
-                    .collect(),
-                region,
-                module_exists: false,
-            }),
+        match scope.get_alias_import_module_id(module_name_str) {
+            Some(module_id) => self.qualified_lookup_help(scope, *module_id, true, ident, region),
+            None => match self.module_ids.get_id(&module_name) {
+                Some(module_id) => {
+                    self.qualified_lookup_help(scope, module_id, false, ident, region)
+                }
+                None => Err(RuntimeError::ModuleNotImported {
+                    module_name,
+                    imported_modules: self
+                        .module_ids
+                        .available_modules()
+                        .map(|string| string.as_ref().into())
+                        .collect(),
+                    region,
+                    module_exists: false,
+                }),
+            },
         }
     }
 
@@ -94,7 +99,7 @@ impl<'a> Env<'a> {
         ident: &str,
         region: Region,
     ) -> Result<Symbol, RuntimeError> {
-        self.qualified_lookup_help(scope, module_id, ident, region)
+        self.qualified_lookup_help(scope, module_id, false, ident, region)
     }
 
     /// Returns Err if the symbol resolved, but it was not exposed by the given module
@@ -102,6 +107,7 @@ impl<'a> Env<'a> {
         &mut self,
         scope: &Scope,
         module_id: ModuleId,
+        is_alias_import: bool,
         ident: &str,
         region: Region,
     ) -> Result<Symbol, RuntimeError> {
@@ -141,7 +147,9 @@ impl<'a> Env<'a> {
             }
         } else {
             match self.dep_idents.get(&module_id) {
-                Some(exposed_ids) if scope.has_imported_module(&module_id) => {
+                Some(exposed_ids)
+                    if is_alias_import || scope.has_imported_unaliased_module(&module_id) =>
+                {
                     match exposed_ids.get_id(ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);

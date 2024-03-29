@@ -40,6 +40,12 @@ pub enum Problem {
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
+    ImportAliasConflict {
+        alias: String,
+        conflict: ImportAliasConflict,
+        module_id: ModuleId,
+        region: Region,
+    },
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -213,6 +219,13 @@ pub enum Problem {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImportAliasConflict {
+    Alias(ModuleId, Region),
+    Module(Region),
+    Builtin,
+}
+
 impl Problem {
     pub fn severity(&self) -> Severity {
         use Severity::{Fatal, RuntimeError, Warning};
@@ -221,6 +234,7 @@ impl Problem {
             Problem::UnusedDef(_, _) => Warning,
             Problem::UnusedImport(_, _) => Warning,
             Problem::UnusedModuleImport(_, _) => Warning,
+            Problem::ImportAliasConflict { .. } => RuntimeError,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
@@ -295,6 +309,7 @@ impl Problem {
             }
             | Problem::UnusedImport(_, region)
             | Problem::UnusedModuleImport(_, region)
+            | Problem::ImportAliasConflict { region, .. }
             | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
