@@ -73,7 +73,7 @@ EncoderFormatting implements
 
 ## Creates a custom encoder from a given function.
 ##
-## ```
+## ```roc
 ## expect
 ##     # Appends the byte 42
 ##     customEncoder = Encode.custom (\bytes, _fmt -> List.append bytes 42)
@@ -91,7 +91,7 @@ appendWith = \lst, @Encoder doEncoding, fmt -> doEncoding lst fmt
 
 ## Appends the encoded representation of a value to an existing list of bytes.
 ##
-## ```
+## ```roc
 ## expect
 ##     actual = Encode.append [] { foo: 43 } Core.json
 ##     expected = Str.toUtf8 """{"foo":43}"""
@@ -103,7 +103,7 @@ append = \lst, val, fmt -> appendWith lst (toEncoder val) fmt
 
 ## Encodes a value to a list of bytes (`List U8`) according to the specified format.
 ##
-## ```
+## ```roc
 ## expect
 ##     fooRec = { foo: 42 }
 ##

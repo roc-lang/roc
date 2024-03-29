@@ -51,7 +51,7 @@ import Inspect exposing [Inspect, Inspector, InspectFormatter]
 ##
 ## Here's an example of a dictionary which uses a city's name as the key, and
 ## its population as the associated value.
-## ```
+## ```roc
 ## populationByCity =
 ##     Dict.empty {}
 ##     |> Dict.insert "London" 8_961_989
@@ -72,7 +72,7 @@ import Inspect exposing [Inspect, Inspector, InspectFormatter]
 ## ## Removing
 ##
 ## We can remove an element from the dictionary, like so:
-## ```
+## ```roc
 ## populationByCity
 ##     |> Dict.remove "Philadelphia"
 ##     |> Dict.keys
@@ -133,7 +133,7 @@ toInspectorDict = \dict ->
     Inspect.apply (Inspect.dict dict walk Inspect.toInspector Inspect.toInspector) fmt
 
 ## Return an empty dictionary.
-## ```
+## ```roc
 ## emptyDict = Dict.empty {}
 ## ```
 empty : {} -> Dict * *
@@ -198,7 +198,7 @@ releaseExcessCapacity = \@Dict { buckets, data, maxBucketCapacity: originalMaxBu
         @Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }
 
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
-## ```
+## ```roc
 ## foodDict =
 ##     Dict.empty {}
 ##     |> Dict.insert "apple" "fruit"
@@ -210,7 +210,7 @@ capacity = \@Dict { maxBucketCapacity } ->
     maxBucketCapacity
 
 ## Returns a dictionary containing the key and value provided as input.
-## ```
+## ```roc
 ## expect
 ##     Dict.single "A" "B"
 ##     |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
@@ -220,7 +220,7 @@ single = \k, v ->
     insert (empty {}) k v
 
 ## Returns dictionary with the keys and values specified by the input [List].
-## ```
+## ```roc
 ## expect
 ##     Dict.single 1 "One"
 ##     |> Dict.insert 2 "Two"
@@ -239,7 +239,7 @@ fromList = \data ->
     List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
-## ```
+## ```roc
 ## expect
 ##     Dict.empty {}
 ##     |> Dict.insert "One" "A Song"
@@ -253,7 +253,7 @@ len = \@Dict { data } ->
     List.len data
 
 ## Check if the dictionary is empty.
-## ```
+## ```roc
 ## Dict.isEmpty (Dict.empty {} |> Dict.insert "key" 42)
 ##
 ## Dict.isEmpty (Dict.empty {})
@@ -263,7 +263,7 @@ isEmpty = \@Dict { data } ->
     List.isEmpty data
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
-## ```
+## ```roc
 ## songs =
 ##        Dict.empty {}
 ##        |> Dict.insert "One" "A Song"
@@ -310,7 +310,7 @@ joinMap = \dict, transform ->
 ## Iterate through the keys and values in the dictionary and call the provided
 ## function with signature `state, k, v -> state` for each value, with an
 ## initial `state` value provided for the first call.
-## ```
+## ```roc
 ## expect
 ##     Dict.empty {}
 ##     |> Dict.insert "Apples" 12
@@ -333,7 +333,7 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## As such, it is typically better for performance to use this over [Dict.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
-## ```
+## ```roc
 ## people =
 ##     Dict.empty {}
 ##     |> Dict.insert "Alice" 17
@@ -356,7 +356,7 @@ walkUntil = \@Dict { data }, initialState, transform ->
 
 ## Run the given function on each key-value pair of a dictionary, and return
 ## a dictionary with just the pairs for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## expect Dict.empty {}
 ##     |> Dict.insert "Alice" 17
 ##     |> Dict.insert "Bob" 18
@@ -382,7 +382,7 @@ keepIfHelp = \@Dict dict, predicate, index, length ->
 
 ## Run the given function on each key-value pair of a dictionary, and return
 ## a dictionary with just the pairs for which the function returned `Bool.false`.
-## ```
+## ```roc
 ## expect Dict.empty {}
 ##     |> Dict.insert "Alice" 17
 ##     |> Dict.insert "Bob" 18
@@ -397,7 +397,7 @@ dropIf = \dict, predicate ->
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
-## ```
+## ```roc
 ## dictionary =
 ##     Dict.empty {}
 ##     |> Dict.insert 1 "Apple"
@@ -412,7 +412,7 @@ get = \dict, key ->
     |> .result
 
 ## Check if the dictionary has a value for a specified key.
-## ```
+## ```roc
 ## expect
 ##     Dict.empty {}
 ##     |> Dict.insert 1234 "5678"
@@ -426,7 +426,7 @@ contains = \dict, key ->
     |> Result.isOk
 
 ## Insert a value into the dictionary at a specified key.
-## ```
+## ```roc
 ## expect
 ##     Dict.empty {}
 ##     |> Dict.insert "Apples" 12
@@ -470,7 +470,7 @@ insertHelper = \buckets0, data0, bucketIndex0, distAndFingerprint0, key, value, 
         insertHelper buckets0 data0 bucketIndex1 distAndFingerprint1 key value maxBucketCapacity maxLoadFactor shifts
 
 ## Remove a value from the dictionary for a specified key.
-## ```
+## ```roc
 ## expect
 ##     Dict.empty {}
 ##     |> Dict.insert "Some" "Value"
@@ -508,7 +508,7 @@ removeHelper = \buckets, bucketIndex, distAndFingerprint, data, key ->
 ## performance optimization for the use case of providing a default when a value
 ## is missing. This is more efficient than doing both a `Dict.get` and then a
 ## `Dict.insert` call, and supports being piped.
-## ```
+## ```roc
 ## alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
 ## alterValue = \possibleValue ->
 ##     when possibleValue is
@@ -571,7 +571,7 @@ circularDist = \start, end, size ->
 
 ## Returns the keys and values of a dictionary as a [List].
 ## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
-## ```
+## ```roc
 ## expect
 ##     Dict.single 1 "One"
 ##     |> Dict.insert 2 "Two"
@@ -586,7 +586,7 @@ toList = \@Dict { data } ->
 
 ## Returns the keys of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
-## ```
+## ```roc
 ## expect
 ##     Dict.single 1 "One"
 ##     |> Dict.insert 2 "Two"
@@ -601,7 +601,7 @@ keys = \@Dict { data } ->
 
 ## Returns the values of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
-## ```
+## ```roc
 ## expect
 ##     Dict.single 1 "One"
 ##     |> Dict.insert 2 "Two"
@@ -619,7 +619,7 @@ values = \@Dict { data } ->
 ## both dictionaries will be combined. Note that where there are pairs
 ## with the same key, the value contained in the second input will be
 ## retained, and the value in the first input will be removed.
-## ```
+## ```roc
 ## first =
 ##     Dict.single 1 "Not Me"
 ##     |> Dict.insert 2 "And Me"
@@ -648,7 +648,7 @@ insertAll = \xs, ys ->
 ## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the key-value pairs. This means that we keep only those pairs
 ## that are in both dictionaries. Both the key and value must match to be kept.
-## ```
+## ```roc
 ## first =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
@@ -689,7 +689,7 @@ keepShared = \xs0, ys0 ->
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
 ## of the values. This means that we will be left with only those pairs that
 ## are in the first dictionary and whose keys are not in the second.
-## ```
+## ```roc
 ## first =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"

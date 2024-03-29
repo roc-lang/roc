@@ -66,7 +66,7 @@ toInspectorSet = \set ->
     Inspect.apply (Inspect.set set walk Inspect.toInspector) fmt
 
 ## Creates a new empty `Set`.
-## ```
+## ```roc
 ## emptySet = Set.empty {}
 ## countValues = Set.len emptySet
 ##
@@ -95,7 +95,7 @@ releaseExcessCapacity = \@Set dict ->
     @Set (Dict.releaseExcessCapacity dict)
 
 ## Creates a new `Set` with a single value.
-## ```
+## ```roc
 ## singleItemSet = Set.single "Apple"
 ## countValues = Set.len singleItemSet
 ##
@@ -106,7 +106,7 @@ single = \key ->
     Dict.single key {} |> @Set
 
 ## Insert a value into a `Set`.
-## ```
+## ```roc
 ## fewItemSet =
 ##     Set.empty {}
 ##     |> Set.insert "Apple"
@@ -139,7 +139,7 @@ expect
     expected == actual
 
 ## Counts the number of values in a given `Set`.
-## ```
+## ```roc
 ## fewItemSet =
 ##     Set.empty {}
 ##     |> Set.insert "Apple"
@@ -155,7 +155,7 @@ len = \@Set dict ->
     Dict.len dict
 
 ## Returns the max number of elements the set can hold before requiring a rehash.
-## ```
+## ```roc
 ## foodSet =
 ##     Set.empty {}
 ##     |> Set.insert "apple"
@@ -167,7 +167,7 @@ capacity = \@Set dict ->
     Dict.capacity dict
 
 ## Check if the set is empty.
-## ```
+## ```roc
 ## Set.isEmpty (Set.empty {} |> Set.insert 42)
 ##
 ## Set.isEmpty (Set.empty {})
@@ -189,7 +189,7 @@ expect
     actual == 3
 
 ## Removes the value from the given `Set`.
-## ```
+## ```roc
 ## numbers =
 ##     Set.empty {}
 ##     |> Set.insert 10
@@ -207,7 +207,7 @@ remove = \@Set dict, key ->
     Dict.remove dict key |> @Set
 
 ## Test if a value is in the `Set`.
-## ```
+## ```roc
 ## Fruit : [Apple, Pear, Banana]
 ##
 ## fruit : Set Fruit
@@ -226,7 +226,7 @@ contains = \@Set dict, key ->
     Dict.contains dict key
 
 ## Retrieve the values in a `Set` as a `List`.
-## ```
+## ```roc
 ## numbers : Set U64
 ## numbers = Set.fromList [1,2,3,4,5]
 ##
@@ -239,7 +239,7 @@ toList = \@Set dict ->
     Dict.keys dict
 
 ## Create a `Set` from a `List` of values.
-## ```
+## ```roc
 ## values =
 ##     Set.empty {}
 ##     |> Set.insert Banana
@@ -259,7 +259,7 @@ fromList = \list ->
 ## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the values pairs. This means that all of the values in both `Set`s
 ## will be combined.
-## ```
+## ```roc
 ## set1 = Set.single Left
 ## set2 = Set.single Right
 ##
@@ -272,7 +272,7 @@ union = \@Set dict1, @Set dict2 ->
 ## Combine two `Set`s by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the values pairs. This means that we keep only those values that are
 ## in both `Set`s.
-## ```
+## ```roc
 ## set1 = Set.fromList [Left, Other]
 ## set2 = Set.fromList [Left, Right]
 ##
@@ -286,7 +286,7 @@ intersection = \@Set dict1, @Set dict2 ->
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
 ## of the values. This means that we will be left with only those values that
 ## are in the first and not in the second.
-## ```
+## ```roc
 ## first = Set.fromList [Left, Right, Up, Down]
 ## second = Set.fromList [Left, Right]
 ##
@@ -297,7 +297,7 @@ difference = \@Set dict1, @Set dict2 ->
     Dict.removeAll dict1 dict2 |> @Set
 
 ## Iterate through the values of a given `Set` and build a value.
-## ```
+## ```roc
 ## values = Set.fromList ["March", "April", "May"]
 ##
 ## startsWithLetterM = \month ->
@@ -343,7 +343,7 @@ joinMap = \set, transform ->
 
 ## Iterate through the values of a given `Set` and build a value, can stop
 ## iterating part way through the collection.
-## ```
+## ```roc
 ## numbers = Set.fromList [1,2,3,4,5,6,42,7,8,9,10]
 ##
 ## find42 = \state, k ->
@@ -362,7 +362,7 @@ walkUntil = \@Set dict, state, step ->
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## expect Set.fromList [1,2,3,4,5]
 ##     |> Set.keepIf \k -> k >= 3
 ##     |> Bool.isEq (Set.fromList [3,4,5])
@@ -373,7 +373,7 @@ keepIf = \@Set dict, predicate ->
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.false`.
-## ```
+## ```roc
 ## expect Set.fromList [1,2,3,4,5]
 ##     |> Set.dropIf \k -> k >= 3
 ##     |> Bool.isEq (Set.fromList [1,2])

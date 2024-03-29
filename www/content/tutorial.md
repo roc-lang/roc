@@ -1259,14 +1259,14 @@ This type says `abs` takes a number and then returns a number of the same type. 
 There's also an `Int` type which is only compatible with integers, and a `Frac` type which is only compatible with fractions. For example:
 
 ```roc
-Num.xor : Int a, Int a -> Int a
+Num.bitwiseXor : Int a, Int a -> Int a
 ```
 
 ```roc
 Num.cos : Frac a -> Frac a
 ```
 
-When you write a number literal in Roc, it has the type `Num *`. So you could call `Num.xor 1 1` and also `Num.cos 1` and have them all work as expected; the number literal `1` has the type `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason, you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
+When you write a number literal in Roc, it has the type `Num *`. So you could call `Num.bitwiseXor 1 1` and also `Num.cos 1` and have them all work as expected; the number literal `1` has the type `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason, you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
 ### [Number Literals](#number-literals) {#number-literals}
 

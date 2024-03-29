@@ -8,13 +8,13 @@ module [box, unbox]
 ## the value from the stack to the heap. This may provide a performance
 ## optimization for advanced use cases with large values. A platform may require
 ## that some values are boxed.
-## ```
+## ```roc
 ## expect Box.unbox (Box.box "Stack Faster") == "Stack Faster"
 ## ```
 box : a -> Box a
 
 ## Returns a boxed value.
-## ```
+## ```roc
 ## expect Box.unbox (Box.box "Stack Faster") == "Stack Faster"
 ## ```
 unbox : Box a -> a

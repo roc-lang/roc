@@ -977,6 +977,48 @@ impl<'a> Defs<'a> {
         })
     }
 
+    pub fn remove_value_def(&mut self, index: usize) {
+        match self
+            .tags
+            .get(index)
+            .expect("got an invalid index for Defs")
+            .split()
+        {
+            Ok(type_index) => {
+                let index = type_index.index();
+
+                // remove from vec
+                self.type_defs.remove(index);
+
+                // update all of the remaining indexes in type_defs
+                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+                    // only update later indexes into type_defs
+                    if tag_index > index && tag.split().is_ok() {
+                        tag.decrement_index();
+                    }
+                }
+            }
+            Err(value_index) => {
+                let index: usize = value_index.index();
+
+                // remove from vec
+                self.value_defs.remove(index);
+
+                // update all of the remaining indexes in value_defs
+                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+                    // only update later indexes into value_defs
+                    if tag_index > index && tag.split().is_err() {
+                        tag.decrement_index();
+                    }
+                }
+            }
+        }
+        self.tags.remove(index);
+        self.regions.remove(index);
+        self.space_after.remove(index);
+        self.space_before.remove(index);
+    }
+
     /// NOTE assumes the def itself is pushed already!
     fn push_def_help(
         &mut self,
@@ -1032,6 +1074,55 @@ impl<'a> Defs<'a> {
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
+
+    // Find the first definition that is a Apply Suffixed
+    // We need the tag_index so we can use it to remove the value
+    // We need the value index to know if it is the first
+    pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
+        for (tag_index, tag) in self.tags.iter().enumerate() {
+            if let Err(value_index) = tag.split() {
+                let index = value_index.index();
+
+                if let ValueDef::Body(_, expr) = &self.value_defs[index] {
+                    // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
+                    if let Expr::Apply(sub_expr, _, _) = expr.value {
+                        if let Expr::Suffixed(_) = sub_expr.value {
+                            return Some((tag_index, index));
+                        }
+                    }
+
+                    // The Suffixed has NO arguments applied e.g. `Stdin.line!`
+                    if let Expr::Suffixed(_) = expr.value {
+                        return Some((tag_index, index));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
+    pub fn split_values_either_side_of(&self, index: usize) -> SplitDefsAround {
+        let mut before = self.clone();
+        let mut after = self.clone();
+
+        before.tags = self.tags[0..index].to_vec();
+
+        if index >= self.tags.len() {
+            after.tags = self.tags.clone();
+            after.tags.clear();
+        } else {
+            after.tags = self.tags[(index + 1)..].to_vec();
+        }
+
+        SplitDefsAround { before, after }
+    }
+}
+
+pub struct SplitDefsAround<'a> {
+    pub before: Defs<'a>,
+    pub after: Defs<'a>,
 }
 
 /// Should always be a zero-argument `Apply`; we'll check this in canonicalization

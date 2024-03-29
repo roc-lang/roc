@@ -5,7 +5,7 @@
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://roc-lang.org/tutorial)
 - [**docs** for the standard library](https://www.roc-lang.org/builtins)
-- [**examples**](https://github.com/roc-lang/examples/tree/main/examples)
+- [**examples**](https://www.roc-lang.org/examples)
 - [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/www/content/faq.md)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
@@ -33,6 +33,7 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+* [Krzysztof G.](https://github.com/krzysztofgb)
 * [Sam Mohr](https://github.com/smores56)
 * [Steven Chen](https://github.com/megakilo)
 * [Drew Lazzeri](https://github.com/asteroidb612)
