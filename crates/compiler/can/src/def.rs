@@ -1094,6 +1094,7 @@ fn canonicalize_value_defs<'a>(
                 imports_introduced.push(introduced_import);
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
+            PendingValue::ImportAliasConflict => { /* skip */ }
         }
     }
 
@@ -2832,6 +2833,7 @@ enum PendingValue<'a> {
     ModuleImport(IntroducedImport),
     SignatureDefMismatch,
     InvalidIngestedFile,
+    ImportAliasConflict,
 }
 
 struct PendingExpectOrDbg<'a> {
@@ -2975,7 +2977,27 @@ fn to_pending_value_def<'a>(
                 .get_id(&module_name)
                 .expect("Module id should have been added in load");
 
-            scope.import_module(module_id);
+            match module_import.alias {
+                Some(alias) => {
+                    let alias_str = alias.item.value.as_str();
+                    if let Err(conflict) = scope.import_module_with_alias(
+                        env.module_ids,
+                        module_id,
+                        alias_str,
+                        alias.item.region,
+                    ) {
+                        env.problems.push(Problem::ImportAliasConflict {
+                            alias: alias_str.to_owned(),
+                            conflict,
+                            module_id,
+                            region: alias.item.region,
+                        });
+
+                        return PendingValue::ImportAliasConflict;
+                    }
+                }
+                None => scope.import_module(module_id, module_import.name.region),
+            }
 
             let mut exposed_symbols;
 

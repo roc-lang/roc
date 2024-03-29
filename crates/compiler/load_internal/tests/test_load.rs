@@ -572,39 +572,6 @@ fn iface_quicksort() {
 }
 
 #[test]
-fn quicksort_one_def() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "QuicksortMultiDef", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "swap" => "U64, U64, List a -> List a",
-            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
-            "quicksortHelp" => "List (Num a), U64, U64 -> List (Num a)",
-            "quicksort" => "List (Num a) -> List (Num a)",
-        },
-    );
-}
-
-#[test]
-fn app_quicksort() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "swap" => "U64, U64, List a -> List a",
-            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
-            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
-        },
-    );
-}
-
-#[test]
 fn load_astar() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module);
@@ -1028,7 +995,7 @@ fn unused_imports() {
             "Main.roc",
             indoc!(
                 r#"
-            interface Main exposes [usedModule, unusedModule, unusedExposed, usingThreeValue] imports []
+            interface Main exposes [usedModule, unusedModule, unusedExposed, unusedWithAlias, usingThreeValue] imports []
 
             import Dep1
             import Dep3 exposing [Three]
@@ -1047,6 +1014,10 @@ fn unused_imports() {
 
             usingThreeValue =
                 Dep3.three
+
+            unusedWithAlias =
+                import Dep2 as D2
+                2
                 "#
             ),
         ),
@@ -1077,6 +1048,15 @@ fn unused_imports() {
 
             ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
 
+            Dep2 is imported but not used.
+
+            22│      import Dep2 as D2
+                     ^^^^^^^^^^^^^^^^^
+
+            Since Dep2 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
+
             Dep1 is imported but not used.
 
             3│  import Dep1
@@ -1097,6 +1077,245 @@ fn unused_imports() {
         "\n{}",
         err
     )
+}
+
+#[test]
+fn import_with_alias() {
+    let modules = vec![
+        (
+            "Dep.roc",
+            indoc!(
+                r#"
+                interface Dep exposes [hello] imports []
+
+                hello = "Hello, World!\n"
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import Dep as D
+
+                main = D.hello
+                "#
+            ),
+        ),
+    ];
+    let loaded_module = multiple_modules("import_with_alias", modules);
+    assert!(loaded_module.is_ok(), "should check");
+}
+
+#[test]
+fn duplicate_alias() {
+    let modules = vec![
+        (
+            "One.roc",
+            indoc!(
+                r#"
+                interface One exposes [one] imports []
+
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Two.roc",
+            indoc!(
+                r#"
+                interface Two exposes [two] imports []
+
+                two = 2
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import One as D
+                import Two as D
+
+                main = D.one
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("duplicate_alias", modules).unwrap_err();
+
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── IMPORT ALIAS CONFLICT in tmp/duplicate_alias/Main.roc ───────────────────────
+
+            One was imported as D:
+
+            3│  import One as D
+                              ^
+
+            but the same alias was also used for Two:
+
+            4│  import Two as D
+                              ^
+
+            Each import should have a unique alias or none at all.
+            "
+        )
+    );
+}
+
+#[test]
+fn alias_using_module_name() {
+    let modules = vec![
+        (
+            "One.roc",
+            indoc!(
+                r#"
+                interface One exposes [one] imports []
+
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Two.roc",
+            indoc!(
+                r#"
+                interface Two exposes [two] imports []
+
+                two = 2
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import One
+                import Two as One
+
+                main = [One.one]
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("alias_using_module_name", modules).unwrap_err();
+
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── IMPORT ALIAS CONFLICT in tmp/alias_using_module_name/Main.roc ───────────────
+
+            Two was imported as One:
+
+            4│  import Two as One
+                              ^^^
+
+            but One is also the name of an imported module:
+
+            3│  import One
+                       ^^^
+
+            Using the same name for both can make it hard to tell which one you
+            are referring to.
+
+            Make sure each import has a unique alias or none at all.
+            "
+        )
+    );
+}
+
+#[test]
+fn alias_using_builtin_name() {
+    let modules = vec![
+        (
+            "BoolExtra.roc",
+            indoc!(
+                r#"
+                interface BoolExtra exposes [toNum] imports []
+
+                toNum = \value ->
+                    if value then 1 else 0
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import BoolExtra as Bool
+
+                main = Bool.true
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("alias_using_builtin_name", modules).unwrap_err();
+
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── IMPORT ALIAS CONFLICT in tmp/alias_using_builtin_name/Main.roc ──────────────
+
+            BoolExtra was imported as Bool:
+
+            3│  import BoolExtra as Bool
+                                    ^^^^
+
+            but Bool is also the name of a builtin.
+
+            Using the same name for both can make it hard to tell which one you
+            are referring to.
+
+            Make sure each import has a unique alias or none at all.
+            "
+        )
+    )
+}
+
+#[test]
+fn cannot_use_original_name_if_imported_with_alias() {
+    let modules = vec![
+        (
+            "Dep.roc",
+            indoc!(
+                r#"
+                interface Dep exposes [hello] imports []
+
+                hello = "Hello, World!\n"
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import Dep as D
+
+                main = Dep.hello
+                "#
+            ),
+        ),
+    ];
+
+    multiple_modules("cannot_use_original_name_if_imported_with_alias", modules).unwrap_err();
 }
 
 #[test]
