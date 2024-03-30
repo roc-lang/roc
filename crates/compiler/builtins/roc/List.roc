@@ -371,9 +371,9 @@ prependIfOk = \list, result ->
 
 ## Returns the length of the list - the number of elements it contains.
 ##
-## One [List] can store up to 2,147,483,648 elements (just over 2 billion), which
-## is exactly equal to the highest valid #I32 value. This means the #U32 this function
-## returns can always be safely converted to an #I32 without losing any data.
+## One [List] can store up to 9,223,372,036,854,775,807 elements, which
+## is exactly equal to the highest valid #I64 value. This means the #U64 this function
+## returns can always be safely converted to an #I64 without losing any data.
 len : List * -> U64
 
 ## Create a list with space for at least capacity elements
