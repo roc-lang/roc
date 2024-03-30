@@ -3,9 +3,7 @@ use const_format::formatcp;
 use core::fmt::{self, Write};
 use roc_docs_types::{AbilityMember, RecordField, TypeVisitor};
 
-pub struct TypeRenderer<'a> {
-    arena: &'a Bump,
-    buf: &'a mut String<'a>,
+pub struct TypeRenderer {
     indent: Indentation,
 
     /// Whether the type needs to be wrapped in parens (only matters if the rendered type contains spaces,
@@ -13,83 +11,96 @@ pub struct TypeRenderer<'a> {
     wrap_in_parens: WrapInParens,
 }
 
-impl<'a> TypeRenderer<'a> {
-    pub fn new(arena: &'a Bump, buf: &'a mut String<'a>) -> Self {
+impl Default for TypeRenderer {
+    fn default() -> Self {
         Self {
-            arena,
-            buf,
             indent: Indentation::default(),
             wrap_in_parens: WrapInParens::Unnecessary,
         }
     }
 }
 
-impl<'a, Type> TypeVisitor<Type> for TypeRenderer<'a> {
-    fn tag_union(
+impl<Type> TypeVisitor<Type> for TypeRenderer {
+    fn tag_union<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         tags: impl Iterator<Item = (impl AsRef<str>, Type)>,
         ext: Type,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn function(
+    fn function<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         args: impl Iterator<Item = Type>,
         ret: Type,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn apply_type(
+    fn apply_type<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         type_name: impl AsRef<str>,
         type_params: impl Iterator<Item = Type>,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn record(
+    fn record<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         fields: impl Iterator<Item = RecordField<impl AsRef<str>, Type>>,
         ext: Type,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn tuple(
+    fn tuple<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         elems: impl Iterator<Item = RecordField<impl AsRef<str>, Type>>,
         ext: Type,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn with_where_clause(
+    fn with_where_clause<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         wrapped_type: Type,
         implements: impl Iterator<Item = (impl AsRef<str>, Type)>,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn with_as(
+    fn with_as<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         wrapped_type: Type,
         vars: impl Iterator<Item = impl Iterator<Item = impl AsRef<str>>>,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn ability(
+    fn ability<'a>(
         &mut self,
+        arena: &'a Bump,
         render_type: impl Fn(&mut Self, Type),
         members: impl Iterator<
             Item = AbilityMember<
@@ -98,23 +109,29 @@ impl<'a, Type> TypeVisitor<Type> for TypeRenderer<'a> {
                 impl Iterator<Item = (impl AsRef<str>, impl Iterator<Item = Type>)>,
             >,
         >,
+        buf: &mut String<'a>,
     ) {
         todo!()
     }
 
-    fn obscured_tag_union(&mut self) {
+    fn obscured_tag_union<'a>(&mut self, arena: &'a Bump, buf: &mut String<'a>) {
         todo!()
     }
 
-    fn obscured_record(&mut self) {
+    fn obscured_record<'a>(&mut self, arena: &'a Bump, buf: &mut String<'a>) {
         todo!()
     }
 
-    fn wildcard(&mut self) {
+    fn wildcard<'a>(&mut self, arena: &'a Bump, buf: &mut String<'a>) {
         todo!()
     }
 
-    fn bound_variable(&mut self, var_name: impl AsRef<str>) {
+    fn bound_variable<'a>(
+        &mut self,
+        arena: &'a Bump,
+        var_name: impl AsRef<str>,
+        buf: &mut String<'a>,
+    ) {
         todo!()
     }
 }

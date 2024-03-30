@@ -9,7 +9,7 @@ version.workspace = true
 
 [dependencies]
 roc_docs_types = { path = "../docs_types" }
-roc_highlight = { path = "../highlight" }
+roc_highlight = { path = "../highlight" }   # TODO this brings in many deps - slim it down!
 bumpalo.workspace = true
 pulldown-cmark.workspace = true
 const_format.workspace = true
