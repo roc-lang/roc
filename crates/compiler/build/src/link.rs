@@ -999,19 +999,13 @@ fn link_linux(
             vec![scrt1_path_str.to_string()],
             output_path,
         ),
-        LinkType::Dylib => {
-            (
-                // TODO: find a way to avoid using a vec! here - should theoretically be
-                // able to do this somehow using &[] but the borrow checker isn't having it.
-                // Also find a way to have these be string slices instead of Strings.
-                vec![
-                    "-shared".to_string(),
-                    "-soname".to_string(),
-                    output_path.as_path().to_str().unwrap().to_string(),
-                ],
-                output_path,
-            )
-        }
+        LinkType::Dylib => (
+            // TODO: find a way to avoid using a vec! here - should theoretically be
+            // able to do this somehow using &[] but the borrow checker isn't having it.
+            // Also find a way to have these be string slices instead of Strings.
+            vec!["-shared".to_string()],
+            output_path,
+        ),
         LinkType::None => internal_error!("link_linux should not be called with link type of none"),
     };
 
