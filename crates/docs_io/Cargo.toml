@@ -10,7 +10,6 @@ version.workspace = true
 [dependencies]
 roc_builtins = { path = "../compiler/builtins" }
 roc_collections = { path = "../compiler/collections" }
-roc_highlight = { path = "../highlight" }
 roc_can = { path = "../compiler/can" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
