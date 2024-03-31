@@ -69,6 +69,8 @@ module [
     walkBackwardsUntil,
     countIf,
     chunksOf,
+    Sort,
+    compare,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1324,3 +1326,6 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
             Break b -> Break b
     else
         Continue state
+
+Sort implements
+    compare : a, a -> [LessThan, Equal, GreaterThan] where a implements Sort

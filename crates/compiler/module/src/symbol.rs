@@ -53,6 +53,7 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
     (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
+    (Symbol::LIST_SORT, &[Symbol::LIST_COMPARE]),
     (
         Symbol::INSPECT_INSPECT_ABILITY,
         &[Symbol::INSPECT_TO_INSPECTOR],
@@ -1531,6 +1532,8 @@ define_builtins! {
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
         87 LIST_CLONE: "clone"
         88 LIST_LEN_USIZE: "lenUsize"
+        89 LIST_SORT: "Sort" exposed_type=true
+        90 LIST_COMPARE: "compare"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
