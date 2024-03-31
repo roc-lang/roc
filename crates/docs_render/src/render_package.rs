@@ -1,6 +1,6 @@
-use crate::render_type::{Indentation, TypeRenderer};
+use crate::render_type::TypeRenderer;
 use bumpalo::{collections::string::String, Bump};
-use core::fmt::{self, Debug, Write};
+use core::fmt::{Debug, Write};
 
 /// A named heading in the sidebar, with some number of
 /// entries beneath it.
@@ -37,9 +37,6 @@ pub struct BodyEntry<'a, Type> {
     pub type_annotation: Type,
     pub docs: Option<&'a str>,
 }
-
-///////////////////////////////////////////////////////////////
-// TODO next: `Type` trait visitor
 
 pub trait Docs<
     'a,
@@ -405,10 +402,10 @@ pub trait TypeAnn {
 }
 
 pub struct TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue> {
-    ability: VisitAbility,
-    type_alias: VisitAlias,
-    opaque_type: VisitOpaque,
-    value: VisitValue,
+    pub ability: VisitAbility,
+    pub type_alias: VisitAlias,
+    pub opaque_type: VisitOpaque,
+    pub value: VisitValue,
 }
 
 pub fn render_package_name_link(name: &str, buf: &mut String<'_>) {

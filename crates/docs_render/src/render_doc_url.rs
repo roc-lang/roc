@@ -22,14 +22,14 @@ pub enum AutolinkProblem<'a> {
 }
 
 pub struct ModuleInfo<'a> {
-    module_name: &'a str,
+    pub module_name: &'a str,
     // TODO add a `--include-builtins` CLI flag for generating offline docs locally
     // which include builtins; if that flag is omitted, have this code path generate
     // a link directly to the builtin docs on roc-lang.org instead of to a localhost
     // URL that will 404.
     /// Note that this depends on what package the module is in!
     /// Also, it should *not* end in a '/' because we always add one.
-    module_base_url: &'a str,
+    pub module_base_url: &'a str,
 }
 
 impl<'a> DocUrl<'a> {

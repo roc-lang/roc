@@ -29,7 +29,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         ext: Type,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn function<'a>(
@@ -40,7 +40,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         ret: Type,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn apply_type<'a>(
@@ -51,7 +51,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         type_params: impl Iterator<Item = Type>,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn record<'a>(
@@ -62,7 +62,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         ext: Type,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn tuple<'a>(
@@ -73,7 +73,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         ext: Type,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn with_where_clause<'a>(
@@ -84,7 +84,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         implements: impl Iterator<Item = (impl AsRef<str>, Type)>,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn with_as<'a>(
@@ -95,7 +95,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         vars: impl Iterator<Item = impl Iterator<Item = impl AsRef<str>>>,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn ability<'a>(
@@ -111,19 +111,19 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         >,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn obscured_tag_union<'a>(&mut self, arena: &'a Bump, buf: &mut String<'a>) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn obscured_record<'a>(&mut self, arena: &'a Bump, buf: &mut String<'a>) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn wildcard<'a>(&mut self, arena: &'a Bump, buf: &mut String<'a>) {
-        todo!()
+        buf.push_str("TODO render");
     }
 
     fn bound_variable<'a>(
@@ -132,7 +132,7 @@ impl<Type> TypeVisitor<Type> for TypeRenderer {
         var_name: impl AsRef<str>,
         buf: &mut String<'a>,
     ) {
-        todo!()
+        buf.push_str("TODO render");
     }
 }
 
