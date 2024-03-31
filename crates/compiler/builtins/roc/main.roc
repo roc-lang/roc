@@ -6,6 +6,7 @@ package [
     List,
     Dict,
     Set,
+    Sort
     Decode,
     Encode,
     Hash,
