@@ -40,13 +40,13 @@ pub struct BodyEntry<'a, Type> {
 
 pub trait Docs<
     'a,
-    Ability: AbilityImpl<'a> + Debug,
-    AbilityIter: Iterator<Item = Ability>,
+    Ability: AbilityImpl<'a> + Debug + 'a,
     ModuleId: PartialEq + Copy + Debug + 'a,
     IdentId: PartialEq + Copy + Debug + 'a,
     Type: TypeAnn + Debug + 'a,
     Alias,
     TypeVisitor: roc_docs_types::TypeVisitor<Type>,
+    AbilityIter: Iterator<Item = &'a Ability>,
     ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
     Sidebar: Iterator<Item = &'a mut SidebarEntry<'a, StrIter>>,
     StrIter: Iterator<Item = &'a &'a str> + 'a,
@@ -338,7 +338,7 @@ pub trait Docs<
         &self,
         _arena: &'a Bump, // TODO this will be needed in the future arena API
         type_var_names: impl Iterator<Item = impl AsRef<str>>,
-        abilities: impl Iterator<Item = Ability>,
+        abilities: impl Iterator<Item = &'a Ability>,
         buf: &mut String<'_>,
     ) {
         // Render the type variables

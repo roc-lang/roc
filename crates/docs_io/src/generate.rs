@@ -1,10 +1,12 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
-use bumpalo::Bump;
+use bumpalo::{collections::string::String, Bump};
 use core::slice::Iter;
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
-use roc_docs_render::{BodyEntry, Docs, SidebarEntry, TypeRenderer};
+use roc_docs_render::{
+    AbilityImpl, BodyEntry, Docs, SidebarEntry, TypeAnn, TypeAnnVisitor, TypeRenderer,
+};
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -18,6 +20,7 @@ use roc_region::all::Region;
 use roc_types::types::{Alias, Type};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::slice::IterMut;
 
 pub fn generate_docs_html<'a>(
     arena: &'a Bump,
@@ -122,20 +125,46 @@ impl<'a> IoDocs<'a> {
     }
 }
 
+#[derive(Debug)]
+struct Annotation {}
+
+impl TypeAnn for Annotation {
+    fn visit<
+        'a,
+        Ability,
+        VisitAbility: Fn(Ability, &'a mut String<'a>),
+        Alias,
+        VisitAlias: Fn(StrIter, Alias, &'a mut String<'a>),
+        Opaque,
+        VisitOpaque: Fn(StrIter, Opaque, &'a mut String<'a>),
+        Value,
+        VisitValue: Fn(Value, &'a mut String<'a>),
+        StrIter: Iterator<Item = &'a &'a str>,
+    >(
+        &self,
+        buf: &mut String<'_>,
+        visitor: TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue>,
+    ) {
+        todo!()
+    }
+}
+
 impl<'a>
     Docs<
         'a,
+        Ability,
         ModuleId,
         IdentId,
-        Type,
+        Annotation,
         Alias,
-        TypeRenderer<'a>,
+        TypeRenderer,
+        Iter<'a, Ability>,
         Iter<'a, (ModuleId, &'a str)>,
-        Iter<'a, SidebarEntry<'a, Iter<'a, &'a str>>>,
+        IterMut<'a, SidebarEntry<'a, Iter<'a, &'a str>>>,
         Iter<'a, &'a str>,
-        Iter<'a, BodyEntry<'a, Type, IdentId>>,
-        Iter<'a, (&'a str, Iter<'a, Type>)>,
-        Iter<'a, Type>,
+        Iter<'a, BodyEntry<'a, Annotation>>,
+        Iter<'a, (&'a str, Iter<'a, Annotation>)>,
+        Iter<'a, Annotation>,
     > for IoDocs<'a>
 {
     fn package_name(&self) -> &'a str {
@@ -154,14 +183,6 @@ impl<'a>
         todo!()
     }
 
-    fn package_sidebar_entries(&self) -> Iter<'a, SidebarEntry<'a, Iter<'a, &'a str>>> {
-        todo!()
-    }
-
-    fn body_entries(&self) -> Iter<'a, BodyEntry<'a, Type, IdentId>> {
-        todo!()
-    }
-
     fn base_url(&self, module_id: ModuleId) -> &'a str {
         todo!()
     }
@@ -174,10 +195,6 @@ impl<'a>
         todo!()
     }
 
-    fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Type> {
-        todo!()
-    }
-
     fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Alias> {
         todo!()
     }
@@ -186,7 +203,38 @@ impl<'a>
         todo!()
     }
 
-    fn visit_type(&self, renderer: &mut TypeRenderer<'_>, typ: Type) {
+    fn package_sidebar_entries(&self) -> IterMut<'a, SidebarEntry<'a, Iter<'a, &'a str>>> {
+        todo!()
+    }
+
+    fn body_entries(&self) -> Iter<'a, BodyEntry<'a, Annotation>> {
+        todo!()
+    }
+
+    fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Annotation> {
+        todo!()
+    }
+
+    fn visit_type<'b>(
+        &self,
+        arena: &'b Bump,
+        renderer: &mut TypeRenderer,
+        typ: Annotation,
+        buf: &mut String<'b>,
+    ) {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+pub struct Ability {}
+
+impl<'a> AbilityImpl<'a> for Ability {
+    fn name(&self) -> &'a str {
+        todo!()
+    }
+
+    fn docs_url(&self) -> &'a str {
         todo!()
     }
 }

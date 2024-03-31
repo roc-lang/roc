@@ -6,5 +6,7 @@ mod render_markdown;
 mod render_package;
 mod render_type;
 
-pub use render_package::{BodyEntry, Docs, RecordField, SidebarEntry};
+pub use render_package::{
+    AbilityImpl, BodyEntry, Docs, RecordField, SidebarEntry, TypeAnn, TypeAnnVisitor,
+};
 pub use render_type::TypeRenderer;
