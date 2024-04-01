@@ -15,6 +15,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
 use crate::ir::ErasedField;
+use crate::layout::LambdaName;
 use crate::{
     ir::{
         BranchInfo, Call, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
@@ -30,8 +31,19 @@ Insert the reference count operations for procedures.
 pub fn insert_inc_dec_operations<'a>(
     arena: &'a Bump,
     layout_interner: &STLayoutInterner<'a>,
-    procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
+    procedures: &mut HashMap<(Symbol, ProcLayout<'a>), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
+    // TODO remove this clone?
+    let x = procedures.clone();
+    let ps = arena.alloc(x);
+
+    let borrow_signatures = crate::borrow::infer_borrow_signatures(arena, layout_interner, ps);
+    let borrow_signatures = arena.alloc(borrow_signatures);
+
+    for ((s, _), sig) in borrow_signatures.iter() {
+        dbg!((s, sig));
+    }
+
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
     // Thus, these rc operations are performed on the caller of the wrapper instead, and we skip rc on the lowlevel.
@@ -43,7 +55,7 @@ pub fn insert_inc_dec_operations<'a>(
             LowLevelWrapperType::NotALowLevelWrapper
         ) {
             let symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
-            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, proc);
+            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, borrow_signatures, proc);
         }
     }
 }
@@ -245,6 +257,8 @@ Type containing data about the symbols consumption of a join point.
 */
 type JoinPointConsumption = MutSet<Symbol>;
 
+type Key<'a> = (LambdaName<'a>, InLayout<'a>, &'a [InLayout<'a>]);
+
 /**
 The environment for the reference counting pass.
 Contains the symbols rc types and the ownership.
@@ -256,6 +270,8 @@ struct RefcountEnvironment<'v> {
     // The Koka implementation assumes everything that is not owned to be borrowed.
     symbols_ownership: SymbolsOwnership,
     jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
+    // inferred borrow signatures of roc functions
+    borrow_signatures: &'v crate::borrow::BorrowSignatures<'v>,
 }
 
 impl<'v> RefcountEnvironment<'v> {
@@ -403,6 +419,7 @@ impl<'v> RefcountEnvironment<'v> {
 fn insert_inc_dec_operations_proc<'a>(
     arena: &'a Bump,
     mut symbol_rc_types_env: SymbolRcTypesEnv<'a, '_>,
+    borrow_signatures: &'a crate::borrow::BorrowSignatures<'a>,
     proc: &mut Proc<'a>,
 ) {
     // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
@@ -413,6 +430,7 @@ fn insert_inc_dec_operations_proc<'a>(
         symbols_rc_types: &symbol_rc_types_env.symbols_rc_type,
         symbols_ownership: MutMap::default(),
         jointpoint_closures: MutMap::default(),
+        borrow_signatures,
     };
 
     // Add all arguments to the environment (if they are reference counted)

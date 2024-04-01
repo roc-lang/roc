@@ -396,6 +396,16 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
+
+    pub fn proc_layout(&self, arena: &'a Bump) -> ProcLayout<'a> {
+        let args = Vec::from_iter_in(self.args.iter().map(|(a, b)| *a), arena);
+
+        ProcLayout {
+            arguments: args.into_bump_slice(),
+            result: self.ret_layout,
+            niche: Niche::NONE,
+        }
+    }
 }
 
 /// A host-exposed function must be specialized; it's a seed for subsequent specializations
