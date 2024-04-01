@@ -373,7 +373,10 @@ pub fn build_c_host_native(
             }
         }
     } else {
-        clang_cmd.args(["-fPIC", "-c"]);
+        #[cfg(not(target_os = "windows"))]
+        clang_cmd.arg("-fPIC");
+
+        clang_cmd.arg("-c");
     }
     if matches!(opt_level, OptLevel::Optimize) {
         clang_cmd.arg("-O3");
