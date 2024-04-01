@@ -1180,7 +1180,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumF32ToParts => {
             arguments!(arg);
             let fn_name = bitcode::NUM_F32_TO_PARTS;
-            call_bitcode_fn_and_cast_result(
+            call_bitcode_fn_returning_record(
                 env,
                 layout,
                 layout_interner,
@@ -1192,7 +1192,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumF64ToParts => {
             arguments!(arg);
             let fn_name = bitcode::NUM_F64_TO_PARTS;
-            call_bitcode_fn_and_cast_result(
+            call_bitcode_fn_returning_record(
                 env,
                 layout,
                 layout_interner,
@@ -1204,51 +1204,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumF32FromParts => {
             arguments!(arg);
             let fn_name = bitcode::NUM_F32_FROM_PARTS;
-
-            let roc_call_alloca = env
-                .builder
-                .new_build_alloca(arg.get_type(), "roc_call_alloca");
-            env.builder.new_build_store(roc_call_alloca, arg);
-
-            let fn_val = env.module.get_function(fn_name).unwrap();
-            let zig_param_type = fn_val.get_params()[0].get_type();
-            let zig_value =
-                env.builder
-                    .new_build_load(zig_param_type, roc_call_alloca, "zig_value");
-
-            call_bitcode_fn(env, &[zig_value], fn_name)
+            call_bitcode_fn_with_record_arg(env, arg, fn_name)
         }
         NumF64FromParts => {
             arguments!(arg);
             let fn_name = bitcode::NUM_F64_FROM_PARTS;
-
-            let roc_call_alloca = env
-                .builder
-                .new_build_alloca(arg.get_type(), "roc_call_alloca");
-            env.builder.new_build_store(roc_call_alloca, arg);
-
-            let fn_val = env.module.get_function(fn_name).unwrap();
-
-            let zig_params_types: Vec<_> =
-                fn_val.get_params().iter().map(|p| p.get_type()).collect();
-
-            let zig_record_type = env.context.struct_type(&zig_params_types, false);
-            let zig_recode_value = env
-                .builder
-                .new_build_load(zig_record_type, roc_call_alloca, "zig_value")
-                .into_struct_value();
-
-            let zig_value_0 = env
-                .builder
-                .build_extract_value(zig_recode_value, 0, "zig_value_0")
-                .unwrap();
-
-            let zig_value_1 = env
-                .builder
-                .build_extract_value(zig_recode_value, 1, "zig_value_1")
-                .unwrap();
-
-            call_bitcode_fn(env, &[zig_value_0, zig_value_1], fn_name)
+            call_bitcode_fn_with_record_arg(env, arg, fn_name)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1420,7 +1381,53 @@ pub(crate) fn run_low_level<'a, 'ctx>(
     }
 }
 
-fn call_bitcode_fn_and_cast_result<'a, 'ctx>(
+fn call_bitcode_fn_with_record_arg<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    arg: BasicValueEnum<'ctx>,
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    let roc_call_alloca = env
+        .builder
+        .new_build_alloca(arg.get_type(), "roc_call_alloca");
+    env.builder.new_build_store(roc_call_alloca, arg);
+
+    let fn_val = env.module.get_function(fn_name).unwrap();
+
+    let mut args: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(fn_val.count_params() as usize);
+    if fn_val.get_first_param().unwrap().is_pointer_value() {
+        // call by pointer
+        let zig_call_alloca = env
+            .builder
+            .new_build_alloca(arg.get_type(), "zig_return_alloca");
+        env.builder.new_build_store(zig_call_alloca, arg);
+        args.push(zig_call_alloca.into());
+    } else if fn_val.count_params() == 1 {
+        //c all single with arg as
+        let zig_param_type = fn_val.get_params()[0].get_type();
+        let zig_value = env
+            .builder
+            .new_build_load(zig_param_type, roc_call_alloca, "zig_value");
+        args.push(zig_value);
+    } else {
+        // split arg
+        let zig_params_types: Vec<_> = fn_val.get_param_iter().map(|p| p.get_type()).collect();
+        let zig_record_type = env.context.struct_type(&zig_params_types, false);
+        let zig_recode_value = env
+            .builder
+            .new_build_load(zig_record_type, roc_call_alloca, "zig_value")
+            .into_struct_value();
+        for i in 0..fn_val.count_params() {
+            let zig_value = env
+                .builder
+                .build_extract_value(zig_recode_value, i, "zig_value")
+                .unwrap();
+            args.push(zig_value);
+        }
+    }
+    call_bitcode_fn(env, &args, fn_name)
+}
+
+fn call_bitcode_fn_returning_record<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout: InLayout<'_>,
     layout_interner: &STLayoutInterner<'_>,
@@ -1428,14 +1435,10 @@ fn call_bitcode_fn_and_cast_result<'a, 'ctx>(
     arg: BasicValueEnum<'ctx>,
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    use roc_target::Target::*;
     let zig_return_alloca;
     let layout_repr = layout_interner.get_repr(layout);
-    if env.target == Wasm32
-        || (env.target == WinX64
-            && layout_repr.stack_size(layout_interner) as usize > env.target.ptr_size())
-    //TODO this works for f32_to_parts and f64_to_parts, but I'm not sure if this is the right check
-    {
+    let fn_val = env.module.get_function(fn_name).unwrap();
+    if fn_val.get_type().get_return_type() == None {
         // return by pointer
         let bitcode_return_type = env
             .module
