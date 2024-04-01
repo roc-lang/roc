@@ -88,7 +88,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     }
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_wasm32(),
+        target: roc_target::Target::Wasm32,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE_HTML,
         threading: Threading::Single,

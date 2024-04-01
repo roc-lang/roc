@@ -17,7 +17,7 @@ use roc_mono::ir::{generate_glue_procs, CrashTag, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use roc_target::{Architecture, TargetInfo};
+use roc_target::{Architecture, Target, TargetFromTripleError::TripleUnsupported};
 use roc_types::subs::{Subs, Variable};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
@@ -41,16 +41,17 @@ pub fn generate(
     spec_path: &Path,
     backend: CodeGenBackend,
 ) -> io::Result<i32> {
+    let target = Triple::host().into();
     // TODO: Add verification around the paths. Make sure they heav the correct file extension and what not.
     match load_types(
         input_path.to_path_buf(),
         Threading::AllAvailable,
         IgnoreErrors::NONE,
+        target,
     ) {
         Ok(types) => {
             // TODO: we should to modify the app file first before loading it.
             // Somehow it has to point to the correct platform file which may not exist on the target machine.
-            let triple = Triple::host();
 
             let code_gen_options = CodeGenOptions {
                 backend,
@@ -61,14 +62,14 @@ pub fn generate(
             };
 
             let load_config = standard_load_config(
-                &triple,
+                target,
                 BuildOrdering::BuildIfChecks,
                 Threading::AllAvailable,
             );
 
             let arena = ManuallyDrop::new(Bump::new());
             let link_type = LinkType::Dylib;
-            let linking_strategy = if roc_linker::supported(link_type, &triple) {
+            let linking_strategy = if roc_linker::supported(link_type, target) {
                 LinkingStrategy::Surgical
             } else {
                 LinkingStrategy::Legacy
@@ -79,7 +80,7 @@ pub fn generate(
             let res_binary_path = match tempdir_res {
                 Ok(dylib_dir) => build_file(
                     &arena,
-                    &triple,
+                    target,
                     spec_path.to_path_buf(),
                     code_gen_options,
                     false,
@@ -105,12 +106,10 @@ pub fn generate(
                     expect_metadata: _,
                 }) => {
                     // TODO: Should binary_path be update to deal with extensions?
-                    use target_lexicon::OperatingSystem;
-                    let lib_path = match triple.operating_system {
+                    use roc_target::OperatingSystem;
+                    let lib_path = match target.operating_system() {
                         OperatingSystem::Windows => binary_path.with_extension("dll"),
-                        OperatingSystem::Darwin | OperatingSystem::MacOSX { .. } => {
-                            binary_path.with_extension("dylib")
-                        }
+                        OperatingSystem::Mac => binary_path.with_extension("dylib"),
 
                         _ => binary_path.with_extension("so.1.0"),
                     };
@@ -398,8 +397,8 @@ pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
     ignore_errors: IgnoreErrors,
+    target: Target,
 ) -> Result<Vec<Types>, io::Error> {
-    let target_info = (&Triple::host()).into();
     // TODO the function kind may need to be parameterizable.
     let function_kind = FunctionKind::LambdaSet;
     let arena = &Bump::new();
@@ -417,7 +416,7 @@ pub fn load_types(
         full_file_path,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
-            target_info,
+            target,
             function_kind,
             render: RenderTarget::Generic,
             palette: DEFAULT_PALETTE,
@@ -456,18 +455,19 @@ pub fn load_types(
         exposed_to_host.get(&symbol).copied()
     });
 
-    let operating_system = target_info.operating_system;
+    let operating_system = target.operating_system();
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());
 
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
-        let target_info = TargetInfo {
-            architecture,
-            operating_system,
+        let target = match Target::try_from((architecture, operating_system)) {
+            Ok(t) => t,
+            Err(TripleUnsupported) => continue,
         };
-        let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
-        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+
+        let layout_interner = GlobalLayoutInterner::with_capacity(128, target);
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target);
         let mut glue_procs_by_layout = MutMap::default();
 
         let mut extern_names = MutMap::default();
@@ -528,7 +528,7 @@ pub fn load_types(
             arena.alloc(interns),
             glue_procs_by_layout,
             layout_cache,
-            target_info,
+            target,
             exposed_to_host.clone(),
         );
 

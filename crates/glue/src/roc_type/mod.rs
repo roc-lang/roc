@@ -195,16 +195,18 @@ pub struct Target {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum OperatingSystem {
-    Unix = 0,
-    Wasi = 1,
-    Windows = 2,
+    Freestanding = 0,
+    Linux = 1,
+    Mac = 2,
+    Windows = 3,
 }
 
 impl core::fmt::Debug for OperatingSystem {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Unix => f.write_str("OperatingSystem::Unix"),
-            Self::Wasi => f.write_str("OperatingSystem::Wasi"),
+            Self::Freestanding => f.write_str("OperatingSystem::Freestanding"),
+            Self::Linux => f.write_str("OperatingSystem::Linux"),
+            Self::Mac => f.write_str("OperatingSystem::Mac"),
             Self::Windows => f.write_str("OperatingSystem::Windows"),
         }
     }

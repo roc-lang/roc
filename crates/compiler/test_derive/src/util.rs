@@ -517,7 +517,7 @@ where
 {
     let arena = Bump::new();
     let (builtin_module, source, path) = module_source_and_path(builtin);
-    let target_info = roc_target::TargetInfo::default_x86_64();
+    let target = roc_target::Target::LinuxX64;
 
     let LoadedModule {
         mut interns,
@@ -531,7 +531,7 @@ where
         source,
         path.parent().unwrap().to_path_buf(),
         Default::default(),
-        target_info,
+        target,
         FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,

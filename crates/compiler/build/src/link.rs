@@ -1,9 +1,10 @@
-use crate::target::{arch_str, target_zig_str};
+use crate::target::arch_str;
 use libloading::{Error, Library};
 use roc_command_utils::{cargo, clang, rustup, zig};
 use roc_debug_flags;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
+use roc_target::{Architecture, OperatingSystem, Target};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::DirEntry;
@@ -11,7 +12,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
 use std::{env, fs};
-use target_lexicon::{Architecture, OperatingSystem, Triple};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 pub use roc_linker::LinkType;
@@ -28,46 +28,33 @@ pub enum LinkingStrategy {
 
 /// input_paths can include the host as well as the app. e.g. &["host.o", "roc_app.o"]
 pub fn link(
-    target: &Triple,
+    target: Target,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    match target {
-        Triple {
-            architecture: Architecture::Wasm32,
-            ..
-        } => link_wasm32(target, output_path, input_paths, link_type),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => link_linux(target, output_path, input_paths, link_type),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => link_macos(target, output_path, input_paths, link_type),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            ..
-        } => link_windows(target, output_path, input_paths, link_type),
+    match target.arch_os() {
+        (Architecture::Wasm32, _) => link_wasm32(target, output_path, input_paths, link_type),
+        (_, OperatingSystem::Linux) => link_linux(target, output_path, input_paths, link_type),
+        (_, OperatingSystem::Mac) => link_macos(target, output_path, input_paths, link_type),
+        (_, OperatingSystem::Windows) => link_windows(output_path, input_paths, link_type),
         _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
-pub fn legacy_host_file(target: &Triple, platform_main_roc: &Path) -> Option<PathBuf> {
-    let os = roc_target::OperatingSystem::from(target.operating_system);
-    let lib_ext = os.static_library_file_ext();
+pub fn legacy_host_file(target: Target, platform_main_roc: &Path) -> PathBuf {
+    let lib_ext = target.static_library_file_ext();
 
-    let file_name = roc_linker::preprocessed_host_filename(target)?
+    let file_name = roc_linker::preprocessed_host_filename(target)
         .replace(roc_linker::PRECOMPILED_HOST_EXT, lib_ext);
 
     let lib_path = platform_main_roc.with_file_name(file_name);
     if lib_path.exists() {
-        Some(lib_path)
+        lib_path
     } else {
-        let obj_ext = os.object_file_ext();
-        Some(lib_path.with_extension(obj_ext))
+        let obj_ext = target.object_file_ext();
+        lib_path.with_extension(obj_ext)
     }
 }
 
@@ -316,7 +303,7 @@ pub fn build_zig_host_wasm32(
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_c_host_native(
-    target: &Triple,
+    target: Target,
     env_path: &str,
     env_home: &str,
     env_cpath: &str,
@@ -335,7 +322,7 @@ pub fn build_c_host_native(
         .args(sources)
         .args(["-o", dest]);
     if let Some(shared_lib_path) = shared_lib_path {
-        match target.operating_system {
+        match target.operating_system() {
             OperatingSystem::Windows => {
                 // just use zig as a C compiler
 
@@ -347,7 +334,7 @@ pub fn build_c_host_native(
                     env_home,
                     dest,
                     sources[0],
-                    get_target_str(target),
+                    "native",
                     opt_level,
                     Some(shared_lib_path),
                     builtins_host_path,
@@ -406,7 +393,7 @@ pub fn build_swift_host_native(
         .env("HOME", env_home);
 
     match arch {
-        Architecture::Aarch64(_) => command.arg("-arm64"),
+        Architecture::Aarch64 => command.arg("-arm64"),
         _ => command.arg(format!("-{arch}")),
     };
 
@@ -437,7 +424,7 @@ pub fn build_swift_host_native(
 
 pub fn rebuild_host(
     opt_level: OptLevel,
-    target: &Triple,
+    target: Target,
     platform_main_roc: &Path,
     shared_lib_path: Option<&Path>,
 ) -> PathBuf {
@@ -450,14 +437,12 @@ pub fn rebuild_host(
     let swift_host_src = platform_main_roc.with_file_name("host.swift");
     let swift_host_header_src = platform_main_roc.with_file_name("host.h");
 
-    let os = roc_target::OperatingSystem::from(target.operating_system);
-    let executable_extension = match os {
-        roc_target::OperatingSystem::Windows => "exe",
-        roc_target::OperatingSystem::Unix => "",
-        roc_target::OperatingSystem::Wasi => "",
+    let executable_extension = match target.operating_system() {
+        OperatingSystem::Windows => "exe",
+        _ => "",
     };
 
-    let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
+    let host_dest = if matches!(target.architecture(), Architecture::Wasm32) {
         if matches!(opt_level, OptLevel::Development) {
             platform_main_roc.with_extension("o")
         } else {
@@ -468,7 +453,7 @@ pub fn rebuild_host(
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        legacy_host_file(target, platform_main_roc).unwrap()
+        legacy_host_file(target, platform_main_roc)
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -480,7 +465,7 @@ pub fn rebuild_host(
 
     if zig_host_src.exists() {
         // Compile host.zig
-        let zig_cmd = match target.architecture {
+        let zig_cmd = match target.architecture() {
             Architecture::Wasm32 => {
                 let emit_bin = if matches!(opt_level, OptLevel::Development) {
                     format!("-femit-bin={}", host_dest.to_str().unwrap())
@@ -501,12 +486,12 @@ pub fn rebuild_host(
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                get_target_str(target),
+                "native",
                 opt_level,
                 shared_lib_path,
                 builtins_host_tempfile.path(),
             ),
-            Architecture::X86_32(_) => build_zig_host_native(
+            Architecture::X86_32 => build_zig_host_native(
                 &env_path,
                 &env_home,
                 host_dest.to_str().unwrap(),
@@ -516,17 +501,17 @@ pub fn rebuild_host(
                 shared_lib_path,
                 builtins_host_tempfile.path(),
             ),
-            Architecture::Aarch64(_) => build_zig_host_native(
+            Architecture::Aarch64 => build_zig_host_native(
                 &env_path,
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                target_zig_str(target),
+                "native",
                 opt_level,
                 shared_lib_path,
                 builtins_host_tempfile.path(),
             ),
-            _ => internal_error!("Unsupported architecture {:?}", target.architecture),
+            _ => internal_error!("Unsupported architecture {:?}", target.architecture()),
         };
 
         run_build_command(zig_cmd, "host.zig", 0);
@@ -714,7 +699,7 @@ pub fn rebuild_host(
             swift_host_header_src
                 .exists()
                 .then(|| swift_host_header_src.to_str().unwrap()),
-            target.architecture,
+            target.architecture(),
         );
 
         run_build_command(swiftc_cmd, "host.swift", 0);
@@ -782,16 +767,6 @@ fn find_in_folder_or_subfolders(path: &PathBuf, folder_to_find: &str) -> Vec<Dir
     }
 
     matching_dirs
-}
-
-fn get_target_str(target: &Triple) -> &str {
-    if target.operating_system == OperatingSystem::Windows
-        && target.environment == target_lexicon::Environment::Gnu
-    {
-        "x86_64-windows-gnu"
-    } else {
-        "native"
-    }
 }
 
 fn nix_paths() -> Vec<String> {
@@ -862,12 +837,12 @@ fn extra_link_flags() -> Vec<String> {
 }
 
 fn link_linux(
-    target: &Triple,
+    target: Target,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let architecture = format!("{}-linux-gnu", target.architecture);
+    let architecture = format!("{}-linux-gnu", target.architecture());
 
     //    Command::new("cp")
     //        .args(&[input_paths[0], "/home/folkertdev/roc/wasm/host.o"])
@@ -879,7 +854,7 @@ fn link_linux(
     //        .output()
     //        .unwrap();
 
-    if let Architecture::X86_32(_) = target.architecture {
+    if let Architecture::X86_32 = target.architecture() {
         return Ok((
             zig()
                 .args(["build-exe"])
@@ -971,7 +946,7 @@ fn link_linux(
         scrt1_path.to_string_lossy(),
     );
 
-    let ld_linux_path = match target.architecture {
+    let ld_linux_path = match target.architecture() {
         Architecture::X86_64 => {
             // give preference to nix_path if it's defined, this prevents bugs
             if let Some(nix_glibc_path) = nix_glibc_path_opt() {
@@ -983,10 +958,10 @@ fn link_linux(
                 build_path_or_panic(["/lib64", "ld-linux-x86-64.so.2"])
             }
         }
-        Architecture::Aarch64(_) => build_path_or_panic(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Aarch64 => build_path_or_panic(["/lib", "ld-linux-aarch64.so.1"]),
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
-            target.architecture
+            target.architecture()
         ),
     };
 
@@ -1064,7 +1039,7 @@ fn link_linux(
 }
 
 fn link_macos(
-    target: &Triple,
+    target: Target,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
@@ -1081,9 +1056,9 @@ fn link_macos(
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
 
-    let arch = match target.architecture {
-        Architecture::Aarch64(_) => "arm64".to_string(),
-        _ => target.architecture.to_string(),
+    let arch = match target.architecture() {
+        Architecture::Aarch64 => "arm64".to_string(),
+        _ => target.architecture().to_string(),
     };
 
     let mut ld_command = Command::new("ld");
@@ -1158,8 +1133,8 @@ fn link_macos(
 
     let mut ld_child = ld_command.spawn()?;
 
-    match target.architecture {
-        Architecture::Aarch64(_) => {
+    match target.architecture() {
+        Architecture::Aarch64 => {
             ld_child.wait()?;
 
             let mut codesign_cmd = Command::new("codesign");
@@ -1195,7 +1170,7 @@ fn get_macos_version() -> String {
 }
 
 fn link_wasm32(
-    _target: &Triple,
+    _target: Target,
     output_path: PathBuf,
     input_paths: &[&str],
     _link_type: LinkType,
@@ -1230,7 +1205,6 @@ fn link_wasm32(
 }
 
 fn link_windows(
-    target: &Triple,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
@@ -1263,7 +1237,7 @@ fn link_windows(
                 .args(input_paths)
                 .args([
                     "-target",
-                    get_target_str(target),
+                    "native",
                     "--subsystem",
                     "console",
                     "-lc",
@@ -1279,7 +1253,7 @@ fn link_windows(
 
 pub fn llvm_module_to_dylib(
     module: &inkwell::module::Module,
-    target: &Triple,
+    target: Target,
     opt_level: OptLevel,
 ) -> Result<Library, Error> {
     use crate::target::{self, convert_opt_level};
@@ -1303,7 +1277,7 @@ pub fn llvm_module_to_dylib(
 
     // Link app.o into a dylib - e.g. app.so or app.dylib
     let (mut child, dylib_path) = link(
-        &Triple::host(),
+        target,
         app_o_file.clone(),
         &[app_o_file.to_str().unwrap()],
         LinkType::Dylib,
@@ -1320,7 +1294,7 @@ pub fn llvm_module_to_dylib(
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
 
-    if matches!(target.architecture, Architecture::Aarch64(_)) {
+    if matches!(target.architecture(), Architecture::Aarch64) {
         // On AArch64 darwin machines, calling `ldopen` on Roc-generated libs from multiple threads
         // sometimes fails with
         //   cannot dlopen until fork() handlers have completed

@@ -23,7 +23,7 @@ use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
 use roc_reporting::report::ANSI_STYLE_CODES;
-use roc_target::Target;
+use roc_target::{Architecture, Target};
 use std::env;
 use std::ffi::{CString, OsStr, OsString};
 use std::io;
@@ -33,7 +33,6 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{Duration, Instant};
 use strum::IntoEnumIterator;
-use target_lexicon::{Architecture, Triple};
 #[cfg(not(target_os = "linux"))]
 use tempfile::TempDir;
 
@@ -442,7 +441,7 @@ fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
 }
 
 #[cfg(windows)]
-pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
+pub fn test(_matches: &ArgMatches, _target: Target) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
 }
 
@@ -454,11 +453,10 @@ struct ModuleTestResults {
 }
 
 #[cfg(not(windows))]
-pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
     use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
-    use roc_target::TargetInfo;
 
     let start_time = Instant::now();
     let arena = Bump::new();
@@ -495,14 +493,12 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     }
 
     let arena = &arena;
-    let target = &triple;
-    let target_info = TargetInfo::from(target);
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;
 
     // Step 1: compile the app and generate the .o file
     let load_config = LoadConfig {
-        target_info,
+        target,
         function_kind,
         // TODO: expose this from CLI?
         render: roc_reporting::report::RenderTarget::ColorTerminal,
@@ -536,7 +532,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let (dyn_lib, expects_by_module, layout_interner) =
         roc_repl_expect::run::expect_mono_module_to_dylib(
             arena,
-            target.clone(),
+            target,
             loaded,
             opt_level,
             LlvmBackendMode::CliTest,
@@ -673,7 +669,7 @@ pub fn build(
     matches: &ArgMatches,
     subcommands: &[String],
     config: BuildConfig,
-    triple: Triple,
+    target: Target,
     out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
@@ -784,7 +780,7 @@ pub fn build(
     // Note: This allows using `--dev` with `--optimize`.
     // This means frontend optimizations and dev backend.
     let code_gen_backend = if matches.get_flag(FLAG_DEV) {
-        if matches!(triple.architecture, Architecture::Wasm32) {
+        if matches!(target.architecture(), Architecture::Wasm32) {
             CodeGenBackend::Wasm
         } else {
             CodeGenBackend::Assembly(AssemblyBackendMode::Binary)
@@ -818,7 +814,7 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, &triple)
+    } else if !roc_linker::supported(link_type, target)
         || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
     {
         LinkingStrategy::Legacy
@@ -827,8 +823,8 @@ pub fn build(
     };
 
     let prebuilt = {
-        let cross_compile = triple != Triple::host();
-        let targeting_wasm = matches!(triple.architecture, Architecture::Wasm32);
+        let cross_compile = target != Target::default();
+        let targeting_wasm = matches!(target.architecture(), Architecture::Wasm32);
 
         matches.get_flag(FLAG_PREBUILT) ||
             // When compiling for a different target, assume a prebuilt platform.
@@ -862,11 +858,11 @@ pub fn build(
         fuzz,
     };
 
-    let load_config = standard_load_config(&triple, build_ordering, threading);
+    let load_config = standard_load_config(target, build_ordering, threading);
 
     let res_binary_path = build_file(
         &arena,
-        &triple,
+        target,
         path.to_owned(),
         code_gen_options,
         emit_timings,
@@ -933,7 +929,7 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
+                    roc_run(&arena, opt_level, target, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
                     if problems.fatally_errored {
@@ -968,7 +964,7 @@ pub fn build(
                     // ManuallyDrop will leak the bytes because we don't drop manually
                     let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
+                    roc_run(&arena, opt_level, target, args, bytes, expect_metadata)
                 }
             }
         }
@@ -982,12 +978,12 @@ pub fn build(
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: &Bump,
     opt_level: OptLevel,
-    triple: Triple,
+    target: Target,
     args: I,
     binary_bytes: &[u8],
     expect_metadata: ExpectMetadata,
 ) -> io::Result<i32> {
-    match triple.architecture {
+    match target.architecture() {
         Architecture::Wasm32 => {
             let executable = roc_run_executable_file_path(binary_bytes)?;
             let path = executable.as_path();

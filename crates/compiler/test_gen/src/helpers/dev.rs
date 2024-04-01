@@ -56,7 +56,7 @@ pub fn helper(
     }
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_x86_64(),
+        target: roc_target::Target::LinuxX64,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -197,14 +197,9 @@ pub fn helper(
         mode: roc_gen_dev::AssemblyBackendMode::Test,
     };
 
-    let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(
-        &env,
-        &mut interns,
-        &mut layout_interner,
-        &target,
-        procedures,
-    );
+    let target = target_lexicon::Triple::host().into();
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let module_out = module_object
         .write()
@@ -216,7 +211,7 @@ pub fn helper(
 
     let (mut child, dylib_path) = link(
         &target,
-        dir.path().join("app.dylib"),
+        app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[
