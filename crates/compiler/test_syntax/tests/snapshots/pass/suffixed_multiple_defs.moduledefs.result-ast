@@ -1,23 +1,17 @@
 Defs {
     tags: [
         Index(2147483648),
-        Index(2147483649),
     ],
     regions: [
-        @0-22,
-        @27-40,
+        @0-20,
     ],
     space_before: [
         Slice(start = 0, length = 0),
-        Slice(start = 0, length = 1),
     ],
     space_after: [
         Slice(start = 0, length = 0),
-        Slice(start = 1, length = 0),
     ],
-    spaces: [
-        Newline,
-    ],
+    spaces: [],
     type_defs: [],
     value_defs: [
         Body(
@@ -25,44 +19,22 @@ Defs {
                 ident: "main",
                 suffixed: 0,
             },
-            @12-22 SpaceBefore(
-                Apply(
-                    @12-16 Var {
-                        module_name: "A",
-                        ident: "x",
-                        suffixed: 1,
-                    },
-                    [
-                        @17-22 Str(
-                            PlainLine(
-                                "Bar",
-                            ),
-                        ),
-                    ],
-                    Space,
-                ),
-                [
-                    Newline,
-                ],
-            ),
-        ),
-        Body(
-            @27-29 Identifier {
-                ident: "ab",
-                suffixed: 0,
-            },
-            @27-40 Defs(
+            @0-20 Defs(
                 Defs {
                     tags: [
                         Index(2147483648),
+                        Index(2147483649),
                     ],
                     regions: [
-                        @27-40,
+                        @0-20,
+                        @25-37,
                     ],
                     space_before: [
+                        Slice(start = 0, length = 0),
                         Slice(start = 0, length = 1),
                     ],
                     space_after: [
+                        Slice(start = 0, length = 0),
                         Slice(start = 1, length = 0),
                     ],
                     spaces: [
@@ -71,14 +43,40 @@ Defs {
                     type_defs: [],
                     value_defs: [
                         Stmt(
-                            @30-40 Apply(
-                                @30-34 Var {
+                            @12-20 SpaceBefore(
+                                Apply(
+                                    @12-14 Var {
+                                        module_name: "",
+                                        ident: "a",
+                                        suffixed: 1,
+                                    },
+                                    [
+                                        @15-20 Str(
+                                            PlainLine(
+                                                "Bar",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ),
+                        Body(
+                            @25-26 Identifier {
+                                ident: "x",
+                                suffixed: 0,
+                            },
+                            @27-37 Apply(
+                                @27-31 Var {
                                     module_name: "B",
-                                    ident: "y",
+                                    ident: "b",
                                     suffixed: 1,
                                 },
                                 [
-                                    @35-40 Str(
+                                    @32-37 Str(
                                         PlainLine(
                                             "Foo",
                                         ),
@@ -89,17 +87,17 @@ Defs {
                         ),
                     ],
                 },
-                @46-53 SpaceBefore(
+                @43-47 SpaceBefore(
                     Apply(
-                        @46-49 Var {
-                            module_name: "C",
-                            ident: "z",
-                            suffixed: 0,
+                        @43-45 Var {
+                            module_name: "",
+                            ident: "c",
+                            suffixed: 1,
                         },
                         [
-                            @50-53 Var {
+                            @46-47 Var {
                                 module_name: "",
-                                ident: "out",
+                                ident: "x",
                                 suffixed: 0,
                             },
                         ],

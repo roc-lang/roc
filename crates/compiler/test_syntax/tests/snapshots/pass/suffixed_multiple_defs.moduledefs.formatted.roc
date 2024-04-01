@@ -1,7 +1,5 @@
 main =
-    A.x! "Bar"
-ab =
+    a! "Bar"
+    x = B.b! "Foo"
 
-    B.y! "Foo"
-
-    C.z out
+    c! x
