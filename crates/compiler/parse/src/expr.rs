@@ -686,7 +686,7 @@ pub fn parse_single_def<'a>(
                 let result = parse_single_def_assignment(
                     options,
                     // to support statements we have to increase the indent here so that we can parse a child def
-                    // within a def and still continue to parse the final expresison for this def
+                    // within a def and still continue to parse the final expression for this def
                     // e.g.
                     // main =
                     //     Stdout.line! "Bar"
@@ -908,7 +908,7 @@ pub fn parse_single_def_assignment<'a>(
             &[],
         );
 
-        // Try to parse the rest of the expression as multipls defs, which may contain sub-assignments
+        // Try to parse the rest of the expression as multiple defs, which may contain sub-assignments
         match parse_defs_expr(options, min_indent, defs, arena, state.clone()) {
             Ok((new_progress, expr, new_state)) => {
                 progress = new_progress;
@@ -1156,7 +1156,7 @@ fn parse_defs_expr<'a>(
 
             match parse_final_expr.parse(arena, state.clone(), min_indent) {
                 Err((_, fail)) => {
-                    // If the last def was a statment, unwrap it and use that as loc_ret
+                    // If the last def was a statement, unwrap it and use that as loc_ret
                     if let Some((new_defs, loc_ret)) = def_state.last_value_suffixed() {
                         if new_defs.value_defs.len() > 1 {
                             return Ok((
