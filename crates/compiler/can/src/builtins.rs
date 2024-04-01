@@ -216,6 +216,7 @@ map_symbol_to_lowlevel_and_arity! {
     And; BOOL_AND; 2,
     Or; BOOL_OR; 2,
     Not; BOOL_NOT; 1,
+    Compare; LIST_STRUCTURAL_COMPARE; 2,
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,
     Unreachable; LIST_UNREACHABLE; 1,

@@ -1558,7 +1558,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | ListReleaseExcessCapacity
         | StrReleaseExcessCapacity => RC::Rc,
 
-        Eq | NotEq => RC::NoRc,
+        Eq | NotEq | Compare => RC::NoRc,
 
         And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated

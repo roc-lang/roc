@@ -112,7 +112,7 @@ impl Symbol {
             self,
             // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
             // low-level implementation.
-            &Self::BOOL_STRUCTURAL_EQ
+            &Self::BOOL_STRUCTURAL_EQ | &Self::LIST_STRUCTURAL_COMPARE
         )
     }
 
@@ -1534,6 +1534,7 @@ define_builtins! {
         88 LIST_LEN_USIZE: "lenUsize"
         89 LIST_SORT: "Sort" exposed_type=true
         90 LIST_COMPARE: "compare"
+        unexposed 91 LIST_STRUCTURAL_COMPARE: "structuralCompare"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

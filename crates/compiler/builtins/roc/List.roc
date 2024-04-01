@@ -1329,3 +1329,7 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
 
 Sort implements
     compare : a, a -> [LessThan, Equal, GreaterThan] where a implements Sort
+
+# INTERNAL COMPILER USE ONLY: used to lower calls to `compare` to structural
+# compare via the `Sort` low-level for derived types.
+structuralCompare : a, a -> [LessThan, Equal, GreaterThan]
