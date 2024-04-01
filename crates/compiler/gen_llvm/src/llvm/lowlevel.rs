@@ -1180,12 +1180,26 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumF32ToParts => {
             arguments!(arg);
             let fn_name = bitcode::NUM_F32_TO_PARTS;
-            call_bitcode_fn_and_cast_result(env, &[arg], fn_name, layout_interner, layout)
+            call_bitcode_fn_and_cast_result(
+                env,
+                layout,
+                layout_interner,
+                "num.F32Parts",
+                arg,
+                fn_name,
+            )
         }
         NumF64ToParts => {
             arguments!(arg);
             let fn_name = bitcode::NUM_F64_TO_PARTS;
-            call_bitcode_fn_and_cast_result(env, &[arg], fn_name, layout_interner, layout)
+            call_bitcode_fn_and_cast_result(
+                env,
+                layout,
+                layout_interner,
+                "num.F64Parts",
+                arg,
+                fn_name,
+            )
         }
         NumF32FromParts => {
             arguments!(arg);
@@ -1406,25 +1420,42 @@ pub(crate) fn run_low_level<'a, 'ctx>(
     }
 }
 
-fn call_bitcode_fn_and_cast_result<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-    layout_interner: &STLayoutInterner<'_>,
+fn call_bitcode_fn_and_cast_result<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout: InLayout<'_>,
+    layout_interner: &STLayoutInterner<'_>,
+    bitcode_return_type_name: &str,
+    arg: BasicValueEnum<'ctx>,
+    fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    let zig_result = call_bitcode_fn(env, args, fn_name);
-    let zig_return_alloca = env
-        .builder
-        .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
-    env.builder.new_build_store(zig_return_alloca, zig_result);
-
+    use roc_target::Target::*;
+    let zig_return_alloca;
+    match env.target {
+        Wasm32 => {
+            let bitcode_return_type = env
+                .module
+                .get_struct_type(bitcode_return_type_name)
+                .unwrap();
+            zig_return_alloca = env
+                .builder
+                .new_build_alloca(bitcode_return_type, "zig_return_alloca");
+            call_void_bitcode_fn(env, &[zig_return_alloca.into(), arg.into()], fn_name);
+        }
+        LinuxX64 | MacX64 | LinuxX32 | WinX32 | LinuxArm64 | MacArm64 | WinArm64 => {
+            let zig_result = call_bitcode_fn(env, &[arg], fn_name);
+            zig_return_alloca = env
+                .builder
+                .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
+            env.builder.new_build_store(zig_return_alloca, zig_result);
+        }
+        WinX64 => todo!("The 32bit and 64bit funktion are clled different on Windows"),
+    }
     load_roc_value(
         env,
         layout_interner,
         layout_interner.get_repr(layout),
         zig_return_alloca,
-        "f64_to_parts_result",
+        "result",
     )
 }
 
