@@ -1430,30 +1430,34 @@ fn call_bitcode_fn_and_cast_result<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     use roc_target::Target::*;
     let zig_return_alloca;
-    match env.target {
-        Wasm32 => {
-            let bitcode_return_type = env
-                .module
-                .get_struct_type(bitcode_return_type_name)
-                .unwrap();
-            zig_return_alloca = env
-                .builder
-                .new_build_alloca(bitcode_return_type, "zig_return_alloca");
-            call_void_bitcode_fn(env, &[zig_return_alloca.into(), arg.into()], fn_name);
-        }
-        LinuxX64 | MacX64 | LinuxX32 | WinX32 | LinuxArm64 | MacArm64 | WinArm64 => {
-            let zig_result = call_bitcode_fn(env, &[arg], fn_name);
-            zig_return_alloca = env
-                .builder
-                .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
-            env.builder.new_build_store(zig_return_alloca, zig_result);
-        }
-        WinX64 => todo!("The 32bit and 64bit funktion are clled different on Windows"),
+    let layout_repr = layout_interner.get_repr(layout);
+    if env.target == Wasm32
+        || (env.target == WinX64
+            && layout_repr.stack_size(layout_interner) as usize > env.target.ptr_size())
+    //TODO this works for f32_to_parts and f64_to_parts, but I'm not sure if this is the right check
+    {
+        // return by pointer
+        let bitcode_return_type = env
+            .module
+            .get_struct_type(bitcode_return_type_name)
+            .unwrap();
+        zig_return_alloca = env
+            .builder
+            .new_build_alloca(bitcode_return_type, "zig_return_alloca");
+        call_void_bitcode_fn(env, &[zig_return_alloca.into(), arg.into()], fn_name);
+    } else {
+        // direct return
+        let zig_result = call_bitcode_fn(env, &[arg], fn_name);
+        zig_return_alloca = env
+            .builder
+            .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
+        env.builder.new_build_store(zig_return_alloca, zig_result);
     }
+
     load_roc_value(
         env,
         layout_interner,
-        layout_interner.get_repr(layout),
+        layout_repr,
         zig_return_alloca,
         "result",
     )
