@@ -547,7 +547,6 @@ fn provides_exposed<'a>() -> impl Parser<
     })
 }
 
-// [modules-revamp] TODO: Types?
 #[inline(always)]
 fn provides_types<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, EProvides<'a>> {

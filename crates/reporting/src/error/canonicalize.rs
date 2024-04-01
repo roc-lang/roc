@@ -1,10 +1,10 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::DERIVABLE_ABILITIES;
+use roc_module::symbol::{ScopeModuleSource, DERIVABLE_ABILITIES};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
-    BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, ImportAliasConflict, IntErrorKind,
-    Problem, RuntimeError, ShadowKind,
+    BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+    ShadowKind,
 };
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
@@ -20,7 +20,7 @@ const NAMING_PROBLEM: &str = "NAMING PROBLEM";
 const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
-const IMPORT_ALIAS_CONFLICT: &str = "IMPORT ALIAS CONFLICT";
+const IMPORT_NAME_CONFLICT: &str = "IMPORT NAME CONFLICT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
 const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
@@ -121,70 +121,65 @@ pub fn can_problem<'b>(
 
             title = UNUSED_IMPORT.to_string();
         }
-        Problem::ImportAliasConflict {
-            alias,
-            conflict,
-            module_id,
-            region,
+        Problem::ImportNameConflict {
+            name,
+            is_alias,
+            new_module_id,
+            new_import_region,
+            existing_import,
         } => {
-            match conflict {
-                ImportAliasConflict::Alias(first_import_module, first_import_region) => {
-                    doc = alloc.stack([
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.module(new_module_id),
+                    if is_alias {
                         alloc.concat([
-                            alloc.module(first_import_module),
                             alloc.reflow(" was imported as "),
-                            alloc.string(alias),
+                            alloc.module_name(name.clone()),
                             alloc.reflow(":"),
-                        ]),
-                        alloc.region(lines.convert_region(first_import_region)),
-                        alloc.concat([
-                            alloc.reflow("but the same alias was also used for "),
-                            alloc.module(module_id),
-                            alloc.reflow(":"),
-                        ]),
-                        alloc.region(lines.convert_region(region)),
-                        alloc.reflow("Each import should have a unique alias or none at all."),
-                    ]);
-                }
-                ImportAliasConflict::Module(first_import_region) => {
-                    doc = alloc.stack([
-                        alloc.concat([
-                            alloc.module(module_id),
-                            alloc.reflow(" was imported as "),
-                            alloc.string(alias.clone()),
-                            alloc.reflow(":"),
-                        ]),
-                        alloc.region(lines.convert_region(region)),
+                        ])
+                    } else {
+                        alloc.reflow(" was imported here: ")
+                    },
+                ]),
+                alloc.region(lines.convert_region(new_import_region)),
+
+                match existing_import {
+                    ScopeModuleSource::Import(exsting_import_region) => {
+                        alloc.stack([
+                            alloc.concat([
+                                alloc.reflow("but "),
+                                alloc.module_name(name.clone()),
+                                alloc.reflow(" is already used by a previous import:"),
+                            ]),
+                            alloc.region(lines.convert_region(exsting_import_region)),
+                        ])
+                    }
+                    ScopeModuleSource::Builtin => {
                         alloc.concat([
                             alloc.reflow("but "),
-                            alloc.string(alias),
-                            alloc.reflow(" is also the name of an imported module:"),
-                        ]),
-                        alloc.region(lines.convert_region(first_import_region)),
-                        alloc.reflow("Using the same name for both can make it hard to tell which one you are referring to."),
-                        alloc.reflow("Make sure each import has a unique alias or none at all."),
-                    ]);
-                }
-                ImportAliasConflict::Builtin => {
-                    doc = alloc.stack([
-                        alloc.concat([
-                            alloc.module(module_id),
-                            alloc.reflow(" was imported as "),
-                            alloc.string(alias.clone()),
-                            alloc.reflow(":"),
-                        ]),
-                        alloc.region(lines.convert_region(region)),
-                        alloc.concat([
-                            alloc.reflow("but "),
-                            alloc.string(alias),
+                            alloc.module_name(name),
                             alloc.reflow(" is also the name of a builtin."),
-                        ]),
-                        alloc.reflow("Using the same name for both can make it hard to tell which one you are referring to."),
-                        alloc.reflow("Make sure each import has a unique alias or none at all."),
-                    ]);
-                }
-            }
-            title = IMPORT_ALIAS_CONFLICT.to_string();
+                        ])
+                    }
+                    ScopeModuleSource::Current => {
+                        alloc.concat([
+                            alloc.reflow("but "),
+                            alloc.module_name(name),
+                            alloc.reflow(" is also the name of the current module."),
+                        ])
+                    }
+                },
+                alloc.reflow("Using the same name for both can make it hard to tell which module you are referring to."),
+                if is_alias {
+                    alloc.reflow("Make sure each import has a unique alias or none at all.")
+                } else {
+                    alloc.stack([
+                        alloc.reflow("You can assign a different name to a module like this:"),
+                        alloc.reflow("import JsonDecode as JD").indent(4),
+                    ])
+                },
+            ]);
+            title = IMPORT_NAME_CONFLICT.to_string();
         }
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([

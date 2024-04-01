@@ -3827,8 +3827,8 @@ mod test_reporting {
 
         Box
         Bool
-        
         Num
+        Set
     "###
     );
 
@@ -7857,8 +7857,8 @@ In roc, functions are always written as a lambda, like{}
 
         Hash
         List
-        
         Num
+        Box
     "###
     );
 

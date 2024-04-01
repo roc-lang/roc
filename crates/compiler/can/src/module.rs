@@ -13,7 +13,7 @@ use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
@@ -275,7 +275,7 @@ pub fn canonicalize_module_defs<'a>(
     home: ModuleId,
     module_path: &str,
     src: &'a str,
-    module_ids: &'a ModuleIds,
+    qualified_module_ids: &'a PackageModuleIds<'a>,
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
@@ -284,10 +284,20 @@ pub fn canonicalize_module_defs<'a>(
     exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
+    opt_shorthand: Option<&'a str>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
-    let mut env = Env::new(arena, home, dep_idents, module_ids);
+    let mut scope = Scope::new(
+        home,
+        qualified_module_ids
+            .get_name(home)
+            .expect("home module not found")
+            .as_inner()
+            .to_owned(),
+        exposed_ident_ids,
+        imported_abilities_state,
+    );
+    let mut env = Env::new(arena, home, dep_idents, qualified_module_ids, opt_shorthand);
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(

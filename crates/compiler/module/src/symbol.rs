@@ -593,6 +593,68 @@ impl ModuleIds {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ScopeModules {
+    modules: VecMap<ModuleName, ModuleId>,
+    sources: VecMap<ModuleId, ScopeModuleSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
+}
+
+impl ScopeModules {
+    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
+        self.modules.get(module_name).copied()
+    }
+
+    pub fn has_id(&self, module_id: ModuleId) -> bool {
+        self.sources.contains_key(&module_id)
+    }
+
+    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
+        self.modules.keys()
+    }
+
+    pub fn insert(
+        &mut self,
+        module_name: ModuleName,
+        module_id: ModuleId,
+        region: Region,
+    ) -> Result<(), ScopeModuleSource> {
+        if let Some(existing_module_id) = self.modules.get(&module_name) {
+            if *existing_module_id == module_id {
+                return Ok(());
+            }
+
+            return Err(*self.sources.get(existing_module_id).unwrap());
+        }
+
+        self.modules.insert(module_name, module_id);
+        self.sources
+            .insert(module_id, ScopeModuleSource::Import(region));
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.modules.len(), self.sources.len());
+        self.modules.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
+        self.modules.is_empty()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.modules.truncate(len);
+        self.sources.truncate(len);
+    }
+}
+
 /// An ID that is assigned to interned string identifiers within a module.
 /// By turning these strings into numbers, post-canonicalization processes
 /// like unification and optimization can run a lot faster.
@@ -924,6 +986,32 @@ macro_rules! define_builtins {
                 )+
 
                 ModuleIds {  by_id }
+            }
+        }
+
+        impl ScopeModules {
+            pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
+                // +1 because the user will be compiling at least 1 non-builtin module!
+                let capacity = $total + 1;
+
+                let mut modules = VecMap::with_capacity(capacity);
+                let mut sources = VecMap::with_capacity(capacity);
+
+                modules.insert(home_name, home_id);
+                sources.insert(home_id, ScopeModuleSource::Current);
+
+                let mut insert_both = |id: ModuleId, name_str: &'static str| {
+                    let name: ModuleName = name_str.into();
+
+                    modules.insert(name, id);
+                    sources.insert(id, ScopeModuleSource::Builtin);
+                };
+
+                $(
+                    insert_both(ModuleId::$module_const, $module_name);
+                )+
+
+                ScopeModules { modules, sources }
             }
         }
 

@@ -198,6 +198,7 @@ pub struct ParsedModule<'a> {
     pub packages: MutMap<&'a str, PackageName<'a>>,
     pub initial_scope: MutMap<Ident, (Symbol, Region)>,
     pub exposes: Vec<Symbol>,
+    pub opt_shorthand: Option<&'a str>,
 }
 
 #[derive(Debug)]

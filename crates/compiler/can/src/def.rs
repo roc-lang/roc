@@ -30,6 +30,7 @@ use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::ident::ModuleName;
+use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
@@ -1092,7 +1093,7 @@ fn canonicalize_value_defs<'a>(
                 imports_introduced.push(introduced_import);
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
-            PendingValue::ImportAliasConflict => { /* skip */ }
+            PendingValue::ImportNameConflict => { /* skip */ }
         }
     }
 
@@ -2830,7 +2831,7 @@ enum PendingValue<'a> {
     ModuleImport(IntroducedImport),
     SignatureDefMismatch,
     InvalidIngestedFile,
-    ImportAliasConflict,
+    ImportNameConflict,
 }
 
 struct PendingExpectOrDbg<'a> {
@@ -2969,31 +2970,36 @@ fn to_pending_value_def<'a>(
 
         ModuleImport(module_import) => {
             let module_name = ModuleName::from(module_import.name.value.name);
+            let pq_module_name = QualifiedModuleName {
+                opt_package: module_import.name.value.package,
+                module: module_name.clone(),
+            }
+            .into_pq_module_name(env.opt_shorthand);
+
             let module_id = env
-                .module_ids
-                .get_id(&module_name)
+                .qualified_module_ids
+                .get_id(&pq_module_name)
                 .expect("Module id should have been added in load");
 
-            match module_import.alias {
-                Some(alias) => {
-                    let alias_str = alias.item.value.as_str();
-                    if let Err(conflict) = scope.import_module_with_alias(
-                        env.module_ids,
-                        module_id,
-                        alias_str,
-                        alias.item.region,
-                    ) {
-                        env.problems.push(Problem::ImportAliasConflict {
-                            alias: alias_str.to_owned(),
-                            conflict,
-                            module_id,
-                            region: alias.item.region,
-                        });
+            let name_with_alias = match module_import.alias {
+                Some(alias) => ModuleName::from(alias.item.value.as_str()),
+                None => module_name.clone(),
+            };
 
-                        return PendingValue::ImportAliasConflict;
-                    }
-                }
-                None => scope.import_module(module_id, module_import.name.region),
+            if let Err(existing_import) =
+                scope
+                    .modules
+                    .insert(name_with_alias.clone(), module_id, region)
+            {
+                env.problems.push(Problem::ImportNameConflict {
+                    name: name_with_alias,
+                    is_alias: module_import.alias.is_some(),
+                    new_module_id: module_id,
+                    new_import_region: region,
+                    existing_import,
+                });
+
+                return PendingValue::ImportNameConflict;
             }
 
             let mut exposed_symbols;

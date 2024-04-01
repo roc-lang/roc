@@ -7,7 +7,7 @@ use roc_can::expr::Output;
 use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PackageModuleIds, Symbol};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -43,7 +43,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
-    let module_ids = ModuleIds::default();
+    let qualified_module_ids = PackageModuleIds::default();
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -60,7 +60,12 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         arena.alloc("TestPath"),
     );
 
-    let mut scope = Scope::new(home, IdentIds::default(), Default::default());
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
     scope.add_alias(
         Symbol::NUM_INT,
         Region::zero(),
@@ -74,7 +79,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     );
 
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(arena, home, &dep_idents, &module_ids);
+    let mut env = Env::new(arena, home, &dep_idents, &qualified_module_ids, None);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
@@ -88,7 +93,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     all_ident_ids.insert(home, scope.locals.ident_ids);
 
     let interns = Interns {
-        module_ids: env.module_ids.clone(),
+        module_ids: env.qualified_module_ids.clone().into_module_ids(),
         all_ident_ids,
     };
 

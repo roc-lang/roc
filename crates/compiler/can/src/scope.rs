@@ -1,8 +1,8 @@
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
-use roc_module::ident::Ident;
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_problem::can::{ImportAliasConflict, RuntimeError};
+use roc_module::ident::{Ident, ModuleName};
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, ScopeModules, Symbol};
+use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
@@ -30,9 +30,7 @@ pub struct Scope {
     exposed_ident_count: usize,
 
     /// Modules that are imported
-    unaliased_imported_modules: Vec<ModuleId>,
-    aliased_imported_modules: VecMap<String, ModuleId>,
-    import_regions: VecMap<ModuleId, Region>,
+    pub modules: ScopeModules,
 
     /// Identifiers that are imported
     imported_symbols: Vec<(Ident, Symbol, Region)>,
@@ -55,6 +53,7 @@ pub struct Scope {
 impl Scope {
     pub fn new(
         home: ModuleId,
+        module_name: ModuleName,
         initial_ident_ids: IdentIds,
         starting_abilities_store: PendingAbilitiesStore,
     ) -> Scope {
@@ -73,9 +72,7 @@ impl Scope {
             aliases: VecMap::default(),
             abilities_store: starting_abilities_store,
             shadows: VecMap::default(),
-            unaliased_imported_modules: Vec::default(),
-            aliased_imported_modules: VecMap::default(),
-            import_regions: VecMap::default(),
+            modules: ScopeModules::new(home, module_name),
             imported_symbols: default_imports,
             ignored_locals: VecMap::default(),
         }
@@ -208,14 +205,6 @@ impl Scope {
             opaques_in_scope,
             opt_defined_alias,
         }
-    }
-
-    pub fn get_alias_import_module_id(&self, alias: &str) -> Option<&ModuleId> {
-        self.aliased_imported_modules.get(&alias.to_owned())
-    }
-
-    pub fn has_imported_unaliased_module(&self, module_id: &ModuleId) -> bool {
-        module_id.is_builtin() || self.unaliased_imported_modules.contains(module_id)
     }
 
     fn has_imported_symbol(&self, ident: &str) -> Option<(Symbol, Region)> {
@@ -410,48 +399,6 @@ impl Scope {
         Ok(())
     }
 
-    pub fn import_module_with_alias(
-        &mut self,
-        module_ids: &ModuleIds,
-        module_id: ModuleId,
-        alias_name: &str,
-        region: Region,
-    ) -> Result<(), ImportAliasConflict> {
-        let alias = alias_name.to_owned();
-
-        if let Some(first_module_id) = self.aliased_imported_modules.get(&alias) {
-            return Err(ImportAliasConflict::Alias(
-                *first_module_id,
-                *self.import_regions.get(first_module_id).unwrap(),
-            ));
-        }
-
-        if let Some(same_name_module_id) = module_ids.get_id(&alias_name.into()) {
-            if same_name_module_id.is_builtin() {
-                return Err(ImportAliasConflict::Builtin);
-            }
-
-            if self
-                .unaliased_imported_modules
-                .contains(&same_name_module_id)
-            {
-                return Err(ImportAliasConflict::Module(
-                    *self.import_regions.get(&same_name_module_id).unwrap(),
-                ));
-            }
-        }
-
-        self.aliased_imported_modules.insert(alias, module_id);
-        self.import_regions.insert(module_id, region);
-
-        Ok(())
-    }
-
-    pub fn import_module(&mut self, module_id: ModuleId, region: Region) {
-        self.unaliased_imported_modules.push(module_id);
-        self.import_regions.insert(module_id, region);
-    }
-
     pub fn add_alias(
         &mut self,
         name: Symbol,
@@ -489,20 +436,14 @@ impl Scope {
         let ignored_locals_count = self.ignored_locals.len();
         let locals_snapshot = self.locals.in_scope.len();
         let imported_symbols_snapshot = self.imported_symbols.len();
-        let unaliased_imported_modules_snapshot = self.unaliased_imported_modules.len();
-        let aliased_imported_modules_snapshot = self.aliased_imported_modules.len();
-        let import_regions_snapshot = self.import_regions.len();
+        let imported_modules_snapshot = self.modules.len();
 
         let result = f(self);
 
         self.aliases.truncate(aliases_count);
         self.ignored_locals.truncate(ignored_locals_count);
         self.imported_symbols.truncate(imported_symbols_snapshot);
-        self.unaliased_imported_modules
-            .truncate(unaliased_imported_modules_snapshot);
-        self.aliased_imported_modules
-            .truncate(aliased_imported_modules_snapshot);
-        self.import_regions.truncate(import_regions_snapshot);
+        self.modules.truncate(imported_modules_snapshot);
 
         // anything added in the inner scope is no longer in scope now
         for i in locals_snapshot..self.locals.in_scope.len() {
@@ -720,6 +661,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );
@@ -739,6 +681,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );
@@ -768,6 +711,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );
@@ -789,6 +733,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );
@@ -812,6 +757,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );
@@ -879,6 +825,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );
@@ -901,6 +848,7 @@ mod test {
         let _register_module_debug_names = ModuleIds::default();
         let mut scope = Scope::new(
             ModuleId::ATTR,
+            "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
         );

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::{ModuleId, ScopeModuleSource, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
@@ -40,11 +40,12 @@ pub enum Problem {
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
-    ImportAliasConflict {
-        alias: String,
-        conflict: ImportAliasConflict,
-        module_id: ModuleId,
-        region: Region,
+    ImportNameConflict {
+        name: ModuleName,
+        is_alias: bool,
+        new_module_id: ModuleId,
+        new_import_region: Region,
+        existing_import: ScopeModuleSource,
     },
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
@@ -219,13 +220,6 @@ pub enum Problem {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ImportAliasConflict {
-    Alias(ModuleId, Region),
-    Module(Region),
-    Builtin,
-}
-
 impl Problem {
     pub fn severity(&self) -> Severity {
         use Severity::{Fatal, RuntimeError, Warning};
@@ -234,7 +228,7 @@ impl Problem {
             Problem::UnusedDef(_, _) => Warning,
             Problem::UnusedImport(_, _) => Warning,
             Problem::UnusedModuleImport(_, _) => Warning,
-            Problem::ImportAliasConflict { .. } => RuntimeError,
+            Problem::ImportNameConflict { .. } => RuntimeError,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
@@ -309,7 +303,10 @@ impl Problem {
             }
             | Problem::UnusedImport(_, region)
             | Problem::UnusedModuleImport(_, region)
-            | Problem::ImportAliasConflict { region, .. }
+            | Problem::ImportNameConflict {
+                new_import_region: region,
+                ..
+            }
             | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
