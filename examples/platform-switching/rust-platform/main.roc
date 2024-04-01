@@ -1,9 +1,9 @@
 platform "echo-in-rust"
-    requires {} { main : Str }
-    exposes []
+    requires {} { main : Task {} [] }
+    exposes [Task]
     packages {}
-    imports []
+    imports [InternalTask.{ Task }]
     provides [mainForHost]
 
-mainForHost : Str
+mainForHost : Task {} []
 mainForHost = main
