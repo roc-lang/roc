@@ -372,7 +372,7 @@ prependIfOk = \list, result ->
 ## Returns the length of the list - the number of elements it contains.
 ##
 ## One [List] can store up to `Num.maxI64` elements on 64-bit targets and `Num.maxI32` on 32-bit targets like wasm.
-## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target. 
+## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 len : List * -> U64
 
 ## Create a list with space for at least capacity elements

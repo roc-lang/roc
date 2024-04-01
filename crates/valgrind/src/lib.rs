@@ -14,11 +14,11 @@ fn build_host() {
         roc_command_utils::root_dir().join("crates/valgrind/zig-platform/main.roc");
 
     // tests always run on the host
-    let target = target_lexicon::Triple::host();
+    let target = target_lexicon::Triple::host().into();
 
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path =
-        platform_main_roc.with_file_name(preprocessed_host_filename(&target).unwrap());
+        platform_main_roc.with_file_name(preprocessed_host_filename(target));
 
     // valgrind does not support avx512 yet: https://bugs.kde.org/show_bug.cgi?id=383010
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -28,7 +28,7 @@ fn build_host() {
 
     build_and_preprocess_host(
         roc_mono::ir::OptLevel::Normal,
-        &target,
+        target,
         &platform_main_roc,
         &preprocessed_host_path,
         roc_linker::ExposedSymbols {
