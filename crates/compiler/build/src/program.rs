@@ -1028,13 +1028,11 @@ fn build_loaded_file<'a>(
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
-            let (mut child, _) = link(
-                target,
-                output_exe_path.set_extension("dylib"),
-                &inputs,
-                link_type,
-            )
-            .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
+            let mut dylib_file = output_exe_path.clone();
+            dylib_file.set_extension("dylib");
+
+            let (mut child, _) = link(target, dylib_file, &inputs, link_type)
+                .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
 
             let exit_status = child
                 .wait()
