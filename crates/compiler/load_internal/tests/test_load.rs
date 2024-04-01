@@ -1153,19 +1153,22 @@ fn duplicate_alias() {
         err,
         indoc!(
             r"
-            ── IMPORT ALIAS CONFLICT in tmp/duplicate_alias/Main.roc ───────────────────────
+            ── IMPORT NAME CONFLICT in tmp/duplicate_alias/Main.roc ────────────────────────
 
-            One was imported as D:
-
-            3│  import One as D
-                              ^
-
-            but the same alias was also used for Two:
+            Two was imported as D:
 
             4│  import Two as D
-                              ^
+                ^^^^^^^^^^^^^^^
 
-            Each import should have a unique alias or none at all.
+            but D is already used by a previous import:
+
+            3│  import One as D
+                ^^^^^^^^^^^^^^^
+
+            Using the same name for both can make it hard to tell which module you
+            are referring to.
+
+            Make sure each import has a unique alias or none at all.
             "
         )
     );
@@ -1215,19 +1218,19 @@ fn alias_using_module_name() {
         err,
         indoc!(
             r"
-            ── IMPORT ALIAS CONFLICT in tmp/alias_using_module_name/Main.roc ───────────────
+            ── IMPORT NAME CONFLICT in tmp/alias_using_module_name/Main.roc ────────────────
 
             Two was imported as One:
 
             4│  import Two as One
-                              ^^^
+                ^^^^^^^^^^^^^^^^^
 
-            but One is also the name of an imported module:
+            but One is already used by a previous import:
 
             3│  import One
-                       ^^^
+                ^^^^^^^^^^
 
-            Using the same name for both can make it hard to tell which one you
+            Using the same name for both can make it hard to tell which module you
             are referring to.
 
             Make sure each import has a unique alias or none at all.
@@ -1270,16 +1273,16 @@ fn alias_using_builtin_name() {
         err,
         indoc!(
             r"
-            ── IMPORT ALIAS CONFLICT in tmp/alias_using_builtin_name/Main.roc ──────────────
+            ── IMPORT NAME CONFLICT in tmp/alias_using_builtin_name/Main.roc ───────────────
 
             BoolExtra was imported as Bool:
 
             3│  import BoolExtra as Bool
-                                    ^^^^
+                ^^^^^^^^^^^^^^^^^^^^^^^^
 
             but Bool is also the name of a builtin.
 
-            Using the same name for both can make it hard to tell which one you
+            Using the same name for both can make it hard to tell which module you
             are referring to.
 
             Make sure each import has a unique alias or none at all.

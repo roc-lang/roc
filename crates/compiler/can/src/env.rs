@@ -3,7 +3,7 @@ use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{IdentIdsByModule, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIdsByModule, ModuleId, PQModuleName, PackageModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 
@@ -15,7 +15,7 @@ pub struct Env<'a> {
 
     pub dep_idents: &'a IdentIdsByModule,
 
-    pub module_ids: &'a ModuleIds,
+    pub qualified_module_ids: &'a PackageModuleIds<'a>,
 
     /// Problems we've encountered along the way, which will be reported to the user at the end.
     pub problems: Vec<Problem>,
@@ -35,6 +35,8 @@ pub struct Env<'a> {
     pub top_level_symbols: VecSet<Symbol>,
 
     pub arena: &'a Bump,
+
+    pub opt_shorthand: Option<&'a str>,
 }
 
 impl<'a> Env<'a> {
@@ -42,19 +44,21 @@ impl<'a> Env<'a> {
         arena: &'a Bump,
         home: ModuleId,
         dep_idents: &'a IdentIdsByModule,
-        module_ids: &'a ModuleIds,
+        qualified_module_ids: &'a PackageModuleIds<'a>,
+        opt_shorthand: Option<&'a str>,
     ) -> Env<'a> {
         Env {
             arena,
             home,
             dep_idents,
-            module_ids,
+            qualified_module_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
             qualified_value_lookups: VecSet::default(),
             qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
             top_level_symbols: VecSet::default(),
+            opt_shorthand,
         }
     }
 
@@ -72,23 +76,21 @@ impl<'a> Env<'a> {
 
         let module_name = ModuleName::from(module_name_str);
 
-        match scope.get_alias_import_module_id(module_name_str) {
-            Some(module_id) => self.qualified_lookup_help(scope, *module_id, true, ident, region),
-            None => match self.module_ids.get_id(&module_name) {
-                Some(module_id) => {
-                    self.qualified_lookup_help(scope, module_id, false, ident, region)
-                }
-                None => Err(RuntimeError::ModuleNotImported {
-                    module_name,
-                    imported_modules: self
-                        .module_ids
-                        .available_modules()
-                        .map(|string| string.as_ref().into())
-                        .collect(),
-                    region,
-                    module_exists: false,
-                }),
-            },
+        match scope.modules.get_id(&module_name) {
+            Some(module_id) => self.qualified_lookup_help(scope, module_id, ident, region),
+            None => Err(RuntimeError::ModuleNotImported {
+                module_name: module_name.clone(),
+                imported_modules: scope
+                    .modules
+                    .available_names()
+                    .map(|string| string.as_ref().into())
+                    .collect(),
+                region,
+                module_exists: self
+                    .qualified_module_ids
+                    .get_id(&PQModuleName::Unqualified(module_name))
+                    .is_some(),
+            }),
         }
     }
 
@@ -99,7 +101,11 @@ impl<'a> Env<'a> {
         ident: &str,
         region: Region,
     ) -> Result<Symbol, RuntimeError> {
-        self.qualified_lookup_help(scope, module_id, false, ident, region)
+        if !scope.modules.has_id(module_id) {
+            Err(self.module_exists_but_not_imported(scope, module_id, region))
+        } else {
+            self.qualified_lookup_help(scope, module_id, ident, region)
+        }
     }
 
     /// Returns Err if the symbol resolved, but it was not exposed by the given module
@@ -107,7 +113,6 @@ impl<'a> Env<'a> {
         &mut self,
         scope: &Scope,
         module_id: ModuleId,
-        is_alias_import: bool,
         ident: &str,
         region: Region,
     ) -> Result<Symbol, RuntimeError> {
@@ -147,56 +152,63 @@ impl<'a> Env<'a> {
             }
         } else {
             match self.dep_idents.get(&module_id) {
-                Some(exposed_ids)
-                    if is_alias_import || scope.has_imported_unaliased_module(&module_id) =>
-                {
-                    match exposed_ids.get_id(ident) {
-                        Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, ident_id);
+                Some(exposed_ids) => match exposed_ids.get_id(ident) {
+                    Some(ident_id) => {
+                        let symbol = Symbol::new(module_id, ident_id);
 
-                            if is_type_name {
-                                self.qualified_type_lookups.insert(symbol);
-                            } else {
-                                self.qualified_value_lookups.insert(symbol);
-                            }
+                        if is_type_name {
+                            self.qualified_type_lookups.insert(symbol);
+                        } else {
+                            self.qualified_value_lookups.insert(symbol);
+                        }
 
-                            Ok(symbol)
-                        }
-                        None => {
-                            let exposed_values = exposed_ids
-                                .ident_strs()
-                                .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
-                                .map(|(_, ident)| Lowercase::from(ident))
-                                .collect();
-                            Err(RuntimeError::ValueNotExposed {
-                                module_name: self
-                                    .module_ids
-                                    .get_name(module_id)
-                                    .expect("Module ID known, but not in the module IDs somehow")
-                                    .clone(),
-                                ident: Ident::from(ident),
-                                region,
-                                exposed_values,
-                            })
-                        }
+                        Ok(symbol)
                     }
-                }
-                _ => Err(RuntimeError::ModuleNotImported {
-                    module_name: self
-                        .module_ids
-                        .get_name(module_id)
-                        .expect("Module ID known, but not in the module IDs somehow")
-                        .clone(),
-                    imported_modules: self
-                        .dep_idents
-                        .keys()
-                        .filter_map(|module_id| self.module_ids.get_name(*module_id))
-                        .map(|module_name| module_name.as_ref().into())
-                        .collect(),
-                    region,
-                    module_exists: true,
-                }),
+                    None => {
+                        let exposed_values = exposed_ids
+                            .ident_strs()
+                            .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
+                            .map(|(_, ident)| Lowercase::from(ident))
+                            .collect();
+                        Err(RuntimeError::ValueNotExposed {
+                            module_name: self
+                                .qualified_module_ids
+                                .get_name(module_id)
+                                .expect("Module ID known, but not in the module IDs somehow")
+                                .as_inner()
+                                .clone(),
+                            ident: Ident::from(ident),
+                            region,
+                            exposed_values,
+                        })
+                    }
+                },
+                _ => Err(self.module_exists_but_not_imported(scope, module_id, region)),
             }
+        }
+    }
+
+    #[inline]
+    fn module_exists_but_not_imported(
+        &self,
+        scope: &Scope,
+        module_id: ModuleId,
+        region: Region,
+    ) -> RuntimeError {
+        RuntimeError::ModuleNotImported {
+            module_name: self
+                .qualified_module_ids
+                .get_name(module_id)
+                .expect("Module ID known, but not in the module IDs somehow")
+                .as_inner()
+                .clone(),
+            imported_modules: scope
+                .modules
+                .available_names()
+                .map(|string| string.as_ref().into())
+                .collect(),
+            region,
+            module_exists: true,
         }
     }
 

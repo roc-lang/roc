@@ -237,8 +237,6 @@ fn start_phase<'a>(
                 let qualified_module_ids = Arc::clone(&state.arc_modules);
                 let qualified_module_ids = { (*qualified_module_ids).lock().clone() };
 
-                let module_ids = qualified_module_ids.into_module_ids();
-
                 let exposed_symbols = state
                     .exposed_symbols_by_module
                     .get(&module_id)
@@ -301,7 +299,7 @@ fn start_phase<'a>(
                     parsed,
                     dep_idents,
                     exposed_symbols,
-                    module_ids,
+                    qualified_module_ids,
                     aliases,
                     abilities_store,
                     skip_constraint_gen,
@@ -873,7 +871,7 @@ enum BuildTask<'a> {
     },
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
-        module_ids: ModuleIds,
+        qualified_module_ids: PackageModuleIds<'a>,
         dep_idents: IdentIdsByModule,
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
@@ -4973,7 +4971,7 @@ fn build_platform_header<'a>(
 #[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
-    module_ids: &ModuleIds,
+    qualified_module_ids: &'a PackageModuleIds<'a>,
     dep_idents: IdentIdsByModule,
     exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
@@ -4995,6 +4993,7 @@ fn canonicalize_and_constrain<'a>(
         imported_modules,
         mut module_timing,
         symbols_from_requires,
+        opt_shorthand,
         ..
     } = parsed;
 
@@ -5013,7 +5012,7 @@ fn canonicalize_and_constrain<'a>(
         module_id,
         &*arena.alloc(module_path.to_string_lossy()),
         src,
-        module_ids,
+        qualified_module_ids,
         exposed_ident_ids,
         &dep_idents,
         aliases,
@@ -5022,6 +5021,7 @@ fn canonicalize_and_constrain<'a>(
         exposed_symbols,
         &symbols_from_requires,
         &mut var_store,
+        opt_shorthand,
     );
 
     let mut types = Types::new();
@@ -5051,7 +5051,7 @@ fn canonicalize_and_constrain<'a>(
             crate::docs::generate_module_docs(
                 scope,
                 module_id,
-                module_ids,
+                arena.alloc(qualified_module_ids.clone().into_module_ids()),
                 module_name.into(),
                 &parsed_defs_for_docs,
                 exposed_module_ids,
@@ -5434,6 +5434,7 @@ fn parse<'a>(
         symbols_from_requires,
         header_type,
         header_comments: header_docs,
+        opt_shorthand: header.opt_shorthand,
     };
 
     Ok(Msg::Parsed(parsed))
@@ -6145,7 +6146,7 @@ fn run_task<'a>(
         } => parse(arena, header, module_ids, ident_ids_by_module),
         CanonicalizeAndConstrain {
             parsed,
-            module_ids,
+            qualified_module_ids,
             dep_idents,
             exposed_symbols,
             aliases,
@@ -6155,7 +6156,7 @@ fn run_task<'a>(
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
-                &module_ids,
+                &qualified_module_ids,
                 dep_idents,
                 exposed_symbols,
                 aliases,
