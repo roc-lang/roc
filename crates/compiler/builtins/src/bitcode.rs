@@ -1,5 +1,5 @@
 use roc_module::symbol::Symbol;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::ops::Index;
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -38,7 +38,7 @@ impl FloatWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub const fn alignment_bytes(&self, target: Target) -> u32 {
         use roc_target::Architecture::*;
         use FloatWidth::*;
 
@@ -47,7 +47,7 @@ impl FloatWidth {
         // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
-            F64 => match target_info.architecture {
+            F64 => match target.architecture() {
                 X86_64 | Aarch64 | Wasm32 => 8,
                 X86_32 | Aarch32 => 4,
             },
@@ -107,7 +107,7 @@ impl IntWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub const fn alignment_bytes(&self, target: Target) -> u32 {
         use roc_target::Architecture;
         use IntWidth::*;
 
@@ -118,7 +118,7 @@ impl IntWidth {
             U8 | I8 => 1,
             U16 | I16 => 2,
             U32 | I32 => 4,
-            U64 | I64 => match target_info.architecture {
+            U64 | I64 => match target.architecture() {
                 Architecture::X86_64
                 | Architecture::Aarch64
                 | Architecture::Aarch32
@@ -131,7 +131,7 @@ impl IntWidth {
                 //
                 // however, rust does not always think that this is true
                 // Our alignmets here are correct, but they will not match rust/zig/llvm until they update to llvm version 18.
-                match target_info.architecture {
+                match target.architecture() {
                     Architecture::X86_64 | Architecture::Aarch64 | Architecture::X86_32 => 16,
                     Architecture::Aarch32 | Architecture::Wasm32 => 8,
                 }

@@ -31,7 +31,7 @@ use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_reporting::report::{strip_colors, RenderTarget};
 use roc_solve::FunctionKind;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
+    target: Target,
     function_kind: FunctionKind,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
@@ -54,7 +54,7 @@ fn load_and_typecheck(
         DEFAULT_PALETTE,
     )?;
     let load_config = LoadConfig {
-        target_info,
+        target,
         function_kind,
         render: RenderTarget::Generic,
         palette: DEFAULT_PALETTE,
@@ -75,7 +75,7 @@ fn load_and_typecheck(
     }
 }
 
-const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+const TARGET: Target = Target::LinuxX64;
 
 // HELPERS
 
@@ -184,7 +184,7 @@ fn multiple_modules_help<'a>(
             arena,
             full_file_path,
             Default::default(),
-            TARGET_INFO,
+            TARGET,
             FunctionKind::LambdaSet,
         )
     };
@@ -204,7 +204,7 @@ fn load_fixture(
         &arena,
         filename,
         subs_by_module,
-        TARGET_INFO,
+        TARGET,
         FunctionKind::LambdaSet,
     );
     let mut loaded_module = match loaded {
@@ -367,7 +367,7 @@ fn interface_with_deps() {
         &arena,
         filename,
         subs_by_module,
-        TARGET_INFO,
+        TARGET,
         FunctionKind::LambdaSet,
     );
 
@@ -450,7 +450,10 @@ fn load_docs() {
     let expected = vec![
         (None, Some("An interface for docs tests\n")),
         (Some("User"), Some("This is a user\n")),
-        (Some("makeUser"), Some("Makes a user\n")),
+        (
+            Some("makeUser"),
+            Some("Makes a user\n\nTakes a name Str.\n"),
+        ),
         (Some("getName"), Some("Gets the user's name\n")),
         (Some("getNameExposed"), None),
     ]
