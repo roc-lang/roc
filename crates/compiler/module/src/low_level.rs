@@ -113,6 +113,7 @@ pub enum LowLevel {
     And,
     Or,
     Not,
+    Compare,
     Hash,
     PtrCast,
     PtrStore,
@@ -352,6 +353,7 @@ map_symbol_to_lowlevel! {
     And <= BOOL_AND;
     Or <= BOOL_OR;
     Not <= BOOL_NOT;
+    Compare <= LIST_STRUCTURAL_COMPARE;
     Unreachable <= LIST_UNREACHABLE;
     DictPseudoSeed <= DICT_PSEUDO_SEED;
 }

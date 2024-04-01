@@ -81,6 +81,7 @@ pub enum DeriveBuiltin {
     Decoder,
     Hash,
     IsEq,
+    Compare,
     ToInspector,
 }
 
@@ -93,6 +94,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
             Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
             Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
+            Symbol::LIST_COMPARE => Ok(DeriveBuiltin::Compare),
             Symbol::INSPECT_TO_INSPECTOR => Ok(DeriveBuiltin::ToInspector),
             _ => Err(value),
         }
@@ -127,6 +129,13 @@ impl Derived {
                     Symbol::BOOL_STRUCTURAL_EQ,
                 ))
             }
+            DeriveBuiltin::Compare => {
+                // If obligation checking passes, we always lower derived implementations of
+                // `compare` to the `Compare` low-level, to be fulfilled by the backends.
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::LIST_STRUCTURAL_COMPARE,
+                ))
+            }
             DeriveBuiltin::ToInspector => match FlatInspectable::from_var(subs, var) {
                 FlatInspectable::Immediate(imm) => Ok(Derived::Immediate(imm)),
                 FlatInspectable::Key(repr) => Ok(Derived::Key(DeriveKey::ToInspector(repr))),
@@ -159,6 +168,13 @@ impl Derived {
                 // to the `Eq` low-level, to be fulfilled by the backends.
                 Ok(Derived::SingleLambdaSetImmediate(
                     Symbol::BOOL_STRUCTURAL_EQ,
+                ))
+            }
+            DeriveBuiltin::Compare => {
+                // If obligation checking passes, we always lower derived implementations of
+                // `compare` to the `Compare` low-level, to be fulfilled by the backends.
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::LIST_STRUCTURAL_COMPARE,
                 ))
             }
             DeriveBuiltin::ToInspector => {

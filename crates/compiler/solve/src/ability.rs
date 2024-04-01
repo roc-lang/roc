@@ -303,6 +303,13 @@ impl ObligationCache {
 
             Symbol::BOOL_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
 
+            Symbol::LIST_COMPARE => Some(DeriveCompare::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
             Symbol::INSPECT_INSPECT_ABILITY => Some(DeriveInspect::is_derivable(
                 self,
                 abilities_store,
@@ -1384,6 +1391,133 @@ impl DerivableVisitor for DeriveEq {
     }
 }
 
+struct DeriveCompare;
+impl DerivableVisitor for DeriveCompare {
+    const ABILITY: Symbol = Symbol::LIST_COMPARE;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_COMPARE;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_fixed_int_alias(symbol)
+            || is_builtin_dec_alias(symbol)
+            || is_builtin_bool_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::BOX_BOX_TYPE,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        subs: &Subs,
+        var: Variable,
+        fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        for (field_name, _, field) in fields.iter_all() {
+            if subs[field].is_optional() {
+                return Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::DecodeOptionalRecordField(
+                        subs[field_name].clone(),
+                    ),
+                });
+            }
+        }
+
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, _symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    fn visit_floating_point_content(
+        var: Variable,
+        subs: &mut Subs,
+        content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        use roc_unify::unify::unify;
+
+        // Of the floating-point types,
+        // only Dec implements Eq.
+        // TODO(checkmate): pass checkmate through
+        let unified = unify(
+            &mut with_checkmate!({
+                on => UEnv::new(subs, None),
+                off => UEnv::new(subs),
+            }),
+            content_var,
+            Variable::DECIMAL,
+            UnificationMode::EQ,
+            Polarity::Pos,
+        );
+        match unified {
+            roc_unify::unify::Unified::Success { .. } => Ok(Descend(false)),
+            roc_unify::unify::Unified::Failure(..) => Err(NotDerivable {
+                var,
+                context: NotDerivableContext::Eq(NotDerivableEq::FloatingPoint),
+            }),
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        // Ranged numbers are allowed, because they are always possibly ints - floats can not have
+        // `isEq` derived, but if something were to be a float, we'd see it exactly as a float.
+        Ok(())
+    }
+}
 /// Determines what type implements an ability member of a specialized signature, given the
 /// [MustImplementAbility] constraints of the signature.
 pub fn type_implementing_specialization(

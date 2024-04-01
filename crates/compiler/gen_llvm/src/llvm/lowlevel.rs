@@ -1269,6 +1269,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let bool_val = env.builder.new_build_not(arg.into_int_value(), "bool_not");
             BasicValueEnum::IntValue(bool_val)
         }
+        Compare => {
+            panic!("TODO: implement this")
+        }
         Hash => {
             unimplemented!()
         }

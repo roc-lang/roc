@@ -1701,6 +1701,8 @@ impl Subs {
     pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
     #[rustfmt::skip]
     pub const AB_INSPECT: SubsSlice<Symbol>         = SubsSlice::new(5, 1);
+    #[rustfmt::skip]
+    pub const AB_COMPARE: SubsSlice<Symbol>         = SubsSlice::new(6, 1);
     // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
@@ -1730,6 +1732,7 @@ impl Subs {
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
         symbol_names.push(Symbol::BOOL_EQ);
         symbol_names.push(Symbol::INSPECT_INSPECT_ABILITY);
+        symbol_names.push(Symbol::LIST_COMPARE);
         // END INIT-SymbolSubsSlice
 
         // IFTTT INIT-VariableSubsSlice

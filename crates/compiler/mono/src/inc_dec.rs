@@ -1310,7 +1310,7 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         ListReleaseExcessCapacity => &[OWNED],
         StrReleaseExcessCapacity => &[OWNED],
 
-        Eq | NotEq => &[BORROWED, BORROWED],
+        Eq | NotEq | Compare => &[BORROWED, BORROWED],
 
         And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
