@@ -626,7 +626,7 @@ pub fn parse_single_def<'a>(
                 options,
                 start,
                 spaces_before_current_start,
-                // TODO figure out why including spaces_before_current here doubles things up
+                // TODO including spaces_before_current here doubles things up
                 &[],
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
@@ -634,41 +634,12 @@ pub fn parse_single_def<'a>(
                     Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
                         Ok((MadeProgress, Some(single_def), state))
                     }
-                    _ => Ok((NoProgress, None, initial)),
+                    _ => Ok((NoProgress, None, initial)), // a hacky way to get expression-based error messages. TODO fix this
                 },
-                _ => Ok((NoProgress, None, initial)),
+                _ => Ok((NoProgress, None, initial)), // a hacky way to get expression-based error messages. TODO fix this
             }
-
-            // a hacky way to get expression-based error messages. TODO fix this
         }
         Ok((_, loc_pattern, state)) => {
-            // // Check if we have a Statement with Suffixed first,
-            // // re-parse the state as an expression
-            // // and then use a `{}=` pattern for the ValueDef::Body.
-            // if is_statement {
-            //     let parse_def_expr =
-            //     space0_before_e(increment_min_indent(expr_start(options)), EExpr::IndentEnd);
-
-            //     let (_, loc_def_expr, updated_state) =
-            //         parse_def_expr.parse(arena, state, min_indent)?;
-
-            //     let loc_pattern = Loc::at(region, Pattern::RecordDestructure(Collection::empty()));
-
-            //     let value_def = ValueDef::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_expr));
-
-            //     let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
-
-            //     Ok((
-            //         MadeProgress,
-            //         Some(SingleDef {
-            //             type_or_value: Either::Second(value_def),
-            //             region,
-            //             spaces_before: spaces_before_current,
-            //         }),
-            //         updated_state,
-            //     ))
-            // }
-
             // First let's check whether this is an ability definition.
             let opt_tag_and_args: Option<(&str, Region, &[Loc<Pattern>])> = match loc_pattern.value
             {
@@ -721,7 +692,6 @@ pub fn parse_single_def<'a>(
                     //     Stdout.line! "Bar"
                     //     a=Stdout.line! "Foo"
                     //     Task.ok {}
-                    // any less than +4 and this doesn't work reliably
                     operator_result_state.line_indent() + 1,
                     arena,
                     operator_result_state.clone(),
@@ -923,7 +893,6 @@ pub fn parse_single_def_assignment<'a>(
     let (mut progress, mut loc_def_expr, mut state) =
         parse_def_expr.parse(arena, state, min_indent)?;
 
-    // TODO how do we get region if we use parse_defs_expr which only returns expr???
     let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
     // If the expression is actually a suffixed statement, then we need to continue
@@ -934,7 +903,7 @@ pub fn parse_single_def_assignment<'a>(
         // we will keep the pattern `loc_pattern` for the new Defs
         defs.push_value_def(
             ValueDef::Stmt(arena.alloc(loc_def_expr)),
-            region,
+            Region::span_across(&loc_pattern.region, &loc_def_expr.region),
             spaces_before_current,
             &[],
         );
@@ -1742,20 +1711,6 @@ fn parse_expr_operator<'a>(
                         .with_spaces_before(spaces_after_operator, new_expr.region);
                 }
 
-                // For suffixed expressions we restrict multi-line statements to be indented
-                // so that we can parse a statement like,
-                // ```
-                // "hello"
-                //     |> sayHi!
-                // ```
-                // if we don't do this then we do not know where the statement ends
-                // and the next expressions starts
-                let new_indent = if is_loc_expr_suffixed(&new_expr) {
-                    min_indent + 1
-                } else {
-                    min_indent
-                };
-
                 match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
                     Err((_, _)) => {
                         let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
@@ -1780,7 +1735,20 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        // TODO new start?
+                        // For suffixed expressions we restrict multi-line statements to be indented
+                        // so that we can parse a statement like,
+                        // ```
+                        // "hello"
+                        //     |> sayHi!
+                        // ```
+                        // if we don't do this then we do not know where the statement ends
+                        // and the next expressions starts
+                        let new_indent = if is_loc_expr_suffixed(&new_expr) {
+                            min_indent + 1
+                        } else {
+                            min_indent
+                        };
+
                         parse_expr_end(new_indent, options, expr_state, arena, state, initial_state)
                     }
                 }
