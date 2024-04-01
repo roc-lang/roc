@@ -1000,8 +1000,6 @@ pub enum Pattern<'a> {
     MalformedIdent(&'a str, crate::ident::BadIdent),
 }
 
-// pub fn contains_bang_suffixed
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Base {
     Octal,
@@ -1511,14 +1509,7 @@ macro_rules! impl_extract_spaces {
                 match self {
                     $t::SpaceBefore(item, before) => {
                         match item {
-                            $t::SpaceBefore(_, _) => {
-                                // TODO this probably isn't right, but was causing a panic with just todo!()
-                                Spaces {
-                                    before,
-                                    item: **item,
-                                    after: &[],
-                                }
-                            },
+                            $t::SpaceBefore(_, _) => todo!(),
                             $t::SpaceAfter(item, after) => {
                                 Spaces {
                                     before,

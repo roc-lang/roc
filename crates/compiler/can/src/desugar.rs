@@ -886,30 +886,6 @@ pub fn desugar_expr<'a>(
             })
         }
         LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
-        // Suffixed(expr) => {
-        //     // Rewrite `Suffixed(BinOps([args...], Var(...)))` to `BinOps([args...], Suffixed(Var(...)))`
-        //     // This is to handle cases like e.g. `"Hello" |> line!`
-        //     if let BinOps(args, sub_expr) = expr {
-        //         return desugar_expr(
-        //             arena,
-        //             arena.alloc(Loc::at(
-        //                 loc_expr.region,
-        //                 BinOps(
-        //                     args,
-        //                     arena.alloc(Loc::at(sub_expr.region, Suffixed(&sub_expr.value))),
-        //                 ),
-        //             )),
-        //             src,
-        //             line_info,
-        //             module_path,
-        //         );
-        //     }
-
-        //     // Suffixed are also desugared in Defs
-        //     // Any nodes that don't get desugared will be caught by canonicalize_expr
-        //     // and we can handle those cases as required
-        //     loc_expr
-        // }
     }
 }
 
