@@ -1,6 +1,4 @@
-app "quicksort"
-    packages { pf: "quicksort-platform/main.roc" }
-    provides [quicksort] to pf
+app [quicksort] { pf: platform "quicksort-platform/main.roc" }
 
 quicksort = \originalList ->
     n = List.len originalList

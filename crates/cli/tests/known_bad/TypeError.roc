@@ -1,6 +1,4 @@
-app "type-error"
-    packages { pf: "../../../../examples/cli/false-interpreter/platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "../../../../examples/cli/false-interpreter/platform/main.roc" }
 
 import pf.Task exposing [Task]
 

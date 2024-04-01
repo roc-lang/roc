@@ -1,5 +1,3 @@
-package "transitive-tests"
-    exposes [
-        Direct,
-    ]
-    packages {}
+package [
+    Direct,
+] {}

@@ -5553,7 +5553,7 @@ fn make_specializations<'a>(
     let (procedures, host_exposed_lambda_sets, restored_procs_base) =
         procs.get_specialized_procs_without_rc();
 
-    // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
+    // Turn `BytesDecode.IdentId(238)` into `BytesDecode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
     let make_specializations_end = Instant::now();

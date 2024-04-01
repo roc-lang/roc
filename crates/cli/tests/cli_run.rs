@@ -566,7 +566,7 @@ mod cli_run {
 
                 This expectation failed:
 
-                28│      expect words == []
+                25│      expect words == []
                                 ^^^^^^^^^^^
 
                 When it failed, these variables had these values:
@@ -574,12 +574,12 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [<ignored for tests>:31] x = 42
-                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:35] "this is line 24" = "this is line 24"
-                [<ignored for tests>:21] x = "abc"
-                [<ignored for tests>:21] x = 10
-                [<ignored for tests>:21] x = (A (B C))
+                [<ignored for tests>:28] x = 42
+                [<ignored for tests>:30] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:32] "this is line 24" = "this is line 24"
+                [<ignored for tests>:18] x = "abc"
+                [<ignored for tests>:18] x = 10
+                [<ignored for tests>:18] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -599,7 +599,7 @@ mod cli_run {
 
                 This expectation failed:
 
-                9│      expect a == 2
+                6│      expect a == 2
                                ^^^^^^
 
                 When it failed, these variables had these values:
@@ -611,8 +611,8 @@ mod cli_run {
 
                 This expectation failed:
 
-                10│      expect a == 3
-                                ^^^^^^
+                7│      expect a == 3
+                               ^^^^^^
 
                 When it failed, these variables had these values:
 
@@ -623,11 +623,11 @@ mod cli_run {
 
                 This expectation failed:
 
-                14│>  expect
-                15│>      a = makeA
-                16│>      b = 2i64
-                17│>
-                18│>      a == b
+                11│>  expect
+                12│>      a = makeA
+                13│>      b = 2i64
+                14│>
+                15│>      a == b
 
                 When it failed, these variables had these values:
 
@@ -1405,9 +1405,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                7│  main : Str -> Task {} []
-                8│  main = /_ ->
-                9│      "this is a string, not a Task {} [] function like the platform expects."
+                5│  main : Str -> Task {} []
+                6│  main = /_ ->
+                7│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:
@@ -1441,7 +1441,7 @@ mod cli_run {
 
                 Symbol is imported but not used.
 
-                4│  import Symbol exposing [Ident]
+                3│  import Symbol exposing [Ident]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
@@ -1485,7 +1485,7 @@ mod cli_run {
 
                 Symbol is imported but not used.
 
-                4│  import Symbol exposing [Ident]
+                3│  import Symbol exposing [Ident]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.

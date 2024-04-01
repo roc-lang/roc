@@ -1,6 +1,4 @@
-app "closure"
-    packages { pf: "platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
 import pf.Task
 

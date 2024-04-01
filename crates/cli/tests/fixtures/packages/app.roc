@@ -1,6 +1,4 @@
-app "packages-test"
-    packages { pf: "platform/main.roc", json: "json/main.roc", csv: "csv/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc", json: "json/main.roc", csv: "csv/main.roc" }
 
 import json.JsonParser
 import csv.Csv

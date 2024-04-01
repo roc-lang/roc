@@ -1,6 +1,4 @@
-app "expects-test"
-    packages { pf: "zig-platform/main.roc" }
-    provides [main] to pf
+app [main] { pf: platform "zig-platform/main.roc" }
 
 makeA =
     a = 1
