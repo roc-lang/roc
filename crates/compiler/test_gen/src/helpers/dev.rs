@@ -216,7 +216,7 @@ pub fn helper(
 
     let (mut child, dylib_path) = link(
         &target,
-        app_o_file.clone(),
+        dir.path().join("app.dylib"),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[

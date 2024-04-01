@@ -343,7 +343,7 @@ fn mono_module_to_dylib_asm<'a>(
 
     let (mut child, dylib_path) = roc_build::link::link(
         &target,
-        app_o_file.clone(),
+        dir.path().join("app.dylib"),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[
