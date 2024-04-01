@@ -346,20 +346,20 @@ pub enum Expr<'a> {
     UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
 }
 
-pub fn is_loc_expr_suffixed(loc_expr: Loc<Expr>) -> bool {
+pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
     match loc_expr.value.extract_spaces().item {
         // expression without arguments, `read!`
         Expr::Var { suffixed, .. } => suffixed > 0,
 
         // expression with arguments, `line! "Foo"`
-        Expr::Apply(sub_loc_expr, _, _) => is_loc_expr_suffixed(*sub_loc_expr),
+        Expr::Apply(sub_loc_expr, _, _) => is_loc_expr_suffixed(sub_loc_expr),
 
         // expression in a pipeline, `"hi" |> say!`
         Expr::BinOps(chain, sub_loc_expr) => {
             let sum: isize = chain
-                .into_iter()
+                .iter()
                 .map(|(chain_loc_expr, _)| -> isize {
-                    if is_loc_expr_suffixed(*chain_loc_expr) {
+                    if is_loc_expr_suffixed(chain_loc_expr) {
                         1
                     } else {
                         0
@@ -367,7 +367,7 @@ pub fn is_loc_expr_suffixed(loc_expr: Loc<Expr>) -> bool {
                 })
                 .sum();
 
-            is_loc_expr_suffixed(*sub_loc_expr) || sum > 0
+            is_loc_expr_suffixed(sub_loc_expr) || sum > 0
         }
 
         _ => false,
@@ -544,13 +544,13 @@ impl<'a> Defs<'a> {
                         ..
                     },
                     loc_expr,
-                ) if collection.is_empty() && is_loc_expr_suffixed(*loc_expr) => {
+                ) if collection.is_empty() && is_loc_expr_suffixed(loc_expr) => {
                     let mut new_defs = self.clone();
                     new_defs.remove_value_def(tag_index);
 
                     return Some((new_defs, loc_expr));
                 }
-                ValueDef::Stmt(loc_expr) if is_loc_expr_suffixed(*loc_expr) => {
+                ValueDef::Stmt(loc_expr) if is_loc_expr_suffixed(loc_expr) => {
                     let mut new_defs = self.clone();
                     new_defs.remove_value_def(tag_index);
 
@@ -676,7 +676,7 @@ impl<'a> Defs<'a> {
 
                 // a definition with a suffixed expression e.g. `args = Arg.list!`
                 if let ValueDef::Body(_, loc_expr) = &self.value_defs[index] {
-                    if is_loc_expr_suffixed(**loc_expr) {
+                    if is_loc_expr_suffixed(loc_expr) {
                         return Some((tag_index, index));
                     }
                 }

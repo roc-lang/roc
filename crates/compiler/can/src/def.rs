@@ -2880,7 +2880,7 @@ fn to_pending_value_def<'a>(
             preceding_comment: *preceding_comment,
         }),
 
-        Stmt(_) => todo!(),
+        Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
     }
 }
 

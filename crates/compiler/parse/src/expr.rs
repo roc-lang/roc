@@ -327,7 +327,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
-        let new_indent = if is_loc_expr_suffixed(expr) {
+        let new_indent = if is_loc_expr_suffixed(&expr) {
             min_indent + 1
         } else {
             min_indent
@@ -404,7 +404,7 @@ impl<'a> ExprState<'a> {
         } else if !self.expr.value.is_tag()
             && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
-            && !is_loc_expr_suffixed(self.expr)
+            && !is_loc_expr_suffixed(&self.expr)
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
 
@@ -631,7 +631,7 @@ pub fn parse_single_def<'a>(
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
-                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(*loc_expr) => {
+                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
                         Ok((MadeProgress, Some(single_def), state))
                     }
                     _ => Ok((NoProgress, None, initial)),
@@ -712,21 +712,26 @@ pub fn parse_single_def<'a>(
             let operator_result = operator().parse(arena, state.clone(), min_indent);
 
             if let Ok((_, BinOp::Assignment, operator_result_state)) = operator_result {
-                return parse_single_def_assignment(
+                let result = parse_single_def_assignment(
                     options,
                     // to support statements we have to increase the indent here so that we can parse a child def
                     // within a def and still continue to parse the final expresison for this def
                     // e.g.
                     // main =
                     //     Stdout.line! "Bar"
-                    //     a = Stdout.line! "Foo"
+                    //     a=Stdout.line! "Foo"
                     //     Task.ok {}
-                    min_indent + 1,
+                    // any less than +4 and this doesn't work reliably
+                    operator_result_state.line_indent() + 1,
                     arena,
-                    operator_result_state,
+                    operator_result_state.clone(),
                     loc_pattern,
                     spaces_before_current,
                 );
+
+                // dbg!("parse_single_def", &loc_pattern, min_indent, operator_result_state.clone(), &result);
+
+                return result;
             };
 
             if let Ok((_, BinOp::IsAliasType, state)) = operator_result {
@@ -893,7 +898,7 @@ pub fn parse_single_def<'a>(
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
-                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(*loc_expr) => {
+                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
                         Ok((MadeProgress, Some(single_def), state))
                     }
                     _ => Ok((NoProgress, None, initial)),
@@ -923,7 +928,7 @@ pub fn parse_single_def_assignment<'a>(
 
     // If the expression is actually a suffixed statement, then we need to continue
     // to parse the rest of the expression
-    if crate::ast::is_loc_expr_suffixed(loc_def_expr) {
+    if crate::ast::is_loc_expr_suffixed(&loc_def_expr) {
         let mut defs = Defs::default();
         // Take the suffixed value and make it a e.g. Body(`{}=`, Apply(Var(...)))
         // we will keep the pattern `loc_pattern` for the new Defs
@@ -941,7 +946,9 @@ pub fn parse_single_def_assignment<'a>(
                 loc_def_expr = Loc::at(region, expr);
                 state = new_state;
             }
-            Err(err) => {}
+            Err(_) => {
+                // unable to parse more definitions, continue
+            }
         }
     };
 
@@ -956,80 +963,6 @@ pub fn parse_single_def_assignment<'a>(
         }),
         state,
     ))
-
-    // If there is only 1 def then extract the value and replace the Defs node
-    // let loc_return = if defs.value_defs.len() > 1 {
-    //     match defs.last_value_suffixed() {
-    //         None => internal_error!("expected a value_def, found nothing"),
-    //         Some((new_defs, value_def)) => {
-    //             if new_defs.
-    //         }
-    //     }
-    // };
-
-    // let parse_defs_expr_result = dbg!(parse_defs_expr(
-    //     options,
-    //     min_indent + 1,
-    //     defs.clone(),
-    //     arena,
-    //     state_after_def_expr.clone(),
-    // ));
-
-    // if let Err((err_progress, EExpr::DefMissingFinalExpr2(expr2, pos))) =
-    //     parse_defs_expr_result
-    // {
-    //     let defs_copy = defs.clone();
-
-    //     // Try to de-sugar `!` a suffix if it is the final expression
-    //     if let Some(ValueDef::Body(body_loc_pattern, loc_expr)) =
-    //         defs_copy.value_defs.last()
-    //     {
-    //         if let Pattern::RecordDestructure(record) =
-    //             body_loc_pattern.extract_spaces().item
-    //         {
-    //             if record.is_empty() && is_loc_expr_suffixed(**loc_expr) {
-    //                 // remove the last value_def and extract the Suffixed value
-    //                 // to be  the return expression ret_loc
-    //                 let mut new_defs_copy = defs_copy.clone();
-
-    //                 dbg!(&new_defs_copy);
-    //                 new_defs_copy.remove_value_def(
-    //                     new_defs_copy.tags.len().saturating_sub(1),
-    //                 );
-    //                 dbg!(&new_defs_copy);
-
-    //                 let loc_ret = if new_defs_copy.len() <= 1 {
-    //                     extract_suffixed_expr(arena, **loc_expr)
-    //                 } else {
-    //                     arena.alloc(Loc::at(
-    //                         region,
-    //                         Expr::Defs(
-    //                             arena.alloc(new_defs_copy),
-    //                             extract_suffixed_expr(arena, **loc_expr),
-    //                         ),
-    //                     ))
-    //                 };
-
-    //                 return Ok((
-    //                     MadeProgress,
-    //                     Some(SingleDef {
-    //                         type_or_value: Either::Second(ValueDef::Body(
-    //                             arena.alloc(loc_pattern),
-    //                             loc_ret,
-    //                         )),
-    //                         region,
-    //                         spaces_before: spaces_before_current,
-    //                     }),
-    //                     state_after_def_expr.clone(),
-    //                 ));
-    //             }
-    //         }
-    //     }
-
-    //     return Err((err_progress, EExpr::DefMissingFinalExpr2(expr2, pos)));
-    // } else if let Ok((progress, expr, state_after_parse_defs_expr)) =
-    //     parse_defs_expr_result
-    // {
 }
 
 /// e.g. Things that can be on their own line in a def, e.g. `expect`, `expect-fx`, or `dbg`
@@ -1246,7 +1179,7 @@ fn parse_defs_expr<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    match dbg!(parse_defs_end(options, min_indent, defs, arena, state)) {
+    match parse_defs_end(options, min_indent, defs, arena, state) {
         Err(bad) => Err(bad),
         Ok((_, def_state, state)) => {
             // this is no def, because there is no `=` or `:`; parse as an expr
@@ -1817,7 +1750,7 @@ fn parse_expr_operator<'a>(
                 // ```
                 // if we don't do this then we do not know where the statement ends
                 // and the next expressions starts
-                let new_indent = if is_loc_expr_suffixed(new_expr) {
+                let new_indent = if is_loc_expr_suffixed(&new_expr) {
                     min_indent + 1
                 } else {
                     min_indent

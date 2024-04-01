@@ -291,7 +291,25 @@ fn generate_entry_docs(
                     // Don't generate docs for `expect-fx`s
                 }
 
-                ValueDef::Stmt(_) => todo!(),
+                ValueDef::Stmt(loc_expr) => {
+                    // TODO is this right for suffixed??
+                    if let roc_parse::ast::Expr::Var {
+                        ident: identifier, ..
+                    } = loc_expr.value
+                    {
+                        // Check if this module exposes the def
+                        if let Some(ident_id) = ident_ids.get_id(identifier) {
+                            let doc_def = DocDef {
+                                name: identifier.to_string(),
+                                type_annotation: TypeAnnotation::NoTypeAnn,
+                                type_vars: Vec::new(),
+                                symbol: Symbol::new(home, ident_id),
+                                docs,
+                            };
+                            doc_entries.push(DocEntry::DocDef(doc_def));
+                        }
+                    }
+                }
             },
 
             Ok(type_index) => match &defs.type_defs[type_index.index()] {
