@@ -967,7 +967,6 @@ fn link_linux(
 
     let ld_linux_path_str = &ld_linux_path.to_string_lossy();
 
-    let mut soname;
     let (base_args, output_path) = match link_type {
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
@@ -976,17 +975,8 @@ fn link_linux(
             output_path,
         ),
         LinkType::Dylib => {
-            // TODO: do we actually need the version number on this?
-            // Do we even need the "-soname" argument?
-            //
-            // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
-
-            soname = output_path.clone();
-            soname.set_extension("so.1");
-
             let mut output_path = output_path;
-
-            output_path.set_extension("so.1.0");
+            output_path.set_extension("so");
 
             (
                 // TODO: find a way to avoid using a vec! here - should theoretically be
@@ -994,8 +984,6 @@ fn link_linux(
                 // Also find a way to have these be string slices instead of Strings.
                 vec![
                     "-shared".to_string(),
-                    "-soname".to_string(),
-                    soname.as_path().to_str().unwrap().to_string(),
                 ],
                 output_path,
             )
