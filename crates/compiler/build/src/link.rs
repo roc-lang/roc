@@ -1278,7 +1278,7 @@ pub fn llvm_module_to_dylib(
     // Link app.o into a dylib - e.g. app.so or app.dylib
     let (mut child, dylib_path) = link(
         target,
-        app_o_file.clone(),
+        dir.path().join("app.dylib"),
         &[app_o_file.to_str().unwrap()],
         LinkType::Dylib,
     )
