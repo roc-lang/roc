@@ -1,6 +1,6 @@
 app "rocLovesRust"
     packages { pf: "rust-platform/main.roc" }
-    imports []
+    imports [pf.Task]
     provides [main] to pf
 
-main = "Roc <3 Rust!\n"
+main = Task.stdoutLine "Roc <3 Rust!\n"

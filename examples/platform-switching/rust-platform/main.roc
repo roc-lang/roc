@@ -2,8 +2,8 @@ platform "echo-in-rust"
     requires {} { main : Task {} [] }
     exposes [Task]
     packages {}
-    imports [InternalTask.{ Task }]
+    imports [Task.{ Task }]
     provides [mainForHost]
 
-mainForHost : Task {} []
-mainForHost = main
+mainForHost : Task.Op
+mainForHost = Task.taskToOp main
