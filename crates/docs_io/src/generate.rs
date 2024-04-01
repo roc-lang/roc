@@ -1,11 +1,12 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
 use bumpalo::{collections::string::String, Bump};
-use core::slice::Iter;
+use core::{fmt::Debug, slice::Iter};
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_docs_render::{
-    AbilityImpl, BodyEntry, Docs, SidebarEntry, TypeAnn, TypeAnnVisitor, TypeRenderer,
+    AbilityImpl, AbilityMember, BodyEntry, Docs, SidebarEntry, TypeAnn, TypeAnnVisitor,
+    TypeRenderer,
 };
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
@@ -126,43 +127,78 @@ impl<'a> IoDocs<'a> {
 }
 
 #[derive(Debug)]
-struct Annotation {}
+struct Annotation {
+    typ: Type,
+}
 
-impl TypeAnn for Annotation {
+impl<'a, Ability: AbilityImpl<'a> + Debug + 'a> TypeAnn<'a, Ability> for Annotation {
     fn visit<
-        'a,
-        Ability,
-        VisitAbility: Fn(Ability, &'a mut String<'a>),
-        Alias,
-        VisitAlias: Fn(StrIter, Alias, &'a mut String<'a>),
-        Opaque,
-        VisitOpaque: Fn(StrIter, Opaque, &'a mut String<'a>),
-        Value,
-        VisitValue: Fn(Value, &'a mut String<'a>),
+        VisitAbility: Fn(AbilityMemberIter, &'a mut String<'a>),
+        VisitAlias: Fn(StrIter, &'a Self, &'a mut String<'a>),
+        VisitOpaque: Fn(StrIter, AbilityIter, &'a mut String<'a>),
+        VisitValue: Fn(&'a Self, &'a mut String<'a>),
+        // Iterators
         StrIter: Iterator<Item = &'a &'a str>,
+        AbilityIter: Iterator<Item = &'a Ability>,
+        AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Self>>,
     >(
         &self,
         buf: &mut String<'_>,
         visitor: TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue>,
     ) {
-        todo!()
+        match &self.typ {
+            Type::EmptyRec
+            | Type::EmptyTagUnion
+            | Type::Function(_, _, _)
+            | Type::Record(_, _)
+            | Type::Tuple(_, _)
+            | Type::TagUnion(_, _)
+            | Type::FunctionOrTagUnion(_, _, _)
+            | Type::RangedNumber(_) => (visitor.value)(&self, buf),
+            Type::ClosureTag {
+                name,
+                captures,
+                ambient_function,
+            } => todo!(),
+            Type::UnspecializedLambdaSet { unspecialized } => todo!(),
+            Type::DelayedAlias(_) => todo!(),
+            Type::Alias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                infer_ext_in_output_types,
+                actual,
+                kind,
+            } => {
+                let todo = (); // TODO actually populate these.
+                let type_var_names = &["TODO type variable names"];
+
+                (visitor.type_alias)(type_var_names.iter(), &self, buf)
+            }
+            Type::RecursiveTagUnion(_, _, _) => todo!(),
+            Type::Apply(_, _, _) => (visitor.opaque_type)(),
+            Type::Variable(_) => todo!(),
+            Type::Error => todo!(),
+        }
     }
 }
 
 impl<'a>
     Docs<
         'a,
-        Ability,
+        AbilityAnn<'a>,
         ModuleId,
         IdentId,
         Annotation,
         Alias,
         TypeRenderer,
-        Iter<'a, Ability>,
+        // Iterators
+        Iter<'a, AbilityAnn<'a>>,
         Iter<'a, (ModuleId, &'a str)>,
         IterMut<'a, SidebarEntry<'a, Iter<'a, &'a str>>>,
         Iter<'a, &'a str>,
         Iter<'a, BodyEntry<'a, Annotation>>,
+        Iter<'a, AbilityMember<'a, Annotation>>,
         Iter<'a, (&'a str, Iter<'a, Annotation>)>,
         Iter<'a, Annotation>,
     > for IoDocs<'a>
@@ -219,7 +255,7 @@ impl<'a>
         &self,
         arena: &'b Bump,
         renderer: &mut TypeRenderer,
-        typ: Annotation,
+        typ: &Annotation,
         buf: &mut String<'b>,
     ) {
         todo!()
@@ -227,9 +263,11 @@ impl<'a>
 }
 
 #[derive(Debug)]
-pub struct Ability {}
+pub struct AbilityAnn<'a> {
+    name: &'a str,
+}
 
-impl<'a> AbilityImpl<'a> for Ability {
+impl<'a> AbilityImpl<'a> for AbilityAnn<'a> {
     fn name(&self) -> &'a str {
         todo!()
     }

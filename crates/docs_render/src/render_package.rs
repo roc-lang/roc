@@ -38,19 +38,28 @@ pub struct BodyEntry<'a, Type> {
     pub docs: Option<&'a str>,
 }
 
+#[derive(Debug)]
+pub struct AbilityMember<'a, Type> {
+    pub entry_name: &'a str,
+    pub type_annotation: Type,
+    pub docs: Option<&'a str>,
+}
+
 pub trait Docs<
     'a,
     Ability: AbilityImpl<'a> + Debug + 'a,
     ModuleId: PartialEq + Copy + Debug + 'a,
     IdentId: PartialEq + Copy + Debug + 'a,
-    Type: TypeAnn + Debug + 'a,
+    Type: TypeAnn<'a, Ability> + Debug + 'a,
     Alias,
     TypeVisitor: roc_docs_types::TypeVisitor<Type>,
+    // Iterators
     AbilityIter: Iterator<Item = &'a Ability>,
     ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
     Sidebar: Iterator<Item = &'a mut SidebarEntry<'a, StrIter>>,
     StrIter: Iterator<Item = &'a &'a str> + 'a,
     BodyEntries: Iterator<Item = &'a BodyEntry<'a, Type>>,
+    AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Type>>,
     VisitAbleVars: Iterator<Item = &'a (&'a str, TypesIter)>,
     TypesIter: Iterator<Item = &'a Type> + 'a,
 >: Sized
@@ -76,7 +85,7 @@ pub trait Docs<
         &self,
         arena: &'b Bump,
         renderer: &mut TypeRenderer,
-        typ: Type,
+        typ: &Type,
         buf: &mut String<'b>,
     );
 
@@ -232,7 +241,7 @@ pub trait Docs<
         }
     }
 
-    fn render_type(&self, arena: &'a Bump, typ: Type, buf: &mut String<'a>) {
+    fn render_type(&self, arena: &'a Bump, typ: &Type, buf: &mut String<'a>) {
         use roc_docs_types::TypeVisitor;
 
         let mut renderer = TypeRenderer::default();
@@ -278,7 +287,7 @@ pub trait Docs<
             type_ann.visit(
                 buf,
                 TypeAnnVisitor {
-                    ability: |ability, buf| self.render_ability_decl(arena, ability, buf),
+                    ability: |members, buf| self.render_ability_decl(arena, members, buf),
                     type_alias: |type_var_names: StrIter, alias, buf| {
                         self.render_type_alias_decl(arena, type_var_names, alias, buf)
                     },
@@ -291,21 +300,23 @@ pub trait Docs<
         }
     }
 
-    fn render_ability_decl(&self, _arena: &'a Bump, members: AbilityIter, buf: &mut String<'_>) {
+    fn render_ability_decl(&self, arena: &'a Bump, members: AbilityMemberIter, buf: &mut String<'a>) {
         buf.push_str(" <span class='kw'>implements {</span>");
 
         let mut any_rendered = false;
 
-        for (index, ability) in members.enumerate() {
+        for (index, member) in members.enumerate() {
             if index == 0 {
                 buf.push_str(" <h4 class='kw'>implements</h4><ul class='opaque-abilities'>");
                 any_rendered = true;
             }
 
-            let name = ability.name();
-            let href = ability.docs_url();
+            let _ = write!(buf, "<li>{} : ", member.entry_name);
+            // TODO should we render docs for each member individually?
 
-            let _ = write!(buf, "<li><a href='{href}'>{name}</a></li>");
+            self.render_type(arena, &member.type_annotation, buf);
+
+            buf.push_str("</li>");
         }
 
         if any_rendered {
@@ -319,7 +330,7 @@ pub trait Docs<
         &self,
         arena: &'a Bump,
         type_var_names: StrIter,
-        alias: Type,
+        alias: &'a Type,
         buf: &mut String<'a>,
     ) {
         // Render the type variables
@@ -331,7 +342,7 @@ pub trait Docs<
 
         buf.push_str(" <span class='kw'>:</span>");
 
-        self.render_type(arena, alias, buf);
+        self.render_type(arena, &alias, buf);
     }
 
     fn render_opaque_type_decl(
@@ -370,10 +381,10 @@ pub trait Docs<
         }
     }
 
-    fn render_val_decl(&self, arena: &'a Bump, typ: Type, buf: &mut String<'a>) {
+    fn render_val_decl(&self, arena: &'a Bump, typ: &'a Type, buf: &mut String<'a>) {
         buf.push_str(" <span class='kw'>:</span>");
 
-        self.render_type(arena, typ, buf)
+        self.render_type(arena, &typ, buf)
     }
 }
 
@@ -382,24 +393,32 @@ pub trait AbilityImpl<'a> {
     fn docs_url(&self) -> &'a str;
 }
 
-pub trait TypeAnn {
+pub trait TypeAnn<'a, Ability: AbilityImpl<'a> + Debug + 'a>: Sized + 'a {
     fn visit<
-        'a,
-        Ability,
-        VisitAbility: Fn(Ability, &'a mut String<'a>),
-        Alias,
-        VisitAlias: Fn(StrIter, Alias, &'a mut String<'a>),
-        Opaque,
-        VisitOpaque: Fn(StrIter, Opaque, &'a mut String<'a>),
-        Value,
-        VisitValue: Fn(Value, &'a mut String<'a>),
+        // visit functions
+        VisitAbility: Fn(AbilityMemberIter, &'a mut String<'a>),
+        VisitAlias: Fn(StrIter, &'a Self, &'a mut String<'a>),
+        VisitOpaque: Fn(StrIter, AbilityIter, &'a mut String<'a>),
+        VisitValue: Fn(&'a Self, &'a mut String<'a>),
+        // iterators
         StrIter: Iterator<Item = &'a &'a str>,
+        AbilityIter: Iterator<Item = &'a Ability>,
+        AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Self>>,
     >(
         &self,
         buf: &mut String<'_>,
         visitor: TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue>,
     );
 }
+
+// ability: |ability, buf| self.render_ability_decl(arena, ability, buf),
+// type_alias: |type_var_names: StrIter, alias, buf| {
+//     self.render_type_alias_decl(arena, type_var_names, alias, buf)
+// },
+// opaque_type: |type_var_names: StrIter, abilities: AbilityIter, buf| {
+//     self.render_opaque_type_decl(arena, type_var_names, abilities, buf)
+// },
+// value: |val, buf| self.render_val_decl(arena, val, buf),
 
 pub struct TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue> {
     pub ability: VisitAbility,
