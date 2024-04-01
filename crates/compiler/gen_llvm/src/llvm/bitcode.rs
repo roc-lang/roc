@@ -1226,7 +1226,7 @@ pub(crate) fn call_bitcode_fn_returning_record<'ctx>(
     let zig_return_alloca;
     let layout_repr = layout_interner.get_repr(layout);
     let fn_val = env.module.get_function(fn_name).unwrap();
-    if fn_val.get_type().get_return_type() == None {
+    if fn_val.get_type().get_return_type().is_none() {
         // return by pointer
         let bitcode_return_type = env
             .module
@@ -1235,7 +1235,7 @@ pub(crate) fn call_bitcode_fn_returning_record<'ctx>(
         zig_return_alloca = env
             .builder
             .new_build_alloca(bitcode_return_type, "zig_return_alloca");
-        call_void_bitcode_fn(env, &[zig_return_alloca.into(), arg.into()], fn_name);
+        call_void_bitcode_fn(env, &[zig_return_alloca.into(), arg], fn_name);
     } else {
         // direct return
         let zig_result = call_bitcode_fn(env, &[arg], fn_name);
