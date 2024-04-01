@@ -982,9 +982,7 @@ fn link_linux(
                 // TODO: find a way to avoid using a vec! here - should theoretically be
                 // able to do this somehow using &[] but the borrow checker isn't having it.
                 // Also find a way to have these be string slices instead of Strings.
-                vec![
-                    "-shared".to_string(),
-                ],
+                vec!["-shared".to_string()],
                 output_path,
             )
         }
