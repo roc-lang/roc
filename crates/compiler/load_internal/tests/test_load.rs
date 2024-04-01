@@ -1080,6 +1080,38 @@ fn unused_imports() {
 }
 
 #[test]
+fn used_exposed_and_qualified() {
+    let modules = vec![
+        (
+            "Dep.roc",
+            indoc!(
+                r#"
+            interface Dep exposes [one] imports []
+
+            one = 1
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        interface Main exposes [qualified, exposed] imports []
+
+        import Dep exposing [one]
+
+        qualified = Dep.one
+        exposed = one
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("used_exposed_and_qualified", modules);
+    assert!(result.is_ok())
+}
+
+#[test]
 fn import_with_alias() {
     let modules = vec![
         (

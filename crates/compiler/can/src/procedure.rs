@@ -47,6 +47,7 @@ impl ReferencesBitflags {
     const CALL: Self = ReferencesBitflags(4);
     const BOUND: Self = ReferencesBitflags(8);
     const QUALIFIED: Self = ReferencesBitflags(16);
+    const UNQUALIFIED: Self = ReferencesBitflags(32);
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -58,7 +59,7 @@ pub enum QualifiedReference {
 impl QualifiedReference {
     fn flags(&self, flags: ReferencesBitflags) -> ReferencesBitflags {
         match self {
-            Self::Unqualified => flags,
+            Self::Unqualified => ReferencesBitflags(flags.0 | ReferencesBitflags::UNQUALIFIED.0),
             Self::Qualified => ReferencesBitflags(flags.0 | ReferencesBitflags::QUALIFIED.0),
         }
     }
@@ -199,7 +200,7 @@ impl References {
         let it = self.symbols.iter().zip(self.bitflags.iter());
 
         for (a, b) in it {
-            if *a == symbol && b.0 & mask > 0 && b.0 & ReferencesBitflags::QUALIFIED.0 == 0 {
+            if *a == symbol && b.0 & mask > 0 && b.0 & ReferencesBitflags::UNQUALIFIED.0 > 0 {
                 return true;
             }
         }
