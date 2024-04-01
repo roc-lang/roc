@@ -111,7 +111,7 @@ pub fn generate(
                         OperatingSystem::Windows => binary_path.with_extension("dll"),
                         OperatingSystem::Mac => binary_path.with_extension("dylib"),
 
-                        _ => binary_path.with_extension("so.1.0"),
+                        _ => binary_path.with_extension("so"),
                     };
 
                     // TODO: Should glue try and run with errors, especially type errors.
