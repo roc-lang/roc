@@ -968,16 +968,18 @@ fn link_linux(
     let ld_linux_path_str = &ld_linux_path.to_string_lossy();
 
     let base_args = match link_type {
-        LinkType::Executable => 
+        LinkType::Executable => {
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path_str.to_string()],
-            
-        LinkType::Dylib => 
+            vec![scrt1_path_str.to_string()]
+        }
+
+        LinkType::Dylib => {
             // TODO: find a way to avoid using a vec! here - should theoretically be
             // able to do this somehow using &[] but the borrow checker isn't having it.
             // Also find a way to have these be string slices instead of Strings.
-            vec!["-shared".to_string()],
+            vec!["-shared".to_string()]
+        }
         LinkType::None => internal_error!("link_linux should not be called with link type of none"),
     };
 
