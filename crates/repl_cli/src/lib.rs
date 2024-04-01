@@ -50,11 +50,7 @@ pub fn main() -> i32 {
     editor.set_helper(Some(repl_helper));
 
     let history_cache = cache::roc_cache_dir().as_path().join(".repl_history");
-    if editor.load_history(&history_cache).is_err() {
-        println!("No previous history loaded.");
-    } else {
-        println!("History loaded successfully.");
-    }
+    let _ = editor.load_history(&history_cache);
 
     let target = Triple::host();
     let target_info = TargetInfo::from(&target);
@@ -125,9 +121,7 @@ pub fn evaluate(
 
 fn save_history(editor: &mut Editor<ReplHelper>, history_cache: &Path) {
     if editor.save_history(&history_cache).is_err() {
-        eprintln!("Failed saving history.");
-    } else {
-        println!("History saved successfully.");
+        eprintln!("Failed to save history.");
     }
 }
 

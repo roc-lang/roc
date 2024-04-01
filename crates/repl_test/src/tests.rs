@@ -579,9 +579,7 @@ fn multiline_string_non_wasm() {
     // line of output, and in this case we care about every line of output!
     let out = repl_eval(r#""\n\nhi!\n\n""#);
     let expected = indoc!(
-        r#"istory loaded successfully.
-
-                """
+        r#""""
 
 
                 hi!

@@ -2948,6 +2948,7 @@ dependencies = [
  "roc_gen_llvm",
  "roc_load",
  "roc_mono",
+ "roc_packaging",
  "roc_parse",
  "roc_region",
  "roc_repl_eval",
