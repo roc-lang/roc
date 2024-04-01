@@ -333,7 +333,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
             min_indent
         };
 
-        match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
+        match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), new_indent) {
             Err((_, _)) => Ok((MadeProgress, expr.value, state)),
             Ok((_, spaces_before_op, state)) => {
                 let expr_state = ExprState {
@@ -344,7 +344,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     end,
                 };
 
-                parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
+                parse_expr_end(new_indent, options, expr_state, arena, state, initial_state)
             }
         }
     })
@@ -618,7 +618,6 @@ pub fn parse_single_def<'a>(
             }
         }
         Err((MadeProgress, _)) => {
-
             // Try to parse as a Statement
             match parse_statement_inside_def(
                 arena,
@@ -630,7 +629,6 @@ pub fn parse_single_def<'a>(
                 // TODO figure out why including spaces_before_current here doubles things up
                 &[],
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
-                print_debug,
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
                     Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(*loc_expr) => {
@@ -728,7 +726,6 @@ pub fn parse_single_def<'a>(
                     operator_result_state,
                     loc_pattern,
                     spaces_before_current,
-                    print_debug,
                 );
             };
 
@@ -938,15 +935,13 @@ pub fn parse_single_def_assignment<'a>(
         );
 
         // Try to parse the rest of the expression as multipls defs, which may contain sub-assignments
-        match parse_defs_expr(options, min_indent, defs, arena, state.clone(), print_debug) {
+        match parse_defs_expr(options, min_indent, defs, arena, state.clone()) {
             Ok((new_progress, expr, new_state)) => {
-        progress = new_progress;
-        loc_def_expr = Loc::at(region, expr);
-        state = new_state;
-
+                progress = new_progress;
+                loc_def_expr = Loc::at(region, expr);
+                state = new_state;
             }
-            Err(_) => {
-            }
+            Err(err) => {}
         }
     };
 
@@ -1251,7 +1246,7 @@ fn parse_defs_expr<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    match parse_defs_end(options, min_indent, defs, arena, state) {
+    match dbg!(parse_defs_end(options, min_indent, defs, arena, state)) {
         Err(bad) => Err(bad),
         Ok((_, def_state, state)) => {
             // this is no def, because there is no `=` or `:`; parse as an expr

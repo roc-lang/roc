@@ -596,10 +596,12 @@ pub fn desugar_expr<'a>(
             let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
 
             // Desugar any Suffixed nodes
-            desugar_defs_node_suffixed(
-                arena,
-                arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
-            )
+            // desugar_defs_node_suffixed(
+            //     arena,
+            //     arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
+            // )
+
+            arena.alloc(Loc::at(loc_ret.region, Defs(arena.alloc(defs), loc_ret)))
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
