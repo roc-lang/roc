@@ -312,7 +312,7 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    crate::operator::desugar_defs(arena, loc_defs, src, &mut None, module_path);
+    crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path);
 
     let mut rigid_variables = RigidVariables::default();
 

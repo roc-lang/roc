@@ -28,7 +28,7 @@ use roc_mono::list_element_layout;
 mod generic64;
 mod object_builder;
 pub use object_builder::build_module;
-use roc_target::TargetInfo;
+use roc_target::Target;
 mod run_roc;
 
 #[derive(Debug, Clone, Copy)]
@@ -312,7 +312,7 @@ trait Backend<'a> {
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation>;
-    fn target_info(&self) -> TargetInfo;
+    fn target(&self) -> Target;
 
     fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
         self.module_interns_helpers_mut().1

@@ -11,7 +11,7 @@ use roc_repl_ui::colors::{CYAN, END_COL};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
 use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
-use roc_target::TargetInfo;
+use roc_target::Target;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline::Editor;
@@ -52,8 +52,7 @@ pub fn main() -> i32 {
     let history_cache = cache::roc_cache_dir().as_path().join(".repl_history");
     let _ = editor.load_history(&history_cache);
 
-    let target = Triple::host();
-    let target_info = TargetInfo::from(&target);
+    let target = Triple::host().into();
     let mut arena = Bump::new();
 
     loop {
@@ -69,9 +68,9 @@ pub fn main() -> i32 {
                     .state;
 
                 arena.reset();
-                match repl_state.step(&arena, line, target_info, DEFAULT_PALETTE) {
+                match repl_state.step(&arena, line, target, DEFAULT_PALETTE) {
                     ReplAction::Eval { opt_mono, problems } => {
-                        let output = evaluate(opt_mono, problems, &target);
+                        let output = evaluate(opt_mono, problems, target);
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
                         if !output.is_empty() {
@@ -113,7 +112,7 @@ pub fn main() -> i32 {
 pub fn evaluate(
     opt_mono: Option<MonomorphizedModule<'_>>,
     problems: Problems,
-    target: &Triple,
+    target: Target,
 ) -> String {
     let opt_output = opt_mono.and_then(|mono| eval_llvm(mono, target, OptLevel::Normal));
     format_output(ANSI_STYLE_CODES, opt_output, problems)

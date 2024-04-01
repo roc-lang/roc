@@ -7,6 +7,8 @@ interface Docs
 User : { name : Str }
 
 ## Makes a user
+##
+## Takes a name Str.
 makeUser : Str -> User
 makeUser = \name ->
     { name }

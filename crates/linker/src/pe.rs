@@ -1795,7 +1795,7 @@ mod test {
         }
 
         let preprocessed_host_filename =
-            dir.join(preprocessed_host_filename(&Triple::host()).unwrap());
+            dir.join(preprocessed_host_filename(Triple::host().into()));
 
         preprocess_windows(
             &dir.join("host.exe"),

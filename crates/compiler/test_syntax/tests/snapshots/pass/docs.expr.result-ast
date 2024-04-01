@@ -5,7 +5,7 @@ SpaceBefore(
                 Index(2147483648),
             ],
             regions: [
-                @46-51,
+                @48-53,
             ],
             space_before: [
                 Slice(start = 0, length = 0),
@@ -17,16 +17,16 @@ SpaceBefore(
             type_defs: [],
             value_defs: [
                 Body(
-                    @46-47 Identifier(
+                    @48-49 Identifier(
                         "x",
                     ),
-                    @50-51 Num(
+                    @52-53 Num(
                         "5",
                     ),
                 ),
             ],
         },
-        @53-55 SpaceBefore(
+        @55-57 SpaceBefore(
             Num(
                 "42",
             ),
@@ -43,8 +43,11 @@ SpaceBefore(
         LineComment(
             "## not docs!",
         ),
-        LineComment(
-            "#still not docs",
+        DocComment(
+            "actually docs",
+        ),
+        DocComment(
+            "",
         ),
         LineComment(
             "#####",

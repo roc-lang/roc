@@ -377,7 +377,7 @@ mod test_snapshots {
         pass/nonempty_hosted_header.header,
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
-        pass/not_docs.expr,
+        pass/docs.expr,
         pass/not_multiline_string.expr,
         pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,

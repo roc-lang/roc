@@ -16,7 +16,8 @@ Architecture : [
 ]
 
 OperatingSystem : [
+    Freestanding,
+    Linux,
+    Mac,
     Windows,
-    Unix,
-    Wasi,
 ]

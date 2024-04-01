@@ -27,7 +27,7 @@ use roc_mono::ir::ProcLayout;
 use roc_mono::layout::STLayoutInterner;
 use test_mono_macros::*;
 
-const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+const TARGET: roc_target::Target = roc_target::Target::LinuxX64;
 
 /// Without this, some tests pass in `cargo test --release` but fail without
 /// the --release flag because they run out of stack space. This increases
@@ -104,7 +104,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
     }
 
     let load_config = LoadConfig {
-        target_info: TARGET_INFO,
+        target: TARGET,
         // TODO parameterize
         function_kind: FunctionKind::LambdaSet,
         threading: Threading::Single,
