@@ -4,103 +4,112 @@ Defs {
         Index(2147483649),
     ],
     regions: [
-        @25-44,
-        @92-131,
+        @0-22,
+        @27-40,
     ],
     space_before: [
+        Slice(start = 0, length = 0),
         Slice(start = 0, length = 1),
-        Slice(start = 1, length = 0),
     ],
     space_after: [
-        Slice(start = 1, length = 0),
+        Slice(start = 0, length = 0),
         Slice(start = 1, length = 0),
     ],
     spaces: [
-        LineComment(
-            " valid as a single line",
-        ),
+        Newline,
     ],
     type_defs: [],
     value_defs: [
-        Stmt(
-            @25-44 Apply(
-                @25-29 Var {
-                    module_name: "A",
-                    ident: "x",
-                    suffixed: 1,
-                },
-                [
-                    @33-38 Str(
-                        PlainLine(
-                            "Foo",
-                        ),
-                    ),
-                    @42-44 List(
-                        [],
-                    ),
-                ],
-                Space,
-            ),
-        ),
-        Stmt(
-            @92-131 SpaceBefore(
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+                suffixed: 0,
+            },
+            @12-22 SpaceBefore(
                 Apply(
-                    @92-96 Var {
-                        module_name: "B",
-                        ident: "y",
+                    @12-16 Var {
+                        module_name: "A",
+                        ident: "x",
                         suffixed: 1,
                     },
                     [
-                        @106-111 SpaceBefore(
-                            Str(
-                                PlainLine(
-                                    "Bar",
-                                ),
+                        @17-22 Str(
+                            PlainLine(
+                                "Bar",
                             ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @120-131 SpaceBefore(
-                            Closure(
-                                [
-                                    @121-122 Identifier {
-                                        ident: "a",
-                                        suffixed: 0,
-                                    },
-                                ],
-                                @126-131 BinOps(
-                                    [
-                                        (
-                                            @126-127 Var {
-                                                module_name: "",
-                                                ident: "x",
-                                                suffixed: 0,
-                                            },
-                                            @128-129 Plus,
-                                        ),
-                                    ],
-                                    @130-131 Var {
-                                        module_name: "",
-                                        ident: "y",
-                                        suffixed: 0,
-                                    },
-                                ),
-                            ),
-                            [
-                                Newline,
-                            ],
                         ),
                     ],
                     Space,
                 ),
                 [
                     Newline,
-                    Newline,
-                    LineComment(
-                        " valid as a multi-line, with increased ident",
-                    ),
                 ],
+            ),
+        ),
+        Body(
+            @27-29 Identifier {
+                ident: "ab",
+                suffixed: 0,
+            },
+            @27-40 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @27-40,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 1),
+                    ],
+                    space_after: [
+                        Slice(start = 1, length = 0),
+                    ],
+                    spaces: [
+                        Newline,
+                    ],
+                    type_defs: [],
+                    value_defs: [
+                        Stmt(
+                            @30-40 Apply(
+                                @30-34 Var {
+                                    module_name: "B",
+                                    ident: "y",
+                                    suffixed: 1,
+                                },
+                                [
+                                    @35-40 Str(
+                                        PlainLine(
+                                            "Foo",
+                                        ),
+                                    ),
+                                ],
+                                Space,
+                            ),
+                        ),
+                    ],
+                },
+                @46-53 SpaceBefore(
+                    Apply(
+                        @46-49 Var {
+                            module_name: "C",
+                            ident: "z",
+                            suffixed: 0,
+                        },
+                        [
+                            @50-53 Var {
+                                module_name: "",
+                                ident: "out",
+                                suffixed: 0,
+                            },
+                        ],
+                        Space,
+                    ),
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                ),
             ),
         ),
     ],

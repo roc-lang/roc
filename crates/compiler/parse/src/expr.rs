@@ -327,6 +327,12 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
+        let new_indent = if is_loc_expr_suffixed(expr) {
+            min_indent + 1
+        } else {
+            min_indent
+        };
+
         match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
             Err((_, _)) => Ok((MadeProgress, expr.value, state)),
             Ok((_, spaces_before_op, state)) => {
@@ -398,6 +404,7 @@ impl<'a> ExprState<'a> {
         } else if !self.expr.value.is_tag()
             && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
+            && !is_loc_expr_suffixed(self.expr)
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
 
@@ -611,8 +618,30 @@ pub fn parse_single_def<'a>(
             }
         }
         Err((MadeProgress, _)) => {
+
+            // Try to parse as a Statement
+            match parse_statement_inside_def(
+                arena,
+                initial.clone(),
+                min_indent,
+                options,
+                start,
+                spaces_before_current_start,
+                // TODO figure out why including spaces_before_current here doubles things up
+                &[],
+                |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
+                print_debug,
+            ) {
+                Ok((_, Some(single_def), state)) => match single_def.type_or_value {
+                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(*loc_expr) => {
+                        Ok((MadeProgress, Some(single_def), state))
+                    }
+                    _ => Ok((NoProgress, None, initial)),
+                },
+                _ => Ok((NoProgress, None, initial)),
+            }
+
             // a hacky way to get expression-based error messages. TODO fix this
-            Ok((NoProgress, None, initial))
         }
         Ok((_, loc_pattern, state)) => {
             // // Check if we have a Statement with Suffixed first,
@@ -687,11 +716,19 @@ pub fn parse_single_def<'a>(
             if let Ok((_, BinOp::Assignment, operator_result_state)) = operator_result {
                 return parse_single_def_assignment(
                     options,
-                    min_indent,
+                    // to support statements we have to increase the indent here so that we can parse a child def
+                    // within a def and still continue to parse the final expresison for this def
+                    // e.g.
+                    // main =
+                    //     Stdout.line! "Bar"
+                    //     a = Stdout.line! "Foo"
+                    //     Task.ok {}
+                    min_indent + 1,
                     arena,
                     operator_result_state,
                     loc_pattern,
                     spaces_before_current,
+                    print_debug,
                 );
             };
 
@@ -901,12 +938,16 @@ pub fn parse_single_def_assignment<'a>(
         );
 
         // Try to parse the rest of the expression as multipls defs, which may contain sub-assignments
-        let (new_progress, expr, new_state) =
-            parse_defs_expr(options, min_indent, defs, arena, state)?;
-
+        match parse_defs_expr(options, min_indent, defs, arena, state.clone(), print_debug) {
+            Ok((new_progress, expr, new_state)) => {
         progress = new_progress;
         loc_def_expr = Loc::at(region, expr);
         state = new_state;
+
+            }
+            Err(_) => {
+            }
+        }
     };
 
     let value_def = ValueDef::Body(arena.alloc(loc_pattern), arena.alloc(loc_def_expr));

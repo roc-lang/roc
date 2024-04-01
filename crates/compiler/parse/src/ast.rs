@@ -661,7 +661,7 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
-    // Find the first definition that is a Apply Suffixed
+    // Find the first definition that is suffixed
     // We need the tag_index so we can use it to remove the value
     // We need the value index to know if it is the first
     pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
@@ -669,6 +669,12 @@ impl<'a> Defs<'a> {
             if let Err(value_index) = tag.split() {
                 let index = value_index.index();
 
+                // a statement e.g. `Stdout.line! "hello world"`
+                if let ValueDef::Stmt(_) = &self.value_defs[index] {
+                    return Some((tag_index, index));
+                }
+
+                // a definition with a suffixed expression e.g. `args = Arg.list!`
                 if let ValueDef::Body(_, loc_expr) = &self.value_defs[index] {
                     if is_loc_expr_suffixed(**loc_expr) {
                         return Some((tag_index, index));
