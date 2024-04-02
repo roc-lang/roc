@@ -6,7 +6,6 @@ procedure #Derived.0 (#Derived.1):
 procedure #Derived.2 (#Derived.3, #Derived.4, #Attr.12):
     let #Derived_gen.19 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
     joinpoint #Derived_gen.15 #Derived_gen.14:
-        inc #Derived.3;
         let #Derived_gen.13 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.14 #Derived.4;
         ret #Derived_gen.13;
     in
@@ -23,7 +22,6 @@ procedure #Derived.5 (#Derived.6):
 procedure #Derived.7 (#Derived.8, #Derived.9, #Attr.12):
     let #Derived_gen.9 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     joinpoint #Derived_gen.5 #Derived_gen.4:
-        inc #Derived.8;
         let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.8 #Derived_gen.4 #Derived.9;
         ret #Derived_gen.3;
     in
@@ -52,25 +50,22 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    inc Encode.99;
-    let Encode.115 : List U8 = CallByName Test.63 Encode.99 Encode.101 Encode.107;
-    ret Encode.115;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.111 : List U8 = CallByName Test.213 Encode.99 Encode.101 Encode.107;
     ret Encode.111;
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.115 : List U8 = CallByName Test.63 Encode.99 Encode.101 Encode.107;
+    ret Encode.115;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.117 : U8 = GetTagId Encode.107;
     switch Encode.117:
         case 0:
             let Encode.116 : List U8 = CallByName #Derived.2 Encode.99 Encode.101 Encode.107;
-            dec Encode.99;
             ret Encode.116;
     
         case 1:
             let Encode.116 : List U8 = CallByName #Derived.7 Encode.99 Encode.101 Encode.107;
-            dec Encode.99;
             ret Encode.116;
     
         default:
@@ -90,7 +85,6 @@ procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
     let Encode.110 : {{}, {}} = CallByName Test.49 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    dec Encode.109;
     ret Encode.108;
 
 procedure List.13 (#Attr.2, #Attr.3):

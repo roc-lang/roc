@@ -88,8 +88,6 @@ procedure Inspect.229 (Inspect.330, Inspect.331):
         let Inspect.337 : Str = CallByName Inspect.59 Inspect.342 Inspect.343;
         dec Inspect.343;
         let Inspect.333 : Str = CallByName Inspect.235 Inspect.337 Inspect.233;
-        dec Inspect.233;
-        dec Inspect.337;
         let Inspect.334 : {} = Struct {};
         let Inspect.332 : {Str, Int1} = CallByName Inspect.237 Inspect.333;
         dec Inspect.333;
@@ -173,14 +171,12 @@ procedure Inspect.30 (Inspect.143):
     ret Inspect.143;
 
 procedure Inspect.31 (Inspect.299, Inspect.145):
-    inc Inspect.299;
-    inc Inspect.145;
-    let Inspect.341 : Str = CallByName #Derived.6 Inspect.145 Inspect.299;
-    ret Inspect.341;
-
-procedure Inspect.31 (Inspect.299, Inspect.145):
     let Inspect.310 : Str = CallByName Inspect.225 Inspect.145 Inspect.299;
     ret Inspect.310;
+
+procedure Inspect.31 (Inspect.299, Inspect.145):
+    let Inspect.341 : Str = CallByName #Derived.6 Inspect.145 Inspect.299;
+    ret Inspect.341;
 
 procedure Inspect.31 (Inspect.299, Inspect.145):
     let Inspect.350 : Str = CallByName Inspect.225 Inspect.145 Inspect.299;

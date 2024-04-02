@@ -27,7 +27,6 @@ procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
     let Encode.110 : {Str, Str} = CallByName Test.49 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    dec Encode.109;
     ret Encode.108;
 
 procedure List.13 (#Attr.2, #Attr.3):
@@ -120,7 +119,6 @@ procedure Test.21 (Test.61, Test.62):
 
 procedure Test.213 (Test.214, Test.215, Test.212):
     joinpoint Test.267 Test.216:
-        inc Test.214;
         let Test.265 : List U8 = CallByName Encode.24 Test.214 Test.216 Test.215;
         ret Test.265;
     in

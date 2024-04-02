@@ -29,7 +29,6 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    inc Encode.99;
     let Encode.111 : List U8 = CallByName #Derived.2 Encode.99 Encode.101 Encode.107;
     ret Encode.111;
 
@@ -45,7 +44,6 @@ procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
     let Encode.110 : {Str, Str} = CallByName #Derived.0 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    dec Encode.109;
     ret Encode.108;
 
 procedure List.18 (List.160, List.161, List.162):

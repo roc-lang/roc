@@ -8,7 +8,6 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.6 : {Str, Str} = Struct {#Derived_gen.7, #Derived_gen.8};
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6];
     let #Derived_gen.4 : List {Str, Str} = CallByName Test.21 #Derived_gen.5;
-    inc #Derived.3;
     let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.4 #Derived.4;
     dec #Derived_gen.4;
     ret #Derived_gen.3;
@@ -43,22 +42,20 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    inc Encode.107;
-    let Encode.116 : List U8 = CallByName #Derived.7 Encode.99 Encode.101 Encode.107;
-    ret Encode.116;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    inc Encode.99;
-    let Encode.119 : List U8 = CallByName Test.67 Encode.99 Encode.101 Encode.107;
-    ret Encode.119;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.111 : List U8 = CallByName #Derived.2 Encode.99 Encode.101 Encode.107;
     ret Encode.111;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.113 : List U8 = CallByName Test.67 Encode.99 Encode.101 Encode.107;
     ret Encode.113;
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.116 : List U8 = CallByName #Derived.7 Encode.99 Encode.101 Encode.107;
+    ret Encode.116;
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.119 : List U8 = CallByName Test.67 Encode.99 Encode.101 Encode.107;
+    ret Encode.119;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.124 : List U8 = CallByName Test.56 Encode.99 Encode.101 Encode.107;
@@ -68,7 +65,6 @@ procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
     let Encode.110 : Str = CallByName #Derived.0 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    dec Encode.109;
     ret Encode.108;
 
 procedure List.18 (List.160, List.161, List.162):
@@ -259,8 +255,6 @@ procedure Test.70 (Test.71, Test.266):
     let Test.268 : List U8 = CallByName Encode.24 Test.71 Test.270 Test.271;
     let Test.269 : {} = Struct {};
     let Test.267 : List U8 = CallByName Encode.24 Test.268 Test.73 Test.269;
-    dec Test.268;
-    dec Test.73;
     ret Test.267;
 
 procedure Test.70 (Test.71, Test.266):

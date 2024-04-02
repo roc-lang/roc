@@ -850,7 +850,6 @@ procedure Inspect.30 (Inspect.143):
     ret Inspect.143;
 
 procedure Inspect.31 (Inspect.299, Inspect.145):
-    inc Inspect.145;
     let Inspect.310 : Str = CallByName Inspect.183 Inspect.145 Inspect.299;
     ret Inspect.310;
 
@@ -885,7 +884,6 @@ procedure Inspect.5 (Inspect.146):
     let Inspect.305 : {} = Struct {};
     let Inspect.304 : Str = CallByName Inspect.35 Inspect.305;
     let Inspect.303 : Str = CallByName Dict.120 Inspect.304 Inspect.308;
-    dec Inspect.304;
     ret Inspect.303;
 
 procedure Inspect.53 (Inspect.273):
