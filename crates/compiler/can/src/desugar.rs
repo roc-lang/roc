@@ -630,7 +630,6 @@ pub fn desugar_expr<'a>(
                 arena,
                 arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
             )
-
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
