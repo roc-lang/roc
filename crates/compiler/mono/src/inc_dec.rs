@@ -15,13 +15,12 @@ use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
 use crate::ir::ErasedField;
-use crate::layout::{LambdaName, Niche};
 use crate::{
     ir::{
         BranchInfo, Call, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
-    layout::{InLayout, LayoutInterner, STLayoutInterner},
+    layout::{InLayout, LayoutInterner, Niche, STLayoutInterner},
     low_level::HigherOrder,
 };
 

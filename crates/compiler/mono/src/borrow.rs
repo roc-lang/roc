@@ -9,7 +9,7 @@ use crate::{
     layout::{Builtin, InLayout, LayoutInterner, LayoutRepr, Niche},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BorrowSignature(u64);
 
 impl std::fmt::Debug for BorrowSignature {
@@ -83,8 +83,6 @@ pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
     interner: &impl LayoutInterner<'a>,
     procs: &'b MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> BorrowSignatures<'a> {
-    // let host_exposed_procs = &[];
-
     let mut borrow_signatures: BorrowSignatures = procs
         .iter()
         .map(|(_key, proc)| {
@@ -116,32 +114,9 @@ pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
         //
         // when the signatures no longer change, the analysis stops and returns the signatures
 
-        //        // initialize borrow signatures for everyone
-        //        for index in group.iter_ones() {
-        //            let (key, proc) = procs.iter().nth(index).unwrap();
-        //
-        //            if proc.args.is_empty() {
-        //                continue;
-        //            }
-        //
-        //            // host-exposed functions must always own their arguments.
-        //            let is_host_exposed = host_exposed_procs.contains(&key.0);
-        //
-        //            let key = (proc.name.name(), proc.proc_layout(arena));
-        //
-        //            // initialize the borrow signature based on the layout if first time
-        //            borrow_signatures.entry(key).or_insert_with(|| {
-        //                let mut borrow_signature = BorrowSignature::new(proc.args.len());
-        //
-        //                for (i, in_layout) in key.1.arguments.iter().enumerate() {
-        //                    borrow_signature.set(i, layout_to_ownership(*in_layout, interner));
-        //                }
-        //
-        //                borrow_signature
-        //            });
-        //        }
-
         loop {
+            let mut modified = false;
+
             for index in group.iter_ones() {
                 let (_, proc) = procs.iter().nth(index).unwrap();
                 let key = (proc.name.name(), proc.proc_layout(arena));
@@ -157,12 +132,14 @@ pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
 
                 state.inspect_stmt(&mut borrow_signatures, &proc.body);
 
-                borrow_signatures.insert(key, state.borrow_signature);
+                let Some(old) = borrow_signatures.insert(key, state.borrow_signature) else {
+                    unreachable!("key should be present");
+                };
+
+                modified |= old != state.borrow_signature
             }
 
-            // if there were no modifications, we're done
-            // if !env.modified {
-            if true {
+            if !modified {
                 break;
             }
         }
