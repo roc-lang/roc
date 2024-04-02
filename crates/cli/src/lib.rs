@@ -504,7 +504,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
-        exec_mode: ExecutionMode::Test,
+        exec_mode: ExecutionMode::TestIfCheck,
     };
     let load_result = roc_load::load_and_monomorphize(
         arena,

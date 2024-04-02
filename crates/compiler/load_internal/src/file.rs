@@ -120,7 +120,7 @@ pub enum ExecutionMode {
     ExecutableIfCheck,
     /// Test is like [`ExecutionMode::ExecutableIfCheck`], but rather than producing a proper
     /// executable, run tests.
-    Test,
+    TestIfCheck,
 }
 
 impl ExecutionMode {
@@ -129,12 +129,12 @@ impl ExecutionMode {
 
         match self {
             Executable => Phase::MakeSpecializations,
-            Check | ExecutableIfCheck | Test => Phase::SolveTypes,
+            Check | ExecutableIfCheck | TestIfCheck => Phase::SolveTypes,
         }
     }
 
     fn build_if_checks(&self) -> bool {
-        matches!(self, Self::ExecutableIfCheck | Self::Test)
+        matches!(self, Self::ExecutableIfCheck | Self::TestIfCheck)
     }
 }
 
@@ -398,7 +398,7 @@ fn start_phase<'a>(
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 let build_expects =
-                    matches!(state.exec_mode, ExecutionMode::Test) && expectations.is_some();
+                    matches!(state.exec_mode, ExecutionMode::TestIfCheck) && expectations.is_some();
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -2624,7 +2624,7 @@ fn update<'a>(
 
             let add_to_host_exposed = is_host_exposed &&
                 // During testing, we don't need to expose anything to the host.
-                !matches!(state.exec_mode, ExecutionMode::Test);
+                !matches!(state.exec_mode, ExecutionMode::TestIfCheck);
 
             if add_to_host_exposed {
                 state.exposed_to_host.top_level_values.extend(
@@ -3201,7 +3201,7 @@ fn finish_specialization<'a>(
     let entry_point = {
         let interns: &mut Interns = &mut interns;
         match state.exec_mode {
-            ExecutionMode::Test => Ok(EntryPoint::Test),
+            ExecutionMode::TestIfCheck => Ok(EntryPoint::Test),
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
 
