@@ -26,12 +26,13 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.111 : List U8 = CallByName #Derived.4 Encode.99 Encode.101 Encode.107;
-    ret Encode.111;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    inc Encode.99;
     let Encode.113 : List U8 = CallByName Test.60 Encode.99 Encode.101 Encode.107;
     ret Encode.113;
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.111 : List U8 = CallByName #Derived.4 Encode.99 Encode.101 Encode.107;
+    ret Encode.111;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.118 : List U8 = CallByName Test.56 Encode.99 Encode.101 Encode.107;
@@ -41,6 +42,7 @@ procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
     let Encode.110 : {Str, Str} = CallByName #Derived.0 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
+    dec Encode.109;
     ret Encode.108;
 
 procedure List.13 (#Attr.2, #Attr.3):
@@ -93,6 +95,8 @@ procedure List.92 (#Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.15;
+    inc #Derived_gen.14;
     jump List.577 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18;
 
 procedure Num.127 (#Attr.2):
@@ -148,6 +152,7 @@ procedure Test.2 ():
     ret Test.258;
 
 procedure Test.20 (Test.58, Test.59):
+    inc Test.58;
     let Test.266 : {List Str, {}} = Struct {Test.58, Test.59};
     let Test.265 : {List Str, {}} = CallByName Encode.23 Test.266;
     ret Test.265;
@@ -161,6 +166,7 @@ procedure Test.23 (Test.77, Test.78):
     let Test.285 : Str = CallByName Test.19 Test.77;
     let Test.262 : List Str = CallByName List.13 Test.78 Test.285;
     let Test.261 : {List Str, {}} = CallByName Test.22 Test.262;
+    dec Test.262;
     ret Test.261;
 
 procedure Test.3 (Test.48, Test.49, Test.50):
@@ -190,6 +196,8 @@ procedure Test.60 (Test.61, Test.267, #Attr.12):
     let Test.276 : U64 = CallByName List.6 Test.58;
     let Test.62 : List U8 = CallByName Test.3 Test.61 Test.275 Test.276;
     let Test.269 : List U8 = CallByName List.18 Test.58 Test.62 Test.59;
+    dec Test.58;
+    dec Test.62;
     ret Test.269;
 
 procedure Test.63 (Test.64, Test.65, Test.59):

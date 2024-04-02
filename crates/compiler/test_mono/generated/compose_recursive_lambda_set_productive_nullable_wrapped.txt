@@ -29,6 +29,7 @@ procedure List.92 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.5;
     jump List.577 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9;
 
 procedure Num.22 (#Attr.2, #Attr.3):
@@ -50,7 +51,7 @@ procedure Test.11 (#Derived_gen.10, #Derived_gen.11):
     joinpoint Test.27 Test.12 #Attr.12:
         let Test.34 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
         let Test.33 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.14:
+        joinpoint #Derived_gen.16:
             joinpoint Test.31 Test.29:
                 let Test.30 : U8 = GetTagId Test.33;
                 switch Test.30:
@@ -77,15 +78,16 @@ procedure Test.11 (#Derived_gen.10, #Derived_gen.11):
                     jump Test.31 Test.32;
             
         in
-        let #Derived_gen.15 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.15 then
+        let #Derived_gen.17 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.17 then
             free #Attr.12;
-            jump #Derived_gen.14;
+            jump #Derived_gen.16;
         else
             inc Test.33;
             decref #Attr.12;
-            jump #Derived_gen.14;
+            jump #Derived_gen.16;
     in
+    inc #Derived_gen.10;
     jump Test.27 #Derived_gen.10 #Derived_gen.11;
 
 procedure Test.2 (Test.13):
@@ -142,6 +144,7 @@ procedure Test.9 (Test.10, #Attr.12):
         
             default:
                 let Test.41 : Str = CallByName Test.11 Test.10 Test.42;
+                dec Test.10;
                 jump Test.40 Test.41;
         
     in
@@ -162,6 +165,7 @@ procedure Test.0 ():
     let Test.23 : Int1 = CallByName Bool.2;
     let Test.22 : Int1 = CallByName Test.1 Test.23;
     let Test.16 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.18 Test.20 Test.21 Test.22;
+    dec Test.20;
     let Test.18 : Str = "hello";
     let Test.19 : U8 = GetTagId Test.16;
     switch Test.19:
@@ -176,5 +180,6 @@ procedure Test.0 ():
     
         default:
             let Test.17 : Str = CallByName Test.11 Test.18 Test.16;
+            dec Test.18;
             ret Test.17;
     

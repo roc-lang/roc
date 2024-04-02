@@ -23,12 +23,14 @@ procedure Test.1 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
             let Test.20 : I64 = 1i64;
             let Test.19 : I64 = CallByName Num.20 Test.5 Test.20;
             let Test.16 : List I64 = CallByName Test.1 Test.6 Test.3 Test.19;
+            dec Test.6;
             let Test.18 : I64 = 1i64;
             let Test.17 : I64 = CallByName Num.19 Test.5 Test.18;
             jump Test.12 Test.16 Test.17 Test.4;
         else
             ret Test.2;
     in
+    inc #Derived_gen.0;
     jump Test.12 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2;
 
 procedure Test.0 ():
@@ -36,4 +38,5 @@ procedure Test.0 ():
     let Test.10 : I64 = 0i64;
     let Test.11 : I64 = 0i64;
     let Test.8 : List I64 = CallByName Test.1 Test.9 Test.10 Test.11;
+    dec Test.9;
     ret Test.8;

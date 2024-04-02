@@ -3,7 +3,6 @@ procedure Bool.1 ():
     ret Bool.24;
 
 procedure Test.1 (Test.4):
-    dec Test.4;
     let Test.9 : I64 = 0i64;
     ret Test.9;
 
@@ -18,6 +17,7 @@ procedure Test.0 ():
     in
     joinpoint Test.13 Test.12:
         let Test.8 : I64 = CallByName Test.1 Test.12;
+        dec Test.12;
         jump Test.7 Test.8;
     in
     let Test.44 : U64 = lowlevel ListLenUsize Test.6;
