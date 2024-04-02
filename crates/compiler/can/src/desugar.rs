@@ -197,7 +197,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     value: Var {
                                         module_name: ModuleName::TASK,
                                         ident: "await",
-                                        suffixed: 0, // TODO this isn't right
+                                        suffixed: 0,
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
@@ -252,7 +252,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     value: Var {
                                         module_name: ModuleName::TASK,
                                         ident: "await",
-                                        suffixed: 0, // TODO this isn't right
+                                        suffixed: 0,
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
@@ -310,7 +310,7 @@ fn desugar_defs_node_suffixed<'a>(
                                     value: Var {
                                         module_name: ModuleName::TASK,
                                         ident: "await",
-                                        suffixed: 0, // TODO this isn't right
+                                        suffixed: 0,
                                     },
                                 }),
                                 arena.alloc(task_await_apply_args),
@@ -631,7 +631,6 @@ pub fn desugar_expr<'a>(
                 arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
             )
 
-            // arena.alloc(Loc::at(loc_ret.region, Defs(arena.alloc(defs), loc_ret)))
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);

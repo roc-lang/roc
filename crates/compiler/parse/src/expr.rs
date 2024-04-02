@@ -699,7 +699,6 @@ pub fn parse_single_def<'a>(
                     spaces_before_current,
                 );
 
-                // dbg!("parse_single_def", &loc_pattern, min_indent, operator_result_state.clone(), &result);
 
                 return result;
             };
