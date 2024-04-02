@@ -47,16 +47,28 @@ use super::wrap_in_decode_custom_decode_with;
 ///                             {result: Result.map result \val -> {state & f1: Ok val}, rest})
 ///             _ -> Skip
 ///
-///     finalizer = \{f0, f1} ->
-///         when f0 is
-///             Ok first ->
-///                 when f1 is
-///                     Ok second -> Ok {first, second}
-///                     Err _ -> Err TooShort
-///             Err _ -> Err TooShort
-///
-///     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-/// ```
+///    finalizer = \rec, fmt ->
+///        when
+///            when rec.f0 is
+///                Err NoField ->
+///                    when Decode.decodeWith [] Decode.decoder fmt is
+///                        rec2 -> rec2.result
+///                Ok a -> Ok a
+///        is
+///            Ok f0 ->
+///                when
+///                    when rec.f1 is
+///                        Err NoField ->
+///                            when Decode.decodeWith [] Decode.decoder fmt is
+///                                rec2 -> rec2.result
+///                        Ok a -> Ok a
+///                is
+///                    Ok f1 -> Ok { f1, f0 }
+///                    Err _ -> Err TooShort
+///            Err _ -> Err TooShort
+///       
+///            Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+///```
 pub(crate) fn decoder(
     env: &mut Env,
     _def_symbol: Symbol,
@@ -225,12 +237,14 @@ pub(super) fn step_field(
 
         let (decode_custom_ret_var, decode_custom) = custom_decoder(
             env,
-            field_var,
-            decode_err_var,
-            state_record_var,
-            &field_name,
-            result_field_var,
-            state_arg_symbol,
+            DecodingFieldArgs {
+                field_name: field_name.clone(),
+                field_var,
+                state_arg_symbol,
+                state_record_var,
+                result_field_var,
+                decode_err_var,
+            },
         );
 
         env.unify(keep_payload_var, decode_custom_ret_var);
@@ -355,6 +369,14 @@ pub(super) fn step_field(
 
     (expr, function_type)
 }
+struct DecodingFieldArgs {
+    field_name: Lowercase,
+    field_var: Variable,
+    state_arg_symbol: Symbol,
+    state_record_var: Variable,
+    result_field_var: Variable,
+    decode_err_var: Variable,
+}
 /// ```roc
 /// Decode.custom \bytes, fmt ->
 ///    # Uses a single-branch `when` because `let` is more expensive to monomorphize
@@ -370,24 +392,8 @@ pub(super) fn step_field(
 /// )
 /// ```
 /// Expression for custom decoder
-fn custom_decoder(
-    env: &mut Env<'_>,
-    field_var: Variable,
-    decode_err_var: Variable,
-    state_record_var: Variable,
-    field_name: &Lowercase,
-    result_field_var: Variable,
-    state_arg_symbol: Symbol,
-) -> (Variable, Expr) {
-    let (this_custom_callback_var, custom_callback) = custom_decoder_lambda(
-        env,
-        field_name,
-        field_var,
-        state_arg_symbol,
-        state_record_var,
-        result_field_var,
-        decode_err_var,
-    );
+fn custom_decoder(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr) {
+    let (this_custom_callback_var, custom_callback) = custom_decoder_lambda(env, args);
 
     let decode_custom_ret_var = env.subs.fresh_unnamed_flex_var();
     let decode_custom = {
@@ -417,6 +423,7 @@ fn custom_decoder(
     };
     (decode_custom_ret_var, decode_custom)
 }
+
 /// ```roc
 /// \bytes, fmt ->
 ///     when Decode.decodeWith bytes Decode.decoder fmt is
@@ -429,16 +436,15 @@ fn custom_decoder(
 ///             }
 ///
 /// ```
+fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr) {
+    let DecodingFieldArgs {
+        field_var,
+        state_arg_symbol,
+        state_record_var,
+        decode_err_var,
+        ..
+    } = args;
 
-fn custom_decoder_lambda(
-    env: &mut Env<'_>,
-    field_name: &Lowercase,
-    field_var: Variable,
-    state_arg_symbol: Symbol,
-    state_record_var: Variable,
-    result_field_var: Variable,
-    decode_err_var: Variable,
-) -> (Variable, Expr) {
     let this_custom_callback_var;
     let custom_callback_ret_var;
 
@@ -513,17 +519,12 @@ fn custom_decoder_lambda(
             //         }
             let branch_body = state_record_update(
                 env,
-                field_name,
-                field_var,
-                state_arg_symbol,
-                state_record_var,
+                args,
                 rec_symbol,
                 rec_var,
                 rec_dot_result,
                 when_expr_var,
                 custom_callback_ret_var,
-                decode_err_var,
-                result_field_var,
             );
 
             let branch = WhenBranch {
@@ -611,17 +612,19 @@ fn custom_decoder_lambda(
 /// ```
 fn state_record_update(
     env: &mut Env<'_>,
-    field_name: &Lowercase,
-    field_var: Variable,
-    state_arg_symbol: Symbol,
-    state_record_var: Variable,
+    DecodingFieldArgs {
+        field_name,
+        field_var,
+        state_arg_symbol,
+        state_record_var,
+        result_field_var,
+        decode_err_var,
+    }: DecodingFieldArgs,
     rec_symbol: Symbol,
     rec_var: Variable,
     rec_dot_result: Variable,
     when_expr_var: Variable,
     custom_callback_ret_var: Variable,
-    decode_err_var: Variable,
-    result_field_var: Variable,
 ) -> Expr {
     {
         // result: when rec.result is
@@ -636,7 +639,7 @@ fn state_record_update(
                 let mut updates = SendMap::default();
 
                 updates.insert(
-                    field_name.clone(),
+                    field_name,
                     Field {
                         var: result_field_var,
                         region: Region::zero(),
@@ -776,16 +779,26 @@ fn state_record_update(
     }
 }
 
-// Example:
-// finalizer = \rec ->
-//     when rec.f0 is
-//         Ok f0  ->
-//             when rec.f1 is
-//                 Ok f1 -> Ok {f0, f1}
-//                 Err _ -> Err TooShort
-//         Err _ -> Err TooShort
-
-// THis is my new one
+/// Example:
+/// finalizer = \rec, fmt ->
+/// when
+///     when rec.f0 is
+///         Err NoField ->
+///             when Decode.decodeWith [] Decode.decoder fmt is
+///                 rec2 -> rec2.result
+///         Ok a -> Ok a
+/// is
+///     Ok f0 ->
+///         when
+///             when rec.f1 is
+///                 Err NoField ->
+///                     when Decode.decodeWith [] Decode.decoder fmt is
+///                         rec2 -> rec2.result
+///                 Ok a -> Ok a
+///         is
+///             Ok f1 -> Ok { f1, f0 }
+///             Err _ -> Err TooShort
+///     Err _ -> Err TooShort
 pub(super) fn finalizer(
     env: &mut Env,
     state_record_var: Variable,
@@ -878,15 +891,17 @@ pub(super) fn finalizer(
         //               rec2 -> rec2.result
         //       Ok a -> Ok a
         let (attempt_empty_decode_expr, attempt_empty_decode_var) = attempt_empty_decode_if_missing(
-            state_record_var,
             env,
-            field_var,
-            result_field_var,
-            state_arg_symbol,
-            field_name,
+            DecodingFieldArgs {
+                field_name: field_name.clone(),
+                field_var,
+                state_arg_symbol,
+                state_record_var,
+                result_field_var,
+                decode_err_var,
+            },
             fmt_arg_var,
             fmt_arg_symbol,
-            decode_err_var,
             symbol,
         );
 
@@ -1008,15 +1023,17 @@ pub(super) fn finalizer(
 /// field_var: The variable of the field in the state record: `Result var NoField`
 /// result_field_var: The variable of the actual field
 fn attempt_empty_decode_if_missing(
-    state_record_var: Variable,
     env: &mut Env<'_>,
-    field_var: Variable,
-    result_field_var: Variable,
-    state_arg_symbol: Symbol,
-    field_name: &Lowercase,
+    DecodingFieldArgs {
+        field_name,
+        field_var,
+        state_arg_symbol,
+        state_record_var,
+        result_field_var,
+        decode_err_var,
+    }: DecodingFieldArgs,
     fmt_arg_var: Variable,
     fmt_arg_symbol: Symbol,
-    decode_err_var: Variable,
     symbol: &Symbol,
 ) -> (Expr, Variable) {
     let (decode_expr, rec_result, rec_dot_result) = decode_with(
@@ -1115,6 +1132,7 @@ fn attempt_empty_decode_if_missing(
     };
     (expr, rec_dot_result)
 }
+
 // Example:
 // initialState : {first: Result a [NoField], second: Result b [NoField]}
 // initialState = {first: Err NoField, second: Err NoField}
@@ -1193,6 +1211,20 @@ fn initial_state(
     )
 }
 
+struct DecodeWithVars {
+    /// Type of the record returned by `Decode.decodeWith`
+    /// `rec : { rest: List U8, result: (typeof rec.result) }``
+    rec_var: Variable,
+    /// Type of the result field of the record returned by `Decode.decodeWith`
+    rec_dot_result: Variable,
+    /// type of `Decode.decoder`
+    decoder_var: Variable,
+    /// lambda set for `Decode.decodeWith` call
+    lambda_set_var: Variable,
+    /// specialised type of this specific call to `Decode.decodeWith`
+    this_decode_with_var: Variable,
+}
+
 /// Makes the vars for decoding this particular field and decode format
 fn make_decode_with_vars(
     env: &mut Env<'_>,
@@ -1200,7 +1232,7 @@ fn make_decode_with_vars(
     bytes_arg_var: Variable,
     fmt_arg_var: Variable,
     decode_err_var: Variable,
-) -> (Variable, Variable, Variable, Variable, Variable) {
+) -> DecodeWithVars {
     // rec.result : [Ok field_var, Err DecodeError]
     let rec_dot_result = {
         let tag_union = FlatType::TagUnion(
@@ -1242,13 +1274,13 @@ fn make_decode_with_vars(
         this_decode_with_var
     };
 
-    (
+    DecodeWithVars {
         rec_var,
         rec_dot_result,
         decoder_var,
         lambda_set_var,
         this_decode_with_var,
-    )
+    }
 }
 
 /// `Decode.decodeWith bytes Decode.decoder fmt`
@@ -1265,20 +1297,25 @@ pub(super) fn decode_with(
     decode_err_var: Variable,
 ) -> (Expr, Variable, Variable) {
     // Creates all the vars we need to call decode_with for the specific field and fmt we are going to call it with
-    let (decode_rec_var, decode_rec_dot_result, decoder_var, lambda_set_var, this_decode_with_var) =
-        make_decode_with_vars(
-            env,
-            field_var,
-            Variable::LIST_U8,
-            fmt_arg_var,
-            decode_err_var,
-        );
+    let DecodeWithVars {
+        rec_var,
+        rec_dot_result,
+        decoder_var,
+        lambda_set_var,
+        this_decode_with_var,
+    } = make_decode_with_vars(
+        env,
+        field_var,
+        Variable::LIST_U8,
+        fmt_arg_var,
+        decode_err_var,
+    );
     let decode_expr = Expr::Call(
         Box::new((
             this_decode_with_var,
             Loc::at_zero(Expr::Var(Symbol::DECODE_DECODE_WITH, this_decode_with_var)),
             lambda_set_var,
-            decode_rec_var,
+            rec_var,
         )),
         vec![
             (Variable::LIST_U8, Loc::at_zero(bytes_arg_expr)),
@@ -1297,5 +1334,5 @@ pub(super) fn decode_with(
         ],
         CalledVia::Space,
     );
-    (decode_expr, decode_rec_var, decode_rec_dot_result)
+    (decode_expr, rec_var, rec_dot_result)
 }

@@ -218,7 +218,6 @@ pub(crate) fn ok_to_ok_branch(
     symbol: &Symbol,
     env: &mut Env<'_>,
 ) -> WhenBranch {
-    
     WhenBranch {
         patterns: vec![WhenBranchPattern {
             pattern: Loc::at_zero(Pattern::AppliedTag {
