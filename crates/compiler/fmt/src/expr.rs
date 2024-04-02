@@ -503,10 +503,21 @@ impl<'a> Formattable for Expr<'a> {
                 }
             }
             RecordAccess(expr, key) => {
-
                 // Check for any `!` suffixes and format these at the end of expression
-                let (expr_to_format, suffix_count) = if let Var{module_name, ident, suffixed} = expr {
-                    (Var {module_name, ident, suffixed:0}, suffixed)
+                let (expr_to_format, suffix_count) = if let Var {
+                    module_name,
+                    ident,
+                    suffixed,
+                } = expr
+                {
+                    (
+                        Var {
+                            module_name,
+                            ident,
+                            suffixed: 0,
+                        },
+                        suffixed,
+                    )
                 } else {
                     (**expr, &0u8)
                 };
@@ -520,10 +531,21 @@ impl<'a> Formattable for Expr<'a> {
                 }
             }
             TupleAccess(expr, key) => {
-
                 // Check for any `!` suffixes and format these at the end of expression
-                let (expr_to_format, suffix_count) = if let Var{module_name, ident, suffixed} = expr {
-                    (Var {module_name, ident, suffixed:0}, suffixed)
+                let (expr_to_format, suffix_count) = if let Var {
+                    module_name,
+                    ident,
+                    suffixed,
+                } = expr
+                {
+                    (
+                        Var {
+                            module_name,
+                            ident,
+                            suffixed: 0,
+                        },
+                        suffixed,
+                    )
                 } else {
                     (**expr, &0u8)
                 };

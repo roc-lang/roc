@@ -699,7 +699,6 @@ pub fn parse_single_def<'a>(
                     spaces_before_current,
                 );
 
-
                 return result;
             };
 
