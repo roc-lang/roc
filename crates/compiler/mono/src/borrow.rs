@@ -16,8 +16,6 @@ impl std::fmt::Debug for BorrowSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut f = &mut f.debug_struct("BorrowSignature");
 
-        dbg!(self.0);
-
         for (i, ownership) in self.iter().enumerate() {
             f = f.field(&format!("_{i}"), &ownership);
         }
@@ -59,7 +57,7 @@ impl BorrowSignature {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = Ownership> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = Ownership> + '_ {
         let mut i = 0;
 
         std::iter::from_fn(move || {
@@ -80,23 +78,25 @@ impl std::ops::Index<usize> for BorrowSignature {
 
 pub(crate) type BorrowSignatures<'a> = MutMap<(Symbol, ProcLayout<'a>), BorrowSignature>;
 
-pub(crate) fn infer_borrow_signatures<'a>(
+pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
     arena: &'a Bump,
     interner: &impl LayoutInterner<'a>,
-    procs: &'a MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    procs: &'b MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> BorrowSignatures<'a> {
-    let host_exposed_procs = &[];
+    // let host_exposed_procs = &[];
 
-    let mut borrow_signatures = procs
+    let mut borrow_signatures: BorrowSignatures = procs
         .iter()
-        .map(|(key, proc)| {
+        .map(|(_key, proc)| {
             let mut signature = BorrowSignature::new(proc.args.len());
+
+            let key = (proc.name.name(), proc.proc_layout(arena));
 
             for (i, in_layout) in key.1.arguments.iter().enumerate() {
                 signature.set(i, layout_to_ownership(*in_layout, interner));
             }
 
-            (*key, signature)
+            (key, signature)
         })
         .collect();
 
@@ -107,8 +107,6 @@ pub(crate) fn infer_borrow_signatures<'a>(
     let matrix = construct_reference_matrix(arena, procs);
     let sccs = matrix.strongly_connected_components_all();
 
-    let mut env = ();
-
     for (group, _) in sccs.groups() {
         // This is a fixed-point analysis
         //
@@ -117,21 +115,49 @@ pub(crate) fn infer_borrow_signatures<'a>(
         // when that doesn't lead to conflicts the change is kept, otherwise it may be reverted
         //
         // when the signatures no longer change, the analysis stops and returns the signatures
+
+        //        // initialize borrow signatures for everyone
+        //        for index in group.iter_ones() {
+        //            let (key, proc) = procs.iter().nth(index).unwrap();
+        //
+        //            if proc.args.is_empty() {
+        //                continue;
+        //            }
+        //
+        //            // host-exposed functions must always own their arguments.
+        //            let is_host_exposed = host_exposed_procs.contains(&key.0);
+        //
+        //            let key = (proc.name.name(), proc.proc_layout(arena));
+        //
+        //            // initialize the borrow signature based on the layout if first time
+        //            borrow_signatures.entry(key).or_insert_with(|| {
+        //                let mut borrow_signature = BorrowSignature::new(proc.args.len());
+        //
+        //                for (i, in_layout) in key.1.arguments.iter().enumerate() {
+        //                    borrow_signature.set(i, layout_to_ownership(*in_layout, interner));
+        //                }
+        //
+        //                borrow_signature
+        //            });
+        //        }
+
         loop {
             for index in group.iter_ones() {
-                let (key, proc) = procs.iter().nth(index).unwrap();
+                let (_, proc) = procs.iter().nth(index).unwrap();
+                let key = (proc.name.name(), proc.proc_layout(arena));
 
                 if proc.args.is_empty() {
                     continue;
                 }
 
-                // host-exposed functions must always own their arguments.
-                let is_host_exposed = host_exposed_procs.contains(&key.0);
+                let mut state = State {
+                    args: proc.args,
+                    borrow_signature: *borrow_signatures.get(&key).unwrap(),
+                };
 
-                let mut state = State::new(arena, interner, &mut borrow_signatures, proc);
                 state.inspect_stmt(&mut borrow_signatures, &proc.body);
 
-                borrow_signatures.insert(*key, state.borrow_signature);
+                borrow_signatures.insert(key, state.borrow_signature);
             }
 
             // if there were no modifications, we're done
@@ -234,13 +260,13 @@ impl<'a> State<'a> {
                 self.mark_owned(*s);
             }
             Stmt::Refcounting(_, _) => unreachable!("not inserted yet"),
-            Stmt::Expect { .. } | Stmt::ExpectFx { .. } => {
-                // TODO do we rely on values being passed by-value here?
-                // it would be better to pass by-reference in general
+            Stmt::Expect { remainder, .. } | Stmt::ExpectFx { remainder, .. } => {
+                // based on my reading of inc_dec.rs, expect borrows the symbols
+                self.inspect_stmt(borrow_signatures, remainder);
             }
-            Stmt::Dbg { .. } => {
-                // TODO do we rely on values being passed by-value here?
-                // it would be better to pass by-reference in general
+            Stmt::Dbg { remainder, .. } => {
+                // based on my reading of inc_dec.rs, expect borrows the symbol
+                self.inspect_stmt(borrow_signatures, remainder);
             }
             Stmt::Join {
                 body, remainder, ..
@@ -280,7 +306,7 @@ impl<'a> State<'a> {
 
                 let borrow_signature = match borrow_signatures.get(&(name.name(), proc_layout)) {
                     Some(s) => s,
-                    None => todo!("no borrow signature for function/layout"),
+                    None => unreachable!("no borrow signature for {name:?} layout"),
                 };
 
                 for (argument, ownership) in arguments.iter().zip(borrow_signature.iter()) {

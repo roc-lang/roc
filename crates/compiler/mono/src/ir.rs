@@ -398,7 +398,7 @@ impl<'a> Proc<'a> {
     }
 
     pub fn proc_layout(&self, arena: &'a Bump) -> ProcLayout<'a> {
-        let args = Vec::from_iter_in(self.args.iter().map(|(a, b)| *a), arena);
+        let args = Vec::from_iter_in(self.args.iter().map(|(a, _)| *a), arena);
 
         ProcLayout {
             arguments: args.into_bump_slice(),
