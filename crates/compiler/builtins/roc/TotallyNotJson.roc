@@ -232,11 +232,11 @@ escapedByteToJson = \b ->
 encodeList = \lst, encodeElem ->
     Encode.custom \bytes, @Json {} ->
         writeList = \{ buffer, elemsLeft }, elem ->
-            beforeBufferLen=buffer|>List.len
+            beforeBufferLen = buffer |> List.len
 
             bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
-            #If our encoder returned [] we just skip the elem
-            if bufferWithElem|>List.len == beforeBufferLen then
+            # If our encoder returned [] we just skip the elem
+            if bufferWithElem |> List.len == beforeBufferLen then
                 { buffer: bufferWithElem, elemsLeft: elemsLeft - 1 }
             else
                 bufferWithSuffix =
@@ -247,7 +247,6 @@ encodeList = \lst, encodeElem ->
 
                 { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
 
-
         head = List.append bytes (Num.toU8 '[')
         { buffer: withList } = List.walk lst { buffer: head, elemsLeft: List.len lst } writeList
 
@@ -257,9 +256,9 @@ encodeRecord = \fields ->
     Encode.custom \bytes, @Json {} ->
         writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
 
-            fieldValue=[]|>appendWith value (json)
-            #If our encoder returned [] we just skip the field
-            if fieldValue==[] then
+            fieldValue = [] |> appendWith value (json)
+            # If our encoder returned [] we just skip the field
+            if fieldValue == [] then
                 { buffer, fieldsLeft: fieldsLeft - 1 }
             else
                 fieldName = key
@@ -286,15 +285,14 @@ encodeRecord = \fields ->
 encodeTuple = \elems ->
     Encode.custom \bytes, @Json {} ->
         writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
-            beforeBufferLen=buffer|>List.len
+            beforeBufferLen = buffer |> List.len
 
             bufferWithElem = appendWith buffer (elemEncoder) (@Json {})
-            
-            #If our encoder returned [] we just skip the elem
-            if bufferWithElem|>List.len == beforeBufferLen then
+
+            # If our encoder returned [] we just skip the elem
+            if bufferWithElem |> List.len == beforeBufferLen then
                 { buffer: bufferWithElem, elemsLeft: elemsLeft - 1 }
             else
-
                 bufferWithSuffix =
                     if elemsLeft > 1 then
                         List.append bufferWithElem (Num.toU8 ',')
