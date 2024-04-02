@@ -72,6 +72,7 @@ pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
 pub const FLAG_FUZZ: &str = "fuzz";
+pub const FLAG_IGNORE_ERROR: &str = "ignore-error";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -146,6 +147,12 @@ pub fn build_app() -> Command {
     let flag_fuzz = Arg::new(FLAG_FUZZ)
         .long(FLAG_FUZZ)
         .help("Instrument the roc binary for fuzzing with roc-fuzz")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
+    let flag_ignore_error = Arg::new(FLAG_IGNORE_ERROR)
+        .long(FLAG_IGNORE_ERROR)
+        .help("Run tests even if it has build errors")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -237,6 +244,7 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(flag_fuzz.clone())
+            .arg(flag_ignore_error.clone())
             .arg(
                 Arg::new(FLAG_VERBOSE)
                     .long(FLAG_VERBOSE)
