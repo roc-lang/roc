@@ -504,6 +504,12 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;
 
+    let exec_mode = if matches.get_flag(FLAG_IGNORE_ERROR) {
+        ExecutionMode::Test
+    } else {
+        ExecutionMode::TestIfCheck
+    };
+
     // Step 1: compile the app and generate the .o file
     let load_config = LoadConfig {
         target,
@@ -512,7 +518,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
-        exec_mode: ExecutionMode::TestIfCheck,
+        exec_mode,
     };
     let load_result = roc_load::load_and_monomorphize(
         arena,

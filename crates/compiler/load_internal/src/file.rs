@@ -118,8 +118,8 @@ pub enum ExecutionMode {
     Executable,
     /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
     ExecutableIfCheck,
-    /// Test is like [`ExecutionMode::ExecutableIfCheck`], but rather than producing a proper
-    /// executable, run tests.
+    Test,
+    /// Like [`ExecutionMode::Test`], but stops in the presence of type errors.
     TestIfCheck,
 }
 
@@ -128,13 +128,17 @@ impl ExecutionMode {
         use ExecutionMode::*;
 
         match self {
-            Executable => Phase::MakeSpecializations,
+            Executable | Test => Phase::MakeSpecializations,
             Check | ExecutableIfCheck | TestIfCheck => Phase::SolveTypes,
         }
     }
 
     fn build_if_checks(&self) -> bool {
         matches!(self, Self::ExecutableIfCheck | Self::TestIfCheck)
+    }
+
+    fn build_tests(&self) -> bool {
+        matches!(self, Self::TestIfCheck | Self::Test)
     }
 }
 
@@ -397,8 +401,7 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
-                let build_expects =
-                    matches!(state.exec_mode, ExecutionMode::TestIfCheck) && expectations.is_some();
+                let build_expects = state.exec_mode.build_tests() && expectations.is_some();
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -2624,7 +2627,7 @@ fn update<'a>(
 
             let add_to_host_exposed = is_host_exposed &&
                 // During testing, we don't need to expose anything to the host.
-                !matches!(state.exec_mode, ExecutionMode::TestIfCheck);
+                !state.exec_mode.build_tests();
 
             if add_to_host_exposed {
                 state.exposed_to_host.top_level_values.extend(
@@ -3201,7 +3204,7 @@ fn finish_specialization<'a>(
     let entry_point = {
         let interns: &mut Interns = &mut interns;
         match state.exec_mode {
-            ExecutionMode::TestIfCheck => Ok(EntryPoint::Test),
+            ExecutionMode::TestIfCheck | ExecutionMode::Test => Ok(EntryPoint::Test),
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
 
