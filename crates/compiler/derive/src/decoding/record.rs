@@ -369,7 +369,7 @@ pub(super) fn step_field(
 ///            }
 /// )
 /// ```
-///Expression for custom decoder
+/// Expression for custom decoder
 fn custom_decoder(
     env: &mut Env<'_>,
     field_var: Variable,
@@ -785,7 +785,7 @@ fn state_record_update(
 //                 Err _ -> Err TooShort
 //         Err _ -> Err TooShort
 
-//THis is my new one
+// THis is my new one
 pub(super) fn finalizer(
     env: &mut Env,
     state_record_var: Variable,
@@ -871,12 +871,12 @@ pub(super) fn finalizer(
         .zip(field_vars.iter().rev())
         .zip(result_field_vars.iter().rev())
     {
-        //[Ok field_var, Err DecodeError]
-        // when rec.f0 is
-        //     Err _ ->
-        //         when Decode.decodeWith [] Decode.decoder fmt is
-        //             rec2 -> rec2.result
-        //     Ok a -> Ok a
+        // [Ok field_var, Err DecodeError]
+        //   when rec.f0 is
+        //       Err _ ->
+        //           when Decode.decodeWith [] Decode.decoder fmt is
+        //               rec2 -> rec2.result
+        //       Ok a -> Ok a
         let (attempt_empty_decode_expr, attempt_empty_decode_var) = attempt_empty_decode_if_missing(
             state_record_var,
             env,
@@ -932,13 +932,13 @@ pub(super) fn finalizer(
 
         // when
         //    when stateRecord.f0 is
-        //        Ok f0-> Ok f0
+        //        Ok f0 -> Ok f0
         //        _ ->
         //            when Decode.decodeWith [] Decode.decoder fmt is
         //                decRec -> decRec.result
         // is
         //     _-> TooShort
-        //     Ok x-> expr
+        //     Ok x -> expr
         body = Expr::When {
             loc_cond: Box::new(Loc::at_zero(attempt_empty_decode_expr)),
             cond_var: attempt_empty_decode_var,
