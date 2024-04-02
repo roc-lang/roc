@@ -1,5 +1,4 @@
 procedure Test.1 (Test.2):
-    dec Test.2;
     let Test.11 : Int1 = false;
     ret Test.11;
 

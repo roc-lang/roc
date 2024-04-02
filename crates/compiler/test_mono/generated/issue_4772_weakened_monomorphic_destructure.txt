@@ -40,7 +40,6 @@ procedure Decode.26 (Decode.105, Decode.106):
 
 procedure List.1 (List.106):
     let List.622 : U64 = CallByName List.6 List.106;
-    dec List.106;
     let List.623 : U64 = 0i64;
     let List.621 : Int1 = CallByName Bool.11 List.622 List.623;
     ret List.621;
@@ -49,7 +48,6 @@ procedure List.103 (List.487, List.488, List.489):
     let List.631 : U64 = 0i64;
     let List.632 : U64 = CallByName List.6 List.487;
     let List.630 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = CallByName List.80 List.487 List.488 List.489 List.631 List.632;
-    dec List.487;
     ret List.630;
 
 procedure List.2 (List.107, List.108):
@@ -57,18 +55,15 @@ procedure List.2 (List.107, List.108):
     let List.610 : Int1 = CallByName Num.22 List.108 List.613;
     if List.610 then
         let List.612 : U8 = CallByName List.66 List.107 List.108;
-        dec List.107;
         let List.611 : [C {}, C U8] = TagId(1) List.612;
         ret List.611;
     else
-        dec List.107;
         let List.609 : {} = Struct {};
         let List.608 : [C {}, C U8] = TagId(0) List.609;
         ret List.608;
 
 procedure List.26 (List.200, List.201, List.202):
     let List.624 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = CallByName List.103 List.200 List.201 List.202;
-    dec List.200;
     let List.627 : U8 = 1i64;
     let List.628 : U8 = GetTagId List.624;
     let List.629 : Int1 = lowlevel Eq List.627 List.628;
@@ -152,6 +147,7 @@ procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
             let List.634 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = TagId(1) List.491;
             ret List.634;
     in
+    inc #Derived_gen.0;
     jump List.633 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Num.19 (#Attr.2, #Attr.3):
@@ -200,7 +196,6 @@ procedure Str.12 (#Attr.2):
 
 procedure Str.27 (Str.78):
     let Str.232 : [C {}, C I64] = CallByName Str.60 Str.78;
-    dec Str.78;
     ret Str.232;
 
 procedure Str.42 (#Attr.2):
@@ -213,7 +208,6 @@ procedure Str.43 (#Attr.2):
 
 procedure Str.60 (Str.185):
     let Str.186 : {I64, U8} = CallByName Str.42 Str.185;
-    dec Str.185;
     let Str.238 : U8 = StructAtIndex 1 Str.186;
     let Str.239 : U8 = 0i64;
     let Str.235 : Int1 = CallByName Bool.11 Str.238 Str.239;
@@ -376,6 +370,7 @@ procedure TotallyNotJson.488 (TotallyNotJson.489, TotallyNotJson.973):
 
 procedure TotallyNotJson.497 (TotallyNotJson.498):
     let TotallyNotJson.1116 : List U8 = Array [];
+    inc TotallyNotJson.498;
     let TotallyNotJson.995 : {List U8, List U8} = Struct {TotallyNotJson.498, TotallyNotJson.1116};
     let TotallyNotJson.994 : {List U8, List U8} = CallByName TotallyNotJson.69 TotallyNotJson.995;
     ret TotallyNotJson.994;

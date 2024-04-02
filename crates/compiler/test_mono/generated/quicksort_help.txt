@@ -30,6 +30,7 @@ procedure Test.1 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
         else
             ret Test.2;
     in
+    inc #Derived_gen.0;
     jump Test.12 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2;
 
 procedure Test.0 ():

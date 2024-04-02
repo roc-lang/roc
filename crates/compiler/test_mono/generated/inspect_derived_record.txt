@@ -31,7 +31,6 @@ procedure Inspect.225 (Inspect.226, Inspect.224):
     dec Inspect.349;
     let Inspect.320 : {Str, Int1} = CallByName Inspect.227 Inspect.324 Inspect.224;
     dec Inspect.324;
-    dec Inspect.224;
     let Inspect.321 : {} = Struct {};
     let Inspect.316 : Str = CallByName Inspect.239 Inspect.320;
     let Inspect.317 : Str = "}";
@@ -41,10 +40,10 @@ procedure Inspect.225 (Inspect.226, Inspect.224):
 
 procedure Inspect.227 (Inspect.228, Inspect.224):
     let Inspect.348 : Int1 = CallByName Bool.1;
+    inc Inspect.228;
     let Inspect.328 : {Str, Int1} = Struct {Inspect.228, Inspect.348};
     let Inspect.329 : {} = Struct {};
     let Inspect.327 : {Str, Int1} = CallByName List.18 Inspect.224 Inspect.328 Inspect.329;
-    dec Inspect.224;
     ret Inspect.327;
 
 procedure Inspect.229 (Inspect.330, Inspect.331):
@@ -78,6 +77,7 @@ procedure Inspect.235 (Inspect.236, Inspect.233):
 
 procedure Inspect.237 (Inspect.238):
     let Inspect.336 : Int1 = CallByName Bool.2;
+    inc Inspect.238;
     let Inspect.335 : {Str, Int1} = Struct {Inspect.238, Inspect.336};
     ret Inspect.335;
 
@@ -110,7 +110,6 @@ procedure Inspect.30 (Inspect.143):
 
 procedure Inspect.31 (Inspect.299, Inspect.145):
     let Inspect.310 : Str = CallByName Inspect.225 Inspect.145 Inspect.299;
-    dec Inspect.299;
     ret Inspect.310;
 
 procedure Inspect.31 (Inspect.299, Inspect.145):
@@ -157,7 +156,6 @@ procedure Inspect.58 (Inspect.288):
 
 procedure Inspect.59 (Inspect.296, Inspect.292):
     let Inspect.319 : Str = CallByName Str.3 Inspect.296 Inspect.292;
-    dec Inspect.292;
     ret Inspect.319;
 
 procedure Inspect.60 (Inspect.298):
@@ -167,7 +165,6 @@ procedure List.18 (List.159, List.160, List.161):
     let List.573 : U64 = 0i64;
     let List.574 : U64 = CallByName List.6 List.159;
     let List.572 : {Str, Int1} = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
-    dec List.159;
     ret List.572;
 
 procedure List.6 (#Attr.2):
@@ -192,6 +189,7 @@ procedure List.91 (#Derived_gen.24, #Derived_gen.25, #Derived_gen.26, #Derived_g
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.24;
     jump List.575 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26 #Derived_gen.27 #Derived_gen.28;
 
 procedure Num.22 (#Attr.2, #Attr.3):

@@ -2,7 +2,6 @@ procedure List.18 (List.159, List.160, List.161):
     let List.573 : U64 = 0i64;
     let List.574 : U64 = CallByName List.6 List.159;
     let List.572 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
-    dec List.159;
     ret List.572;
 
 procedure List.6 (#Attr.2):
@@ -27,6 +26,7 @@ procedure List.91 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.0;
     jump List.575 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Num.22 (#Attr.2, #Attr.3):

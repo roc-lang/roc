@@ -19,7 +19,6 @@ procedure Test.15 (Test.49):
     ret Test.70;
 
 procedure Test.16 (Test.48):
-    dec Test.48;
     let Test.79 : {} = Struct {};
     let Test.78 : Int1 = CallByName Test.13 Test.79;
     ret Test.78;

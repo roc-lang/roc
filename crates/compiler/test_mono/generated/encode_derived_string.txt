@@ -15,20 +15,16 @@ procedure List.103 (List.487, List.488, List.489):
     let List.614 : U64 = 0i64;
     let List.615 : U64 = CallByName List.6 List.487;
     let List.613 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.80 List.487 List.488 List.489 List.614 List.615;
-    dec List.487;
     ret List.613;
 
 procedure List.18 (List.159, List.160, List.161):
     let List.585 : U64 = 0i64;
     let List.586 : U64 = CallByName List.6 List.159;
     let List.584 : List U8 = CallByName List.91 List.159 List.160 List.161 List.585 List.586;
-    dec List.160;
-    dec List.159;
     ret List.584;
 
 procedure List.26 (List.200, List.201, List.202):
     let List.607 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.103 List.200 List.201 List.202;
-    dec List.200;
     let List.610 : U8 = 1i64;
     let List.611 : U8 = GetTagId List.607;
     let List.612 : Int1 = lowlevel Eq List.610 List.611;
@@ -108,6 +104,7 @@ procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
             let List.617 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.491;
             ret List.617;
     in
+    inc #Derived_gen.0;
     jump List.616 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure List.91 (#Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11, #Derived_gen.12):
@@ -123,6 +120,8 @@ procedure List.91 (#Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.8;
+    inc #Derived_gen.9;
     jump List.587 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12;
 
 procedure Num.137 (#Attr.2, #Attr.3):

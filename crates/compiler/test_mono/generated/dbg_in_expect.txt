@@ -7,7 +7,6 @@ procedure Inspect.246 (Inspect.247, Inspect.245):
     let Inspect.318 : Str = CallByName Inspect.59 Inspect.247 Inspect.319;
     dec Inspect.319;
     let Inspect.314 : Str = CallByName Inspect.59 Inspect.318 Inspect.245;
-    dec Inspect.245;
     let Inspect.315 : Str = "\"";
     let Inspect.313 : Str = CallByName Inspect.59 Inspect.314 Inspect.315;
     dec Inspect.315;
@@ -39,7 +38,6 @@ procedure Inspect.5 (Inspect.146):
 
 procedure Inspect.59 (Inspect.296, Inspect.292):
     let Inspect.317 : Str = CallByName Str.3 Inspect.296 Inspect.292;
-    dec Inspect.292;
     ret Inspect.317;
 
 procedure Inspect.60 (Inspect.298):

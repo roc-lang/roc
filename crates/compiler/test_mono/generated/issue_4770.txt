@@ -10,7 +10,6 @@ procedure List.103 (List.487, List.488, List.489):
     let List.586 : U64 = 0i64;
     let List.587 : U64 = CallByName List.6 List.487;
     let List.585 : [C {}, C {}] = CallByName List.80 List.487 List.488 List.489 List.586 List.587;
-    dec List.487;
     ret List.585;
 
 procedure List.23 (#Attr.2, #Attr.3, #Attr.4):
@@ -33,7 +32,6 @@ procedure List.235 (List.574, List.236, List.234):
 procedure List.56 (List.233, List.234):
     let List.583 : {} = Struct {};
     let List.575 : [C {}, C {}] = CallByName List.103 List.233 List.583 List.234;
-    dec List.233;
     let List.580 : U8 = 1i64;
     let List.581 : U8 = GetTagId List.575;
     let List.582 : Int1 = lowlevel Eq List.580 List.581;
@@ -81,6 +79,7 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
             let List.589 : [C {}, C {}] = TagId(1) List.491;
             ret List.589;
     in
+    inc #Derived_gen.1;
     jump List.588 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
 procedure Num.22 (#Attr.2, #Attr.3):

@@ -3,11 +3,9 @@ procedure List.2 (List.107, List.108):
     let List.591 : Int1 = CallByName Num.22 List.108 List.594;
     if List.591 then
         let List.593 : I64 = CallByName List.66 List.107 List.108;
-        dec List.107;
         let List.592 : [C {}, C I64] = TagId(1) List.593;
         ret List.592;
     else
-        dec List.107;
         let List.590 : {} = Struct {};
         let List.589 : [C {}, C I64] = TagId(0) List.590;
         ret List.589;

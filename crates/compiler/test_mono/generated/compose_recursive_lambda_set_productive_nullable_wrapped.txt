@@ -6,7 +6,6 @@ procedure List.18 (List.159, List.160, List.161):
     let List.573 : U64 = 0i64;
     let List.574 : U64 = CallByName List.6 List.159;
     let List.572 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
-    dec List.159;
     ret List.572;
 
 procedure List.6 (#Attr.2):
@@ -30,6 +29,7 @@ procedure List.91 (#Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.7;
     jump List.575 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11;
 
 procedure Num.22 (#Attr.2, #Attr.3):
@@ -51,7 +51,7 @@ procedure Test.11 (#Derived_gen.3, #Derived_gen.4):
     joinpoint Test.27 Test.12 #Attr.12:
         let Test.34 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
         let Test.33 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.12:
+        joinpoint #Derived_gen.14:
             joinpoint Test.31 Test.29:
                 let Test.30 : U8 = GetTagId Test.33;
                 switch Test.30:
@@ -78,15 +78,16 @@ procedure Test.11 (#Derived_gen.3, #Derived_gen.4):
                     jump Test.31 Test.32;
             
         in
-        let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.13 then
+        let #Derived_gen.15 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.15 then
             free #Attr.12;
-            jump #Derived_gen.12;
+            jump #Derived_gen.14;
         else
             inc Test.33;
             decref #Attr.12;
-            jump #Derived_gen.12;
+            jump #Derived_gen.14;
     in
+    inc #Derived_gen.3;
     jump Test.27 #Derived_gen.3 #Derived_gen.4;
 
 procedure Test.2 (Test.13):
@@ -118,7 +119,7 @@ procedure Test.6 (Test.7, Test.8, Test.5):
 procedure Test.9 (Test.10, #Attr.12):
     let Test.43 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.42 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.14:
+    joinpoint #Derived_gen.16:
         let Test.39 : U8 = GetTagId Test.42;
         joinpoint Test.40 Test.38:
             switch Test.43:
@@ -147,14 +148,14 @@ procedure Test.9 (Test.10, #Attr.12):
                 jump Test.40 Test.41;
         
     in
-    let #Derived_gen.15 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.15 then
+    let #Derived_gen.17 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.17 then
         free #Attr.12;
-        jump #Derived_gen.14;
+        jump #Derived_gen.16;
     else
         inc Test.42;
         decref #Attr.12;
-        jump #Derived_gen.14;
+        jump #Derived_gen.16;
 
 procedure Test.0 ():
     let Test.45 : Int1 = false;

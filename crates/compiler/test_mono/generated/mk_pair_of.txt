@@ -1,5 +1,5 @@
 procedure Test.1 (Test.2):
-    inc Test.2;
+    inc 2 Test.2;
     let Test.6 : {List I64, List I64} = Struct {Test.2, Test.2};
     ret Test.6;
 

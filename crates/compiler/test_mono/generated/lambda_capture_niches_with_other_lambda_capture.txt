@@ -11,6 +11,7 @@ procedure Test.1 (Test.5):
     ret Test.31;
 
 procedure Test.2 (Test.7):
+    inc Test.7;
     let Test.23 : [C {}, C U64, C Str] = TagId(2) Test.7;
     ret Test.23;
 

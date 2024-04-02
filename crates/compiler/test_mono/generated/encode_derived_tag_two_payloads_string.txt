@@ -37,41 +37,34 @@ procedure Encode.24 (Encode.99, Encode.107, Encode.101):
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.117 : List U8 = CallByName TotallyNotJson.150 Encode.99 Encode.101 Encode.107;
-    dec Encode.107;
     ret Encode.117;
 
 procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
     let Encode.110 : {Str, Str} = CallByName #Derived.0 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    dec Encode.109;
     ret Encode.108;
 
 procedure List.103 (List.487, List.488, List.489):
     let List.655 : U64 = 0i64;
     let List.656 : U64 = CallByName List.6 List.487;
     let List.654 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.80 List.487 List.488 List.489 List.655 List.656;
-    dec List.487;
     ret List.654;
 
 procedure List.18 (List.159, List.160, List.161):
     let List.599 : U64 = 0i64;
     let List.600 : U64 = CallByName List.6 List.159;
     let List.598 : {List U8, U64} = CallByName List.91 List.159 List.160 List.161 List.599 List.600;
-    dec List.159;
     ret List.598;
 
 procedure List.18 (List.159, List.160, List.161):
     let List.611 : U64 = 0i64;
     let List.612 : U64 = CallByName List.6 List.159;
     let List.610 : List U8 = CallByName List.91 List.159 List.160 List.161 List.611 List.612;
-    dec List.160;
-    dec List.159;
     ret List.610;
 
 procedure List.26 (List.200, List.201, List.202):
     let List.648 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.103 List.200 List.201 List.202;
-    dec List.200;
     let List.651 : U8 = 1i64;
     let List.652 : U8 = GetTagId List.648;
     let List.653 : Int1 = lowlevel Eq List.651 List.652;
@@ -173,6 +166,7 @@ procedure List.80 (#Derived_gen.27, #Derived_gen.28, #Derived_gen.29, #Derived_g
             let List.658 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.491;
             ret List.658;
     in
+    inc #Derived_gen.27;
     jump List.657 #Derived_gen.27 #Derived_gen.28 #Derived_gen.29 #Derived_gen.30 #Derived_gen.31;
 
 procedure List.91 (#Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17, #Derived_gen.18):
@@ -182,7 +176,6 @@ procedure List.91 (#Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_g
             let List.607 : Str = CallByName List.66 List.162 List.165;
             inc List.607;
             let List.167 : {List U8, U64} = CallByName TotallyNotJson.230 List.163 List.607;
-            dec List.607;
             let List.606 : U64 = 1i64;
             let List.605 : U64 = CallByName Num.51 List.165 List.606;
             jump List.601 List.162 List.167 List.164 List.605 List.166;
@@ -190,6 +183,7 @@ procedure List.91 (#Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_g
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.14;
     jump List.601 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18;
 
 procedure List.91 (#Derived_gen.22, #Derived_gen.23, #Derived_gen.24, #Derived_gen.25, #Derived_gen.26):
@@ -205,6 +199,8 @@ procedure List.91 (#Derived_gen.22, #Derived_gen.23, #Derived_gen.24, #Derived_g
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.23;
+    inc #Derived_gen.22;
     jump List.613 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26;
 
 procedure Num.127 (#Attr.2):
@@ -376,7 +372,6 @@ procedure TotallyNotJson.230 (TotallyNotJson.975, TotallyNotJson.236):
     let TotallyNotJson.235 : U64 = StructAtIndex 1 TotallyNotJson.975;
     let TotallyNotJson.994 : {} = Struct {};
     let TotallyNotJson.237 : List U8 = CallByName Encode.24 TotallyNotJson.234 TotallyNotJson.236 TotallyNotJson.994;
-    dec TotallyNotJson.236;
     joinpoint TotallyNotJson.989 TotallyNotJson.238:
         let TotallyNotJson.987 : U64 = 1i64;
         let TotallyNotJson.986 : U64 = CallByName Num.20 TotallyNotJson.235 TotallyNotJson.987;
@@ -491,6 +486,8 @@ procedure TotallyNotJson.27 (TotallyNotJson.186):
     
 
 procedure TotallyNotJson.31 (TotallyNotJson.226, TotallyNotJson.227):
+    inc TotallyNotJson.227;
+    inc TotallyNotJson.226;
     let TotallyNotJson.972 : {Str, List Str} = Struct {TotallyNotJson.226, TotallyNotJson.227};
     let TotallyNotJson.971 : {Str, List Str} = CallByName Encode.23 TotallyNotJson.972;
     ret TotallyNotJson.971;

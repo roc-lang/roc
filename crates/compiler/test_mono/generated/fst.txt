@@ -1,5 +1,4 @@
 procedure Test.1 (Test.2, Test.3):
-    dec Test.3;
     ret Test.2;
 
 procedure Test.0 ():

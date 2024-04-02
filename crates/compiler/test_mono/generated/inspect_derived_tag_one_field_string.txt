@@ -44,8 +44,6 @@ procedure Inspect.202 (Inspect.203, #Attr.12):
 procedure Inspect.204 (Inspect.205, Inspect.199):
     let Inspect.325 : {} = Struct {};
     let Inspect.324 : Str = CallByName List.18 Inspect.199 Inspect.205 Inspect.325;
-    dec Inspect.205;
-    dec Inspect.199;
     ret Inspect.324;
 
 procedure Inspect.206 (Inspect.207, Inspect.208):
@@ -53,12 +51,10 @@ procedure Inspect.206 (Inspect.207, Inspect.208):
     let Inspect.327 : Str = CallByName Inspect.59 Inspect.207 Inspect.332;
     dec Inspect.332;
     let Inspect.326 : Str = CallByName Inspect.209 Inspect.327 Inspect.208;
-    dec Inspect.208;
     ret Inspect.326;
 
 procedure Inspect.209 (Inspect.210, Inspect.208):
     let Inspect.330 : Str = CallByName Inspect.31 Inspect.208 Inspect.210;
-    dec Inspect.208;
     ret Inspect.330;
 
 procedure Inspect.246 (Inspect.247, Inspect.245):
@@ -66,7 +62,6 @@ procedure Inspect.246 (Inspect.247, Inspect.245):
     let Inspect.350 : Str = CallByName Inspect.59 Inspect.247 Inspect.351;
     dec Inspect.351;
     let Inspect.348 : Str = CallByName Inspect.59 Inspect.350 Inspect.245;
-    dec Inspect.245;
     let Inspect.349 : Str = "\"";
     let Inspect.347 : Str = CallByName Inspect.59 Inspect.348 Inspect.349;
     dec Inspect.349;
@@ -95,7 +90,6 @@ procedure Inspect.31 (Inspect.299, Inspect.145):
 
 procedure Inspect.31 (Inspect.299, Inspect.145):
     let Inspect.331 : Str = CallByName Inspect.246 Inspect.145 Inspect.299;
-    dec Inspect.299;
     ret Inspect.331;
 
 procedure Inspect.33 (Inspect.148):
@@ -110,11 +104,13 @@ procedure Inspect.35 (Inspect.297):
 procedure Inspect.39 (Inspect.198, Inspect.199):
     let Inspect.337 : Int1 = CallByName List.1 Inspect.199;
     if Inspect.337 then
-        dec Inspect.199;
+        inc Inspect.198;
         let Inspect.339 : [C Str, C Str List Str] = TagId(0) Inspect.198;
         let Inspect.338 : [C Str, C Str List Str] = CallByName Inspect.30 Inspect.339;
         ret Inspect.338;
     else
+        inc Inspect.199;
+        inc Inspect.198;
         let Inspect.313 : [C Str, C Str List Str] = TagId(1) Inspect.198 Inspect.199;
         let Inspect.312 : [C Str, C Str List Str] = CallByName Inspect.30 Inspect.313;
         ret Inspect.312;
@@ -132,7 +128,6 @@ procedure Inspect.5 (Inspect.146):
 
 procedure Inspect.59 (Inspect.296, Inspect.292):
     let Inspect.320 : Str = CallByName Str.3 Inspect.296 Inspect.292;
-    dec Inspect.292;
     ret Inspect.320;
 
 procedure Inspect.60 (Inspect.298):
@@ -140,7 +135,6 @@ procedure Inspect.60 (Inspect.298):
 
 procedure List.1 (List.106):
     let List.585 : U64 = CallByName List.6 List.106;
-    dec List.106;
     let List.586 : U64 = 0i64;
     let List.584 : Int1 = CallByName Bool.11 List.585 List.586;
     ret List.584;
@@ -149,8 +143,6 @@ procedure List.18 (List.159, List.160, List.161):
     let List.573 : U64 = 0i64;
     let List.574 : U64 = CallByName List.6 List.159;
     let List.572 : Str = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
-    dec List.160;
-    dec List.159;
     ret List.572;
 
 procedure List.6 (#Attr.2):
@@ -176,6 +168,8 @@ procedure List.91 (#Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_g
             dec List.162;
             ret List.163;
     in
+    inc #Derived_gen.11;
+    inc #Derived_gen.10;
     jump List.575 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14;
 
 procedure Num.22 (#Attr.2, #Attr.3):
