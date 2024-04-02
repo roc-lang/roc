@@ -49,6 +49,7 @@ procedure List.103 (List.487, List.488, List.489):
     let List.631 : U64 = 0i64;
     let List.632 : U64 = CallByName List.6 List.487;
     let List.630 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = CallByName List.80 List.487 List.488 List.489 List.631 List.632;
+    dec List.487;
     ret List.630;
 
 procedure List.2 (List.107, List.108):
@@ -67,6 +68,7 @@ procedure List.2 (List.107, List.108):
 
 procedure List.26 (List.200, List.201, List.202):
     let List.624 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = CallByName List.103 List.200 List.201 List.202;
+    dec List.200;
     let List.627 : U8 = 1i64;
     let List.628 : U8 = GetTagId List.624;
     let List.629 : Int1 = lowlevel Eq List.627 List.628;
@@ -198,6 +200,7 @@ procedure Str.12 (#Attr.2):
 
 procedure Str.27 (Str.78):
     let Str.232 : [C {}, C I64] = CallByName Str.60 Str.78;
+    dec Str.78;
     ret Str.232;
 
 procedure Str.42 (#Attr.2):
@@ -252,6 +255,7 @@ procedure Test.0 ():
     if Test.33 then
         let Test.3 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
         let Test.19 : [C {}, C I64] = CallByName Str.27 Test.3;
+        dec Test.3;
         let Test.25 : U8 = 1i64;
         let Test.26 : U8 = GetTagId Test.19;
         let Test.27 : Int1 = lowlevel Eq Test.25 Test.26;
@@ -291,7 +295,6 @@ procedure TotallyNotJson.488 (TotallyNotJson.489, TotallyNotJson.973):
         let TotallyNotJson.1126 : {List U8, List U8} = CallByName TotallyNotJson.60 TotallyNotJson.489;
         let TotallyNotJson.493 : List U8 = StructAtIndex 0 TotallyNotJson.1126;
         let TotallyNotJson.492 : List U8 = StructAtIndex 1 TotallyNotJson.1126;
-        inc TotallyNotJson.492;
         let TotallyNotJson.1122 : Int1 = CallByName List.1 TotallyNotJson.492;
         if TotallyNotJson.1122 then
             dec TotallyNotJson.492;
@@ -309,6 +312,7 @@ procedure TotallyNotJson.488 (TotallyNotJson.489, TotallyNotJson.973):
             let TotallyNotJson.992 : List U8 = CallByName List.49 TotallyNotJson.492 TotallyNotJson.1117;
             let TotallyNotJson.993 : {} = Struct {};
             let TotallyNotJson.988 : {List U8, List U8} = CallByName TotallyNotJson.497 TotallyNotJson.992;
+            dec TotallyNotJson.992;
             let TotallyNotJson.989 : {} = Struct {};
             let TotallyNotJson.987 : List U8 = CallByName TotallyNotJson.499 TotallyNotJson.988;
             let TotallyNotJson.496 : [C {U64, U8}, C Str] = CallByName Str.9 TotallyNotJson.987;
@@ -390,14 +394,13 @@ procedure TotallyNotJson.59 ():
 procedure TotallyNotJson.60 (TotallyNotJson.504):
     let TotallyNotJson.1138 : [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64] = TagId(4) ;
     let TotallyNotJson.1139 : {} = Struct {};
-    inc TotallyNotJson.504;
     let TotallyNotJson.1127 : [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64] = CallByName List.26 TotallyNotJson.504 TotallyNotJson.1138 TotallyNotJson.1139;
     let TotallyNotJson.1135 : U8 = 2i64;
     let TotallyNotJson.1136 : U8 = GetTagId TotallyNotJson.1127;
     let TotallyNotJson.1137 : Int1 = lowlevel Eq TotallyNotJson.1135 TotallyNotJson.1136;
     if TotallyNotJson.1137 then
-        inc TotallyNotJson.504;
         let TotallyNotJson.506 : U64 = UnionAtIndex (Id 2) (Index 0) TotallyNotJson.1127;
+        inc TotallyNotJson.504;
         let TotallyNotJson.1129 : List U8 = CallByName List.38 TotallyNotJson.504 TotallyNotJson.506;
         let TotallyNotJson.1132 : U64 = 0i64;
         let TotallyNotJson.1131 : {U64, U64} = Struct {TotallyNotJson.506, TotallyNotJson.1132};
@@ -749,7 +752,7 @@ procedure TotallyNotJson.68 ():
 procedure TotallyNotJson.69 (#Derived_gen.5):
     joinpoint TotallyNotJson.996 TotallyNotJson.967:
         let TotallyNotJson.563 : List U8 = StructAtIndex 0 TotallyNotJson.967;
-        inc 4 TotallyNotJson.563;
+        inc 2 TotallyNotJson.563;
         let TotallyNotJson.564 : List U8 = StructAtIndex 1 TotallyNotJson.967;
         let TotallyNotJson.1115 : U64 = 0i64;
         let TotallyNotJson.565 : [C {}, C U8] = CallByName List.2 TotallyNotJson.563 TotallyNotJson.1115;

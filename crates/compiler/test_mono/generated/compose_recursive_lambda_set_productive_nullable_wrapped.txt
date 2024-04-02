@@ -6,6 +6,7 @@ procedure List.18 (List.159, List.160, List.161):
     let List.573 : U64 = 0i64;
     let List.574 : U64 = CallByName List.6 List.159;
     let List.572 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
+    dec List.159;
     ret List.572;
 
 procedure List.6 (#Attr.2):
@@ -142,6 +143,7 @@ procedure Test.9 (Test.10, #Attr.12):
         
             default:
                 let Test.41 : Str = CallByName Test.11 Test.10 Test.42;
+                dec Test.10;
                 jump Test.40 Test.41;
         
     in
@@ -162,6 +164,7 @@ procedure Test.0 ():
     let Test.23 : Int1 = CallByName Bool.2;
     let Test.22 : Int1 = CallByName Test.1 Test.23;
     let Test.16 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.18 Test.20 Test.21 Test.22;
+    dec Test.20;
     let Test.18 : Str = "hello";
     let Test.19 : U8 = GetTagId Test.16;
     switch Test.19:
@@ -176,5 +179,6 @@ procedure Test.0 ():
     
         default:
             let Test.17 : Str = CallByName Test.11 Test.18 Test.16;
+            dec Test.18;
             ret Test.17;
     

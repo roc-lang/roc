@@ -59,6 +59,7 @@ procedure Test.0 ():
         case 1:
             let Test.22 : Str = "foo";
             let Test.21 : [C {}, C U64, C Str] = CallByName Test.2 Test.22;
+            dec Test.22;
             jump Test.13 Test.21;
     
         default:

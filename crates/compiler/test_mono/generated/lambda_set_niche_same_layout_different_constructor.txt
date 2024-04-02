@@ -22,8 +22,10 @@ procedure Test.0 ():
     if Test.22 then
         let Test.16 : Str = "";
         let Test.10 : [C Str, C Str] = CallByName Test.1 Test.16;
+        dec Test.16;
         jump Test.9 Test.10;
     else
         let Test.20 : Str = "";
         let Test.17 : [C Str, C Str] = CallByName Test.1 Test.20;
+        dec Test.20;
         jump Test.9 Test.17;

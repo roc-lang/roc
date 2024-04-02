@@ -62,6 +62,7 @@ procedure Test.0 ():
     let Test.12 : List Str = CallByName Test.2;
     let Test.13 : U64 = 0i64;
     let Test.6 : [C {}, C Str] = CallByName List.2 Test.12 Test.13;
+    dec Test.12;
     let Test.9 : U8 = 1i64;
     let Test.10 : U8 = GetTagId Test.6;
     let Test.11 : Int1 = lowlevel Eq Test.9 Test.10;

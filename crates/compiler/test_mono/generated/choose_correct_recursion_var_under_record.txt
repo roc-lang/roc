@@ -33,6 +33,7 @@ procedure List.66 (#Attr.2, #Attr.3):
 procedure List.9 (List.334):
     let List.579 : U64 = 0i64;
     let List.572 : [C {}, C Str] = CallByName List.2 List.334 List.579;
+    dec List.334;
     let List.576 : U8 = 1i64;
     let List.577 : U8 = GetTagId List.572;
     let List.578 : Int1 = lowlevel Eq List.576 List.577;
@@ -102,6 +103,7 @@ procedure Test.2 (Test.6):
             let Test.24 : {} = Struct {};
             let Test.23 : List Str = CallByName List.5 Test.9 Test.24;
             let Test.21 : [C {}, C Str] = CallByName List.9 Test.23;
+            dec Test.23;
             let Test.22 : Str = "foo";
             let Test.20 : Str = CallByName Result.5 Test.21 Test.22;
             ret Test.20;

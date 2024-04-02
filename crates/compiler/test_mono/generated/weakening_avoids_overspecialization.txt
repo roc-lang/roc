@@ -6,10 +6,12 @@ procedure List.103 (List.487, List.488, List.489):
     let List.590 : U64 = 0i64;
     let List.591 : U64 = CallByName List.6 List.487;
     let List.589 : [C U64, C U64] = CallByName List.80 List.487 List.488 List.489 List.590 List.591;
+    dec List.487;
     ret List.589;
 
 procedure List.26 (List.200, List.201, List.202):
     let List.583 : [C U64, C U64] = CallByName List.103 List.200 List.201 List.202;
+    dec List.200;
     let List.586 : U8 = 1i64;
     let List.587 : U8 = GetTagId List.583;
     let List.588 : Int1 = lowlevel Eq List.586 List.587;
@@ -96,7 +98,6 @@ procedure Test.3 (Test.4, Test.12):
 procedure Test.0 (Test.1):
     let Test.10 : U64 = 0i64;
     let Test.11 : {} = Struct {};
-    inc Test.1;
     let Test.2 : U64 = CallByName List.26 Test.1 Test.10 Test.11;
     let Test.9 : U64 = 0i64;
     let Test.7 : Int1 = CallByName Bool.11 Test.2 Test.9;

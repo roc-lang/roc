@@ -31,6 +31,7 @@ procedure List.66 (#Attr.2, #Attr.3):
 procedure List.9 (List.334):
     let List.579 : U64 = 0i64;
     let List.572 : [C {}, C I64] = CallByName List.2 List.334 List.579;
+    dec List.334;
     let List.576 : U8 = 1i64;
     let List.577 : U8 = GetTagId List.572;
     let List.578 : Int1 = lowlevel Eq List.576 List.577;
@@ -49,6 +50,7 @@ procedure Num.22 (#Attr.2, #Attr.3):
 
 procedure Str.27 (Str.78):
     let Str.232 : [C Int1, C I64] = CallByName Str.60 Str.78;
+    dec Str.78;
     ret Str.232;
 
 procedure Str.42 (#Attr.2):
@@ -75,8 +77,10 @@ procedure Test.0 ():
     if Test.3 then
         let Test.5 : List I64 = Array [];
         let Test.4 : [C Int1, C I64] = CallByName List.9 Test.5;
+        dec Test.5;
         ret Test.4;
     else
         let Test.2 : Str = "";
         let Test.1 : [C Int1, C I64] = CallByName Str.27 Test.2;
+        dec Test.2;
         ret Test.1;

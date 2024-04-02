@@ -2,6 +2,7 @@ procedure List.18 (List.159, List.160, List.161):
     let List.573 : U64 = 0i64;
     let List.574 : U64 = CallByName List.6 List.159;
     let List.572 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
+    dec List.159;
     ret List.572;
 
 procedure List.6 (#Attr.2):
@@ -46,4 +47,5 @@ procedure Test.0 ():
     let Test.8 : List [<rnu>C *self, <null>] = Array [];
     let Test.15 : {} = Struct {};
     let Test.9 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.18 Test.8 Test.6 Test.15;
+    dec Test.8;
     ret Test.9;

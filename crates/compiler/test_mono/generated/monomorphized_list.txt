@@ -18,4 +18,6 @@ procedure Test.0 ():
     let Test.10 : {} = Struct {};
     let Test.8 : List U16 = CallByName Test.1 Test.10;
     let Test.6 : U64 = CallByName Test.2 Test.7 Test.8;
+    dec Test.8;
+    dec Test.7;
     ret Test.6;
