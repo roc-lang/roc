@@ -361,7 +361,7 @@ impl<'a> CallInfo<'a> {
                 self.keys.push(name.name());
             }
             ByPointer { .. } => {
-                todo_lambda_erasure!()
+                // nothing to be done
             }
             Foreign { .. } => {}
             LowLevel { .. } => {}
