@@ -165,13 +165,13 @@ fn record_2_fields() {
                   \#Derived.stateRecord, #Derived.fmt ->
                     when when #Derived.stateRecord.first is
                         Ok #Derived.first -> Ok #Derived.first
-                        _ ->
+                        Err (NoField) ->
                           when decodeWith [] decoder #Derived.fmt is
                             #Derived.decRec2 -> #Derived.decRec2.result is
                       Ok #Derived.first ->
                         when when #Derived.stateRecord.second is
                             Ok #Derived.second -> Ok #Derived.second
-                            _ ->
+                            Err (NoField) ->
                               when decodeWith [] decoder #Derived.fmt is
                                 #Derived.decRec -> #Derived.decRec.result is
                           Ok #Derived.second ->

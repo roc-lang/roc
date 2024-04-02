@@ -52,8 +52,8 @@ use super::wrap_in_decode_custom_decode_with;
 ///             Ok first ->
 ///                 when f1 is
 ///                     Ok second -> Ok {first, second}
-///                     Err NoField -> Err TooShort
-///             Err NoField -> Err TooShort
+///                     Err _ -> Err TooShort
+///             Err _ -> Err TooShort
 ///
 ///     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 /// ```
@@ -782,8 +782,8 @@ fn state_record_update(
 //         Ok f0  ->
 //             when rec.f1 is
 //                 Ok f1 -> Ok {f0, f1}
-//                 Err NoField -> Err TooShort
-//         Err NoField -> Err TooShort
+//                 Err _ -> Err TooShort
+//         Err _ -> Err TooShort
 
 //THis is my new one
 pub(super) fn finalizer(
@@ -863,7 +863,7 @@ pub(super) fn finalizer(
     //
     // when rec.f0 is
     //     Ok f0  -> ...happy path...
-    //     Err NoField -> Err TooShort
+    //     Err _ -> Err TooShort
     for (((symbol, field_name), &field_var), &result_field_var) in pattern_symbols
         .iter()
         .rev()
@@ -1070,10 +1070,33 @@ fn attempt_empty_decode_if_missing(
     // Example: `Ok x -> Ok x`
     let ok_branch = ok_to_ok_branch(result_field_var, rec_dot_result, field_var, symbol, env);
 
-    // Example: `_ -> Decode.partial [] Decode.decoder fmt  `
+    // Example: `Err NoField -> when decodeWith [] decoder #Derived.fmt is  `
+    let no_field_label = "NoField";
+    let union_tags = UnionTags::tag_without_arguments(env.subs, no_field_label.into());
+    let no_field_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::TagUnion(
+            union_tags,
+            TagExt::Any(Variable::EMPTY_TAG_UNION),
+        )),
+    );
+
     let err_branch = WhenBranch {
         patterns: vec![WhenBranchPattern {
-            pattern: Loc::at_zero(Pattern::Underscore),
+            pattern: Loc::at_zero(Pattern::AppliedTag {
+                whole_var: result_field_var,
+                ext_var: Variable::EMPTY_TAG_UNION,
+                tag_name: "Err".into(),
+                arguments: vec![(
+                    no_field_var,
+                    Loc::at_zero(Pattern::AppliedTag {
+                        whole_var: no_field_var,
+                        ext_var: Variable::EMPTY_TAG_UNION,
+                        tag_name: "NoField".into(),
+                        arguments: Vec::new(),
+                    }),
+                )],
+            }),
             degenerate: false,
         }],
         value: Loc::at_zero(decode_when),
