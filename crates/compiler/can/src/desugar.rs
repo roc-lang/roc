@@ -8,10 +8,16 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral, StrSegment, ValueDef,
-    WhenBranch,
+    is_loc_expr_suffixed, AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral,
+    StrSegment, ValueDef, WhenBranch,
 };
 use roc_region::all::{LineInfo, Loc, Region};
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// use a global counter to ensure that each suffixed if-statement has a unique identifier suffix
+// once it is desugared into a closure e.g. isAnswer0, isAnswer1, isAnswer2, etc.
+static SUFFIXED_IF_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
 // https://github.com/gluon-lang/gluon - license information can be found in
@@ -402,6 +408,130 @@ fn unwrap_suffixed_loc_expr<'a>(
         }
     }
 }
+
+// consider each if-statement, if it is suffixed we need to desugar e.g.
+// ```
+// if isFalse! then
+//     "fail"
+// else
+//     if isTrue! then
+//         "success"
+//     else
+//         "fail"
+// ```
+// desugars to
+// ```
+// Task.await (isFalse) \isAnswer0 ->
+//     if isAnswer0 then
+//         "fail"
+//     else
+//         Task.await (isTrue) \isAnswer1 ->
+//             if isAnswer1 then
+//                 "success"
+//             else
+//                 "fail"
+// ```
+//
+// Note there are four possible combinations that must be considered
+// 1. NIL if_thens before the first suffixed, and NIL after e.g. `if y! then "y" else "n"`
+// 2. NIL if_thens before the first suffixed, and SOME after e.g. `if n! then "n" else if y! "y" else "n"`
+// 3. SOME if_thens before the first suffixed, and NIL after e.g. `if n then "n" else if y! then "y" else "n"`
+// 4. SOME if_thens before the first suffixed, and SOME after e.g. `if n then "n" else if y! then "y" else if n then "n"`
+fn desugar_if_node_suffixed<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
+    match loc_expr.value {
+        Expr::If(if_thens, final_else_branch) => {
+            // Search for the first suffixied expression e.g. `if isThing! then ...`
+            for (index, if_then) in if_thens.iter().enumerate() {
+                let (current_if_then_statement, current_if_then_expression) = if_then;
+
+                if is_loc_expr_suffixed(current_if_then_statement) {
+                    // split if_thens around the current index
+                    let (before, after) = roc_parse::ast::split_around(if_thens, index);
+
+                    // increment our global counter for ident suffixes
+                    // this should be the only place this counter is referenced
+                    SUFFIXED_IF_COUNTER.fetch_add(1, Ordering::SeqCst);
+                    let count = SUFFIXED_IF_COUNTER.load(Ordering::SeqCst);
+
+                    // create a unique identifier for our answer
+                    let answer_ident = arena.alloc(format!("ifAnswer{}", count));
+                    let pattern = Loc::at(
+                        current_if_then_statement.region,
+                        Pattern::Identifier {
+                            ident: answer_ident,
+                            suffixed: 0,
+                        },
+                    );
+
+                    // if we have any after the current index, we will recurse on these as they may also be suffixed
+                    let remaining_loc_expr = if after.is_empty() {
+                        final_else_branch
+                    } else {
+                        let after_if = arena
+                            .alloc(Loc::at(loc_expr.region, Expr::If(after, final_else_branch)));
+
+                        desugar_if_node_suffixed(arena, after_if)
+                    };
+
+                    let closure_expr = Closure(
+                        arena.alloc([pattern]),
+                        arena.alloc(Loc::at(
+                            current_if_then_statement.region,
+                            If(
+                                arena.alloc_slice_clone(&[(
+                                    Loc::at(
+                                        current_if_then_statement.region,
+                                        Var {
+                                            module_name: "",
+                                            ident: answer_ident,
+                                            suffixed: 0,
+                                        },
+                                    ),
+                                    *current_if_then_expression,
+                                )]),
+                                remaining_loc_expr,
+                            ),
+                        )),
+                    );
+
+                    // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
+                    let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+
+                    task_await_apply_args.push(current_if_then_statement);
+                    task_await_apply_args.push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
+
+                    let applied_closure = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Apply(
+                            arena.alloc(Loc {
+                                region: loc_expr.region,
+                                value: Var {
+                                    module_name: ModuleName::TASK,
+                                    ident: "await",
+                                    suffixed: 0,
+                                },
+                            }),
+                            arena.alloc(task_await_apply_args),
+                            CalledVia::BangSuffix,
+                        ),
+                    ));
+
+                    if before.is_empty() {
+                        return applied_closure;
+                    } else {
+                        return arena
+                            .alloc(Loc::at(loc_expr.region, Expr::If(before, applied_closure)));
+                    }
+                }
+            }
+
+            // nothing was suffixed, so just return the original if-statement
+            loc_expr
+        }
+        _ => internal_error!("unreachable, expected an If expression to desugar"),
+    }
+}
+
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar_expr<'a>(
@@ -807,10 +937,14 @@ pub fn desugar_expr<'a>(
                 ));
             }
 
-            arena.alloc(Loc {
-                value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
-                region: loc_expr.region,
-            })
+            // Desugar any suffixed nodes, such as `if isTrue! then ...`
+            desugar_if_node_suffixed(
+                arena,
+                arena.alloc(Loc {
+                    value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
+                    region: loc_expr.region,
+                }),
+            )
         }
         Expect(condition, continuation) => {
             let desugared_condition =

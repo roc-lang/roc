@@ -374,6 +374,13 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
     }
 }
 
+pub fn split_around<'a, T>(items: &'a [T], target: usize) -> (&'a [T], &'a [T]) {
+    let (before, rest) = items.split_at(target);
+    let after = &rest[1..];
+
+    (before, after)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrecedenceConflict<'a> {
     pub whole_region: Region,
