@@ -1423,15 +1423,7 @@ pub fn load_single_threaded<'a>(
 
     // now we just manually interleave stepping the state "thread" and the worker "thread"
     loop {
-        match state_thread_step(
-            arena,
-            state,
-            &src_dir,
-            worker_listeners,
-            &injector,
-            &msg_tx,
-            &msg_rx,
-        ) {
+        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
                 state = new_state;
@@ -1465,7 +1457,6 @@ pub fn load_single_threaded<'a>(
 fn state_thread_step<'a>(
     arena: &'a Bump,
     state: State<'a>,
-    src_dir: &Path,
     worker_listeners: &'a [Sender<WorkerMsg>],
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
@@ -1574,7 +1565,6 @@ fn state_thread_step<'a>(
 
                     let res_state = update(
                         state,
-                        src_dir,
                         msg,
                         msg_tx.clone(),
                         injector,
@@ -1898,15 +1888,8 @@ fn load_multi_threaded<'a>(
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             loop {
-                match state_thread_step(
-                    arena,
-                    state,
-                    &src_dir,
-                    worker_listeners,
-                    &injector,
-                    &msg_tx,
-                    &msg_rx,
-                ) {
+                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
+                {
                     Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads!();
 
@@ -2220,7 +2203,6 @@ fn extend_module_with_builtin_import(module: &mut ParsedModule, module_id: Modul
 
 fn update<'a>(
     mut state: State<'a>,
-    src_dir: &Path,
     msg: Msg<'a>,
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
@@ -2293,7 +2275,10 @@ fn update<'a>(
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
-                        let root_module: PathBuf = src_dir.join(package_str);
+                        let mut parent_dir = header.module_path.clone();
+                        parent_dir.pop();
+
+                        let root_module: PathBuf = parent_dir.join(package_str);
                         let root_module_dir = root_module.parent().unwrap_or_else(|| {
                             if root_module.is_file() {
                                 // Files must have parents!
@@ -3407,6 +3392,7 @@ fn load_package_from_disk<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
+    roc_cache_dir: RocCacheDir,
     app_module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
@@ -3465,20 +3451,41 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
-                    let (_, _, package_module_msg) = build_package_header(
+                    let mut parent_dir: PathBuf = filename.clone().into();
+                    parent_dir.pop();
+
+                    let packages = unspace(arena, header.packages.value.items);
+
+                    let (module_id, _, header) = build_package_header(
                         arena,
                         Some(shorthand),
                         false, // since we have an app module ID, the app module must be the root
                         filename.to_path_buf(),
                         parser_state,
-                        module_ids,
-                        ident_ids_by_module,
+                        module_ids.clone(),
+                        ident_ids_by_module.clone(),
                         &header,
                         comments,
                         pkg_module_timing,
                     )?;
 
-                    Ok(Msg::Header(package_module_msg))
+                    let filename = header.module_path.clone();
+                    let mut messages = Vec::with_capacity(packages.len() + 1);
+                    messages.push(Msg::Header(header));
+
+                    load_packages(
+                        packages,
+                        &mut messages,
+                        roc_cache_dir,
+                        parent_dir,
+                        arena,
+                        module_id,
+                        module_ids,
+                        ident_ids_by_module,
+                        filename,
+                    );
+
+                    Ok(Msg::Many(messages))
                 }
                 Ok((
                     ast::Module {
@@ -4177,6 +4184,7 @@ fn load_packages<'a>(
             arena,
             &root_module_path,
             shorthand,
+            roc_cache_dir,
             module_id,
             module_ids.clone(),
             ident_ids_by_module.clone(),
