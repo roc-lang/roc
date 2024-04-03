@@ -123,7 +123,7 @@ instead of `List.first : List a -> Maybe a`.) This is not only more self-descrip
 other operations that can fail; there's no need to have functions like `Result.toMaybe` or `Maybe.toResult`,
 because in Roc, the convention is that operations that can fail always use `Result`.
 
-Second, optional record fields can be handled using Roc's Optional Record Field language feature, so using a type like `Maybe` there would be less ergonomic.
+Second, optional record fields can be handled using Roc's Default Value Record Field language feature, so using a type like `Maybe` there would be less ergonomic.
 
 To describe something that's neither an optional field nor an operation that can fail, an explicit tag union can be
 more descriptive than something like `Maybe`. For example, if a record type has an `artist` field, but the artist

@@ -8,7 +8,7 @@
 //!   `{ b: "" }` have different derived implementations. However, it does not need to distinguish
 //!   between e.g. required and optional record fields.
 //! - `Decoding` is like encoding, but has some differences. For one, it *does* need to distinguish
-//!   between required and optional record fields.
+//!   between required and default value record fields.
 //!
 //! For these reasons the content keying is based on a strategy as well, which are the variants of
 //! [`DeriveKey`].
