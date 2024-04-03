@@ -209,7 +209,7 @@ fn fmt_docs(buf: &mut Buf, docs: &str) {
 /// * Removing comments
 /// * Removing parens in Exprs
 ///
-/// Long term, we actuall want this transform to preserve comments (so we can assert they're maintained by formatting)
+/// Long term, we actually want this transform to preserve comments (so we can assert they're maintained by formatting)
 /// - but there are currently several bugs where they're _not_ preserved.
 /// TODO: ensure formatting retains comments
 pub trait RemoveSpaces<'a> {

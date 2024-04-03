@@ -26,9 +26,8 @@ use roc_mono::{
 };
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::subs::Subs;
-use target_lexicon::Triple;
 
 pub struct ExpectMemory<'a> {
     ptr: *mut u8,
@@ -469,7 +468,7 @@ fn render_expect_failure<'a>(
     offset: usize,
 ) -> std::io::Result<usize> {
     // we always run programs as the host
-    let target_info = (&target_lexicon::Triple::host()).into();
+    let target = target_lexicon::Triple::host().into();
 
     let frame = ExpectFrame::at_offset(start, offset);
     let module_id = frame.module_id;
@@ -487,7 +486,7 @@ fn render_expect_failure<'a>(
     let symbols = split_expect_lookups(&data.subs, current);
 
     let (offset, expressions, variables) = crate::get_values(
-        target_info,
+        target,
         arena,
         &data.subs,
         interns,
@@ -613,7 +612,7 @@ pub struct ExpectFunctions<'a> {
 
 pub fn expect_mono_module_to_dylib<'a>(
     arena: &'a Bump,
-    target: Triple,
+    target: Target,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
@@ -625,8 +624,6 @@ pub fn expect_mono_module_to_dylib<'a>(
     ),
     libloading::Error,
 > {
-    let target_info = TargetInfo::from(&target);
-
     let MonomorphizedModule {
         toplevel_expects,
         procedures,
@@ -638,7 +635,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     let context = Context::create();
     let builder = context.create_builder();
     let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-        &target, &context, "",
+        target, &context, "",
     ));
 
     let module = arena.alloc(module);
@@ -656,7 +653,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         context: &context,
         interns,
         module,
-        target_info,
+        target,
         mode,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
@@ -753,6 +750,6 @@ pub fn expect_mono_module_to_dylib<'a>(
         env.module.print_to_file(path).unwrap();
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level)
+    llvm_module_to_dylib(env.module, target, opt_level)
         .map(|dy_lib| (dy_lib, modules_expects, layout_interner))
 }

@@ -368,6 +368,8 @@ pub enum EExpr<'a> {
 
     IndentStart(Position),
     IndentEnd(Position),
+
+    UnexpectedComma(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

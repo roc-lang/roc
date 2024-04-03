@@ -61,7 +61,7 @@ use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget
 use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solved, SolvedModule};
 use roc_solve::FunctionKind;
 use roc_solve_problem::TypeError;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -101,7 +101,7 @@ macro_rules! log {
 
 #[derive(Debug)]
 pub struct LoadConfig {
-    pub target_info: TargetInfo,
+    pub target: Target,
     pub render: RenderTarget,
     pub palette: Palette,
     pub threading: Threading,
@@ -454,7 +454,7 @@ fn start_phase<'a>(
                         Subs::default(),
                         None, // no expectations for derived module
                         ProcsBase::default(),
-                        LayoutCache::new(state.layout_interner.fork(), state.target_info),
+                        LayoutCache::new(state.layout_interner.fork(), state.target),
                         ModuleTiming::new(Instant::now()),
                     )
                 } else if state.make_specializations_pass.current_pass() == 1 {
@@ -513,7 +513,7 @@ fn start_phase<'a>(
                         &mut ident_ids,
                         &state.derived_module,
                         &mut module_timing,
-                        state.target_info,
+                        state.target,
                         &state.exposed_types,
                         &mut procs_base,
                         &mut state.world_abilities,
@@ -692,7 +692,7 @@ struct State<'a> {
     pub platform_data: Option<PlatformData<'a>>,
     pub exposed_types: ExposedByModule,
     pub platform_path: PlatformPath<'a>,
-    pub target_info: TargetInfo,
+    pub target: Target,
     pub(self) function_kind: FunctionKind,
 
     /// Note: only packages and platforms actually expose any modules;
@@ -756,7 +756,7 @@ impl<'a> State<'a> {
         root_id: ModuleId,
         root_path: PathBuf,
         opt_platform_shorthand: Option<&'a str>,
-        target_info: TargetInfo,
+        target: Target,
         function_kind: FunctionKind,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
@@ -777,7 +777,7 @@ impl<'a> State<'a> {
             root_subs: None,
             opt_platform_shorthand,
             cache_dir,
-            target_info,
+            target,
             function_kind,
             platform_data: None,
             platform_path: PlatformPath::NotSpecified,
@@ -804,7 +804,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-            layout_interner: GlobalLayoutInterner::with_capacity(128, target_info),
+            layout_interner: GlobalLayoutInterner::with_capacity(128, target),
         }
     }
 }
@@ -1054,7 +1054,7 @@ pub fn load_and_typecheck_str<'a>(
     source: &'a str,
     src_dir: PathBuf,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
+    target: Target,
     function_kind: FunctionKind,
     render: RenderTarget,
     palette: Palette,
@@ -1070,7 +1070,7 @@ pub fn load_and_typecheck_str<'a>(
     let cached_subs = MutMap::default();
 
     let load_config = LoadConfig {
-        target_info,
+        target,
         render,
         palette,
         threading,
@@ -1339,7 +1339,7 @@ pub fn load<'a>(
             arena,
             load_start,
             exposed_types,
-            load_config.target_info,
+            load_config.target,
             load_config.function_kind,
             cached_types,
             load_config.render,
@@ -1351,7 +1351,7 @@ pub fn load<'a>(
             arena,
             load_start,
             exposed_types,
-            load_config.target_info,
+            load_config.target,
             load_config.function_kind,
             cached_types,
             load_config.render,
@@ -1368,7 +1368,7 @@ pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
+    target: Target,
     function_kind: FunctionKind,
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
@@ -1398,7 +1398,7 @@ pub fn load_single_threaded<'a>(
         root_id,
         root_path,
         opt_platform_shorthand,
-        target_info,
+        target,
         function_kind,
         exposed_types,
         arc_modules,
@@ -1441,7 +1441,7 @@ pub fn load_single_threaded<'a>(
             &msg_tx,
             &src_dir,
             roc_cache_dir,
-            target_info,
+            target,
         );
 
         match control_flow {
@@ -1730,7 +1730,7 @@ fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
+    target: Target,
     function_kind: FunctionKind,
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
@@ -1776,7 +1776,7 @@ fn load_multi_threaded<'a>(
         root_id,
         root_path,
         opt_platform_shorthand,
-        target_info,
+        target,
         function_kind,
         exposed_types,
         arc_modules,
@@ -1852,7 +1852,7 @@ fn load_multi_threaded<'a>(
                             msg_tx,
                             src_dir,
                             roc_cache_dir,
-                            target_info,
+                            target,
                         )
                     });
 
@@ -1974,7 +1974,7 @@ fn worker_task_step<'a>(
     msg_tx: &MsgSender<'a>,
     src_dir: &Path,
     roc_cache_dir: RocCacheDir<'_>,
-    target_info: TargetInfo,
+    target: Target,
 ) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
     match worker_msg_rx.try_recv() {
         Ok(msg) => {
@@ -2003,7 +2003,7 @@ fn worker_task_step<'a>(
                             src_dir,
                             msg_tx.clone(),
                             roc_cache_dir,
-                            target_info,
+                            target,
                         );
 
                         match result {
@@ -2048,7 +2048,7 @@ fn worker_task<'a>(
     msg_tx: MsgSender<'a>,
     src_dir: &Path,
     roc_cache_dir: RocCacheDir<'_>,
-    target_info: TargetInfo,
+    target: Target,
 ) -> Result<(), LoadingProblem<'a>> {
     // Keep listening until we receive a Shutdown msg
     for msg in worker_msg_rx.iter() {
@@ -2102,7 +2102,7 @@ fn worker_task<'a>(
                         src_dir,
                         msg_tx.clone(),
                         roc_cache_dir,
-                        target_info,
+                        target,
                     );
 
                     match result {
@@ -2706,7 +2706,7 @@ fn update<'a>(
 
                 if state.goal_phase() > Phase::SolveTypes || state.exec_mode.build_if_checks() {
                     let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
-                        LayoutCache::new(state.layout_interner.fork(), state.target_info)
+                        LayoutCache::new(state.layout_interner.fork(), state.target)
                     });
 
                     let typechecked = TypeCheckedModule {
@@ -2934,7 +2934,7 @@ fn update<'a>(
                     }
 
                     let layout_interner = {
-                        let mut taken = GlobalLayoutInterner::with_capacity(0, state.target_info);
+                        let mut taken = GlobalLayoutInterner::with_capacity(0, state.target);
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
@@ -2987,7 +2987,7 @@ fn update<'a>(
                         arena,
                         &layout_interner,
                         module_id,
-                        state.target_info,
+                        state.target,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
@@ -5507,7 +5507,7 @@ fn make_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
     mut module_timing: ModuleTiming,
-    target_info: TargetInfo,
+    target: Target,
     world_abilities: WorldAbilities,
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
@@ -5522,7 +5522,7 @@ fn make_specializations<'a>(
         expectation_subs: expectations.as_mut().map(|e| &mut e.subs),
         home,
         ident_ids: &mut ident_ids,
-        target_info,
+        target,
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
@@ -5593,7 +5593,7 @@ fn build_pending_specializations<'a>(
     declarations: Declarations,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
-    target_info: TargetInfo,
+    target: Target,
     exposed_to_host: ExposedToHost,
     exposed_by_module: &ExposedByModule,
     world_abilities: WorldAbilities,
@@ -5622,7 +5622,7 @@ fn build_pending_specializations<'a>(
         expectation_subs: expectations.as_mut().map(|e| &mut e.subs),
         home,
         ident_ids: &mut ident_ids,
-        target_info,
+        target,
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
@@ -6072,7 +6072,7 @@ fn load_derived_partial_procs<'a>(
     ident_ids: &mut IdentIds,
     derived_module: &SharedDerivedModule,
     module_timing: &mut ModuleTiming,
-    target_info: TargetInfo,
+    target: Target,
     exposed_by_module: &ExposedByModule,
     procs_base: &mut ProcsBase<'a>,
     world_abilities: &mut WorldAbilities,
@@ -6103,7 +6103,7 @@ fn load_derived_partial_procs<'a>(
             expectation_subs: None,
             home,
             ident_ids,
-            target_info,
+            target,
             update_mode_ids: &mut update_mode_ids,
             // call_specialization_counter=0 is reserved
             call_specialization_counter: 1,
@@ -6177,7 +6177,7 @@ fn run_task<'a>(
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
     roc_cache_dir: RocCacheDir<'_>,
-    target_info: TargetInfo,
+    target: Target,
 ) -> Result<(), LoadingProblem<'a>> {
     use BuildTask::*;
 
@@ -6286,7 +6286,7 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
-            target_info,
+            target,
             exposed_to_host,
             &exposed_by_module,
             world_abilities,
@@ -6315,7 +6315,7 @@ fn run_task<'a>(
             layout_cache,
             specializations_we_must_make,
             module_timing,
-            target_info,
+            target,
             world_abilities,
             &exposed_by_module,
             derived_module,

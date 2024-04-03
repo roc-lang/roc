@@ -354,7 +354,7 @@ An easy way to print multiple values at a time is to wrap them in a tag, for exa
 dbg T "the value of count is:" count
 ```
 
-> **Note:** `dbg` is a debugging tool, and is only available when running your program via a `roc` subcommand (for example using `roc dev`, `roc run`, or `roc test`). When you build a standalone application with `roc build`, any uses of `dbg` won't be included!
+> **Note:** `dbg` is a debugging tool, and is only available when running your program with `roc program.roc`, `roc dev program.roc` or `roc test program.roc`. When you build a standalone binary with `roc build`, any uses of `dbg` won't be included!
 
 ## [Records](#records) {#records}
 

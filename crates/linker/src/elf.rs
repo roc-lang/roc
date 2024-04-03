@@ -332,8 +332,7 @@ impl<'a> Surgeries<'a> {
 }
 
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
-pub(crate) fn preprocess_elf(
-    endianness: target_lexicon::Endianness,
+pub(crate) fn preprocess_elf_le(
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -479,47 +478,33 @@ pub(crate) fn preprocess_elf(
 
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
-    let scanning_dynamic_deps_duration;
-    let platform_gen_start;
+    let scanning_dynamic_deps_start = Instant::now();
 
-    let out_mmap = match endianness {
-        target_lexicon::Endianness::Little => {
-            let scanning_dynamic_deps_start = Instant::now();
+    let ElfDynamicDeps {
+        got_app_syms,
+        got_sections,
+        app_sym_indices,
+        dynamic_lib_count,
+        shared_lib_index,
+    } = scan_elf_dynamic_deps(
+        &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
+    );
 
-            let ElfDynamicDeps {
-                got_app_syms,
-                got_sections,
-                app_sym_indices,
-                dynamic_lib_count,
-                shared_lib_index,
-            } = scan_elf_dynamic_deps(
-                &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
-            );
+    let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
-            scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
+    let platform_gen_start = Instant::now();
 
-            platform_gen_start = Instant::now();
-
-            // TODO little endian
-            gen_elf_le(
-                exec_data,
-                &mut md,
-                preprocessed_path,
-                &got_app_syms,
-                &got_sections,
-                &app_sym_indices,
-                dynamic_lib_count,
-                shared_lib_index,
-                verbose,
-            )
-        }
-        target_lexicon::Endianness::Big => {
-            // TODO probably need to make gen_elf a macro to get this
-            // to work, which is annoying. A parameterized function
-            // does *not* work.
-            todo!("Roc does not yet support big-endian ELF hosts!");
-        }
-    };
+    let out_mmap = gen_elf_le(
+        exec_data,
+        &mut md,
+        preprocessed_path,
+        &got_app_syms,
+        &got_sections,
+        &app_sym_indices,
+        dynamic_lib_count,
+        shared_lib_index,
+        verbose,
+    );
 
     let platform_gen_duration = platform_gen_start.elapsed();
 
@@ -1743,7 +1728,7 @@ mod tests {
 
     use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use target_lexicon::Triple;
+    use roc_target::Target;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
 
@@ -1778,9 +1763,6 @@ mod tests {
     fn collect_undefined_symbols_elf() {
         let object = object::File::parse(ELF64_DYNHOST).unwrap();
 
-        let mut triple = Triple::host();
-        triple.binary_format = target_lexicon::BinaryFormat::Elf;
-
         let mut keys: Vec<_> = object
             .dynamic_symbols()
             .filter(is_roc_undefined)
@@ -1800,7 +1782,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn zig_host_app_help(dir: &Path, target: &Triple) {
+    fn zig_host_app_help(dir: &Path, target: Target) {
         let host_zig = indoc!(
             r#"
             const std = @import("std");
@@ -1885,10 +1867,9 @@ mod tests {
             panic!("zig build-exe failed");
         }
 
-        let preprocessed_host_filename = dir.join(preprocessed_host_filename(target).unwrap());
+        let preprocessed_host_filename = dir.join(preprocessed_host_filename(target));
 
-        preprocess_elf(
-            target_lexicon::Endianness::Little,
+        preprocess_elf_le(
             &dir.join("host"),
             &dir.join("metadata"),
             &preprocessed_host_filename,
@@ -1911,12 +1892,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn zig_host_app() {
-        use std::str::FromStr;
-
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        zig_host_app_help(dir, &Triple::from_str("x86_64-unknown-linux-musl").unwrap());
+        zig_host_app_help(dir, Target::LinuxX64);
 
         let output = std::process::Command::new(dir.join("final"))
             .current_dir(dir)

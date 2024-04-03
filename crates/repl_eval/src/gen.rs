@@ -12,7 +12,7 @@ use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_solve::FunctionKind;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 #[derive(Debug)]
 pub struct ReplOutput {
@@ -49,7 +49,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     arena: &'a Bump,
     defs: I,
     expr: &str,
-    target_info: TargetInfo,
+    target: Target,
     palette: Palette,
 ) -> (Option<MonomorphizedModule<'a>>, Problems) {
     let filename = PathBuf::from("replfile.roc");
@@ -62,7 +62,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
         src_dir,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
-            target_info,
+            target,
             function_kind: FunctionKind::LambdaSet,
             render: roc_reporting::report::RenderTarget::ColorTerminal,
             palette,

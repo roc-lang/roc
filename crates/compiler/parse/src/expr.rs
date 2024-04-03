@@ -1911,7 +1911,17 @@ fn parse_expr_end<'a>(
                                 ),
                             ),
                         )
-                        .parse(arena, state, min_indent)?;
+                        .parse(arena, state, min_indent)
+                        .map_err(|(progress, err)| {
+                            // We were expecting the end of an expression, and parsed a comma
+                            // therefore we are either on the LHS of backpassing or this is was
+                            // in an invalid position.
+                            if let EExpr::Pattern(EPattern::IndentEnd(_), pos) = err {
+                                (progress, EExpr::UnexpectedComma(pos.sub(1)))
+                            } else {
+                                (progress, err)
+                            }
+                        })?;
 
                         expr_state.consume_spaces(arena);
                         let call = to_call(arena, expr_state.arguments, expr_state.expr);

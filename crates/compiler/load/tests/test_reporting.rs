@@ -124,7 +124,7 @@ mod test_reporting {
             let mut file = File::create(file_path).unwrap();
             writeln!(file, "{module_src}").unwrap();
             let load_config = LoadConfig {
-                target_info: roc_target::TargetInfo::default_x86_64(),
+                target: roc_target::Target::LinuxX64,
                 render: RenderTarget::Generic,
                 palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
