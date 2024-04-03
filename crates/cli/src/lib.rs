@@ -812,21 +812,24 @@ pub fn build(
 
     let wasm_dev_backend = matches!(code_gen_backend, CodeGenBackend::Wasm);
 
-    let linking_strategy = if wasm_dev_backend {
-        LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, target)
-        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
-        || (
-            // TODO remove when https://github.com/roc-lang/roc/issues/6602 has been resolved
-            // This will default the linker to legacy on Windows unless `--linker=surgical` is passed
-            target.operating_system() == roc_target::OperatingSystem::Windows
-                && matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) != Some("surgical")
-        )
-    {
-        LinkingStrategy::Legacy
-    } else {
-        LinkingStrategy::Surgical
-    };
+    let linking_strategy = 
+        if wasm_dev_backend {
+            LinkingStrategy::Additive
+        } else {
+            let legacy_linker_requested = matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy");
+            let not_surgical_requested =  matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) != Some("surgical");
+
+            let not_supported = !roc_linker::supported(link_type, target);
+            let on_windows = target.operating_system() == roc_target::OperatingSystem::Windows;
+            
+            // TODO: Remove when https://github.com/roc-lang/roc/issues/6602 has been resolved.
+            // This condition defaults the linker to legacy on Windows unless `--linker=surgical` is passed.
+            if (on_windows && not_surgical_requested ) || not_supported || legacy_linker_requested {
+                LinkingStrategy::Legacy
+            } else {
+                LinkingStrategy::Surgical
+            }
+        };
 
     let prebuilt = {
         let cross_compile = target != Target::default();
