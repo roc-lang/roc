@@ -374,7 +374,7 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
     }
 }
 
-pub fn split_around<'a, T>(items: &'a [T], target: usize) -> (&'a [T], &'a [T]) {
+pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
     let (before, rest) = items.split_at(target);
     let after = &rest[1..];
 
