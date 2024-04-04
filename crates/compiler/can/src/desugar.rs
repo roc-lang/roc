@@ -454,7 +454,7 @@ fn desugar_if_node_suffixed<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) ->
                     let count = SUFFIXED_IF_COUNTER.load(Ordering::SeqCst);
 
                     // create a unique identifier for our answer
-                    let answer_ident = arena.alloc(format!("ifAnswer{}", count));
+                    let answer_ident = arena.alloc(format!("#if!{}", count));
                     let pattern = Loc::at(
                         current_if_then_statement.region,
                         Pattern::Identifier {
