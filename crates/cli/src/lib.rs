@@ -72,7 +72,7 @@ pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
 pub const FLAG_FUZZ: &str = "fuzz";
-pub const FLAG_IGNORE_ERRORS: &str = "ignore-errors";
+pub const FLAG_IGNORE_BUILD_ERRORS: &str = "ignore-build-errors";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -150,8 +150,8 @@ pub fn build_app() -> Command {
         .action(ArgAction::SetTrue)
         .required(false);
 
-    let flag_ignore_errors = Arg::new(FLAG_IGNORE_ERRORS)
-        .long(FLAG_IGNORE_ERRORS)
+    let flag_ignore_build_errors = Arg::new(FLAG_IGNORE_BUILD_ERRORS)
+        .long(FLAG_IGNORE_BUILD_ERRORS)
         .help("Run tests even if there were build errors")
         .action(ArgAction::SetTrue)
         .required(false);
@@ -244,7 +244,7 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(flag_fuzz.clone())
-            .arg(flag_ignore_errors.clone())
+            .arg(flag_ignore_build_errors.clone())
             .arg(
                 Arg::new(FLAG_VERBOSE)
                     .long(FLAG_VERBOSE)
@@ -504,7 +504,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;
 
-    let exec_mode = if matches.get_flag(FLAG_IGNORE_ERRORS) {
+    let exec_mode = if matches.get_flag(FLAG_IGNORE_BUILD_ERRORS) {
         ExecutionMode::TestIgnoreErrors
     } else {
         ExecutionMode::Test
