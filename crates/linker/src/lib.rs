@@ -86,7 +86,7 @@ pub fn generate_stub_lib(
             render: RenderTarget::Generic,
             palette: DEFAULT_PALETTE,
             threading: Threading::AllAvailable,
-            exec_mode: ExecutionMode::Executable,
+            exec_mode: ExecutionMode::ExecutableIgnoreErrors,
         },
     )
     .unwrap_or_else(|problem| todo!("{:?}", problem));

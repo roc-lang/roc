@@ -123,7 +123,7 @@ mod test {
             render: RenderTarget::ColorTerminal,
             palette: DEFAULT_PALETTE,
             threading: Threading::Single,
-            exec_mode: ExecutionMode::TestIfCheck,
+            exec_mode: ExecutionMode::Test,
         };
         let loaded = match roc_load::load_and_monomorphize_from_str(
             arena,

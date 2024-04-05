@@ -115,12 +115,12 @@ pub struct LoadConfig {
 #[derive(Debug, Clone, Copy)]
 pub enum ExecutionMode {
     Check,
+    ExecutableIgnoreErrors,
+    /// Like [`ExecutionMode::ExecutableIgnoreErrors`], but stops in the presence of type errors.
     Executable,
-    /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
-    ExecutableIfCheck,
+    TestIgnoreErrors,
+    /// Like [`ExecutionMode::TestIgnoreErrors`], but stops in the presence of type errors.
     Test,
-    /// Like [`ExecutionMode::Test`], but stops in the presence of type errors.
-    TestIfCheck,
 }
 
 impl ExecutionMode {
@@ -128,17 +128,17 @@ impl ExecutionMode {
         use ExecutionMode::*;
 
         match self {
-            Executable | Test => Phase::MakeSpecializations,
-            Check | ExecutableIfCheck | TestIfCheck => Phase::SolveTypes,
+            ExecutableIgnoreErrors | TestIgnoreErrors => Phase::MakeSpecializations,
+            Check | Executable | Test => Phase::SolveTypes,
         }
     }
 
     fn build_if_checks(&self) -> bool {
-        matches!(self, Self::ExecutableIfCheck | Self::TestIfCheck)
+        matches!(self, Self::Executable | Self::Test)
     }
 
     fn build_tests(&self) -> bool {
-        matches!(self, Self::TestIfCheck | Self::Test)
+        matches!(self, Self::Test | Self::TestIgnoreErrors)
     }
 }
 
@@ -3204,8 +3204,8 @@ fn finish_specialization<'a>(
     let entry_point = {
         let interns: &mut Interns = &mut interns;
         match state.exec_mode {
-            ExecutionMode::TestIfCheck | ExecutionMode::Test => Ok(EntryPoint::Test),
-            ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
+            ExecutionMode::Test | ExecutionMode::TestIgnoreErrors => Ok(EntryPoint::Test),
+            ExecutionMode::ExecutableIgnoreErrors | ExecutionMode::Executable => {
                 use PlatformPath::*;
 
                 let platform_path = match &state.platform_path {

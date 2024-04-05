@@ -75,7 +75,7 @@ fn create_llvm_module<'a>(
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode: ExecutionMode::ExecutableIgnoreErrors,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
