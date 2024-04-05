@@ -30,6 +30,37 @@ Implementing the very important [module params](https://docs.google.com/document
 
 Work has not started on this yet, but we'd like to have the project completed sometime in 2024.
 
+### Platform Author Specific Breaking Changes
+
+All of the following changes only affect platform authors.
+They will not be noticeable from the Roc application developer perspective.
+
+#### Glue
+
+Much like with builtins, we periodically make changes to code generation or to the `roc glue` API that aren't backwards compatible. When this happens, relevant glue scripts need to be updated and then `roc glue` needs to be re-run on platforms to regenerate their host glue.
+
+As with builtins, it's hard to predict when these will happen and what they'll be, but right now it's a safe bet that they will happen from time to time.
+
+#### Effect Interpreters
+
+Currently, Roc effects directly call functions in the platform.
+For example, [Stdout.line](https://github.com/roc-lang/basic-cli/blob/e022fba2b01216678d62f07c2f3ba702e80fa00c/platform/Stdout.roc#L9-L13) in basic-cli calls the [roc_fx_stdoutLine](https://github.com/roc-lang/basic-cli/blob/e022fba2b01216678d62f07c2f3ba702e80fa00c/platform/src/lib.rs#L380-L384) function.
+Roc directly calling these functions synchronously greatly limits the possibilities of how a platform can implement the effect.
+With the effect interpreter model, on each effect, roc will return a tag union to the platform.
+That tag union will contain all of the function arguments along with a continuation closure.
+The platform can execute the effect however it likes (including running it asynchronously).
+After the effect completes, the platform simply has to call the continuation closure with the results.
+
+In terms of actual implementation, this is quite similar to an async state machine in other languages like Rust.
+
+#### Platform-side Explicit Allocators
+
+Related to the effect interpreter changes, for memory allocation functions (plus a few others), currently Roc always directly calls `roc_alloc/roc_etc`.
+This makes it hard to implement more interesting allocation strategies (like arena allocation).
+With this change, all calls to Roc will require the platform to pass in an Allocator struct.
+Roc will directly use that struct to call each of the allocation related functions.
+This struct will also hold a few other functions like `roc_dbg` and `roc_panic`.
+
 ## [Planned Non-Breaking Changes](#planned-non-breaking-changes) {#planned-non-breaking-changes}
 
 These are planned changes to how things work, which should be backwards-compatible and require no code changes. These won't include bugfixes, just changing something that currently works as designed to have a different design.
