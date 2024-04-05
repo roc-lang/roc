@@ -1,6 +1,6 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.300 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.300;
+    let Num.269 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.269;
 
 procedure Test.0 ():
     let Test.17 : {} = Struct {};
@@ -9,7 +9,7 @@ procedure Test.0 ():
     let Test.14 : {List {}, Str} = Struct {Test.15, Test.16};
     let Test.10 : List {} = StructAtIndex 0 Test.14;
     dec Test.16;
-    let Test.11 : U64 = lowlevel ListLen Test.10;
+    let Test.11 : U64 = lowlevel ListLenUsize Test.10;
     dec Test.10;
     let Test.12 : U64 = 1i64;
     let Test.13 : Int1 = lowlevel Eq Test.11 Test.12;

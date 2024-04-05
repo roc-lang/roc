@@ -25,7 +25,7 @@ fn dict_empty_len() {
             "
         ),
         0,
-        usize
+        u64
     );
 }
 
@@ -41,7 +41,7 @@ fn dict_insert_empty() {
             "
         ),
         1,
-        usize
+        u64
     );
 }
 

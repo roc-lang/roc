@@ -1192,19 +1192,19 @@ define_builtins! {
         80 NUM_MUL_SATURATED: "mulSaturated"
         81 NUM_INT: "Int" exposed_type=true
         82 NUM_FRAC: "Frac" exposed_type=true
-        83 NUM_NATURAL: "Natural" exposed_type=true
-        84 NUM_NAT: "Nat" exposed_type=true
-        85 NUM_INT_CAST: "intCast"
+        83 NUM_E: "e"
+        84 NUM_PI: "pi"
+        85 NUM_TAU: "tau"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         87 NUM_DECIMAL: "Decimal" exposed_type=true
         88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
-        89 NUM_BYTES_TO_U16: "bytesToU16"
-        90 NUM_BYTES_TO_U32: "bytesToU32"
-        91 NUM_BYTES_TO_U64: "bytesToU64"
-        92 NUM_BYTES_TO_U128: "bytesToU128"
-        93 NUM_CAST_TO_NAT: "#castToNat"
-        94 NUM_DIV_CEIL: "divCeil"
-        95 NUM_DIV_CEIL_CHECKED: "divCeilChecked"
+        89 NUM_COUNT_ONE_BITS: "countOneBits"
+        90 NUM_ABS_DIFF: "absDiff"
+        91 NUM_IS_NAN: "isNaN"
+        92 NUM_IS_INFINITE: "isInfinite"
+        93 NUM_IS_FINITE: "isFinite"
+        94 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
+        95 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
         96 NUM_TO_STR: "toStr"
         97 NUM_MIN_I8: "minI8"
         98 NUM_MAX_I8: "maxI8"
@@ -1246,8 +1246,8 @@ define_builtins! {
         134 NUM_TO_U64_CHECKED: "toU64Checked"
         135 NUM_TO_U128: "toU128"
         136 NUM_TO_U128_CHECKED: "toU128Checked"
-        137 NUM_TO_NAT: "toNat"
-        138 NUM_TO_NAT_CHECKED: "toNatChecked"
+        137 NUM_DIV_CEIL: "divCeil"
+        138 NUM_DIV_CEIL_CHECKED: "divCeilChecked"
         139 NUM_TO_F32: "toF32"
         140 NUM_TO_F32_CHECKED: "toF32Checked"
         141 NUM_TO_F64: "toF64"
@@ -1257,25 +1257,17 @@ define_builtins! {
         145 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
         146 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
         147 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
-        148 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
-        149 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
-        150 NUM_BYTES_TO_U64_LOWLEVEL: "bytesToU64Lowlevel"
-        151 NUM_BYTES_TO_U128_LOWLEVEL: "bytesToU128Lowlevel"
-        152 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
-        153 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
-        154 NUM_COUNT_ONE_BITS: "countOneBits"
-        155 NUM_ABS_DIFF: "absDiff"
-        156 NUM_IS_NAN: "isNaN"
-        157 NUM_IS_INFINITE: "isInfinite"
-        158 NUM_IS_FINITE: "isFinite"
-        159 NUM_MIN: "min"
-        160 NUM_MAX: "max"
-        161 NUM_E: "e"
-        162 NUM_PI: "pi"
-        163 NUM_TAU: "tau"
-        164 NUM_BITWISE_NOT: "bitwiseNot"
-        165 NUM_IS_APPROX_EQ: "isApproxEq"
-        166 NUM_DIV_TRUNC_UNCHECKED: "divTruncUnchecked" // traps on division by zero
+        148 NUM_MIN: "min"
+        149 NUM_MAX: "max"
+        150 NUM_BITWISE_NOT: "bitwiseNot"
+        151 NUM_INT_CAST: "intCast"
+        152 NUM_IS_APPROX_EQ: "isApproxEq"
+        153 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        154 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        155 NUM_BYTES_TO_U64_LOWLEVEL: "bytesToU64Lowlevel"
+        156 NUM_BYTES_TO_U128_LOWLEVEL: "bytesToU128Lowlevel"
+        157 NUM_DIV_TRUNC_UNCHECKED: "divTruncUnchecked" // traps on division by zero
+        158 NUM_REM_UNCHECKED: "remUnchecked" // traps on division by zero
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1313,10 +1305,10 @@ define_builtins! {
         17 STR_TRIM: "trim"
         18 STR_TRIM_START: "trimStart"
         19 STR_TRIM_END: "trimEnd"
-        20 STR_TO_DEC: "toDec"
+        20 STR_WITH_CAPACITY: "withCapacity"
         21 STR_TO_F64: "toF64"
         22 STR_TO_F32: "toF32"
-        23 STR_TO_NAT: "toNat"
+        23 STR_TO_DEC: "toDec"
         24 STR_TO_U128: "toU128"
         25 STR_TO_I128: "toI128"
         26 STR_TO_U64: "toU64"
@@ -1336,13 +1328,12 @@ define_builtins! {
         40 STR_WALK_UTF8_WITH_INDEX: "walkUtf8WithIndex"
         41 STR_RESERVE: "reserve"
         42 STR_TO_NUM: "strToNum"
-        43 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
+        43 STR_FROM_UTF8_LOWLEVEL: "fromUtf8Lowlevel"
         44 STR_CAPACITY: "capacity"
         45 STR_REPLACE_EACH: "replaceEach"
         46 STR_REPLACE_FIRST: "replaceFirst"
         47 STR_REPLACE_LAST: "replaceLast"
-        48 STR_WITH_CAPACITY: "withCapacity"
-        49 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        48 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1351,7 +1342,7 @@ define_builtins! {
         3 LIST_SET: "set"
         4 LIST_APPEND: "append"
         5 LIST_MAP: "map"
-        6 LIST_LEN: "len"
+        6 LIST_LEN_U64: "len"
         7 LIST_WALK_BACKWARDS: "walkBackwards"
         8 LIST_CONCAT: "concat"
         9 LIST_FIRST: "first"
@@ -1433,6 +1424,7 @@ define_builtins! {
         85 LIST_PREPEND_IF_OK: "prependIfOk"
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
         87 LIST_CLONE: "clone"
+        88 LIST_LEN_USIZE: "lenUsize"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1591,13 +1583,12 @@ define_builtins! {
         12 HASH_HASH_I32: "hashI32"
         13 HASH_HASH_I64: "hashI64"
         14 HASH_HASH_I128: "hashI128"
-        15 HASH_HASH_NAT: "hashNat"
+        15 HASH_HASH_UNORDERED: "hashUnordered"
         16 I128_OF_DEC: "i128OfDec"
         17 HASH_HASH_DEC: "hashDec"
         18 HASH_COMPLETE: "complete"
         19 HASH_HASH_STR_BYTES: "hashStrBytes"
         20 HASH_HASH_LIST: "hashList"
-        21 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 INSPECT: "Inspect" => {
         0 INSPECT_INSPECT_ABILITY: "Inspect" exposed_type=true
@@ -1633,8 +1624,7 @@ define_builtins! {
         30 INSPECT_CUSTOM: "custom"
         31 INSPECT_APPLY: "apply"
         32 INSPECT_TO_INSPECTOR: "toInspector"
-        33 INSPECT_NAT: "nat"
-        34 INSPECT_TO_STR: "toStr"
+        33 INSPECT_TO_STR: "toStr"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"

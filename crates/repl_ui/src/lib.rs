@@ -4,19 +4,17 @@ pub mod colors;
 pub mod repl_state;
 
 use bumpalo::Bump;
-use colors::{BLUE, END_COL, PINK};
+use colors::{CYAN, END_COL, GREEN};
 use const_format::concatcp;
 use repl_state::{parse_src, ParseOutcome};
 use roc_parse::ast::{Expr, ValueDef};
 use roc_repl_eval::gen::{Problems, ReplOutput};
 use roc_reporting::report::StyleCodes;
 
-use crate::colors::GREEN;
-
 // TODO add link to repl tutorial (does not yet exist).
 pub const TIPS: &str = concatcp!(
     "\nEnter an expression to evaluate, or a definition (like ",
-    BLUE,
+    CYAN,
     "x = 1",
     END_COL,
     ") to use later.\n\n",
@@ -25,25 +23,25 @@ pub const TIPS: &str = concatcp!(
     } else {
         // We use ctrl-v + ctrl-j for newlines because on Unix, terminals cannot distinguish between Shift-Enter and Enter
         concatcp!(
-            BLUE,
+            CYAN,
             "  - ",
             END_COL,
-            PINK,
+            GREEN,
             "ctrl-v",
             END_COL,
             " + ",
-            PINK,
+            GREEN,
             "ctrl-j",
             END_COL,
             " makes a newline\n",
-            BLUE,
+            CYAN,
             "  - ",
             END_COL,
             GREEN,
             ":q",
             END_COL,
             " quits\n",
-            BLUE,
+            CYAN,
             "  - ",
             END_COL,
             GREEN,
@@ -57,8 +55,8 @@ pub const TIPS: &str = concatcp!(
 // For when nothing is entered in the repl
 // TODO add link to repl tutorial(does not yet exist).
 pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n\n";
-pub const PROMPT: &str = concatcp!(BLUE, "»", END_COL, " ");
-pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
+pub const PROMPT: &str = concatcp!(CYAN, "»", END_COL, " ");
+pub const CONT_PROMPT: &str = concatcp!(CYAN, "…", END_COL, " ");
 
 pub fn is_incomplete(input: &str) -> bool {
     let arena = Bump::new();
@@ -116,7 +114,7 @@ pub fn format_output(
             {
                 buf.push('\n');
                 buf.push_str(&expr);
-                buf.push_str(style_codes.magenta); // Color for the type separator
+                buf.push_str(style_codes.green); // Color for the type separator
                 buf.push_str(EXPR_TYPE_SEPARATOR);
                 buf.push_str(style_codes.reset);
                 buf.push_str(&expr_type);

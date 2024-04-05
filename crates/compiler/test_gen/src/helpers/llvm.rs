@@ -16,7 +16,7 @@ use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use target_lexicon::Triple;
+use roc_target::Target;
 
 #[cfg(feature = "gen-llvm-wasm")]
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
@@ -52,11 +52,9 @@ fn create_llvm_module<'a>(
     src: &str,
     config: HelperConfig,
     context: &'a inkwell::context::Context,
-    target: &Triple,
+    target: Target,
     function_kind: FunctionKind,
 ) -> (&'static str, String, &'a Module<'a>) {
-    let target_info = roc_target::TargetInfo::from(target);
-
     let filename = PathBuf::from("Test.roc");
     let src_dir = PathBuf::from("fake/test/path");
 
@@ -72,7 +70,7 @@ fn create_llvm_module<'a>(
     }
 
     let load_config = LoadConfig {
-        target_info,
+        target,
         function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
@@ -227,7 +225,7 @@ fn create_llvm_module<'a>(
         context,
         interns,
         module,
-        target_info,
+        target,
         mode: config.mode,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
@@ -332,31 +330,19 @@ pub fn helper<'a>(
     context: &'a inkwell::context::Context,
     function_kind: FunctionKind,
 ) -> (&'static str, String, Library) {
-    let target = target_lexicon::Triple::host();
+    let target = target_lexicon::Triple::host().into();
 
     let (main_fn_name, delayed_errors, module) =
-        create_llvm_module(arena, src, config, context, &target, function_kind);
+        create_llvm_module(arena, src, config, context, target, function_kind);
 
     if !config.emit_debug_info {
         module.strip_debug_info();
     }
-    let res_lib = llvm_module_to_dylib(module, &target, config.opt_level);
+    let res_lib = llvm_module_to_dylib(module, target, config.opt_level);
 
     let lib = res_lib.expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors, lib)
-}
-
-#[allow(dead_code)]
-fn wasm32_target_tripple() -> Triple {
-    use target_lexicon::{Architecture, BinaryFormat};
-
-    let mut triple = Triple::unknown();
-
-    triple.architecture = Architecture::Wasm32;
-    triple.binary_format = BinaryFormat::Wasm;
-
-    triple
 }
 
 #[allow(dead_code)]
@@ -383,10 +369,10 @@ fn compile_to_wasm_bytes<'a>(
     static TEMP_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
     let temp_dir = TEMP_DIR.get_or_init(|| tempfile::tempdir().unwrap());
 
-    let target = wasm32_target_tripple();
+    let target = Target::Wasm32;
 
     let (_main_fn_name, _delayed_errors, llvm_module) =
-        create_llvm_module(arena, src, config, context, &target, function_kind);
+        create_llvm_module(arena, src, config, context, target, function_kind);
 
     let content_hash = crate::helpers::src_hash(src);
     let wasm_file = llvm_module_to_wasm_file(temp_dir, content_hash, llvm_module);
@@ -628,6 +614,7 @@ macro_rules! assert_llvm_evals_to {
 //
 //   let (_main_fn_name, _delayed_errors, _module) =
 //       $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
+#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
         assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);

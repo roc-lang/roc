@@ -5,4 +5,4 @@ app "libhello"
 
 main : Str -> Str
 main = \message ->
-    "TypeScript said to Roc: \(message)! 🎉"
+    "TypeScript said to Roc: $(message)! 🎉"

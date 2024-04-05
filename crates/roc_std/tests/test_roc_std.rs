@@ -300,6 +300,11 @@ mod test_roc_std {
 
         let example = RocDec::from_str("1000.000").unwrap();
         assert_eq!(format!("{example}"), "1000");
+
+        // truncate if there are more digits than supported
+        let example =
+            RocDec::from_str("3.14159265358979323846264338327950288419716939937510").unwrap();
+        assert_eq!(format!("{example}"), "3.141592653589793238");
     }
 
     #[test]

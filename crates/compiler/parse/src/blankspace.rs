@@ -437,11 +437,8 @@ where
             Some(b'#') => {
                 state.advance_mut(1);
 
-                let is_doc_comment = state.bytes().first() == Some(&b'#')
-                    && (state.bytes().get(1) == Some(&b' ')
-                        || state.bytes().get(1) == Some(&b'\n')
-                        || begins_with_crlf(&state.bytes()[1..])
-                        || Option::is_none(&state.bytes().get(1)));
+                let is_doc_comment =
+                    state.bytes().first() == Some(&b'#') && state.bytes().get(1) != Some(&b'#');
 
                 if is_doc_comment {
                     state.advance_mut(1);

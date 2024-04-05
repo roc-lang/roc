@@ -33,7 +33,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U32 => Some(lowlevel_1(Symbol::NUM_TO_U32, LowLevel::NumIntCast, var_store)),
                 Symbol::NUM_TO_U64 => Some(lowlevel_1(Symbol::NUM_TO_U64, LowLevel::NumIntCast, var_store)),
                 Symbol::NUM_TO_U128 => Some(lowlevel_1(Symbol::NUM_TO_U128, LowLevel::NumIntCast, var_store)),
-                Symbol::NUM_TO_NAT => Some(lowlevel_1(Symbol::NUM_TO_NAT, LowLevel::NumIntCast, var_store)),
 
                 Symbol::NUM_INT_CAST => Some(lowlevel_1(Symbol::NUM_INT_CAST, LowLevel::NumIntCast, var_store)),
 
@@ -50,7 +49,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U32_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U64_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U128_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U128_CHECKED, var_store, LowLevel::NumToIntChecked)),
-                Symbol::NUM_TO_NAT_CHECKED => Some(to_num_checked(Symbol::NUM_TO_NAT_CHECKED, var_store, LowLevel::NumToIntChecked)),
 
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
@@ -118,7 +116,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrEndsWith; STR_ENDS_WITH; 2,
     StrSplit; STR_SPLIT; 2,
     StrCountUtf8Bytes; STR_COUNT_UTF8_BYTES; 1,
-    StrFromUtf8Range; STR_FROM_UTF8_RANGE_LOWLEVEL; 3,
+    StrFromUtf8; STR_FROM_UTF8_LOWLEVEL; 1,
     StrToUtf8; STR_TO_UTF8; 1,
     StrRepeat; STR_REPEAT; 2,
     StrTrim; STR_TRIM; 1,
@@ -128,11 +126,11 @@ map_symbol_to_lowlevel_and_arity! {
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
     StrReserve; STR_RESERVE; 2,
     StrToNum; STR_TO_NUM; 1,
-    StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
 
-    ListLen; LIST_LEN; 1,
+    ListLenUsize; LIST_LEN_USIZE; 1,
+    ListLenU64; LIST_LEN_U64; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
     ListReserve; LIST_RESERVE; 2,
     ListIsUnique; LIST_IS_UNIQUE; 1,
@@ -175,7 +173,7 @@ map_symbol_to_lowlevel_and_arity! {
     NumDivFrac; NUM_DIV_FRAC; 2,
     NumDivTruncUnchecked; NUM_DIV_TRUNC_UNCHECKED; 2,
     NumDivCeilUnchecked; NUM_DIV_CEIL; 2,
-    NumRemUnchecked; NUM_REM; 2,
+    NumRemUnchecked; NUM_REM_UNCHECKED; 2,
     NumIsMultipleOf; NUM_IS_MULTIPLE_OF; 2,
     NumAbs; NUM_ABS; 1,
     NumNeg; NUM_NEG; 1,
@@ -196,10 +194,6 @@ map_symbol_to_lowlevel_and_arity! {
     NumAtan; NUM_ATAN; 1,
     NumAcos; NUM_ACOS; 1,
     NumAsin; NUM_ASIN; 1,
-    NumBytesToU16; NUM_BYTES_TO_U16_LOWLEVEL; 2,
-    NumBytesToU32; NUM_BYTES_TO_U32_LOWLEVEL; 2,
-    NumBytesToU64; NUM_BYTES_TO_U64_LOWLEVEL; 2,
-    NumBytesToU128; NUM_BYTES_TO_U128_LOWLEVEL; 2,
     NumBitwiseAnd; NUM_BITWISE_AND; 2,
     NumBitwiseXor; NUM_BITWISE_XOR; 2,
     NumBitwiseOr; NUM_BITWISE_OR; 2,
@@ -226,7 +220,7 @@ map_symbol_to_lowlevel_and_arity! {
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
-/// List.get : List elem, Nat -> Result elem [OutOfBounds]*
+/// List.get : List elem, U64 -> Result elem [OutOfBounds]*
 ///
 /// Because this returns an open tag union for its Err type, it's not possible
 /// for code gen to return a hardcoded value for OutOfBounds. For example,

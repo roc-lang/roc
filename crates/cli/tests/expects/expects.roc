@@ -3,14 +3,23 @@ app "expects-test"
     imports []
     provides [main] to pf
 
-expect
+makeA =
     a = 1
-    b = 2
+
+    expect a == 2
+    expect a == 3
+
+    a
+
+expect
+    a = makeA
+    b = 2i64
 
     a == b
 
 polyDbg = \x ->
     dbg x
+
     x
 
 main =
@@ -20,10 +29,12 @@ main =
 
     x = 42
     dbg x
+
     dbg "Fjoer en ferdjer frieten oan dyn geve lea"
+
     dbg "this is line 24"
 
-    r = {x : polyDbg "abc", y: polyDbg 10u8, z : polyDbg (A (B C))}
+    r = { x: polyDbg "abc", y: polyDbg 10u8, z: polyDbg (A (B C)) }
 
     when r is
         _ -> "Program finished!\n"

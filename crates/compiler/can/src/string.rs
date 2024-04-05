@@ -45,7 +45,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 //                 )? {
 //                     let expr = Expr::Var(ident);
 
-//                     // +2 for `\(` and then another +1 for `)` at the end
+//                     // +2 for `$(` and then another +1 for `)` at the end
 //                     let parsed_length = buf.len() + 2 + ident.len() + 1;
 
 //                     // Casting should always succeed in this section, because

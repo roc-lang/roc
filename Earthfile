@@ -32,7 +32,7 @@ install-zig-llvm:
     RUN apt -y install libpolly-16-dev # required by llvm-sys crate
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     RUN apt -y install libssl-dev
-    RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
+    RUN wget https://rustwasm.github.io/wasm-pack/installer/init.sh -O init.sh && sh init.sh
     # sccache
     RUN cargo install sccache --locked
     RUN sccache -V
@@ -53,7 +53,7 @@ build-nightly-release:
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc --bin roc_ls
+    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc --bin roc_language_server
     RUN ./ci/package_release.sh $RELEASE_FOLDER_NAME
     RUN ls
     SAVE ARTIFACT ./$RELEASE_FOLDER_NAME.tar.gz AS LOCAL $RELEASE_FOLDER_NAME.tar.gz

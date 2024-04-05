@@ -1,5 +1,5 @@
 use roc_module::symbol::Symbol;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::ops::Index;
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -38,7 +38,7 @@ impl FloatWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub const fn alignment_bytes(&self, target: Target) -> u32 {
         use roc_target::Architecture::*;
         use FloatWidth::*;
 
@@ -47,7 +47,7 @@ impl FloatWidth {
         // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
-            F64 => match target_info.architecture {
+            F64 => match target.architecture() {
                 X86_64 | Aarch64 | Wasm32 => 8,
                 X86_32 | Aarch32 => 4,
             },
@@ -107,7 +107,7 @@ impl IntWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub const fn alignment_bytes(&self, target: Target) -> u32 {
         use roc_target::Architecture;
         use IntWidth::*;
 
@@ -118,7 +118,7 @@ impl IntWidth {
             U8 | I8 => 1,
             U16 | I16 => 2,
             U32 | I32 => 4,
-            U64 | I64 => match target_info.architecture {
+            U64 | I64 => match target.architecture() {
                 Architecture::X86_64
                 | Architecture::Aarch64
                 | Architecture::Aarch32
@@ -130,10 +130,10 @@ impl IntWidth {
                 // according to https://reviews.llvm.org/D28990#655487
                 //
                 // however, rust does not always think that this is true
-                match target_info.architecture {
-                    Architecture::X86_64 => 16,
-                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
-                    Architecture::X86_32 => 8,
+                // Our alignmets here are correct, but they will not match rust/zig/llvm until they update to llvm version 18.
+                match target.architecture() {
+                    Architecture::X86_64 | Architecture::Aarch64 | Architecture::X86_32 => 16,
+                    Architecture::Aarch32 | Architecture::Wasm32 => 8,
                 }
             }
         }
@@ -335,11 +335,6 @@ pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_trailing_zero_bits");
 pub const NUM_COUNT_ONE_BITS: IntrinsicName = int_intrinsic!("roc_builtins.num.count_one_bits");
 
-pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
-pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
-pub const NUM_BYTES_TO_U64: &str = "roc_builtins.num.bytes_to_u64";
-pub const NUM_BYTES_TO_U128: &str = "roc_builtins.num.bytes_to_u128";
-
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
@@ -359,7 +354,7 @@ pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_SUBSTRING_UNSAFE: &str = "roc_builtins.str.substring_unsafe";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
-pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
+pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
 pub const STR_TRIM: &str = "roc_builtins.str.trim";
 pub const STR_TRIM_START: &str = "roc_builtins.str.trim_start";
@@ -408,6 +403,7 @@ pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_in
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
 pub const DEC_LOG: &str = "roc_builtins.dec.log";
+pub const DEC_POW: &str = "roc_builtins.dec.pow";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
@@ -420,6 +416,9 @@ pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
+pub const DEC_ROUND: IntrinsicName = int_intrinsic!("roc_builtins.dec.round");
+pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
+pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
 pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";

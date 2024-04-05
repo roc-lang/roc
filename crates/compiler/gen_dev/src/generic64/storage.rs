@@ -14,7 +14,7 @@ use roc_mono::{
         Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
     },
 };
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::cmp::max;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -92,7 +92,7 @@ pub struct StorageManager<
     phantom_cc: PhantomData<CC>,
     phantom_asm: PhantomData<ASM>,
     pub(crate) env: &'r Env<'a>,
-    pub(crate) target_info: TargetInfo,
+    pub(crate) target: Target,
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<GeneralReg, FloatReg>>,
 
@@ -137,13 +137,13 @@ pub fn new_storage_manager<
     CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
     env: &'r Env<'a>,
-    target_info: TargetInfo,
+    target: Target,
 ) -> StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC> {
     StorageManager {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
         env,
-        target_info,
+        target,
         symbol_storage_map: MutMap::default(),
         allocation_map: MutMap::default(),
         join_param_map: MutMap::default(),
@@ -694,7 +694,7 @@ impl<
     }
 
     // Loads the dst to be the later 64 bits of a list (its length).
-    pub fn list_len(&mut self, _buf: &mut Vec<'a, u8>, dst: &Symbol, list: &Symbol) {
+    pub fn list_len_u64(&mut self, _buf: &mut Vec<'a, u8>, dst: &Symbol, list: &Symbol) {
         let owned_data = self.remove_allocation_for_sym(list);
         self.allocation_map.insert(*list, Rc::clone(&owned_data));
         self.allocation_map.insert(*dst, owned_data);
@@ -707,6 +707,11 @@ impl<
                 sign_extend: false,
             }),
         );
+    }
+
+    /// In a 64-bit backend, this is the same as list_len_u64
+    pub fn list_len_usize(&mut self, buf: &mut Vec<'a, u8>, dst: &Symbol, list: &Symbol) {
+        self.list_len_u64(buf, dst, list)
     }
 
     /// Creates a struct on the stack, moving the data in fields into the struct.

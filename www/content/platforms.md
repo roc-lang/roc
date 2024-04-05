@@ -1,6 +1,6 @@
 # Platforms
 
-Something that sets Roc apart from other programming languages is its <span class="nowrap">*platforms and applications*</span> architecture.
+Something that sets Roc apart from other programming languages is its <span class="nowrap">_platforms and applications_</span> architecture.
 
 ## [Applications](#applications) {#applications}
 
@@ -8,7 +8,7 @@ Here is a Roc application that prints `"Hello, World!"` to the command line:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -26,19 +26,20 @@ Also like many game engines and Web frameworks, Roc platforms have a high-level 
 
 Here are some example Roc platforms, and functionality they might provide:
 
-* A Roc game engine platform might provide functionality for rendering and sound.
-* A Roc Web server platform (like [basic-webserver](https://github.com/roc-lang/basic-webserver)) probably would not provide functionality for rendering and sound, but it might provide functionality for responding to incoming HTTP requests—which a game engine platform likely would not.
-* A Roc native [GUI](https://en.wikipedia.org/wiki/Graphical_user_interface) platform might provide functionality for defining native operating system UI elements, whereas a game engine platform might focus more on rendering with [shaders](https://en.wikipedia.org/wiki/Shader), and a Web server platform would not have GUI functionality at all.
+-   A Roc game engine platform might provide functionality for rendering and sound.
+-   A Roc Web server platform (like [basic-webserver](https://github.com/roc-lang/basic-webserver)) probably would not provide functionality for rendering and sound, but it might provide functionality for responding to incoming HTTP requests—which a game engine platform likely would not.
+-   A Roc native [GUI](https://en.wikipedia.org/wiki/Graphical_user_interface) platform might provide functionality for defining native operating system UI elements, whereas a game engine platform might focus more on rendering with [shaders](https://en.wikipedia.org/wiki/Shader), and a Web server platform would not have GUI functionality at all.
 
-These are broad domains, but platforms can be much more specific than this. For example, anyone could make a platform for writing [Vim](https://en.wikipedia.org/wiki/Vim_(text_editor)) plugins, or [Postgres](https://en.wikipedia.org/wiki/PostgreSQL) extensions, or robots ([which has already happened](https://roc.zulipchat.com/#narrow/stream/304902-show-and-tell/topic/Roc.20on.20a.20microcontroller/near/286678630)), or even [implementing servo logic for a clock that physically turns panels to simulate an LCD](https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/Roc.20Clock/near/327939600). You really can get as specific as you like!
+These are broad domains, but platforms can be much more specific than this. For example, anyone could make a platform for writing [Vim](<https://en.wikipedia.org/wiki/Vim_(text_editor)>) plugins, or [Postgres](https://en.wikipedia.org/wiki/PostgreSQL) extensions, or robots ([which has already happened](https://roc.zulipchat.com/#narrow/stream/304902-show-and-tell/topic/Roc.20on.20a.20microcontroller/near/286678630)), or even [implementing servo logic for a clock that physically turns panels to simulate an LCD](https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/Roc.20Clock/near/327939600). You really can get as specific as you like!
 
 Platforms can also be designed to have a single, specific application run on them. For example, you can make a platform that is essentially "your entire existing code base in another language," and then use Roc as an embedded language within that code base. For example, [Vendr](https://www.vendr.com/careers) is using this strategy to call Roc functions from their [Node.js](https://nodejs.org/en) backend using [roc-esbuild](https://github.com/vendrinc/roc-esbuild), as a way to incrementally transition code from Node to Roc.
 
 ## [Platform scope](#scope) {#scope}
 
 Roc platforms have a broader scope of responsibility than game engines or Web frameworks. In addition to providing a nice domain-specific interface, platforms are also responsible for:
-* Tailoring memory management to that domain (more on this later)
-* Providing all I/O primitives
+
+-   Tailoring memory management to that domain (more on this later)
+-   Providing all I/O primitives
 
 In most languages, I/O primitives come with the standard library. In Roc, the [standard library](https://www.roc-lang.org/builtins/) contains only data structures; an application gets all of its I/O primitives from its platform. For example, in the "Hello, World" application above, the `Stdout.line` function comes from the `basic-cli` platform itself, not from Roc's standard library.
 
@@ -48,7 +49,7 @@ This design has a few benefits.
 
 Some I/O operations make sense in some use cases but not others.
 
-For example, suppose I'm building an application on a platform for command-line interfaces, and I use a third-party package which sometimes blocks the program while it waits for [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)). This might be fine for my command-line application, but it would probably be a very bad fit if I'm using a webserver. Similarly, a package which does some occasional file I/O for caching might work fine on either of those platforms, but might break in surprising ways when used in a platform that's designed to run in a browser on WebAssembly—since browsers don't offer arbitrary file I/O access!
+For example, suppose I'm building an application on a platform for command-line interfaces, and I use a third-party package which sometimes blocks the program while it waits for [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>). This might be fine for my command-line application, but it would probably be a very bad fit if I'm using a webserver. Similarly, a package which does some occasional file I/O for caching might work fine on either of those platforms, but might break in surprising ways when used in a platform that's designed to run in a browser on WebAssembly—since browsers don't offer arbitrary file I/O access!
 
 Because Roc's I/O primitives come from platforms, these mismatches can be prevented at build time. The browser-based platform would not expose file I/O primitives, the webserver wouldn't expose a way to block on reading from standard input, and so on. (Note that there's a design in the works for allowing packages which perform I/O to work across multiple platforms—but only platforms which support the I/O primitives it requires—but this design has not yet been implemented.)
 
@@ -58,7 +59,7 @@ Since platforms have exclusive control over all I/O primitives, one of the thing
 
 [This talk](https://www.youtube.com/watch?v=cpQwtwVKAfU&t=75s) shows an example of taking this idea a step further with a "safe scripting" platform for writing command-line scripts. The idea is that you could download a script from the Internet and run it on this platform without worrying that the script would do bad things to your computer, because the platform would (much like a Web browser) show you specific prompts before allowing the script to do potentially harmful I/O, such as filesystem operations.
 
-These security guarantees can be relied on because platforms have *exclusive* control over all I/O primitives, including how they are implemented. There are no escape hatches that a malicious program could use to get around these, either; for example, Roc programs that want to call functions in other languages must do so using primitives provided by the platform, which the platform can disallow (or sandbox with end-user prompts) in the same way.
+These security guarantees can be relied on because platforms have _exclusive_ control over all I/O primitives, including how they are implemented. There are no escape hatches that a malicious program could use to get around these, either; for example, Roc programs that want to call functions in other languages must do so using primitives provided by the platform, which the platform can disallow (or sandbox with end-user prompts) in the same way.
 
 ### [Performance benefits](#performance) {#performance}
 
@@ -75,8 +76,9 @@ To understand how platforms can tailor automatic memory management to their part
 ### [The Host and the Roc API](#host-and-roc-api) {#host-and-roc-api}
 
 Each platform consists of two parts:
-* **The Roc API** is the part that application authors see. For example, `Stdout.line` is part of basic-cli's Roc API.
-* **The Host** is the under-the-hood implementation written in a language other than Roc. For example, basic-cli's host is written in Rust. It has a Rust function which implements the behavior of the `Stdout.line` operation, and all the other I/O operations it supports.
+
+-   **The Roc API** is the part that application authors see. For example, `Stdout.line` is part of basic-cli's Roc API.
+-   **The Host** is the under-the-hood implementation written in a language other than Roc. For example, basic-cli's host is written in Rust. It has a Rust function which implements the behavior of the `Stdout.line` operation, and all the other I/O operations it supports.
 
 This design means that application authors don't necessarily need to know (or care) about the non-Roc language being used to implement the platform's host. That can be a behind-the-scenes implementation detail that only the platform's author(s) are concerned with. Application authors only interact with the public-facing Roc API.
 
@@ -97,6 +99,7 @@ When a compiled Roc program runs, it's actually the host—not the Roc applicati
 Knowing this, a useful mental model for how Roc platforms and applications interact at the implementation level is: the Roc application compiles down to a C library which the platform can choose to call (or not).
 
 This is essentially what's happening behind the scenes when you run `roc build`. Specifically:
+
 1. The Roc compiler builds the Roc application into a binary [object file](https://en.wikipedia.org/wiki/Object_file)
 2. Since that application specified its platform, the compiler then looks up the platform's host implementation (which the platform will have provided as an already-compiled binary)
 3. Now that it has a binary for the Roc application and a binary for the host, it links them together into one combined binary in which the host portion calls the application portion as many times as it likes.
@@ -109,6 +112,6 @@ Every Roc application has exactly one platform. That platform provides all the I
 
 This I/O design has [security benefits](#security), [ecosystem benefits](#ecosystem), and [performance benefits](#performance). The [domain-specific memory management](#memory) platforms can implement can offer additional benefits as well.
 
-Applications only interact with the *Roc API* portion of a platform, but there is also a *host* portion (written in a different language) that works behind the scenes. The host determines how the program starts, how memory is allocated and deallocated, and how I/O primitives are implemented.
+Applications only interact with the _Roc API_ portion of a platform, but there is also a _host_ portion (written in a different language) that works behind the scenes. The host determines how the program starts, how memory is allocated and deallocated, and how I/O primitives are implemented.
 
 Anyone can implement their own platform. There isn't yet an official guide about how to do this, so the best way to get help if you'd like to create a platform is to [say hi in the `#beginners` channel](https://roc.zulipchat.com/#narrow/stream/231634-beginners) on [Roc Zulip!](https://roc.zulipchat.com)

@@ -17,7 +17,7 @@ use roc_mono::layout::{
     TagIdIntType, UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::marker::PhantomData;
 
 pub(crate) mod aarch64;
@@ -790,7 +790,7 @@ pub fn new_backend_64bit<
     CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
     env: &'r Env<'a>,
-    target_info: TargetInfo,
+    target: Target,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
 ) -> Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC> {
@@ -800,7 +800,7 @@ pub fn new_backend_64bit<
         env,
         interns,
         layout_interner,
-        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
+        helper_proc_gen: CodeGenHelp::new(env.arena, target, env.module_id),
         helper_proc_symbols: bumpalo::vec![in env.arena],
         caller_procs: bumpalo::vec![in env.arena],
         proc_name: None,
@@ -812,7 +812,7 @@ pub fn new_backend_64bit<
         free_map: MutMap::default(),
         literal_map: MutMap::default(),
         join_map: MutMap::default(),
-        storage_manager: storage::new_storage_manager(env, target_info),
+        storage_manager: storage::new_storage_manager(env, target),
     }
 }
 
@@ -853,8 +853,8 @@ impl<
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
         &mut self.relocs
     }
-    fn target_info(&self) -> TargetInfo {
-        self.storage_manager.target_info
+    fn target(&self) -> Target {
+        self.storage_manager.target
     }
     fn module_interns_helpers_mut(
         &mut self,
@@ -2830,8 +2830,13 @@ impl<
         }
     }
 
-    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
-        self.storage_manager.list_len(&mut self.buf, dst, list);
+    fn build_list_len_usize(&mut self, dst: &Symbol, list: &Symbol) {
+        self.storage_manager
+            .list_len_usize(&mut self.buf, dst, list);
+    }
+
+    fn build_list_len_u64(&mut self, dst: &Symbol, list: &Symbol) {
+        self.storage_manager.list_len_u64(&mut self.buf, dst, list);
     }
 
     fn build_list_clone(
@@ -3299,7 +3304,7 @@ impl<
         let elem_layout = arg_layouts[1];
 
         // List alignment argument (u32).
-        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
+        self.load_layout_alignment(elem_layout, Symbol::DEV_TMP);
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
@@ -3622,7 +3627,7 @@ impl<
 
                 // mask out the tag id bits
                 let (unmasked_symbol, unmasked_reg) =
-                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                         (None, ptr_reg)
                     } else {
                         let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
@@ -3723,7 +3728,7 @@ impl<
 
                 // mask out the tag id bits
                 let (unmasked_symbol, unmasked_reg) =
-                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                         (None, ptr_reg)
                     } else {
                         let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
@@ -4002,8 +4007,8 @@ impl<
             UnionLayout::Recursive(_) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
 
-                let target_info = self.storage_manager.target_info;
-                if union_layout.stores_tag_id_as_data(target_info) {
+                let target = self.storage_manager.target;
+                if union_layout.stores_tag_id_as_data(target) {
                     let offset = union_layout.tag_id_offset(self.interner()).unwrap() as i32;
 
                     let ptr_reg = self
@@ -4168,7 +4173,7 @@ impl<
                         .unwrap();
 
                     let largest_variant =
-                        if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                        if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                             self.layout_interner
                                 .insert_direct_no_semantic(LayoutRepr::Struct(
                                     self.env.arena.alloc([largest_variant_fields, Layout::U8]),
@@ -4209,7 +4214,7 @@ impl<
                     };
 
                     // finally, we need to tag the pointer
-                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                         // allocate space on the stack for the whole tag payload
                         let scratch_space = self.debug_symbol("scratch_space");
                         let (data_size, data_alignment) =
@@ -4285,7 +4290,7 @@ impl<
                 let other_fields = tags[tag_id as usize];
 
                 let stores_tag_id_as_data =
-                    union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
+                    union_layout.stores_tag_id_as_data(self.storage_manager.target);
 
                 let (largest_variant_fields, _largest_variant_size) = tags
                     .iter()

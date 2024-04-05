@@ -166,7 +166,7 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = if self.filename == PathBuf::from("") {
+            let header = if self.filename == PathBuf::from("replfile.roc") {
                 crate::report::pretty_header(&self.title)
             } else {
                 crate::report::pretty_header_with_path(&self.title, &self.filename)
@@ -219,7 +219,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         code_block: codes.white,
         keyword: codes.green,
         ellipsis: codes.green,
-        variable: codes.blue,
+        variable: codes.cyan,
         type_variable: codes.yellow,
         structure: codes.green,
         alias: codes.yellow,
@@ -249,28 +249,22 @@ pub struct StyleCodes {
     pub red: &'static str,
     pub green: &'static str,
     pub yellow: &'static str,
-    pub blue: &'static str,
-    pub magenta: &'static str,
     pub cyan: &'static str,
     pub white: &'static str,
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
-    pub color_reset: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
-    red: "\u{001b}[31m",
-    green: "\u{001b}[32m",
-    yellow: "\u{001b}[33m",
-    blue: "\u{001b}[34m",
-    magenta: "\u{001b}[35m",
-    cyan: "\u{001b}[36m",
+    red: "\u{001b}[1;31m",
+    green: "\u{001b}[1;32m",
+    yellow: "\u{001b}[1;33m",
+    cyan: "\u{001b}[1;36m",
     white: "\u{001b}[37m",
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
-    color_reset: "\u{1b}[39m",
 };
 
 macro_rules! html_color {
@@ -283,15 +277,24 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     red: html_color!("red"),
     green: html_color!("green"),
     yellow: html_color!("yellow"),
-    blue: html_color!("blue"),
-    magenta: html_color!("magenta"),
     cyan: html_color!("cyan"),
     white: html_color!("white"),
     bold: "<span class='bold'>",
     underline: "<span class='underline'>",
     reset: "</span>",
-    color_reset: "</span>",
 };
+
+// useful for tests
+pub fn strip_colors(str: &str) -> String {
+    str.replace(ANSI_STYLE_CODES.red, "")
+        .replace(ANSI_STYLE_CODES.green, "")
+        .replace(ANSI_STYLE_CODES.yellow, "")
+        .replace(ANSI_STYLE_CODES.cyan, "")
+        .replace(ANSI_STYLE_CODES.white, "")
+        .replace(ANSI_STYLE_CODES.bold, "")
+        .replace(ANSI_STYLE_CODES.underline, "")
+        .replace(ANSI_STYLE_CODES.reset, "")
+}
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
@@ -1649,6 +1652,42 @@ pub fn to_file_problem_report<'b>(
                 filename,
                 doc,
                 title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        io::ErrorKind::Unsupported => {
+            let doc = match filename.extension() {
+                Some(ext) => alloc.concat(vec![
+                    alloc.reflow(r"I expected a file with extension `.roc` or without extension."),
+                    alloc.hardline(),
+                    alloc.reflow(r"Instead I received a file with extension `."),
+                    alloc.as_string(ext.to_string_lossy()),
+                    alloc.as_string("`."),
+                ]),
+                None => {
+                    alloc.stack(vec![
+                        alloc.vcat(vec![
+                            alloc.reflow(r"I expected a file with either:"),
+                            alloc.reflow("- extension `.roc`"),
+                            alloc.intersperse(
+                                "- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"
+                                    .split(char::is_whitespace),
+                                alloc.concat(vec![ alloc.hardline(), alloc.text("  ")]).flat_alt(alloc.space()).group()
+                            ),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("The provided file did not start with a shebang `#!` containing the string `roc`. Is "),
+                            alloc.as_string(filename.to_string_lossy()),
+                            alloc.reflow(" a Roc file?"),
+                        ])
+                    ])
+                }
+            };
+
+            Report {
+                filename,
+                doc,
+                title: "NOT A ROC FILE".to_string(),
                 severity: Severity::Fatal,
             }
         }

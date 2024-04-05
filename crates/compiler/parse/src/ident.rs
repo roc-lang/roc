@@ -42,6 +42,7 @@ pub enum Ident<'a> {
     Access {
         module_name: &'a str,
         parts: &'a [Accessor<'a>],
+        suffixed: bool,
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
@@ -55,7 +56,9 @@ impl<'a> Ident<'a> {
 
         match self {
             Tag(string) | OpaqueRef(string) => string.len(),
-            Access { module_name, parts } => {
+            Access {
+                module_name, parts, ..
+            } => {
                 let mut len = if module_name.is_empty() {
                     0
                 } else {
@@ -190,7 +193,10 @@ pub fn parse_ident<'a>(
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             let state = advance_state!(state, width as usize)?;
-            if let Ident::Access { module_name, parts } = ident {
+            if let Ident::Access {
+                module_name, parts, ..
+            } = ident
+            {
                 if module_name.is_empty() {
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
@@ -199,6 +205,21 @@ pub fn parse_ident<'a>(
                             }
                         }
                     }
+                }
+            }
+
+            // Parse a suffixed `!` expression
+            if state.bytes().starts_with(b"!") {
+                if let Ident::Access {
+                    module_name, parts, ..
+                } = ident
+                {
+                    let new_ident = Ident::Access {
+                        module_name,
+                        parts,
+                        suffixed: true,
+                    };
+                    return Ok((MadeProgress, new_ident, state.advance(1)));
                 }
             }
 
@@ -513,6 +534,7 @@ fn chomp_identifier_chain<'a>(
                 let ident = Ident::Access {
                     module_name,
                     parts: parts.into_bump_slice(),
+                    suffixed: false,
                 };
 
                 Ok((chomped as u32, ident))
@@ -548,6 +570,7 @@ fn chomp_identifier_chain<'a>(
         let ident = Ident::Access {
             module_name: "",
             parts: arena.alloc([Accessor::RecordField(value)]),
+            suffixed: false,
         };
         Ok((chomped as u32, ident))
     }

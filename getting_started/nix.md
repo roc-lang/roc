@@ -2,10 +2,10 @@
 
 To quickly try out roc without installing, use `nix run`:
 ```shell
-nix run roc-lang/roc -- <roc args>
+nix run github:roc-lang/roc -- <roc args>
 # examples:
-# - nix run roc-lang/roc -- repl
-# - nix run roc-lang/roc -- dev main.roc
+# - nix run github:roc-lang/roc -- repl
+# - nix run github:roc-lang/roc -- dev main.roc
 ```
 
 ## Use with Flakes
@@ -46,3 +46,9 @@ nix flake init --template github:roc-lang/roc#simple --refresh
         );
 }
 ```
+
+## Next Steps
+
+- [editor setup](https://www.roc-lang.org/install#editor-extensions)
+- [tutorial](https://www.roc-lang.org/tutorial)
+- [examples](https://www.roc-lang.org/examples)
