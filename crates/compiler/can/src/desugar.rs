@@ -1021,6 +1021,416 @@ pub fn desugar_expr<'a>(
     }
 }
 
+pub enum Unwrapped<'a> {
+    // the expression has nothing further to unwrap,
+    Unwrapped(&'a Loc<Expr<'a>>),
+
+    // the current expression had a (sub) expr unwrapped
+    UnwrappedSubExpr {
+        // this expression will be applied to the Task.await
+        arg: &'a Loc<Expr<'a>>,
+
+        // this pattern will be used in the closure
+        pat: &'a [Loc<Pattern<'a>>],
+
+        // this expression will replace the unwrapped in the parent
+        new: &'a Loc<Expr<'a>>,
+    },
+}
+
+pub fn unwrap_suffixed_expression<'a>(
+    arena: &'a Bump,
+    loc_expr: &'a Loc<Expr<'a>>,
+    // None -> we will need to generate a pattern for the closure
+    // Some -> first call from a def, we may have a pattern such as "a" or "#answer2" to use
+    // maybe_pattern_expr: Option<&'a Loc<Expr<'a>>>,
+) -> Unwrapped<'a> {
+    match loc_expr.value {
+        Expr::Var { .. } => Unwrapped::Unwrapped(loc_expr),
+
+        Expr::Defs(defs, loc_ret) => {
+            for (tag_index, type_or_value_def) in defs.defs().enumerate() {
+
+                if let Some(ValueDef::Body(def_pattern, def_expr)) = type_or_value_def.err() {
+                    match unwrap_suffixed_expression(arena, def_expr) {
+                        Unwrapped::Unwrapped(_) => {
+                            // do nothing, move on to check the next def
+                        }
+                        Unwrapped::UnwrappedSubExpr { arg, pat, new } => {
+                            if defs.len() != 1 {
+                                todo!("handle other lengths");
+                            }
+
+                            // TODO split around defs etc...
+
+                            let new_value_def = ValueDef::Body(def_pattern, new);
+
+                            let mut new_defs = defs.clone();
+                            new_defs.replace_with_value_def(
+                                tag_index,
+                                new_value_def,
+                                loc_expr.region,
+                            );
+
+                            return unwrap_suffixed_expression(
+                                arena,
+                                apply_task_await(
+                                    arena,
+                                    loc_expr.region,
+                                    arg,
+                                    pat,
+                                    arena.alloc(Loc::at(
+                                        loc_expr.region,
+                                        Defs(arena.alloc(new_defs), loc_ret),
+                                    )),
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                if let Some(ValueDef::Stmt(_)) = type_or_value_def.err() {
+                    todo!("handle Stmt");
+                }
+            }
+
+            // try to unwrap the loc_ret
+
+            // nothing left in the Expr::Defs to unwrap
+            Unwrapped::Unwrapped(loc_expr)
+        }
+
+        Expr::Apply(function, arguments, called_via) => {
+            // // try to unwrap each argument
+
+            // try to unwrapp the function
+            if let Unwrapped::UnwrappedSubExpr { arg, pat, new } =
+                unwrap_suffixed_expression(arena, function)
+            {
+                return Unwrapped::UnwrappedSubExpr {
+                    arg,
+                    pat,
+                    new: arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::Apply(new, arguments, called_via),
+                    )),
+                };
+            }
+
+            Unwrapped::Unwrapped(loc_expr)
+        }
+
+        // Expr::Var {
+        //     module_name,
+        //     ident,
+        //     suffixed,
+        // } if suffixed > 0 => {
+        //     /*
+        //     ## Example with single suffix
+        //     x = foo!
+        //     bar x
+
+        //     Task.await (foo) \x -> bar x
+
+        //     ## Example with multiple suffix
+        //     {} = foo!!
+        //     bar
+
+        //     Task.await (foo) \answer1 ->
+        //         {} = (answer1)!
+        //         bar
+
+        //     Task.await (foo) \answer1 ->
+        //         Task.await (answer1) \{} -> bar
+        //     */
+
+        //     // must have a next expression to progress
+        //     let next_loc_expr = match maybe_next_expr {
+        //         None => return Err(UnwrappedError::MissingNextInVar),
+        //         Some(next_loc_expr) => next_loc_expr,
+        //     };
+
+        //     // use the pattern from the parent expression, or create a unit pattern
+        //     // e.g. ("{}", None) or ("x",Some(Var{"x"}))
+        //     let (loc_pattern, maybe_ident) =
+        //         pattern_thing.unwrap_or_else(|| (
+        //             arena.alloc([Loc::at(
+        //                 loc_expr.region,
+        //                 Pattern::RecordDestructure(Collection::empty()),
+        //                 )]),
+        //             None,
+        //         ));
+
+        //     // recurse to get the next expression
+        //     let loc_expr_to_wrap = unwrap_innermost_suffixed(
+        //         arena,
+        //         next_loc_expr(maybe_ident),
+
+        //         // we are in a Expr::Var, so we cannot have a pattern or sub expression
+        //         None,
+        //         None,
+        //     )?;
+
+        //     Ok(apply_task_await(
+        //         arena,
+        //         loc_expr.region,
+
+        //         // we have desugared a suffixed Var, the argument to Task.await
+        //         // will be the base identifier without a suffix
+        //         arena.alloc(Loc::at(
+        //             loc_expr.region,
+        //             Var {
+        //                 module_name,
+        //                 ident,
+        //                 suffixed: 0,
+        //             },
+        //         )),
+
+        //         // the pattern to use in the closure will be from parent like "x" or "{}"
+        //         loc_pattern,
+
+        //         // the expression we have just wrapped in Task.await
+        //         loc_expr_to_wrap,
+        //     ))
+        // }
+
+        // Expr::Defs(defs, loc_ret) => {
+        //     for (tag_index, type_or_value_def) in defs.defs().enumerate() {
+        //         if let Some(ValueDef::Body(def_pattern, def_expr)) = type_or_value_def.err() {
+
+        //             // if we unwrap this def, we will use this pattern in the closure
+        //             // the second Some(ident) will be used in place of the
+        //             // TODO can we simplify this and not have the first Option?
+        //             let def_pattern_expression: Option<(&'a [Loc<Pattern<'a>>], Option<&'a Loc<Expr<'a>>>)> = match def_pattern {
+        //                 Loc { value: Pattern::RecordDestructure(_), .. } => Some((&[**def_pattern], None)),
+        //                 Loc {  value: Pattern::Identifier { ident, .. }, .. } => Some((&[**def_pattern], Some(arena.alloc(Loc::at(
+        //                     loc_expr.region,
+        //                     Expr::Var {
+        //                         module_name: "",
+        //                         ident,
+        //                         suffixed: 0,
+        //                     },
+        //                 ))))),
+        //                 _ => internal_error!("expected a RecordDestructure e.g. `{{}} =` or Identifier e.g. `x =` pattern in the LHS of a definition"),
+        //             };
+
+        //             // try unwrap this def
+        //             match unwrap_innermost_suffixed(
+        //                 arena,
+        //                 def_expr,
+        //                 def_pattern_expression,
+        //                 next_defs_expr_fn_help(arena, defs, tag_index, loc_ret),
+        //             ) {
+        //                 Err(UnwrappedError::NothingToUnwrap) => {
+        //                     // do nothing, move on to next def
+        //                 }
+        //                 Err(err) => return Err(err),
+        //                 Ok(new_def_expr) => {
+        //                     return Ok(new_def_expr);
+        //                 }
+        //             }
+        //         }
+
+        //         if let Some(ValueDef::Stmt(def_expr)) = type_or_value_def.err() {
+        //             let def_pattern = arena.alloc(Loc::at(
+        //                 loc_expr.region,
+        //                 Pattern::RecordDestructure(Collection::empty()),
+        //             ));
+
+        //             todo!();
+        //         }
+        //     }
+
+        //     // nothing was unwrapped
+        //     Ok(loc_expr)
+        // }
+
+        // Expr::Apply(function, arguments, called_via) => {
+        //     // first descend into the arguments as they will get unwrapped first
+        //     for (index, arg) in arguments.iter().enumerate() {
+        //     }
+        // }
+
+        // Expr::Apply(function, arguments, called_via) => {
+        //     // first descend into the arguments as they will get unwrapped first
+        //     for (index, arg) in arguments.iter().enumerate() {
+        //         // check if this argument can be unwrapped
+        //         if let unwrapped_result =
+        //             unwrap_innermost_suffixed(arena, arg, src, line_info, module_path)?
+        //         {
+        //             debug_assert!(unwrapped_result.is_unwrapped_sub_expr());
+
+        //             // an argument was unwrapped, so we need to replace the argument with the new expression
+        //             let mut new_arguments = Vec::new_in(arena);
+
+        //             // args before
+        //             new_arguments.extend_from_slice(&arguments[..index]);
+
+        //             // our replacement arg
+        //             new_arguments.extend_from_slice(&[unwrapped_result.get_new()]);
+
+        //             if index + 1 < arguments.len() {
+        //                 // args after
+        //                 new_arguments.extend_from_slice(&arguments[index + 1..]);
+        //             }
+
+        //             return Ok(unwrapped_result.set_new(
+        //                 arena,
+        //                 arena.alloc(Loc::at(
+        //                     loc_expr.region,
+        //                     Apply(
+        //                         function,
+        //                         arena.alloc_slice_copy(new_arguments.as_slice()),
+        //                         called_via,
+        //                     ),
+        //                 )),
+        //             ));
+        //         }
+        //     }
+
+        //     // then check the function call itself
+        //     if let unwrapped_result =
+        //         unwrap_innermost_suffixed(arena, function, src, line_info, module_path)?
+        //     {
+        //         debug_assert!(unwrapped_result.is_unwrapped_sub_expr());
+
+        //         return Ok(unwrapped_result.set_new(
+        //             arena,
+        //             arena.alloc(Loc::at(
+        //                 loc_expr.region,
+        //                 Apply(unwrapped_result.get_new(), arguments, called_via),
+        //             )),
+        //         ));
+        //     }
+
+        //     // nothing was unwrapped
+        //     Ok(NoChange)
+        // }
+
+        // Expr::Defs(defs, loc_ret) => {
+        //     // first descend into each def in sequence,
+        //     // if we have any suffixed expressions to unwrap do these first
+        //     for (tag_index, type_or_value_def) in defs.defs().enumerate() {
+        //         // we only care about ValueDefs
+        //         if let Some(ValueDef::Body(def_pattern, def_expr)) = type_or_value_def.err() {
+        //             // check if the def expression can be unwrapped
+        //             let unwrapped_result =
+        //                 unwrap_innermost_suffixed(arena, def_expr, src, line_info, module_path)?;
+
+        //             let mut new_defs = defs.clone();
+
+        //             new_defs.replace_with_value_def(
+        //                 tag_index,
+        //                 ValueDef::Body(def_pattern, unwrapped_result.get_new()),
+        //                 loc_expr.region,
+        //             );
+
+        //             return Ok(unwrapped_result.set_new(
+        //                 arena,
+        //                 arena.alloc(Loc::at(loc_expr.region, Defs(&new_defs, loc_ret))),
+        //             ));
+
+        //             // THIS IS WRONG I THINK
+        //             // let split_defs = defs.split_values_either_side_of(tag_index);
+
+        //             // // TODO check if the type annotations stuff things up here...
+        //             // let empty_before = split_defs.before.is_empty();
+        //             // let empty_after = split_defs.after.is_empty();
+
+        //             // // NIL before, NIL after -> SINGLE
+        //             // if empty_before && empty_after {
+        //             //     /*
+        //             //     ## Example
+
+        //             //     x = foo!                <- single suffixed ValueDef::Body
+        //             //     bar x                   <- loc_ret
+
+        //             //     ## Desguared
+
+        //             //     Task.await foo \x ->    <- apply_task_await
+        //             //         bar x               <- new expression
+        //             //     */
+
+        //             //     // replace our Defs node with the wrapped Task.await expression
+        //             //     return Ok(Done(apply_task_await(
+        //             //         arena,
+        //             //         loc_expr.region,
+        //             //         unwrapped_result.get_arg(),
+        //             //         unwrapped_result.get_pat(),
+        //             //         unwrap_innermost_suffixed(
+        //             //             arena,
+        //             //             unwrapped_result.replace_rep(arena, new),
+        //             //             src,
+        //             //             line_info,
+        //             //             module_path,
+        //             //         ),
+        //             //     )));
+
+        //             // NIL before, SOME after -> FIRST
+        //             // SOME before, NIL after -> LAST
+        //             // SOME before, SOME after -> MIDDLE
+        //         }
+
+        //         // we only care about ValueDefs
+        //         if let Some(ValueDef::Stmt(def_expr)) = type_or_value_def.err() {
+        //             // pattern will be `{}`
+        //             todo!();
+        //         }
+        //     }
+
+        //     // check the def return expression, which shouldn't have any suffixed expressions
+        //     if let Err(unwrapped) =
+        //         unwrap_innermost_suffixed(arena, loc_ret, src, line_info, module_path)
+        //     {
+        //         let sub_loc_expr =
+        //             arena.alloc(Loc::at(loc_expr.region, Defs(defs, unwrapped.sub_loc_expr)));
+
+        //         return Some(unwrapped.replace_sub_loc_expr(arena, sub_loc_expr));
+        //     }
+
+        //     // nothing was suffixed in the defs, so just return
+        //     Ok(loc_expr)
+        // }
+        _ => {
+            dbg!("NOT HANDLED", loc_expr.value);
+            Unwrapped::Unwrapped(loc_expr)
+        },
+    }
+}
+
+fn apply_task_await<'a>(
+    arena: &'a Bump,
+    region: Region,
+    arg_loc_expr: &'a Loc<Expr<'a>>,
+    loc_pat: &'a [Loc<Pattern<'a>>],
+    new: &'a Loc<Expr<'a>>,
+) -> &'a Loc<Expr<'a>> {
+    let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+
+    // apply the unwrapped suffixed expression
+    task_await_apply_args.push(arg_loc_expr);
+
+    // apply the closure
+    task_await_apply_args.push(arena.alloc(Loc::at(region, Closure(arena.alloc(loc_pat), new))));
+
+    // e.g. `Task.await (arg_loc_expr) \pattern -> new`
+    arena.alloc(Loc::at(
+        region,
+        Apply(
+            arena.alloc(Loc {
+                region: region,
+                value: Var {
+                    module_name: ModuleName::TASK,
+                    ident: "await",
+                    suffixed: 0,
+                },
+            }),
+            arena.alloc(task_await_apply_args),
+            CalledVia::BangSuffix,
+        ),
+    ))
+}
+
 fn desugar_str_segments<'a>(
     arena: &'a Bump,
     segments: &'a [StrSegment<'a>],
