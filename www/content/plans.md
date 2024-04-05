@@ -30,12 +30,6 @@ Implementing the very important [module params](https://docs.google.com/document
 
 Work has not started on this yet, but we'd like to have the project completed sometime in 2024.
 
-### Removal of `Nat`
-
-We are removing the `Nat` number type in favour of using `U64` as the default. This will further improve the portability of Roc programs, by removing a potential source of different behaviour across architectures.
-
-You can track progress in [this PR](https://github.com/roc-lang/roc/pull/5923).
-
 ### Platform Author Specific Breaking Changes
 
 All of the following changes only affect platform authors.
@@ -49,21 +43,21 @@ As with builtins, it's hard to predict when these will happen and what they'll b
 
 #### Effect Interpreters
 
-Currently, roc effects directly call functions in the platform.
+Currently, Roc effects directly call functions in the platform.
 For example, [Stdout.line](https://github.com/roc-lang/basic-cli/blob/e022fba2b01216678d62f07c2f3ba702e80fa00c/platform/Stdout.roc#L9-L13) in basic-cli calls the [roc_fx_stdoutLine](https://github.com/roc-lang/basic-cli/blob/e022fba2b01216678d62f07c2f3ba702e80fa00c/platform/src/lib.rs#L380-L384) function.
 Roc directly calling these functions synchronously greatly limits the possibilities of how a platform can implement the effect.
-With the effect interpreter model, on each effect, roc will return a tag union to the platform
+With the effect interpreter model, on each effect, roc will return a tag union to the platform.
 That tag union will contain all of the function arguments along with a continuation closure.
 The platform can execute the effect however it likes (including running it asynchronously).
-After the effect completes the platform simply has to call the continuation closure with the results.
+After the effect completes, the platform simply has to call the continuation closure with the results.
 
 In terms of actual implementation, this is quite similar to an async state machine in other languages like Rust.
 
-#### Platform Side Explicit Allocators
+#### Platform-side Explicit Allocators
 
-Related to the effect interpreter changes, for memory allocation functions (plus a few others), currently roc always directly calls `roc_alloc/roc_etc`.
+Related to the effect interpreter changes, for memory allocation functions (plus a few others), currently Roc always directly calls `roc_alloc/roc_etc`.
 This makes it hard to implement more interesting allocation strategies (like arena allocation).
-With this change, all calls to Roc will require the platform to pass in a Allocator struct.
+With this change, all calls to Roc will require the platform to pass in an Allocator struct.
 Roc will directly use that struct to call each of the allocation related functions.
 This struct will also hold a few other functions like `roc_dbg` and `roc_panic`.
 
