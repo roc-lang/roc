@@ -518,7 +518,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
-        exec_mode,
+        exec_mode: exec_mode.clone(),
     };
     let load_result = roc_load::load_and_monomorphize(
         arena,
@@ -555,10 +555,12 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
 
     // Print warnings before running tests.
     {
-        debug_assert_eq!(
-            problems.errors, 0,
-            "if there were errors, we would have already exited."
-        );
+        if matches!(exec_mode, ExecutionMode::Test) {
+            debug_assert_eq!(
+                problems.errors, 0,
+                "if there were errors, we would have already exited."
+            );
+        }
         if problems.warnings > 0 {
             problems.print_error_warning_count(start_time.elapsed());
             println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
