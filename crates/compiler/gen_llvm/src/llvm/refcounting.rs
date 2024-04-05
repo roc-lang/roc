@@ -1,12 +1,10 @@
 use crate::debug_info_init;
-use crate::llvm::bitcode::call_void_bitcode_fn;
+use crate::llvm::bitcode::{build_dec_wrapper, call_void_bitcode_fn, call_void_list_bitcode_fn};
 use crate::llvm::build::BuilderExt;
 use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
 };
-use crate::llvm::build_list::{
-    incrementing_elem_loop, list_allocation_ptr, list_capacity_or_ref_ptr, load_list,
-};
+use crate::llvm::build_list::{layout_refcounted, layout_width};
 use crate::llvm::build_str::str_allocation_ptr;
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use crate::llvm::struct_::RocStruct;
@@ -16,6 +14,7 @@ use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, InstructionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::ErasedField;
@@ -111,13 +110,18 @@ impl<'ctx> PointerToRefcount<'ctx> {
         layout_interner: &STLayoutInterner<'a>,
     ) {
         match mode {
-            CallMode::Inc(inc_amount) => self.increment(inc_amount, env),
+            CallMode::Inc(inc_amount) => self.increment(inc_amount, env, layout),
             CallMode::Dec => self.decrement(env, layout_interner, layout),
         }
     }
 
-    fn increment<'a, 'env>(&self, amount: IntValue<'ctx>, env: &Env<'a, 'ctx, 'env>) {
-        incref_pointer(env, self.value, amount);
+    fn increment<'a, 'env>(
+        &self,
+        amount: IntValue<'ctx>,
+        env: &Env<'a, 'ctx, 'env>,
+        layout: LayoutRepr<'a>,
+    ) {
+        incref_pointer(env, self.value, amount, layout);
     }
 
     pub fn decrement<'a, 'env>(
@@ -158,7 +162,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
                 debug_info_init!(env, function_value);
 
-                Self::build_decrement_function_body(env, function_value, alignment);
+                Self::build_decrement_function_body(env, function_value, alignment, layout);
 
                 function_value
             }
@@ -180,6 +184,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         env: &Env<'a, 'ctx, 'env>,
         parent: FunctionValue<'ctx>,
         alignment: u32,
+        layout: LayoutRepr<'a>,
     ) {
         let builder = env.builder;
         let ctx = env.context;
@@ -193,6 +198,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             env,
             parent.get_nth_param(0).unwrap().into_pointer_value(),
             alignment,
+            layout,
         );
 
         builder.new_build_return(None);
@@ -202,16 +208,23 @@ impl<'ctx> PointerToRefcount<'ctx> {
         &self,
         env: &Env<'a, 'ctx, 'env>,
         alignment: u32,
+        layout: LayoutRepr<'a>,
     ) -> InstructionValue<'ctx> {
-        free_pointer(env, self.value, alignment)
+        free_pointer(env, self.value, alignment, layout)
     }
+}
+
+fn debug_assert_not_list(layout: LayoutRepr<'_>) {
+    debug_assert!(!matches!(layout, LayoutRepr::Builtin(Builtin::List(_))), "List are no longer safe to refcount through pointer alone. They must go through the zig bitcode functions");
 }
 
 fn incref_pointer<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
     amount: IntValue<'ctx>,
+    layout: LayoutRepr<'_>,
 ) {
+    debug_assert_not_list(layout);
     call_void_bitcode_fn(
         env,
         &[
@@ -232,7 +245,9 @@ fn free_pointer<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
     alignment: u32,
+    layout: LayoutRepr<'_>,
 ) -> InstructionValue<'ctx> {
+    debug_assert_not_list(layout);
     let alignment = env.context.i32_type().const_int(alignment as _, false);
     call_void_bitcode_fn(
         env,
@@ -245,12 +260,19 @@ fn free_pointer<'ctx>(
                 )
                 .into(),
             alignment.into(),
+            env.context.bool_type().const_int(0, false).into(),
         ],
         roc_builtins::bitcode::UTILS_FREE_RC_PTR,
     )
 }
 
-fn decref_pointer<'ctx>(env: &Env<'_, 'ctx, '_>, pointer: PointerValue<'ctx>, alignment: u32) {
+fn decref_pointer<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    pointer: PointerValue<'ctx>,
+    alignment: u32,
+    layout: LayoutRepr<'_>,
+) {
+    debug_assert_not_list(layout);
     let alignment = env.context.i32_type().const_int(alignment as _, false);
     call_void_bitcode_fn(
         env,
@@ -263,6 +285,7 @@ fn decref_pointer<'ctx>(env: &Env<'_, 'ctx, '_>, pointer: PointerValue<'ctx>, al
                 )
                 .into(),
             alignment.into(),
+            env.context.bool_type().const_int(0, false).into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF_RC_PTR,
     );
@@ -273,7 +296,9 @@ pub fn decref_pointer_check_null<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
     alignment: u32,
+    layout: LayoutRepr<'_>,
 ) {
+    debug_assert_not_list(layout);
     let alignment = env.context.i32_type().const_int(alignment as _, false);
     call_void_bitcode_fn(
         env,
@@ -286,6 +311,7 @@ pub fn decref_pointer_check_null<'ctx>(
                 )
                 .into(),
             alignment.into(),
+            env.context.bool_type().const_int(0, false).into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,
     );
@@ -764,7 +790,6 @@ fn modify_refcount_list<'a, 'ctx>(
                 layout_interner,
                 layout_ids,
                 mode,
-                list_layout,
                 element_layout,
                 function_value,
             );
@@ -791,7 +816,6 @@ fn modify_refcount_list_help<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
-    layout: LayoutRepr<'a>,
     element_layout: InLayout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -807,72 +831,48 @@ fn modify_refcount_list_help<'a, 'ctx>(
 
     // Add args to scope
     let arg_symbol = Symbol::ARG_1;
-    let arg_val = fn_val.get_param_iter().next().unwrap();
+    let mut param_iter = fn_val.get_param_iter();
+    let arg_val = param_iter.next().unwrap();
 
     arg_val.set_name(arg_symbol.as_str(&env.interns));
 
-    let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
 
-    // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-    let capacity = list_capacity_or_ref_ptr(builder, original_wrapper);
-
-    let is_non_empty = builder.new_build_int_compare(
-        IntPredicate::UGT,
-        capacity,
-        env.ptr_int().const_zero(),
-        "cap > 0",
-    );
-
-    // build blocks
-    let modification_list_block = ctx.append_basic_block(parent, "modification_list_block");
-    let cont_block = ctx.append_basic_block(parent, "modify_rc_list_cont");
-
-    builder.new_build_conditional_branch(is_non_empty, modification_list_block, cont_block);
-
-    builder.position_at_end(modification_list_block);
-
-    if layout_interner.contains_refcounted(element_layout) {
-        let ptr_type = basic_type_from_layout(
-            env,
-            layout_interner,
-            layout_interner.get_repr(element_layout),
-        )
-        .ptr_type(AddressSpace::default());
-
-        let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
-
-        let loop_fn = |layout_interner, _index, element| {
-            modify_refcount_layout_help(
+    // List incrementing and decrementing is more complex now.
+    // Always go through zig.
+    match mode {
+        Mode::Dec => {
+            let dec_element_fn =
+                build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
+            call_void_list_bitcode_fn(
                 env,
-                layout_interner,
-                layout_ids,
-                mode.to_call_mode(fn_val),
-                element,
-                element_layout,
-            );
-        };
+                &[original_wrapper],
+                &[
+                    env.alignment_intvalue(layout_interner, element_layout),
+                    layout_width(env, layout_interner, element_layout),
+                    layout_refcounted(env, layout_interner, element_layout),
+                    dec_element_fn.as_global_value().as_pointer_value().into(),
+                ],
+                bitcode::LIST_DECREF,
+            )
+        }
+        Mode::Inc => {
+            let inc_amount_symbol = Symbol::ARG_2;
+            let inc_amount_val = param_iter.next().unwrap();
 
-        incrementing_elem_loop(
-            env,
-            layout_interner,
-            parent,
-            element_layout,
-            ptr,
-            len,
-            "modify_rc_index",
-            loop_fn,
-        );
+            inc_amount_val.set_name(inc_amount_symbol.as_str(&env.interns));
+
+            call_void_list_bitcode_fn(
+                env,
+                &[original_wrapper],
+                &[
+                    inc_amount_val.into_int_value().into(),
+                    layout_refcounted(env, layout_interner, element_layout),
+                ],
+                bitcode::LIST_INCREF,
+            )
+        }
     }
-
-    let refcount_ptr =
-        PointerToRefcount::from_ptr_to_data(env, list_allocation_ptr(env, original_wrapper));
-    let call_mode = mode_to_call_mode(fn_val, mode);
-    refcount_ptr.modify(call_mode, layout, env, layout_interner);
-
-    builder.new_build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
 
     // this function returns void
     builder.new_build_return(None);

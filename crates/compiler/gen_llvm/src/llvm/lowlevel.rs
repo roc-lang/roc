@@ -35,7 +35,7 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe,
+        list_append_unsafe, list_clone, list_concat, list_drop_at, list_get_unsafe,
         list_len_usize, list_map, list_map2, list_map3, list_map4, list_prepend,
         list_release_excess_capacity, list_replace_unsafe, list_reserve, list_sort_with,
         list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
@@ -645,6 +645,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_with_capacity(
                 env,
                 layout_interner,
+                layout_ids,
                 list_len.into_int_value(),
                 list_element_layout!(layout_interner, result_layout),
             )
@@ -661,6 +662,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_concat(
                 env,
                 layout_interner,
+                layout_ids,
                 first_list,
                 second_list,
                 element_layout,
@@ -682,7 +684,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
             let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
-            list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
+            list_prepend(
+                env,
+                layout_interner,
+                layout_ids,
+                original_wrapper,
+                elem,
+                elem_layout,
+            )
         }
         ListReserve => {
             // List.reserve : List elem, U64 -> List elem
@@ -695,6 +704,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_reserve(
                 env,
                 layout_interner,
+                layout_ids,
                 list,
                 spare,
                 element_layout,
@@ -708,7 +718,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
-            list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
+            list_release_excess_capacity(
+                env,
+                layout_interner,
+                layout_ids,
+                list,
+                element_layout,
+                update_mode,
+            )
         }
         ListSwap => {
             // List.swap : List elem, U64, U64 -> List elem
@@ -724,6 +741,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_swap(
                 env,
                 layout_interner,
+                layout_ids,
                 original_wrapper,
                 index_1.into_int_value(),
                 index_2.into_int_value(),
@@ -826,19 +844,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
             match update_mode {
-                UpdateMode::Immutable => {
-                    //
-                    call_list_bitcode_fn(
-                        env,
-                        &[list.into_struct_value()],
-                        &[
-                            env.alignment_intvalue(layout_interner, element_layout),
-                            layout_width(env, layout_interner, element_layout),
-                        ],
-                        BitcodeReturns::List,
-                        bitcode::LIST_CLONE,
-                    )
-                }
+                UpdateMode::Immutable => list_clone(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    list.into_struct_value(),
+                    element_layout,
+                ),
                 UpdateMode::InPlace => {
                     // we statically know the list is unique
                     list
@@ -3030,6 +3042,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                     list_sort_with(
                         env,
                         layout_interner,
+                        layout_ids,
                         roc_function_call,
                         compare_wrapper,
                         list,

@@ -129,14 +129,24 @@ pub const RocList = extern struct {
         }
     }
 
-    // TODO: expose these both to roc and ensure lists always call them.
+    // This needs to be called when creating seamless slices from unique list.
+    // It will put the allocation size on the heap to enable the seamless slice to free the underlying allocation.
+    fn setAllocationElementCount(self: RocList, elements_refcounted: bool) void {
+        if (elements_refcounted) {
+            // - 1 is refcount.
+            // - 2 is size on heap.
+            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationPtr()))) - 2;
+            ptr[0] = self.length;
+        }
+    }
+
     pub fn incref(self: RocList, amount: isize, elements_refcounted: bool) void {
         // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
         if (elements_refcounted and self.isUnique() and !self.isSeamlessSlice()) {
             // - 1 is refcount.
             // - 2 is size on heap.
-            const ptr = @as([*]usize, self.getAllocationPtr()) - 2;
-            ptr.* = self.length;
+            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationPtr()))) - 2;
+            ptr[0] = self.length;
         }
         utils.increfDataPtrC(self.getAllocationPtr(), amount);
     }
@@ -326,6 +336,14 @@ pub const RocList = extern struct {
         return result;
     }
 };
+
+pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.C) void {
+    list.incref(amount, elements_refcounted);
+}
+
+pub fn listDecref(list: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec) callconv(.C) void {
+    list.decref(alignment, element_width, elements_refcounted, dec);
+}
 
 const Caller0 = *const fn (?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller1 = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
@@ -686,6 +704,10 @@ pub fn listSwap(
     dec: Dec,
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
+    // Early exit to avoid swapping the same element.
+    if (index_1 == index_2)
+        return list;
+
     const size = @as(u64, @intCast(list.len()));
     if (index_1 == index_2 or index_1 >= size or index_2 >= size) {
         // Either one index was out of bounds, or both indices were the same; just return
@@ -742,7 +764,6 @@ pub fn listSublist(
         // This cast is lossless because we would have early-returned already
         // if `start_u64` were greater than `size`, and `size` fits in usize.
         const start: usize = @intCast(start_u64);
-        const drop_start_len = start;
 
         // (size - start) can't overflow because we would have early-returned already
         // if `start` were greater than `size`.
@@ -753,32 +774,23 @@ pub fn listSublist(
         // than something that fit in usize.
         const keep_len = @as(usize, @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start)))));
 
-        // This can't overflow because if len > size_minus_start,
-        // then keep_len == size_minus_start and this will be 0.
-        // Alternatively, if len <= size_minus_start, then keep_len will
-        // be equal to len, meaning keep_len <= size_minus_start too,
-        // which in turn means this won't overflow.
-        const drop_end_len = size_minus_start - keep_len;
-
-        // Decrement the reference counts of elements before `start`.
-        var i: usize = 0;
-        while (i < drop_start_len) : (i += 1) {
-            const element = source_ptr + i * element_width;
-            dec(element);
-        }
-
-        // Decrement the reference counts of elements after `start + keep_len`.
-        i = 0;
-        while (i < drop_end_len) : (i += 1) {
-            const element = source_ptr + (start + keep_len + i) * element_width;
-            dec(element);
-        }
-
         if (start == 0 and list.isUnique()) {
+            // The list is unique, we actually have to decrement refcounts to elements we aren't keeping around.
+            // Decrement the reference counts of elements after `start + keep_len`.
+            const drop_end_len = size_minus_start - keep_len;
+            var i: usize = 0;
+            while (i < drop_end_len) : (i += 1) {
+                const element = source_ptr + (start + keep_len + i) * element_width;
+                dec(element);
+            }
+
             var output = list;
             output.length = keep_len;
             return output;
         } else {
+            if (list.isUnique()) {
+                list.setAllocationElementCount(elements_refcounted);
+            }
             const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
             const slice_alloc_ptr = list.capacity_or_alloc_ptr;
             const slice_mask = list.seamlessSliceMask();
