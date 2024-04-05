@@ -458,9 +458,9 @@ The `fromScratch` and `fromOriginal` records are equal, although they're defined
 Note that `&` can't introduce new fields to a record, or change the types of existing fields.
 (Trying to do either of these will result in an error at build time!)
 
-## [Optional Record Fields](#optional-record-fields) {#optional-record-fields}
+## [Default Value Record Fields](#default-value-record-fields) {#default-value-record-fields}
 
-Roc supports optional record fields using the `?` operator. This can be a useful pattern where you pass a function a record of configuration values, some of which you'd like to provide defaults for.
+Roc supports default value record fields using the `?` operator. This can be a useful pattern where you pass a function a record of configuration values, some of which you'd like to provide defaults for.
 
 In Roc you can write a function like:
 
@@ -468,14 +468,14 @@ In Roc you can write a function like:
 table = \{
         height,
         width,
-        title? "oak",
-        description? "a wooden table"
+        title ? "oak",
+        description ? "a wooden table"
     }
     ->
 ```
 
-This is using _optional field destructuring_ to destructure a record while
-also providing default values for any fields that might be missing.
+This is using _default value field destructuring_ to destructure a record while
+providing default values for any fields that might be missing.
 
 Here's the type of `table`:
 
@@ -490,23 +490,24 @@ table :
     -> Table
 ```
 
-This says that `table` takes a record with two _required_ fields, `height` and
-`width`, and two _optional_ fields, `title` and `description`. It also says that
+This says that `table` takes a record with two fields that are _required_, `height` and
+`width`, and two fields that may be _omitted_, `title` and `description`. It also says that
 the `height` and `width` fields have the type `Pixels`, a type alias for some
 numeric type, and the `title` and `description` fields have the type `Str`.
-This means you can choose to omit the `title`, `description`, or both fields, when calling the function... but if you provide them, they must have the type `Str`.
+This means you can choose to omit the `title`, `description`, or both fields, when calling
+the function... but if you provide them, they must have the type `Str`.
 
 This is also the type that would have been inferred for `table` if no annotation
 had been written. Roc's compiler can tell from the destructuring syntax
-`title ? ""` that `title` is an optional field, and that it has the type `Str`.
+`title ? ""` that `title` is a default value field, and that it has the type `Str`.
 
-Destructuring is the only way to implement a record with optional fields. For example, if you write the expression `config.title` and `title` is an
-optional field, you'll get a compile error.
+Destructuring is the only way to implement a record with default value fields. For example,
+if you write the expression `config.title` and `title` is a default value field,
+you'll get a compile error.
 
-This means it's never possible to end up with an _optional value_ that exists
-outside a record field. Optionality is a concept that exists only in record
-fields, and it's intended for the use case of config records like this. The
-ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead.
+Default values is a concept that exists only in record fields, and it's intended for the use
+case of config records like this. The ergonomics of destructuring mean this wouldn't be a good
+fit for data modeling, consider using a custom tag union or the `Result` type instead.
 
 ## [Tags &amp; Pattern Matching](#tags) {#tags}
 
