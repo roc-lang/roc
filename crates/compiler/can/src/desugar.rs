@@ -756,10 +756,15 @@ pub fn desugar_expr<'a>(
             let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
 
             // Desugar any suffixed nodes, such as `foo = bar!`
-            desugar_defs_node_suffixed(
-                arena,
-                arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
-            )
+            // desugar_defs_node_suffixed(
+            //     arena,
+            //     arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
+            // )
+
+            match unwrap_suffixed_expression(arena, arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))) {
+                Unwrapped::Unwrapped(loc_expr) => loc_expr,
+                Unwrapped::UnwrappedSubExpr { .. } => internal_error!("a sub expression wasn't unwrapped correctly"),
+            }
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
@@ -1101,7 +1106,8 @@ pub fn unwrap_suffixed_expression<'a>(
         }
 
         Expr::Apply(function, arguments, called_via) => {
-            // // try to unwrap each argument
+
+            // try to unwrap each argument
 
             // try to unwrapp the function
             if let Unwrapped::UnwrappedSubExpr { arg, pat, new } =
