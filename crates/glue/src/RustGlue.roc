@@ -9,8 +9,6 @@ import "../../roc_std/Cargo.toml" as rocStdCargoToml : Str
 import "../../roc_std/src/lib.rs" as rocStdLib : Str
 import "../../roc_std/src/roc_box.rs" as rocStdBox : Str
 import "../../roc_std/src/roc_list.rs" as rocStdList : Str
-import "../../roc_std/src/roc_dict.rs" as rocStdDict : Str
-import "../../roc_std/src/roc_set.rs" as rocStdSet : Str
 import "../../roc_std/src/roc_str.rs" as rocStdStr : Str
 import "../../roc_std/src/storage.rs" as rocStdStorage : Str
 
@@ -45,8 +43,6 @@ staticFiles = [
     { name: "roc_std/src/lib.rs", content: rocStdLib },
     { name: "roc_std/src/roc_box.rs", content: rocStdBox },
     { name: "roc_std/src/roc_list.rs", content: rocStdList },
-    { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
-    { name: "roc_std/src/roc_set.rs", content: rocStdSet },
     { name: "roc_std/src/roc_str.rs", content: rocStdStr },
     { name: "roc_std/src/storage.rs", content: rocStdStorage },
 ]
@@ -2006,16 +2002,16 @@ typeName = \types, id ->
         Num F32 -> "f32"
         Num F64 -> "f64"
         Num Dec -> "roc_std:RocDec"
-        RocDict key value ->
-            keyName = typeName types key
-            valueName = typeName types value
+        RocDict _key _value ->
+            # keyName = typeName types key
+            # valueName = typeName types value
+            # "roc_std::RocDict<$(keyName), $(valueName)>"
+            crash "RocDict is not yet supported in rust"
 
-            "roc_std::RocDict<$(keyName), $(valueName)>"
-
-        RocSet elem ->
-            elemName = typeName types elem
-
-            "roc_std::RocSet<$(elemName)>"
+        RocSet _elem ->
+            # elemName = typeName types elem
+            # "roc_std::RocSet<$(elemName)>"
+            crash "RocSet is not yet supported in rust"
 
         RocList elem ->
             elemName = typeName types elem

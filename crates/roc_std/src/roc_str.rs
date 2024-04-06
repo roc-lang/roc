@@ -21,7 +21,7 @@ use core::{
 use std::ffi::{CStr, CString};
 use std::{ops::Range, ptr::NonNull};
 
-use crate::{roc_realloc, RocList};
+use crate::{roc_realloc, RocList, RocRefcounted};
 
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
@@ -789,6 +789,24 @@ impl From<RocStr> for SendSafeRocStr {
 impl From<SendSafeRocStr> for RocStr {
     fn from(s: SendSafeRocStr) -> Self {
         s.0
+    }
+}
+
+impl RocRefcounted for RocStr {
+    fn inc(&mut self, n: usize) {
+        if !self.is_small_str() {
+            unsafe { self.0.heap_allocated.deref_mut().inc(n) }
+        }
+    }
+
+    fn dec(&mut self) {
+        if !self.is_small_str() {
+            unsafe { self.0.heap_allocated.deref_mut().dec() }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
     }
 }
 

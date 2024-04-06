@@ -14,7 +14,7 @@ use core::{
 };
 use std::ops::Range;
 
-use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
+use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted};
 
 #[cfg(feature = "serde")]
 use core::marker::PhantomData;
@@ -26,7 +26,10 @@ use serde::{
 };
 
 #[repr(C)]
-pub struct RocList<T> {
+pub struct RocList<T>
+where
+    T: RocRefcounted,
+{
     elements: Option<NonNull<ManuallyDrop<T>>>,
     length: usize,
     // This technically points to directly after the refcount.
@@ -34,7 +37,10 @@ pub struct RocList<T> {
     capacity_or_ref_ptr: usize,
 }
 
-impl<T> RocList<T> {
+impl<T> RocList<T>
+where
+    T: RocRefcounted,
+{
     #[inline(always)]
     fn alloc_alignment() -> u32 {
         mem::align_of::<T>().max(mem::align_of::<Storage>()) as u32
@@ -214,12 +220,17 @@ impl<T> RocList<T> {
     }
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
-    pub(crate) fn ptr_to_allocation(&self) -> *mut c_void {
-        let alignment = Self::alloc_alignment() as usize;
+    fn ptr_to_allocation(&self) -> *mut c_void {
+        let alignment = RocList::<T>::alloc_alignment() as usize;
         if self.is_seamless_slice() {
             ((self.capacity_or_ref_ptr << 1) - alignment) as *mut _
         } else {
-            unsafe { self.ptr_to_first_elem().cast::<u8>().sub(alignment) as *mut _ }
+            let offset = if T::is_refcounted() {
+                alignment * 2
+            } else {
+                alignment
+            };
+            unsafe { self.ptr_to_first_elem().cast::<u8>().sub(offset) as *mut _ }
         }
     }
 
@@ -282,7 +293,7 @@ impl<T> RocList<T> {
 
 impl<T> RocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     pub fn from_slice(slice: &[T]) -> Self {
         let mut list = Self::empty();
@@ -370,7 +381,10 @@ where
     }
 }
 
-impl<T> RocList<T> {
+impl<T> RocList<T>
+where
+    T: RocRefcounted,
+{
     #[track_caller]
     pub fn slice_range(&self, range: Range<usize>) -> Self {
         match self.try_slice_range(range) {
@@ -499,7 +513,10 @@ impl<T> RocList<T> {
     }
 }
 
-impl<T> Deref for RocList<T> {
+impl<T> Deref for RocList<T>
+where
+    T: RocRefcounted,
+{
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -513,7 +530,10 @@ impl<T> Deref for RocList<T> {
     }
 }
 
-impl<T> DerefMut for RocList<T> {
+impl<T> DerefMut for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         if let Some(elements) = self.elements {
             let ptr = elements.as_ptr().cast::<T>();
@@ -526,7 +546,10 @@ impl<T> DerefMut for RocList<T> {
     }
 }
 
-impl<T> Default for RocList<T> {
+impl<T> Default for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn default() -> Self {
         Self::empty()
     }
@@ -534,18 +557,20 @@ impl<T> Default for RocList<T> {
 
 impl<T, U> PartialEq<RocList<U>> for RocList<T>
 where
-    T: PartialEq<U>,
+    U: RocRefcounted,
+    T: PartialEq<U> + RocRefcounted,
 {
     fn eq(&self, other: &RocList<U>) -> bool {
         self.as_slice() == other.as_slice()
     }
 }
 
-impl<T> Eq for RocList<T> where T: Eq {}
+impl<T> Eq for RocList<T> where T: Eq + RocRefcounted {}
 
 impl<T, U> PartialOrd<RocList<U>> for RocList<T>
 where
-    T: PartialOrd<U>,
+    U: RocRefcounted,
+    T: PartialOrd<U> + RocRefcounted,
 {
     fn partial_cmp(&self, other: &RocList<U>) -> Option<cmp::Ordering> {
         // If one is longer than the other, use that as the ordering.
@@ -569,7 +594,7 @@ where
 
 impl<T> Ord for RocList<T>
 where
-    T: Ord,
+    T: Ord + RocRefcounted,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         // If one is longer than the other, use that as the ordering.
@@ -593,14 +618,17 @@ where
 
 impl<T> Debug for RocList<T>
 where
-    T: Debug,
+    T: Debug + RocRefcounted,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.deref().fmt(f)
     }
 }
 
-impl<T> Clone for RocList<T> {
+impl<T> Clone for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn clone(&self) -> Self {
         // Increment the reference count
         if let Some((_, storage)) = self.elements_and_storage() {
@@ -620,7 +648,27 @@ impl<T> Clone for RocList<T> {
     }
 }
 
-impl<T> Drop for RocList<T> {
+impl<T> RocRefcounted for RocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self, _: usize) {
+        todo!()
+    }
+
+    fn dec(&mut self) {
+        todo!()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl<T> Drop for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn drop(&mut self) {
         if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrease the list's reference count.
@@ -637,7 +685,7 @@ impl<T> Drop for RocList<T> {
                         }
 
                         // Release the memory.
-                        roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                        roc_dealloc((&*self).ptr_to_allocation(), Self::alloc_alignment());
                     }
                 } else {
                     // Write the storage back.
@@ -650,20 +698,26 @@ impl<T> Drop for RocList<T> {
 
 impl<T> From<&[T]> for RocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     fn from(slice: &[T]) -> Self {
         Self::from_slice(slice)
     }
 }
 
-impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T> {
+impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn from(array: [T; SIZE]) -> Self {
         Self::from_iter(array)
     }
 }
 
-impl<'a, T> IntoIterator for &'a RocList<T> {
+impl<'a, T> IntoIterator for &'a RocList<T>
+where
+    T: RocRefcounted,
+{
     type Item = &'a T;
     type IntoIter = core::slice::Iter<'a, T>;
 
@@ -672,7 +726,10 @@ impl<'a, T> IntoIterator for &'a RocList<T> {
     }
 }
 
-impl<T: Hash> Hash for RocList<T> {
+impl<T: Hash> Hash for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         // This is the same as Rust's Vec implementation, which
         // just delegates to the slice implementation. It's a bit surprising
@@ -688,7 +745,10 @@ impl<T: Hash> Hash for RocList<T> {
     }
 }
 
-impl<T> FromIterator<T> for RocList<T> {
+impl<T> FromIterator<T> for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn from_iter<I>(into: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -732,7 +792,10 @@ impl<T> FromIterator<T> for RocList<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: Serialize> Serialize for RocList<T> {
+impl<T: Serialize> Serialize for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -750,7 +813,7 @@ impl<'de, T> Deserialize<'de> for RocList<T>
 where
     // TODO: I'm not sure about requiring clone here. Is that fine? Is that
     // gonna mean lots of extra allocations?
-    T: Deserialize<'de> + core::clone::Clone,
+    T: Deserialize<'de> + core::clone::Clone + RocRefcounted,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -762,13 +825,15 @@ where
 
 // This is a RocList that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
 #[repr(transparent)]
-pub struct SendSafeRocList<T>(RocList<T>);
+pub struct SendSafeRocList<T>(RocList<T>)
+where
+    T: RocRefcounted;
 
-unsafe impl<T> Send for SendSafeRocList<T> where T: Send {}
+unsafe impl<T> Send for SendSafeRocList<T> where T: Send + RocRefcounted {}
 
 impl<T> Clone for SendSafeRocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     fn clone(&self) -> Self {
         if self.0.is_readonly() {
@@ -782,7 +847,7 @@ where
 
 impl<T> From<RocList<T>> for SendSafeRocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     fn from(l: RocList<T>) -> Self {
         if l.is_unique() || l.is_readonly() {
@@ -796,19 +861,28 @@ where
     }
 }
 
-impl<T> From<SendSafeRocList<T>> for RocList<T> {
+impl<T> From<SendSafeRocList<T>> for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn from(l: SendSafeRocList<T>) -> Self {
         l.0
     }
 }
 
 #[cfg(feature = "serde")]
-struct RocListVisitor<T> {
+struct RocListVisitor<T>
+where
+    T: RocRefcounted,
+{
     marker: PhantomData<T>,
 }
 
 #[cfg(feature = "serde")]
-impl<T> RocListVisitor<T> {
+impl<T> RocListVisitor<T>
+where
+    T: RocRefcounted,
+{
     fn new() -> Self {
         RocListVisitor {
             marker: PhantomData,
@@ -819,7 +893,7 @@ impl<T> RocListVisitor<T> {
 #[cfg(feature = "serde")]
 impl<'de, T> Visitor<'de> for RocListVisitor<T>
 where
-    T: Deserialize<'de> + core::clone::Clone,
+    T: Deserialize<'de> + core::clone::Clone + RocRefcounted,
 {
     type Value = RocList<T>;
 
