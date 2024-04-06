@@ -520,7 +520,6 @@ mod cli_run {
     #[test]
     #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
-    #[ignore = "bug with surgical linker: https://github.com/roc-lang/roc/pull/6591#issuecomment-2030983248"]
     fn platform_switching_zig() {
         test_roc_app_slim(
             "examples/platform-switching",
