@@ -574,3 +574,84 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         }
     }
 }
+
+#[cfg(test)]
+mod record_pattern_field_test {
+    use bumpalo::Bump;
+    use roc_region::all::Loc;
+
+    use crate::{
+        ast,
+        parser::{Parser, Progress},
+        state::State,
+    };
+
+    use super::*;
+
+    #[test]
+    fn destructure() {
+        let arena = Bump::new();
+        let source = "x";
+        let state = State::new(source.as_bytes());
+        let parser = record_pattern_field();
+        let actual = parser
+            .parse(&arena, state, 0)
+            .map(|(prog, act, _)| (prog, act));
+
+        assert_eq!(
+            actual,
+            Ok((
+                Progress::MadeProgress,
+                Loc::new(0, 1, ast::Pattern::Identifier("x",)),
+            ))
+        )
+    }
+    #[test]
+    fn rename() {
+        let arena = Bump::new();
+        let source = "x: x1";
+        let state = State::new(source.as_bytes());
+        let parser = record_pattern_field();
+        let actual = parser
+            .parse(&arena, state, 0)
+            .map(|(prog, act, _)| (prog, act));
+
+        assert_eq!(
+            actual,
+            Ok((
+                Progress::MadeProgress,
+                Loc::new(
+                    0,
+                    5,
+                    ast::Pattern::RequiredField(
+                        "x",
+                        &Loc::new(3, 5, ast::Pattern::Identifier("x1"))
+                    )
+                ),
+            ))
+        )
+    }
+
+    #[test]
+    fn optional() {
+        let arena = Bump::new();
+        let source = "x ? 0.0";
+        let state = State::new(source.as_bytes());
+        let parser = record_pattern_field();
+        let actual = parser
+            .parse(&arena, state, 0)
+            .map(|(prog, act, _)| (prog, act));
+
+        assert_eq!(
+            actual,
+            Ok((
+                Progress::MadeProgress,
+                Loc::new(
+                    0,
+                    7,
+                    ast::Pattern::OptionalField("x", &Loc::new(4, 7, ast::Expr::Float("0.0")))
+                ),
+            ))
+        )
+    }
+}
