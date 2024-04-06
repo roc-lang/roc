@@ -416,7 +416,7 @@ fn underivable_hint<'b>(
             Some(alloc.note("").append(alloc.concat([
                 alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
                 alloc.record_field(field),
-                alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
+                alloc.reflow(". Default value record fields are polymorphic over records that may or may not contain them at compile time, "),
                 alloc.reflow("but are not a concept that extends to runtime!"),
                 alloc.hardline(),
                 alloc.reflow("Maybe you wanted to use a "),

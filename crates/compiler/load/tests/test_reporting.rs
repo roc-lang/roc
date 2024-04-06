@@ -11111,9 +11111,9 @@ In roc, functions are always written as a lambda, like{}
         }
 
     Note: I can't derive decoding for a record with an optional field,
-    which in this case is `.y`. Optional record fields are polymorphic over
-    records that may or may not contain them at compile time, but are not
-    a concept that extends to runtime!
+    which in this case is `.y`. Default value record fields are polymorphic
+    over records that may or may not contain them at compile time, but are
+    not a concept that extends to runtime!
     Maybe you wanted to use a `Result`?
     "
     );
