@@ -495,7 +495,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
 
         let (_, spaces, state) = spaces().parse(arena, state, min_indent)?;
 
-        map!(
+        let modifiers = map!(
             and!(
                 optional(aliased_record_pattern_field()),
                 optional(optional_record_pattern_field())
@@ -550,7 +550,12 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                 (Some(_), Some(_)) => todo!(),
             }
         )
-        .parse(arena, state, min_indent)
+        .parse(arena, state, min_indent);
+
+        match modifiers {
+            Ok((p2, output, state)) => Ok((progress.or(p2), output, state)),
+            err @ Err(_) => err,
+        }
     };
 }
 
