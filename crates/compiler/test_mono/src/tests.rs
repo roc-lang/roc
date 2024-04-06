@@ -84,7 +84,6 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
     let exec_mode = match mode {
         "exec" => ExecutionMode::ExecutableIgnoreErrors,
         "test" => ExecutionMode::Test,
-        // TODO: I'm not sure if I should add anything here
         _ => panic!("Invalid test_mono exec mode {mode}"),
     };
 
