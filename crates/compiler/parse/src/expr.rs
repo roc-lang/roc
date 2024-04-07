@@ -1155,17 +1155,17 @@ fn parse_defs_expr<'a>(
             match parse_final_expr.parse(arena, state.clone(), min_indent) {
                 Err((_, fail)) => {
                     // If the last def was a statement, unwrap it and use that as loc_ret
-                    if let Some((new_defs, loc_ret)) = def_state.last_value_suffixed() {
-                        if new_defs.value_defs.len() > 1 {
-                            return Ok((
-                                MadeProgress,
-                                Expr::Defs(arena.alloc(new_defs), arena.alloc(loc_ret)),
-                                state,
-                            ));
-                        } else {
-                            return Ok((MadeProgress, loc_ret.value, state));
-                        }
-                    }
+                    // if let Some((new_defs, loc_ret)) = def_state.last_value_suffixed() {
+                    //     if new_defs.value_defs.len() > 1 {
+                    //         return Ok((
+                    //             MadeProgress,
+                    //             Expr::Defs(arena.alloc(new_defs), arena.alloc(loc_ret)),
+                    //             state,
+                    //         ));
+                    //     } else {
+                    //         return Ok((MadeProgress, loc_ret.value, state));
+                    //     }
+                    // }
 
                     Err((
                         MadeProgress,
