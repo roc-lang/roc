@@ -143,10 +143,12 @@ pub const RocList = extern struct {
     pub fn incref(self: RocList, amount: isize, elements_refcounted: bool) void {
         // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
         if (elements_refcounted and self.isUnique() and !self.isSeamlessSlice()) {
-            // - 1 is refcount.
-            // - 2 is size on heap.
-            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationPtr()))) - 2;
-            ptr[0] = self.length;
+            if (self.getAllocationPtr()) |source| {
+                // - 1 is refcount.
+                // - 2 is size on heap.
+                const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                ptr[0] = self.length;
+            }
         }
         utils.increfDataPtrC(self.getAllocationPtr(), amount);
     }

@@ -668,6 +668,11 @@ where
     T: RocRefcounted,
 {
     fn inc(&mut self, n: usize) {
+        if self.elements.is_none() {
+            // Empty, non-allocated list, no refcounting to do.
+            return;
+        }
+
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
