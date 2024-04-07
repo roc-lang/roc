@@ -1146,7 +1146,6 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                             */
 
                             let (answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
-                            
                             let arg = arena.alloc(Loc::at(loc_expr.region, Apply(
                                 arena.alloc(Loc::at(
                                     *region,
@@ -1165,7 +1164,6 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                             let new = arena.alloc(Loc::at(loc_expr.region, answer_var));
 
                             return Err(EUnwrapped::UnwrappedSubExpr { arg, pat, new });
-                            
                         }
                     }
                     _ => {
@@ -1184,10 +1182,10 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                 }
                 Err(EUnwrapped::UnwrappedSubExpr { arg, pat, new }) => {
 
-                    return Err(EUnwrapped::UnwrappedSubExpr { 
-                        arg, 
-                        pat, 
-                        new: arena.alloc(Loc::at(loc_expr.region, Expr::Apply(new, local_args, called_via))) 
+                    return Err(EUnwrapped::UnwrappedSubExpr {
+                        arg,
+                        pat,
+                        new: arena.alloc(Loc::at(loc_expr.region, Expr::Apply(new, local_args, called_via)))
                     });
 
                 }
@@ -1270,14 +1268,13 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
 
                             } else {
                                 // SOME before, SOME after -> MIDDLE
-                                
                                 // The first Suffixed is in the middle of our Defs
                                 // We will keep the defs before the Suffixed in our Defs node
                                 // We take the defs after the Suffixed and create a new Defs node using the current loc_return
                                 // Then recurse on the new Defs node, wrap the result in an Apply(Task.await) and Closure,
                                 // which will become the new loc_return
                                 todo!();
-                            }         
+                            }
                         }
                         Err(EUnwrapped::UnwrappedSubExpr { arg, pat, new }) => {
                             // the new unwrapped expression replaces the def expression
@@ -1329,7 +1326,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                     let new_loc_ret = apply_task_await(arena, loc_ret.region, arg, pat, new);
                     Err(EUnwrapped::UnwrappedExpr(arena.alloc(Loc::at(loc_expr.region, Defs(defs, new_loc_ret)))))
                 },
-            } 
+            }
         },
         _ => internal_error!("unreachable, expected a Defs node to be passed into unwrap_suffixed_expression_defs_help"),
     }
