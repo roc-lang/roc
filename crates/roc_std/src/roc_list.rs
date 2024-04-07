@@ -81,8 +81,7 @@ where
     /// returns the number of bytes needed to allocate, taking into account both the
     /// size of the elements as well as the size of Storage.
     fn alloc_bytes(num_elems: usize) -> usize {
-        next_multiple_of(mem::size_of::<Storage>(), mem::align_of::<T>())
-            + (num_elems * mem::size_of::<T>())
+        Self::alloc_to_elem_offset() + (num_elems * mem::size_of::<T>())
     }
 
     fn elems_with_capacity(num_elems: usize) -> NonNull<ManuallyDrop<T>> {
@@ -328,14 +327,14 @@ where
 
             if is_unique {
                 // If we have enough capacity, we can add to the existing elements in-place.
-                if self.capacity() >= slice.len() {
+                if self.capacity() >= new_len {
                     elements
                 } else {
                     // There wasn't enough capacity, so we need a new allocation.
                     // Since this is a unique RocList, we can use realloc here.
                     let new_ptr = unsafe {
                         roc_realloc(
-                            storage.as_ptr().cast(),
+                            self.ptr_to_allocation(),
                             Self::alloc_bytes(new_len),
                             Self::alloc_bytes(self.capacity()),
                             Self::alloc_alignment() as u32,
