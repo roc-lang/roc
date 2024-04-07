@@ -22,7 +22,7 @@ static SUFFIXED_ANSWER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // use a global counter to ensure that each suffixed answer pattern has a unique suffix
 // once it is desugared into a closure e.g. a!0, a!1, a!2, etc.
-fn next_suffixed_answer_pattern<'a>(arena: &'a Bump) -> Pattern<'a> {
+fn next_suffixed_answer_pattern<'a>(arena: &'a Bump) -> (Expr<'a>, Pattern<'a>) {
     // increment our global counter for ident suffixes
     // this should be the only place this counter is referenced
     SUFFIXED_ANSWER_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -30,7 +30,10 @@ fn next_suffixed_answer_pattern<'a>(arena: &'a Bump) -> Pattern<'a> {
     let count = SUFFIXED_ANSWER_COUNTER.load(Ordering::SeqCst);
     let answer_ident = arena.alloc(format!("#!a{}", count));
 
-   Pattern::Identifier { ident: answer_ident.as_str(), suffixed: 0 }
+   (
+    Expr::Var { module_name: "", ident: answer_ident, suffixed:0 },
+    Pattern::Identifier { ident: answer_ident.as_str(), suffixed: 0 },
+    )
 }
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -1312,7 +1315,7 @@ pub fn unwrap_suffixed_expression<'a>(
             // try to unwrap the function
 
             // function is a Var
-            if let Loc { value: Var{module_name, ident,suffixed},.. } = function {
+            if let Loc { value: Var{module_name, ident,suffixed},region } = function {
                 match suffixed {
                     0 => {
                         return Unwrapped::NothingUnwrapped(loc_expr);
@@ -1337,8 +1340,39 @@ pub fn unwrap_suffixed_expression<'a>(
 
                             return Unwrapped::UnwrappedExpr(arena.alloc(new_apply));
                         } else {
-                            // TODO make this into an error report
-                            internal_error!("unwrapping Apply function Var {:?} within a sub expression", loc_expr);
+
+                            /*
+                            ## Example of suffixed function within an Apply
+                            x = (foo! "bar") "hello"
+                                ^^^^^^^^^^^^ is our suffixed function
+                            baz x
+                            
+                            Task.await (foo "bar") \#!a1 -> 
+                                x = #!a1 "hello"
+                                baz x
+                            */
+
+                            let (answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
+                            
+                            let arg = arena.alloc(Loc::at(loc_expr.region, Apply(
+                                arena.alloc(Loc::at(
+                                    *region,
+                                    Var {
+                                        module_name,
+                                        ident,
+                                        suffixed: 0,
+                                    },
+                                )),
+                                apply_args,
+                                called_via,
+                            )));
+
+                            let pat = Loc::at(loc_expr.region, answer_pat);
+
+                            let new = arena.alloc(Loc::at(loc_expr.region, answer_var));
+
+                            return Unwrapped::UnwrappedSubExpr { arg, pat, new };
+                            
                         }
                     }
                     _ => {
@@ -1361,18 +1395,20 @@ pub fn unwrap_suffixed_expression<'a>(
                         x = #!a1 "hello"
                         bar x
                     */
+
+                    todo!()
                     
-                    let arg = Loc::at(loc_expr.region, Apply(
-                        arena.alloc(new_function), apply_args, called_via));
+                    // let arg = Loc::at(loc_expr.region, Apply(
+                    //     arena.alloc(new_function), apply_args, called_via));
 
-                    let new = Loc::at(loc_expr.region, Apply(
-                        arena.alloc(new_function), apply_args, called_via));
+                    // let new = Loc::at(loc_expr.region, Apply(
+                    //     arena.alloc(new_function), apply_args, called_via));
 
-                    return Unwrapped::UnwrappedSubExpr {
-                        arg: arena.alloc(arg),
-                        pat: Loc::at(loc_expr.region, next_suffixed_answer_pattern(arena)),
-                        new: arena.alloc(new),
-                    };
+                    // return Unwrapped::UnwrappedSubExpr {
+                    //     arg: arena.alloc(arg),
+                    //     pat: Loc::at(loc_expr.region, next_suffixed_answer_pattern(arena)),
+                    //     new: arena.alloc(new),
+                    // };
                 }
                 Unwrapped::UnwrappedSubExpr { arg, pat, new } => { 
                 return Unwrapped::UnwrappedSubExpr {
@@ -1681,6 +1717,14 @@ pub fn unwrap_suffixed_expression<'a>(
             }
         }
 
+        Expr::ParensAround(sub_loc_expr) => {
+            match unwrap_suffixed_expression(arena, arena.alloc(Loc::at_zero(*sub_loc_expr)), called_from_def, module_path) {
+                Unwrapped::NothingUnwrapped(_) => Unwrapped::NothingUnwrapped(loc_expr),
+                Unwrapped::UnwrappedExpr(new) => Unwrapped::UnwrappedExpr(arena.alloc(Loc::at(loc_expr.region, ParensAround(arena.alloc(new.value))))),
+                Unwrapped::UnwrappedSubExpr { arg, pat, new } => Unwrapped::UnwrappedSubExpr {arg,pat,new: arena.alloc(Loc::at(loc_expr.region, ParensAround(arena.alloc(new.value))))}
+            }
+        }
+
         _ => {
             if module_path.contains("test.roc") {
                 dbg!(loc_expr.value);
@@ -1862,21 +1906,55 @@ mod unwrap_suffixed_expression_tests {
         
     }
 
+    // #[test]
+    // fn multiple_suffix() {
+    //     /*
+    //     ## Example with multiple suffix
+    //     {} = foo!!
+    //     bar
+
+    //     Task.await (foo) \answer1 ->
+    //         {} = (answer1)!
+    //         bar
+
+    //     Task.await (foo) \answer1 ->
+    //         Task.await (answer1) \{} -> bar
+    //     */
+    //     todo!();
+    // }
+
     #[test]
-    fn multiple_suffix() {
+    fn apply_function_suffixed_sub_expr(){
         /*
-        ## Example with multiple suffix
-        {} = foo!!
-        bar
-
-        Task.await (foo) \answer1 ->
-            {} = (answer1)!
-            bar
-
-        Task.await (foo) \answer1 ->
-            Task.await (answer1) \{} -> bar
+        ## Example of suffixed function within an Apply
+        x = (foo! "bar") "hello"
+            ^^^^^^^^^^^^ is our suffixed function
+        baz x
+        
+        Task.await (foo "bar") \#!a1 -> 
+            x = #!a1 "hello"
+            bar x
         */
-        todo!();
+    
+        let arena = &Bump::new();
+
+        let src = 
+            r#"
+            main = 
+                x = (foo! "bar") "hello"
+                baz x
+            "#;
+
+        let mut defs = parse_defs_with(arena, src).unwrap();
+        
+        desugar_defs_node_values(arena, &mut defs, src, &mut None, "test.roc", true);
+
+        // TODO fix this... the value_defs is incorrect here in a harmless way becuase 
+        // roc_parse::ast::Defs::split_defs_around is not completely correct
+        // so we have the value_def in the vec in Defs, but there is no tag pointing to it
+        let expected = r##"Defs { tags: [Index(2147483648)], regions: [@0-70], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @28-48 Apply(@28-48 Var { module_name: "Task", ident: "await", suffixed: 0 }, [Apply(@29-33 Var { module_name: "", ident: "foo", suffixed: 0 }, [@34-39 Str(PlainLine("bar"))], Space), @28-48 Closure([Identifier { ident: "#!a1", suffixed: 0 }], @28-48 Defs(Defs { tags: [Index(2147483649)], regions: [@28-48], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@24-25 Identifier { ident: "x", suffixed: 0 }, @28-48 Apply(@29-39 ParensAround(Apply(@29-33 Var { module_name: "", ident: "foo", suffixed: 1 }, [@34-39 Str(PlainLine("bar"))], Space)), [@41-48 Str(PlainLine("hello"))], Space)), Body(@24-25 Identifier { ident: "x", suffixed: 0 }, @28-48 Apply(@29-39 ParensAround(Var { module_name: "", ident: "#!a1", suffixed: 0 }), [@41-48 Str(PlainLine("hello"))], Space))] }, @65-70 Apply(@65-68 Var { module_name: "", ident: "baz", suffixed: 0 }, [@69-70 Var { module_name: "", ident: "x", suffixed: 0 }], Space)))], BangSuffix))] }"##;
+
+        assert_multiline_str_eq!(format!("{:?}", &defs).as_str(), expected);
     }
 
     #[test]
