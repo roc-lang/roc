@@ -1209,108 +1209,106 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
 
             // try an unwrap each def, if none can be unwrapped, then try to unwrap the loc_ret
             for (tag_index, type_or_value_def) in defs.defs().enumerate() {
-                if let Some(ValueDef::Body(def_pattern, def_expr)) = type_or_value_def.err() {
-                    match unwrap_suffixed_expression(arena, def_expr, true, module_path) {
-                        Ok(new_def_expr) => {
-                            // do nothing, move on to check the next def
-                            let new_value_def = ValueDef::Body(def_pattern, new_def_expr);
-                            local_defs.replace_with_value_def(tag_index, new_value_def, loc_expr.region);
-                        }
-                        Err(EUnwrapped::UnwrappedExpr(new)) => {
+                use ValueDef::*;
 
-                            let split_defs = defs.split_defs_around(tag_index);
-                            let before_empty = split_defs.before.is_empty();
-                            let after_empty = split_defs.after.is_empty();
+                let maybe_pattern_expr = match type_or_value_def.err() {
+                    None | Some(Annotation(..)) | Some(Dbg{..}) | Some(Expect{..}) | Some(ExpectFx{..}) | Some(Stmt(..))=> None,
+                    Some(AnnotatedBody { body_pattern, body_expr, .. }) => Some((body_pattern, body_expr)),
+                    Some(Body (def_pattern, def_expr, .. )) => Some((def_pattern, def_expr)),
+                };
 
-                            if before_empty && after_empty {
-                                // NIL before, NIL after -> SINGLE
-                                // We have only one value_def and it must be Suffixed
-                                // replace Defs with an Apply(Task.await) and Closure of loc_return
+                match maybe_pattern_expr {
+                    None => {
+                        // nothing to unwrap, move on to the next def
+                        continue;
+                    },
+                    Some((def_pattern, def_expr)) => {
+                        match unwrap_suffixed_expression(arena, def_expr, true, module_path) {
+                            Ok(new_def_expr) => {
+
+                                let new_value_def = match type_or_value_def.err() {
+                                    None | Some(Annotation(..)) | Some(Dbg{..}) | Some(Expect{..}) | Some(ExpectFx{..}) | Some(Stmt(..))=> internal_error!("unexpected ValueDef type"),
+                                    Some(AnnotatedBody{ann_pattern,ann_type,comment,..}) => ValueDef::AnnotatedBody{ann_pattern,ann_type,comment: *comment,body_pattern: def_pattern, body_expr:new_def_expr},
+                                    Some(Body ( .. )) => ValueDef::Body(def_pattern, new_def_expr),
+                                };
+
+                                // do nothing, move on to check the next def
+                                local_defs.replace_with_value_def(tag_index, new_value_def, loc_expr.region);
+                            }
+                            Err(EUnwrapped::UnwrappedExpr(new)) => {
+                                let split_defs = defs.split_defs_around(tag_index);
+                                let before_empty = split_defs.before.is_empty();
+                                let after_empty = split_defs.after.is_empty();
+                                if before_empty && after_empty {
+                                    // NIL before, NIL after -> SINGLE
+                                    return unwrap_suffixed_expression(
+                                        arena,
+                                        apply_task_await(
+                                            arena,
+                                            def_expr.region,
+                                            new,
+                                            **def_pattern,
+                                            loc_ret,
+                                        ),
+                                        false,
+                                        module_path,
+                                    );
+                                } else if before_empty {
+                                    // NIL before, SOME after -> FIRST
+                                    return unwrap_suffixed_expression(
+                                        arena,
+                                        apply_task_await(arena, loc_expr.region, new, **def_pattern, arena.alloc(Loc::at(def_expr.region, Defs(arena.alloc(split_defs.after), loc_ret)))),
+                                        false,
+                                        module_path,
+                                    );
+                                } else {
+                                    // SOME before, NIL after -> LAST
+                                    debug_assert!(after_empty);
+                                    /*
+                                    ## Example with multiple defs, last suffixed
+                                    msg = "hello"
+                                    x = foo! msg <-- e.g. we've just unwrapped this def
+                                    bar x
+    
+                                    msg = "hello"
+                                    Task.await (foo msg) \x -> bar x
+                                    */
+                                    let new_loc_ret = apply_task_await(
+                                        arena,
+                                        loc_expr.region,
+                                        new,
+                                        **def_pattern,
+                                        loc_ret,
+                                    );
+                                    return unwrap_suffixed_expression(arena, arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(split_defs.before), new_loc_ret))), false, module_path);
+                                }
+                            }
+                            Err(EUnwrapped::UnwrappedSubExpr { arg, pat, new }) => {
+                                let new_value_def = ValueDef::Body(def_pattern, new);
+                                let mut new_defs = defs.clone();
+                                new_defs.replace_with_value_def(
+                                    tag_index,
+                                    new_value_def,
+                                    def_expr.region,
+                                );
                                 return unwrap_suffixed_expression(
                                     arena,
                                     apply_task_await(
                                         arena,
                                         def_expr.region,
-                                        new,
-                                        **def_pattern,
-                                        loc_ret,
+                                        arg,
+                                        pat,
+                                        arena.alloc(Loc::at(
+                                            def_expr.region,
+                                            Defs(arena.alloc(new_defs), loc_ret),
+                                        )),
                                     ),
                                     false,
                                     module_path,
                                 );
-                            } else if before_empty {
-                                // NIL before, SOME after -> FIRST
-                                return unwrap_suffixed_expression(
-                                    arena,
-                                    apply_task_await(arena, loc_expr.region, new, **def_pattern, arena.alloc(Loc::at(def_expr.region, Defs(arena.alloc(split_defs.after), loc_ret)))),
-                                    false,
-                                    module_path,
-                                );
-                            } else if after_empty {
-                                // SOME before, NIL after -> LAST
-                                /*
-                                ## Example with multiple defs, last suffixed
-                                msg = "hello"
-                                x = foo! msg <-- e.g. we've just unwrapped this def
-                                bar x
-
-                                msg = "hello"
-                                Task.await (foo msg) \x -> bar x
-                                */
-
-                                let new_loc_ret = apply_task_await(
-                                    arena,
-                                    loc_expr.region,
-                                    new,
-                                    **def_pattern,
-                                    loc_ret,
-                                );
-
-                                return unwrap_suffixed_expression(arena, arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(split_defs.before), new_loc_ret))), false, module_path);
-
-                            } else {
-                                // SOME before, SOME after -> MIDDLE
-                                // The first Suffixed is in the middle of our Defs
-                                // We will keep the defs before the Suffixed in our Defs node
-                                // We take the defs after the Suffixed and create a new Defs node using the current loc_return
-                                // Then recurse on the new Defs node, wrap the result in an Apply(Task.await) and Closure,
-                                // which will become the new loc_return
-                                todo!();
                             }
                         }
-                        Err(EUnwrapped::UnwrappedSubExpr { arg, pat, new }) => {
-                            // the new unwrapped expression replaces the def expression
-                            // doesn't affect other defs or consume the ret expression
-                            let new_value_def = ValueDef::Body(def_pattern, new);
-
-                            let mut new_defs = defs.clone();
-                            new_defs.replace_with_value_def(
-                                tag_index,
-                                new_value_def,
-                                def_expr.region,
-                            );
-
-                            return unwrap_suffixed_expression(
-                                arena,
-                                apply_task_await(
-                                    arena,
-                                    def_expr.region,
-                                    arg,
-                                    pat,
-                                    arena.alloc(Loc::at(
-                                        def_expr.region,
-                                        Defs(arena.alloc(new_defs), loc_ret),
-                                    )),
-                                ),
-                                false,
-                                module_path,
-                            );
-                        }
                     }
-                }
-
-                if let Some(ValueDef::Stmt(_)) = type_or_value_def.err() {
-                    internal_error!("handle Stmt");
                 }
             }
 
@@ -1533,6 +1531,53 @@ mod unwrap_suffixed_expression_tests {
         // roc_parse::ast::Defs::split_defs_around is not completely correct
         // so we have the value_def in the vec in Defs, but there is no tag pointing to it
         let expected = r#"Defs { tags: [Index(2147483648)], regions: [@0-88], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @24-88 Defs(Defs { tags: [Index(2147483650)], regions: [@24-88, @54-66], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 1)], space_after: [Slice(start = 0, length = 0), Slice(start = 1, length = 0)], spaces: [Newline], type_defs: [], value_defs: [Body(@24-27 Identifier { ident: "msg", suffixed: 0 }, @30-37 Str(PlainLine("hello"))), Body(@54-55 Identifier { ident: "x", suffixed: 0 }, @58-66 Apply(@58-62 Var { module_name: "", ident: "foo", suffixed: 1 }, [@63-66 Var { module_name: "", ident: "msg", suffixed: 0 }], Space)), Body(@24-27 Identifier { ident: "msg", suffixed: 0 }, @30-37 Str(PlainLine("hello")))] }, @24-88 Apply(@24-88 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@58-66 Apply(@58-66 Var { module_name: "", ident: "foo", suffixed: 0 }, [@63-66 Var { module_name: "", ident: "msg", suffixed: 0 }], Space), @24-88 Closure([@54-55 Identifier { ident: "x", suffixed: 0 }], @83-88 Apply(@83-86 Var { module_name: "", ident: "bar", suffixed: 0 }, [@87-88 Var { module_name: "", ident: "x", suffixed: 0 }], Space))], BangSuffix)))] }"#;
+
+        assert_multiline_str_eq!(format!("{:?}", &defs).as_str(), expected);
+    }
+
+    #[test]
+    fn closure_with_annotations() {
+        /*
+        x : Str -> Task _ _
+        x = \msg ->
+
+            y : Task {} _
+            y = line! msg
+            y
+
+        x "foo"
+
+        # desugared
+        x = \msg ->
+            Task.await (line msg) \y -> y
+
+        x "foo"
+        */
+
+        let arena = &Bump::new();
+
+        let src = r#"
+            main = 
+                x : Str -> Task _ _
+                x = \msg ->
+
+                    y : Task {} _
+                    y = line! msg
+                    y
+
+                x "foo"
+            "#;
+
+        let mut defs = parse_defs_with(arena, src).unwrap();
+
+        desugar_defs_node_values(arena, &mut defs, src, &mut None, "test.roc", true);
+
+        // TODO fix this... the value_defs is incorrect here in a harmless way because
+        // roc_parse::ast::Defs::split_defs_around is not completely correct
+        // so we have the value_def in the vec in Defs, but there is no tag pointing to it
+        let expected = r##"Defs { tags: [Index(2147483648)], regions: [@0-187], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @24-187 Defs(Defs { tags: [Index(2147483650)], regions: [@24-187], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Annotation(@24-25 Identifier { ident: "x", suffixed: 0 }, @28-43 Function([@28-31 Apply("", "Str", [])], @35-43 Apply("", "Task", [@40-41 Inferred, @42-43 Inferred]))), AnnotatedBody { ann_pattern: @24-25 Identifier { ident: "x", suffixed: 0 }, ann_type: @28-43 Function([@28-31 Apply("", "Str", [])], @35-43 Apply("", "Task", [@40-41 Inferred, @42-43 Inferred])), comment: None, body_pattern: @60-61 Identifier { ident: "x", suffixed: 0 }, body_expr: @64-162 Closure([@65-68 Identifier { ident: "msg", suffixed: 0 }], @93-162 Defs(Defs { tags: [Index(2147483649)], regions: [@93-140], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Annotation(@93-94 Identifier { ident: "y", suffixed: 0 }, @97-106 Apply("", "Task", [@102-104 Record { fields: [], ext: None }, @105-106 Inferred])), AnnotatedBody { ann_pattern: @93-94 Identifier { ident: "y", suffixed: 0 }, ann_type: @97-106 Apply("", "Task", [@102-104 Record { fields: [], ext: None }, @105-106 Inferred]), comment: None, body_pattern: @127-128 Identifier { ident: "y", suffixed: 0 }, body_expr: @131-140 Apply(@131-136 Var { module_name: "", ident: "line", suffixed: 1 }, [@137-140 Var { module_name: "", ident: "msg", suffixed: 0 }], Space) }] }, @161-162 Var { module_name: "", ident: "y", suffixed: 0 })) }, AnnotatedBody { ann_pattern: @24-25 Identifier { ident: "x", suffixed: 0 }, ann_type: @28-43 Function([@28-31 Apply("", "Str", [])], @35-43 Apply("", "Task", [@40-41 Inferred, @42-43 Inferred])), comment: None, body_pattern: @60-61 Identifier { ident: "x", suffixed: 0 }, body_expr: @64-162 Closure([@65-68 Identifier { ident: "msg", suffixed: 0 }], @131-140 Apply(@131-140 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@131-140 Apply(@131-140 Var { module_name: "", ident: "line", suffixed: 0 }, [@137-140 Var { module_name: "", ident: "msg", suffixed: 0 }], Space), @131-140 Closure([@127-128 Identifier { ident: "y", suffixed: 0 }], @161-162 Var { module_name: "", ident: "y", suffixed: 0 })], BangSuffix)) }] }, @180-187 Apply(@180-181 Var { module_name: "", ident: "x", suffixed: 0 }, [@182-187 Str(PlainLine("foo"))], Space)))] }"##;
+
+        dbg!(&defs);
 
         assert_multiline_str_eq!(format!("{:?}", &defs).as_str(), expected);
     }
