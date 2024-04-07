@@ -1240,11 +1240,12 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                 );
                             } else if before_empty {
                                 // NIL before, SOME after -> FIRST
-                                // We have a Suffixed in first index, and also other nodes in Defs
-                                // pop the first Suffixed and recurse on Defs (without first) to handle any other Suffixed
-                                // the result will be wrapped in an Apply(Task.await) and Closure
-
-                                todo!()
+                                return unwrap_suffixed_expression(
+                                    arena,
+                                    apply_task_await(arena, loc_expr.region, new, **def_pattern, arena.alloc(Loc::at(def_expr.region, Defs(arena.alloc(split_defs.after), loc_ret)))),
+                                    false,
+                                    module_path,
+                                );
                             } else if after_empty {
                                 // SOME before, NIL after -> LAST
                                 /*
@@ -1340,6 +1341,39 @@ mod unwrap_suffixed_expression_tests {
     use crate::desugar::Bump;
     use roc_parse::test_helpers::parse_defs_with;
     use roc_test_utils::assert_multiline_str_eq;
+
+    #[test]
+    fn multi_defs_stmts() {
+        /*
+        line! "Ahoy"
+        {} = "There" |> Stdout.line!
+
+        Task.ok {}
+
+        # desugared
+        Task.await (line "Ahoy") \{} ->
+            Task.await ("There" |> Stdout.line) \{} ->
+                Task.ok {}
+        */
+
+        let arena = &Bump::new();
+
+        let src = r#"
+            main = 
+                line! "Ahoy"
+                {} = "There" |> Stdout.line!
+                
+                Task.ok {}
+            "#;
+
+        let mut defs = parse_defs_with(arena, src).unwrap();
+
+        desugar_defs_node_values(arena, &mut defs, src, &mut None, "test.roc", true);
+
+        let expected = r##"Defs { tags: [Index(2147483648)], regions: [@0-36], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @0-36 Apply(@0-36 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@24-36 Apply(@24-36 Var { module_name: "", ident: "line", suffixed: 0 }, [@30-36 Str(PlainLine("Ahoy"))], Space), @0-36 Closure([@24-36 RecordDestructure([])], @58-81 Apply(@58-81 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@58-81 Apply(@58-81 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@58-65 Str(PlainLine("There"))], BinOp(Pizza)), @58-81 Closure([@53-55 RecordDestructure([])], @115-125 Apply(@115-122 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@123-125 Record([])], Space))], BangSuffix))], BangSuffix))] }"##;
+
+        assert_multiline_str_eq!(format!("{:?}", &defs).as_str(), expected);
+    }
 
     #[test]
     fn simple_pizza() {
