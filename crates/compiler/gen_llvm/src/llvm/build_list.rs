@@ -104,7 +104,7 @@ pub(crate) fn layout_refcounted<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let is_refcounted = layout_interner
         .get_repr(layout)
-        .is_refcounted(layout_interner);
+        .contains_refcounted(layout_interner);
     env.context
         .bool_type()
         .const_int(is_refcounted as u64, false)

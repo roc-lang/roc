@@ -556,6 +556,8 @@ impl Hash for U128 {
 }
 
 /// All Roc types that are refcounted must implement this trait.
+///
+/// For aggregate types, this must recurse down the structure.
 pub trait RocRefcounted {
     /// Increments the refcount n times.
     fn inc(&mut self, n: usize);
