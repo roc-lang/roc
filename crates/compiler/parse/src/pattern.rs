@@ -547,7 +547,24 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                         ),
                     )
                 }
-                (Some(_), Some(_)) => todo!(),
+                (Some(alias), Some(expr)) => {
+                    let Loc {
+                        value: label,
+                        region,
+                    } = loc_label;
+
+                    let region = Region::span_across(&region, &expr.region);
+
+                    Loc::at(
+                        region,
+                        Pattern::AliasedOptionalField(
+                            label,
+                            // TODO spaces are dropped
+                            arena.alloc(alias),
+                            arena.alloc(expr),
+                        ),
+                    )
+                }
             }
         )
         .parse(arena, state, min_indent);
@@ -659,6 +676,33 @@ mod record_pattern_field_test {
                     0,
                     7,
                     ast::Pattern::OptionalField("x", &Loc::new(4, 7, ast::Expr::Float("0.0")))
+                ),
+            ))
+        )
+    }
+
+    #[test]
+    fn aliased_optional() {
+        let arena = Bump::new();
+        let source = "x: x1 ? 0.0";
+        let state = State::new(source.as_bytes());
+        let parser = record_pattern_field();
+        let actual = parser
+            .parse(&arena, state, 0)
+            .map(|(prog, act, _)| (prog, act));
+
+        assert_eq!(
+            actual,
+            Ok((
+                Progress::MadeProgress,
+                Loc::new(
+                    0,
+                    11,
+                    ast::Pattern::AliasedOptionalField(
+                        "x",
+                        &Loc::new(3, 5, Pattern::Identifier("x1")),
+                        &Loc::new(8, 11, ast::Expr::Float("0.0"))
+                    )
                 ),
             ))
         )

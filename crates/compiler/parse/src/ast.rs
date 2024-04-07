@@ -892,6 +892,10 @@ pub enum Pattern<'a> {
     /// Can only occur inside of a RecordDestructure
     OptionalField(&'a str, &'a Loc<Expr<'a>>),
 
+    /// An aliased optional field pattern, e.g. { x: x1 ? Just 0 } -> ...
+    /// Can only occur inside of a RecordDestructure
+    AliasedOptionalField(&'a str, &'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
+
     // Literal
     NumLiteral(&'a str),
     NonBase10Literal {
@@ -995,6 +999,7 @@ impl<'a> Pattern<'a> {
                 Identifier(y) | OptionalField(y, _) => x == y,
                 _ => false,
             },
+            AliasedOptionalField(_, _, _) => todo!(),
             Identifier(x) => match other {
                 Identifier(y) | OptionalField(y, _) => x == y,
                 _ => false,
@@ -1755,6 +1760,7 @@ impl<'a> Malformed for Pattern<'a> {
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
             OptionalField(_, expr) => expr.is_malformed(),
+            AliasedOptionalField(_, pat, expr) => pat.is_malformed() || expr.is_malformed(),
 
             NumLiteral(_) |
             NonBase10Literal { .. } |
