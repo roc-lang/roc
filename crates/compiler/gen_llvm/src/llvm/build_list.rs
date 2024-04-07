@@ -432,9 +432,9 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
                     pass_element_as_opaque(env, layout_interner, element, element_layout),
                     layout_width(env, layout_interner, element_layout),
                     layout_refcounted(env, layout_interner, element_layout),
-                    pass_as_opaque(env, element_ptr),
                     inc_element_fn.as_global_value().as_pointer_value().into(),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
+                    pass_as_opaque(env, element_ptr),
                 ],
                 bitcode::LIST_REPLACE,
             )
