@@ -611,6 +611,9 @@ roc_refcounted_arr_impl!(1);
 roc_refcounted_arr_impl!(2);
 roc_refcounted_arr_impl!(3);
 roc_refcounted_arr_impl!(4);
+roc_refcounted_arr_impl!(5);
+roc_refcounted_arr_impl!(6);
+roc_refcounted_arr_impl!(7);
 roc_refcounted_arr_impl!(8);
 
 macro_rules! roc_refcounted_tuple_impl {
@@ -639,3 +642,7 @@ macro_rules! roc_refcounted_tuple_impl {
 roc_refcounted_tuple_impl!(0 A, 1 B);
 roc_refcounted_tuple_impl!(0 A, 1 B, 2 C);
 roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F, 6 G);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F, 6 G, 7 H);

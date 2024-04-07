@@ -10,7 +10,7 @@ use std::{env, path::PathBuf, process::Command};
 use tempfile::tempdir;
 
 /// To debug the zig code with debug prints, we need to disable the wasm code gen
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

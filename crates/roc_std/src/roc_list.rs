@@ -12,7 +12,7 @@ use core::{
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
 };
-use std::ops::Range;
+use std::{cmp::max, ops::Range};
 
 use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted};
 
@@ -42,8 +42,17 @@ where
     T: RocRefcounted,
 {
     #[inline(always)]
-    fn alloc_alignment() -> u32 {
-        mem::align_of::<T>().max(mem::align_of::<Storage>()) as u32
+    fn alloc_alignment() -> usize {
+        mem::align_of::<T>().max(mem::align_of::<Storage>())
+    }
+
+    fn alloc_to_elem_offset() -> usize {
+        let min_offset = if T::is_refcounted() {
+            2 * mem::size_of::<usize>()
+        } else {
+            mem::size_of::<usize>()
+        };
+        max(Self::alloc_alignment(), min_offset)
     }
 
     pub fn empty() -> Self {
@@ -77,7 +86,8 @@ where
     }
 
     fn elems_with_capacity(num_elems: usize) -> NonNull<ManuallyDrop<T>> {
-        let alloc_ptr = unsafe { roc_alloc(Self::alloc_bytes(num_elems), Self::alloc_alignment()) };
+        let alloc_ptr =
+            unsafe { roc_alloc(Self::alloc_bytes(num_elems), Self::alloc_alignment() as u32) };
 
         Self::elems_from_allocation(NonNull::new(alloc_ptr).unwrap_or_else(|| {
             todo!("Call roc_panic with the info that an allocation failed.");
@@ -85,7 +95,7 @@ where
     }
 
     fn elems_from_allocation(allocation: NonNull<c_void>) -> NonNull<ManuallyDrop<T>> {
-        let offset = Self::alloc_alignment() - core::mem::size_of::<*const u8>() as u32;
+        let offset = Self::alloc_to_elem_offset() - core::mem::size_of::<usize>();
         let alloc_ptr = allocation.as_ptr();
 
         unsafe {
@@ -199,10 +209,14 @@ where
     fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
 
-        let offset = match mem::align_of::<T>() {
-            16 => 1,
-            8 | 4 | 2 | 1 => 0,
-            other => unreachable!("invalid alignment {other}"),
+        let offset = if T::is_refcounted() {
+            1
+        } else {
+            match mem::align_of::<T>() {
+                16 => 1,
+                8 | 4 | 2 | 1 => 0,
+                other => unreachable!("invalid alignment {other}"),
+            }
         };
 
         let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>().add(offset) };
@@ -221,21 +235,24 @@ where
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
     fn ptr_to_allocation(&self) -> *mut c_void {
-        let alignment = RocList::<T>::alloc_alignment() as usize;
+        let offset = Self::alloc_to_elem_offset();
         if self.is_seamless_slice() {
-            ((self.capacity_or_ref_ptr << 1) - alignment) as *mut _
+            ((self.capacity_or_ref_ptr << 1) - offset) as *mut _
         } else {
-            let offset = if T::is_refcounted() {
-                alignment * 2
-            } else {
-                alignment
-            };
             unsafe { self.ptr_to_first_elem().cast::<u8>().sub(offset) as *mut _ }
         }
     }
 
+    fn allocation_element_count(&self) -> usize {
+        if self.is_seamless_slice() && T::is_refcounted() {
+            unsafe { self.ptr_to_refcount().sub(1).read() }
+        } else {
+            self.len()
+        }
+    }
+
     #[allow(unused)]
-    pub(crate) fn ptr_to_refcount(&self) -> *mut c_void {
+    pub(crate) fn ptr_to_refcount(&self) -> *mut usize {
         if self.is_seamless_slice() {
             ((self.capacity_or_ref_ptr << 1) - std::mem::size_of::<usize>()) as *mut _
         } else {
@@ -244,12 +261,8 @@ where
     }
 
     unsafe fn elem_ptr_from_alloc_ptr(alloc_ptr: *mut c_void) -> *mut c_void {
-        unsafe {
-            alloc_ptr
-                .cast::<u8>()
-                .add(Self::alloc_alignment() as usize)
-                .cast()
-        }
+        let offset = Self::alloc_to_elem_offset();
+        unsafe { alloc_ptr.cast::<u8>().add(offset).cast() }
     }
 
     pub fn append(&mut self, value: T) {
@@ -325,7 +338,7 @@ where
                             storage.as_ptr().cast(),
                             Self::alloc_bytes(new_len),
                             Self::alloc_bytes(self.capacity()),
-                            Self::alloc_alignment(),
+                            Self::alloc_alignment() as u32,
                         )
                     };
 
@@ -436,7 +449,7 @@ where
                             old_alloc,
                             Self::alloc_bytes(new_len),
                             Self::alloc_bytes(self.capacity()),
-                            Self::alloc_alignment(),
+                            Self::alloc_alignment() as u32,
                         );
 
                         if new_alloc == old_alloc {
@@ -478,7 +491,10 @@ where
                             // The new allocation is referencing them, so instead of incrementing them all
                             // all just to decrement them again here, we neither increment nor decrement them.
                             unsafe {
-                                roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                                roc_dealloc(
+                                    self.ptr_to_allocation(),
+                                    Self::alloc_alignment() as u32,
+                                );
                             }
                         } else {
                             // Write the storage back.
@@ -652,12 +668,43 @@ impl<T> RocRefcounted for RocList<T>
 where
     T: RocRefcounted,
 {
-    fn inc(&mut self, _: usize) {
-        todo!()
+    fn inc(&mut self, n: usize) {
+        let ptr = self.ptr_to_refcount();
+        unsafe {
+            let value = std::ptr::read(ptr);
+            std::ptr::write(ptr, Ord::max(0, ((value as isize) + n as isize) as usize));
+        }
     }
 
     fn dec(&mut self) {
-        todo!()
+        if let Some((_, storage)) = self.elements_and_storage() {
+            // Decrease the list's reference count.
+            let mut new_storage = storage.get();
+
+            if !new_storage.is_readonly() {
+                let needs_dealloc = new_storage.decrease();
+
+                if needs_dealloc {
+                    let alloc_ptr = self.ptr_to_allocation();
+                    unsafe {
+                        // Dec the stored elements in the underlying allocation.
+                        if T::is_refcounted() {
+                            let elements_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr) as *mut T;
+                            let len = self.allocation_element_count();
+                            for index in 0..len {
+                                (*elements_ptr.add(index)).dec()
+                            }
+                        }
+
+                        // Release the memory.
+                        roc_dealloc(alloc_ptr, Self::alloc_alignment() as u32);
+                    }
+                } else {
+                    // Write the storage back.
+                    storage.set(new_storage);
+                }
+            }
+        }
     }
 
     fn is_refcounted() -> bool {
@@ -670,29 +717,7 @@ where
     T: RocRefcounted,
 {
     fn drop(&mut self) {
-        if let Some((elements, storage)) = self.elements_and_storage() {
-            // Decrease the list's reference count.
-            let mut new_storage = storage.get();
-
-            if !new_storage.is_readonly() {
-                let needs_dealloc = new_storage.decrease();
-
-                if needs_dealloc {
-                    unsafe {
-                        // Drop the stored elements.
-                        for index in 0..self.len() {
-                            ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
-                        }
-
-                        // Release the memory.
-                        roc_dealloc((&*self).ptr_to_allocation(), Self::alloc_alignment());
-                    }
-                } else {
-                    // Write the storage back.
-                    storage.set(new_storage);
-                }
-            }
-        }
+        self.dec()
     }
 }
 
