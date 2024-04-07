@@ -876,7 +876,9 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
+
+        // note this only exists after desugaring
+        LowLevelDbg(_, _, _) => loc_expr,
     }
 }
 
@@ -982,17 +984,16 @@ pub fn unwrap_suffixed_expression<'a>(
         }
 
         Expr::When(..) => {
-            if module_path.contains("test.roc") {
-                dbg!("TODO unwrap_suffixed_expression When");
-            }
-
+            // if module_path.contains("test.roc") {
+            //     dbg!("TODO unwrap_suffixed_expression When");
+            // }
             Ok(loc_expr)
         }
 
         Expr::If(..) => {
-            if module_path.contains("test.roc") {
-                dbg!("TODO unwrap_suffixed_expression If");
-            }
+            // if module_path.contains("test.roc") {
+            //     dbg!("TODO unwrap_suffixed_expression If");
+            // }
             Ok(loc_expr)
         }
 
