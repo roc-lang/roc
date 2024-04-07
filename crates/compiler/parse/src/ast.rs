@@ -7,6 +7,7 @@ use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -346,7 +347,23 @@ pub enum Expr<'a> {
     UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
 }
 
-pub fn split_loc_exprs_around<'a>(items: &'a [&Loc<Expr<'a>>], index: usize) -> (&'a [&'a Loc<Expr<'a>>], &'a [&'a Loc<Expr<'a>>]) {
+impl Expr<'_> {
+    pub fn increment_var_suffix(&mut self, count: u8) {
+        match self {
+            Expr::Var { suffixed, .. } => {
+                *suffixed += count;
+            }
+            _ => {
+                internal_error!("increment_var_suffix called on non-Var expression");
+            }
+        }
+    }
+}
+
+pub fn split_loc_exprs_around<'a>(
+    items: &'a [&Loc<Expr<'a>>],
+    index: usize,
+) -> (&'a [&'a Loc<Expr<'a>>], &'a [&'a Loc<Expr<'a>>]) {
     let (before, rest) = items.split_at(index);
     let after = &rest[1..]; // Skip the index element
 
@@ -397,7 +414,6 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
         // Expr::ParensAround(sub_loc_expr) => {
         //     is_loc_expr_suffixed(&Loc::at(loc_expr.region, *sub_loc_expr))
         // }
-
         _ => false,
     }
 }
@@ -551,10 +567,13 @@ impl<'a> Defs<'a> {
     }
 
     pub fn list_value_defs(&self) -> impl Iterator<Item = (usize, &ValueDef<'a>)> {
-        self.tags.iter().enumerate().filter_map(|(tag_index, tag)| match tag.split() {
-            Ok(_) => None,
-            Err(value_index) => Some((tag_index, &self.value_defs[value_index.index()])),
-        })
+        self.tags
+            .iter()
+            .enumerate()
+            .filter_map(|(tag_index, tag)| match tag.split() {
+                Ok(_) => None,
+                Err(value_index) => Some((tag_index, &self.value_defs[value_index.index()])),
+            })
     }
 
     pub fn last(&self) -> Option<Result<&TypeDef<'a>, &ValueDef<'a>>> {
@@ -729,25 +748,24 @@ impl<'a> Defs<'a> {
     }
 
     // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
-    // TODO be smarter with the spaces and comments, at the moment these are duplicated
-    // for both sides of the split, but not all of them are needed
-    pub fn split_defs_around(&self, tag_index: usize) -> SplitDefsAround {
+    pub fn split_defs_around(&self, target: usize) -> SplitDefsAround {
         let mut before = self.clone();
         let mut after = self.clone();
 
-        before.tags = self.tags[0..tag_index].to_vec();
+        before.tags = self.tags[0..target].to_vec();
 
-        if tag_index >= self.tags.len() {
+        if target >= self.tags.len() {
             after.tags = self.tags.clone();
             after.tags.clear();
         } else {
-            after.tags = self.tags[(tag_index + 1)..].to_vec();
+            after.tags = self.tags[(target + 1)..].to_vec();
         }
 
         SplitDefsAround { before, after }
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct SplitDefsAround<'a> {
     pub before: Defs<'a>,
     pub after: Defs<'a>,
@@ -1256,7 +1274,6 @@ impl<'a> Pattern<'a> {
             }
         }
     }
-
 
     // used to check if a pattern is suffixed to report as an error
     pub fn is_suffixed(&self) -> bool {
