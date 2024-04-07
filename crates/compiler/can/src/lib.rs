@@ -26,6 +26,7 @@ pub mod procedure;
 pub mod scope;
 pub mod string;
 pub mod traverse;
+pub mod suffixed;
 
 pub use derive::DERIVED_REGION;
 
