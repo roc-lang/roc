@@ -158,44 +158,35 @@ pub fn desugar_defs_node_values<'a>(
     top_level_def: bool,
 ) {
     for value_def in defs.value_defs.iter_mut() {
-        // we only want to unwrap suffixed nodes if this is a top level def
-        // this function will be called recursively in desugar_expr and we only
-        // unwrap expression after they have completed desugaring to simplify the analysis
-        if top_level_def {
-            // first desugar, then unwrap any suffixed defs
-            *value_def = desugar_defs_node_values_suffixed(
-                arena,
-                desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path),
-                src,
-                line_info,
-                module_path,
-            );
-        } else {
-            *value_def =
-                desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
+        *value_def = desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
+    }
+
+    // `desugar_defs_node_values` is called recursively in `desugar_expr` and we
+    // only we only want to unwrap suffixed nodes if they are a top level def.
+    //
+    // check here first so we only unwrap the expressions once, and after they have
+    // been desugared
+    if top_level_def {
+        for value_def in defs.value_defs.iter_mut() {
+            *value_def = desugar_value_def_suffixed(arena, *value_def);
         }
     }
 }
 
-pub fn desugar_defs_node_values_suffixed<'a>(
-    arena: &'a Bump,
-    value_def: ValueDef<'a>,
-    src: &'a str,
-    line_info: &mut Option<LineInfo>,
-    module_path: &str,
-) -> ValueDef<'a> {
+/// For each top-level ValueDef in our module, we will unwrap any suffixed
+/// expressions
+///
+/// e.g. `say! "hi"` desugars to `Task.await (say "hi") -> \{} -> ...`
+pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) -> ValueDef<'a> {
     use ValueDef::*;
 
     match value_def {
         Body(loc_pattern, loc_expr) => {
             // note called_from_def is passed as `false` as this is a top_level_def
-            let result = unwrap_suffixed_expression(arena, loc_expr, false, module_path);
+            let result = unwrap_suffixed_expression(arena, loc_expr, false);
 
             match result {
-                Ok(loc_expr) => Body(
-                    desugar_loc_pattern(arena, loc_pattern, src, line_info, module_path),
-                    desugar_expr(arena, loc_expr, src, line_info, module_path),
-                ),
+                Ok(new_expr) => Body(loc_pattern, new_expr),
                 Err(err) => {
                     internal_error!("this should have been desugared elsewhere... {:?}", err)
                 }
@@ -210,15 +201,15 @@ pub fn desugar_defs_node_values_suffixed<'a>(
             body_expr,
         } => {
             // note called_from_def is passed as `false` as this is a top_level_def
-            let result = unwrap_suffixed_expression(arena, body_expr, false, module_path);
+            let result = unwrap_suffixed_expression(arena, body_expr, false);
 
             match result {
-                Ok(loc_expr) => AnnotatedBody {
+                Ok(new_expr) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
                     comment,
                     body_pattern,
-                    body_expr: loc_expr,
+                    body_expr: new_expr,
                 },
                 Err(err) => {
                     internal_error!("this should have been desugared elsewhere... {:?}", err)
@@ -230,133 +221,12 @@ pub fn desugar_defs_node_values_suffixed<'a>(
         Dbg { .. } | Expect { .. } | ExpectFx { .. } => value_def,
 
         Stmt(..) => {
-            internal_error!("this should have been desugared in desugar_expr before this call")
+            internal_error!(
+                "this should have been desugared into a Body(..) before this call in desugar_expr"
+            )
         }
     }
 }
-
-// consider each if-statement, if it is suffixed we need to desugar e.g.
-// ```
-// if isFalse! then
-//     "fail"
-// else
-//     if isTrue! then
-//         "success"
-//     else
-//         "fail"
-// ```
-// desugars to
-// ```
-// Task.await (isFalse) \isAnswer0 ->
-//     if isAnswer0 then
-//         "fail"
-//     else
-//         Task.await (isTrue) \isAnswer1 ->
-//             if isAnswer1 then
-//                 "success"
-//             else
-//                 "fail"
-// ```
-//
-// Note there are four possible combinations that must be considered
-// 1. NIL if_thens before the first suffixed, and NIL after e.g. `if y! then "y" else "n"`
-// 2. NIL if_thens before the first suffixed, and SOME after e.g. `if n! then "n" else if y! "y" else "n"`
-// 3. SOME if_thens before the first suffixed, and NIL after e.g. `if n then "n" else if y! then "y" else "n"`
-// 4. SOME if_thens before the first suffixed, and SOME after e.g. `if n then "n" else if y! then "y" else if n then "n"`
-// fn desugar_if_node_suffixed<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
-//     match loc_expr.value {
-//         Expr::If(if_thens, final_else_branch) => {
-//             // Search for the first suffixied expression e.g. `if isThing! then ...`
-//             for (index, if_then) in if_thens.iter().enumerate() {
-//                 let (current_if_then_statement, current_if_then_expression) = if_then;
-
-//                 if is_loc_expr_suffixed(current_if_then_statement) {
-//                     // split if_thens around the current index
-//                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
-
-//                     // increment our global counter for ident suffixes
-//                     // this should be the only place this counter is referenced
-//                     SUFFIXED_IF_COUNTER.fetch_add(1, Ordering::SeqCst);
-//                     let count = SUFFIXED_IF_COUNTER.load(Ordering::SeqCst);
-
-//                     // create a unique identifier for our answer
-//                     let answer_ident = arena.alloc(format!("#if!{}", count));
-//                     let pattern = Loc::at(
-//                         current_if_then_statement.region,
-//                         Pattern::Identifier {
-//                             ident: answer_ident,
-//                             suffixed: 0,
-//                         },
-//                     );
-
-//                     // if we have any after the current index, we will recurse on these as they may also be suffixed
-//                     let remaining_loc_expr = if after.is_empty() {
-//                         final_else_branch
-//                     } else {
-//                         let after_if = arena
-//                             .alloc(Loc::at(loc_expr.region, Expr::If(after, final_else_branch)));
-
-//                         desugar_if_node_suffixed(arena, after_if)
-//                     };
-
-//                     let closure_expr = Closure(
-//                         arena.alloc([pattern]),
-//                         arena.alloc(Loc::at(
-//                             current_if_then_statement.region,
-//                             If(
-//                                 arena.alloc_slice_clone(&[(
-//                                     Loc::at(
-//                                         current_if_then_statement.region,
-//                                         Var {
-//                                             module_name: "",
-//                                             ident: answer_ident,
-//                                             suffixed: 0,
-//                                         },
-//                                     ),
-//                                     *current_if_then_expression,
-//                                 )]),
-//                                 remaining_loc_expr,
-//                             ),
-//                         )),
-//                     );
-
-//                     // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
-//                     let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
-
-//                     task_await_apply_args.push(current_if_then_statement);
-//                     task_await_apply_args.push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
-
-//                     let applied_closure = arena.alloc(Loc::at(
-//                         loc_expr.region,
-//                         Apply(
-//                             arena.alloc(Loc {
-//                                 region: loc_expr.region,
-//                                 value: Var {
-//                                     module_name: ModuleName::TASK,
-//                                     ident: "await",
-//                                     suffixed: 0,
-//                                 },
-//                             }),
-//                             arena.alloc(task_await_apply_args),
-//                             CalledVia::BangSuffix,
-//                         ),
-//                     ));
-
-//                     if before.is_empty() {
-//                         return applied_closure;
-//                     } else {
-//                         return arena
-//                             .alloc(Loc::at(loc_expr.region, Expr::If(before, applied_closure)));
-//                     }
-//                 }
-//             }
-
-//             // nothing was suffixed, so just return the original if-statement
-//             loc_expr
-//         }
-//         _ => internal_error!("unreachable, expected an If expression to desugar"),
-//     }
-// }
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
