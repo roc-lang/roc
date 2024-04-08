@@ -1,8 +1,9 @@
 use crate::graphics::colors::Rgba;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocRefcounted, RocStr};
 use std::ffi::CStr;
+use std::ops::DerefMut;
 use std::os::raw::c_char;
 
 #[no_mangle]
@@ -80,6 +81,32 @@ pub enum RocElemTag {
     Text,
 }
 
+impl RocRefcounted for RocElem {
+    fn inc(&mut self, n: usize) {
+        unsafe {
+            match self.tag() {
+                RocElemTag::Button => (*self.entry).button.deref_mut().inc(n),
+                RocElemTag::Text => (*self.entry).text.deref_mut().inc(n),
+                RocElemTag::Col | RocElemTag::Row => (*self.entry).row_or_col.deref_mut().inc(n),
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        unsafe {
+            match self.tag() {
+                RocElemTag::Button => (*self.entry).button.deref_mut().dec(),
+                RocElemTag::Text => (*self.entry).text.deref_mut().dec(),
+                RocElemTag::Col | RocElemTag::Row => (*self.entry).row_or_col.deref_mut().dec(),
+            }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[repr(C)]
 #[derive(Clone)]
 pub struct RocButton {
@@ -87,10 +114,38 @@ pub struct RocButton {
     pub styles: ButtonStyles,
 }
 
+impl RocRefcounted for RocButton {
+    fn inc(&mut self, n: usize) {
+        self.child.deref_mut().inc(n);
+    }
+
+    fn dec(&mut self) {
+        self.child.deref_mut().dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[repr(C)]
 #[derive(Clone)]
 pub struct RocRowOrCol {
     pub children: RocList<RocElem>,
+}
+
+impl RocRefcounted for RocRowOrCol {
+    fn inc(&mut self, n: usize) {
+        self.children.inc(n);
+    }
+
+    fn dec(&mut self) {
+        self.children.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 impl Clone for RocElem {
