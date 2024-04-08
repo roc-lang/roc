@@ -210,7 +210,7 @@ pub(crate) enum ExtensionKind {
 }
 
 /// Ok a -> Ok a
-/// A when is branch that matches Ok a and returns Ok a
+/// A `when ... is` branch that matches `Ok a` and returns `Ok a`
 pub(crate) fn ok_to_ok_branch(
     pattern_var: Variable,
     result_var: Variable,
@@ -238,8 +238,9 @@ pub(crate) fn ok_to_ok_branch(
         redundant: RedundantMark::known_non_redundant(),
     }
 }
+
 /// `[]`
-/// Creates an empty list of the type provided
+/// Creates an empty list of the type provided.
 pub(crate) fn empty_list(var: Variable) -> Expr {
     Expr::List {
         elem_var: var,
