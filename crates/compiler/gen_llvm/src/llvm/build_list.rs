@@ -378,7 +378,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     // the list has the same alignment as a usize / ptr. The element comes first in the struct if
     // its alignment is bigger than that of a list.
     let element_align = layout_interner.alignment_bytes(element_layout);
-    let element_first = element_align > env.target_info.ptr_width() as u32;
+    let element_first = element_align > env.target.ptr_width() as u32;
 
     let fields = if element_first {
         [element_layout, Layout::LIST_U8 /* any list works */]

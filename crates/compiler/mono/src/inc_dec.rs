@@ -223,17 +223,17 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ownership {
+pub(crate) enum Ownership {
     Owned,
     Borrowed,
 }
 
 impl Ownership {
-    fn is_owned(&self) -> bool {
+    pub(crate) fn is_owned(&self) -> bool {
         matches!(self, Ownership::Owned)
     }
 
-    fn is_borrowed(&self) -> bool {
+    pub(crate) fn is_borrowed(&self) -> bool {
         matches!(self, Ownership::Borrowed)
     }
 }
@@ -1025,7 +1025,7 @@ fn insert_refcount_operations_binding<'a>(
                     }
                     // Otherwise, perform regular reference counting using the lowlevel borrow signature.
                     _ => {
-                        let borrow_signature = lowlevel_borrow_signature(arena, operator);
+                        let borrow_signature = lowlevel_borrow_signature(operator);
                         let arguments_with_borrow_signature = arguments
                             .iter()
                             .copied()
@@ -1265,15 +1265,14 @@ fn insert_dec_stmt<'a>(
 /**
  * Retrieve the borrow signature of a low-level operation.
  */
-fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
+pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
     use LowLevel::*;
 
-    // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = Ownership::Owned;
-    let function = irrelevant;
-    let closure_data = irrelevant;
-    let owned = Ownership::Owned;
-    let borrowed = Ownership::Borrowed;
+    const IRRELEVANT: Ownership = Ownership::Owned;
+    const FUNCTION: Ownership = IRRELEVANT;
+    const CLOSURE_DATA: Ownership = IRRELEVANT;
+    const OWNED: Ownership = Ownership::Owned;
+    const BORROWED: Ownership = Ownership::Borrowed;
 
     // Here we define the borrow signature of low-level operations
     //
@@ -1281,46 +1280,44 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
-        Unreachable => arena.alloc_slice_copy(&[irrelevant]),
-        DictPseudoSeed => arena.alloc_slice_copy(&[irrelevant]),
-        ListLenU64 | ListLenUsize | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity => {
-            arena.alloc_slice_copy(&[borrowed])
-        }
-        ListWithCapacity | StrWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
-        ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        ListConcat => arena.alloc_slice_copy(&[owned, owned]),
-        StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrSubstringUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
-        StrTrim => arena.alloc_slice_copy(&[owned]),
-        StrTrimStart => arena.alloc_slice_copy(&[owned]),
-        StrTrimEnd => arena.alloc_slice_copy(&[owned]),
-        StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        StrToNum => arena.alloc_slice_copy(&[borrowed]),
-        ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
-        StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        ListMap => arena.alloc_slice_copy(&[owned, function, closure_data]),
-        ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
-        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
-        ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
-        ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
-        ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
-        ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        ListReleaseExcessCapacity => arena.alloc_slice_copy(&[owned]),
-        StrReleaseExcessCapacity => arena.alloc_slice_copy(&[owned]),
+        Unreachable => &[IRRELEVANT],
+        DictPseudoSeed => &[IRRELEVANT],
+        ListLenU64 | ListLenUsize | StrIsEmpty | StrCountUtf8Bytes | ListGetCapacity => &[BORROWED],
+        ListWithCapacity | StrWithCapacity => &[IRRELEVANT],
+        ListReplaceUnsafe => &[OWNED, IRRELEVANT, IRRELEVANT],
+        StrGetUnsafe | ListGetUnsafe => &[BORROWED, IRRELEVANT],
+        ListConcat => &[OWNED, OWNED],
+        StrConcat => &[OWNED, BORROWED],
+        StrSubstringUnsafe => &[OWNED, IRRELEVANT, IRRELEVANT],
+        StrReserve => &[OWNED, IRRELEVANT],
+        StrTrim => &[OWNED],
+        StrTrimStart => &[OWNED],
+        StrTrimEnd => &[OWNED],
+        StrSplit => &[BORROWED, BORROWED],
+        StrToNum => &[BORROWED],
+        ListPrepend => &[OWNED, OWNED],
+        StrJoinWith => &[BORROWED, BORROWED],
+        ListMap => &[OWNED, FUNCTION, CLOSURE_DATA],
+        ListMap2 => &[OWNED, OWNED, FUNCTION, CLOSURE_DATA],
+        ListMap3 => &[OWNED, OWNED, OWNED, FUNCTION, CLOSURE_DATA],
+        ListMap4 => &[OWNED, OWNED, OWNED, OWNED, FUNCTION, CLOSURE_DATA],
+        ListSortWith => &[OWNED, FUNCTION, CLOSURE_DATA],
+        ListAppendUnsafe => &[OWNED, OWNED],
+        ListReserve => &[OWNED, IRRELEVANT],
+        ListSublist => &[OWNED, IRRELEVANT, IRRELEVANT],
+        ListDropAt => &[OWNED, IRRELEVANT],
+        ListSwap => &[OWNED, IRRELEVANT, IRRELEVANT],
+        ListReleaseExcessCapacity => &[OWNED],
+        StrReleaseExcessCapacity => &[OWNED],
 
-        Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        Eq | NotEq => &[BORROWED, BORROWED],
 
         And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
         | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
         | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
         | NumPow | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
-        | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        | NumShiftRightBy | NumShiftRightZfBy => &[IRRELEVANT, IRRELEVANT],
 
         NumToStr
         | NumAbs
@@ -1348,24 +1345,29 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits
-        | I128OfDec => arena.alloc_slice_copy(&[irrelevant]),
-        StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
-        StrToUtf8 => arena.alloc_slice_copy(&[owned]),
-        StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
-        Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        | NumWithoutDecimalPoint
+        | NumWithDecimalPoint
+        | NumF32ToParts
+        | NumF64ToParts
+        | NumF32FromParts
+        | NumF64FromParts => &[IRRELEVANT],
+        StrStartsWith | StrEndsWith => &[BORROWED, BORROWED],
+        StrFromUtf8 => &[OWNED],
+        StrToUtf8 => &[OWNED],
+        StrRepeat => &[BORROWED, IRRELEVANT],
+        StrFromInt | StrFromFloat => &[IRRELEVANT],
+        Hash => &[BORROWED, IRRELEVANT],
 
-        ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
-        ListClone => arena.alloc_slice_copy(&[owned]),
+        ListIsUnique => &[BORROWED],
+        ListClone => &[OWNED],
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }
 
-        PtrStore => arena.alloc_slice_copy(&[owned, owned]),
-        PtrLoad => arena.alloc_slice_copy(&[owned]),
-        PtrCast => arena.alloc_slice_copy(&[owned]),
+        PtrStore => &[OWNED, OWNED],
+        PtrLoad => &[OWNED],
+        PtrCast => &[OWNED],
 
         SetJmp | LongJmp | SetLongJmpBuffer => {
             unreachable!("only inserted in dev backend codegen")

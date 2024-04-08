@@ -1,7 +1,7 @@
 //! Provides the functionality for the REPL to evaluate Roc expressions.
 use roc_parse::ast::Expr;
 use roc_std::RocDec;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 pub mod eval;
 pub mod gen;
@@ -28,7 +28,7 @@ pub trait ReplApp<'a> {
     /// When the executed code calls roc_panic, this function will return None
     fn call_function_returns_roc_str<T, F>(
         &mut self,
-        target_info: TargetInfo,
+        target: Target,
         main_fn_name: &str,
         transform: F,
     ) -> Option<T>
@@ -36,7 +36,7 @@ pub trait ReplApp<'a> {
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        let roc_str_width = match target_info.ptr_width() {
+        let roc_str_width = match target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => 12,
             roc_target::PtrWidth::Bytes8 => 24,
         };

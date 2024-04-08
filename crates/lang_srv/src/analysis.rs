@@ -8,8 +8,8 @@ use bumpalo::Bump;
 
 use parking_lot::Mutex;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
-use roc_collections::{MutMap, MutSet};
-use roc_load::{CheckedModule, LoadedModule};
+use roc_collections::{MutMap, MutSet, VecMap};
+use roc_load::{docs::ModuleDocumentation, CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_region::all::LineInfo;
@@ -38,22 +38,22 @@ pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 pub(super) struct ModulesInfo {
     subs: Mutex<HashMap<ModuleId, Subs>>,
     exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    docs: VecMap<ModuleId, ModuleDocumentation>,
 }
 
 impl ModulesInfo {
-    /// Apply function to subs
     fn with_subs<F, A>(&self, mod_id: &ModuleId, f: F) -> Option<A>
     where
         F: FnOnce(&mut Subs) -> A,
     {
         self.subs.lock().get_mut(mod_id).map(f)
     }
-
     /// Transforms some of the raw data from the analysis into a state that is
     /// more useful during processes like completion.
     fn from_analysis(
         exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
         typechecked: &MutMap<ModuleId, CheckedModule>,
+        docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     ) -> ModulesInfo {
         // We wrap this in Arc because later we will go through each module's imports and
         // store the full list of symbols that each imported module exposes.
@@ -76,6 +76,7 @@ impl ModulesInfo {
         ModulesInfo {
             subs: all_subs,
             exposed,
+            docs: docs_by_module,
         }
     }
 }
@@ -111,7 +112,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         fi,
         &doc_info.source,
         src_dir,
-        roc_target::TargetInfo::default_x86_64(),
+        roc_target::Target::LinuxX64,
         roc_load::FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::Generic,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -149,9 +150,10 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         mut typechecked,
         solved,
         abilities_store,
-        mut imports,
         exposed_imports,
+        mut imports,
         exposes,
+        docs_by_module,
         ..
     } = module;
 
@@ -162,7 +164,11 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
 
     let exposed_imports = resolve_exposed_imports(exposed_imports, &exposes);
 
-    let modules_info = Arc::new(ModulesInfo::from_analysis(exposes, &typechecked));
+    let modules_info = Arc::new(ModulesInfo::from_analysis(
+        exposes,
+        &typechecked,
+        docs_by_module,
+    ));
 
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,

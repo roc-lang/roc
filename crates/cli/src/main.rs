@@ -15,7 +15,7 @@ use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_target::{get_target_triple_str, Target};
+use roc_target::Target;
 use std::fs::{self, FileType};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
                     &matches,
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
-                    Triple::host(),
+                    Triple::host().into(),
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
@@ -64,7 +64,7 @@ fn main() -> io::Result<()> {
                     matches,
                     &subcommands,
                     BuildConfig::BuildAndRun,
-                    Triple::host(),
+                    Triple::host().into(),
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
@@ -77,7 +77,7 @@ fn main() -> io::Result<()> {
         }
         Some((CMD_TEST, matches)) => {
             if matches.contains_id(ROC_FILE) {
-                test(matches, Triple::host())
+                test(matches, Triple::host().into())
             } else {
                 eprintln!("What .roc file do you want to test? Specify it at the end of the `roc test` command.");
 
@@ -90,7 +90,7 @@ fn main() -> io::Result<()> {
                     matches,
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
-                    Triple::host(),
+                    Triple::host().into(),
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
@@ -130,7 +130,7 @@ fn main() -> io::Result<()> {
             roc_linker::generate_stub_lib(
                 input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                &target.to_triple(),
+                target,
                 function_kind,
             );
             Ok(0)
@@ -142,24 +142,22 @@ fn main() -> io::Result<()> {
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
 
-            let triple = target.to_triple();
             let function_kind = FunctionKind::LambdaSet;
             let (platform_path, stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib(
                 input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                &triple,
+                target,
                 function_kind,
             );
 
             // TODO: pipeline the executable location through here.
             // Currently it is essentally hardcoded as platform_path/dynhost.
             roc_linker::preprocess_host(
-                &triple,
+                target,
                 &platform_path.with_file_name("main.roc"),
                 // The target triple string must be derived from the triple to convert from the generic
                 // `system` target to the exact specific target.
-                &platform_path
-                    .with_file_name(format!("{}.rh", get_target_triple_str(&triple).unwrap())),
+                &platform_path.with_file_name(format!("{}.rh", target)),
                 &stub_lib,
                 &stub_dll_symbols,
             );
@@ -184,7 +182,7 @@ fn main() -> io::Result<()> {
                 matches,
                 &subcommands,
                 BuildConfig::BuildOnly,
-                target.to_triple(),
+                target,
                 out_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 link_type,

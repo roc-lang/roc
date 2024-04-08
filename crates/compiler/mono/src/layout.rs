@@ -10,7 +10,7 @@ use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
-use roc_target::{PtrWidth, TargetInfo};
+use roc_target::{PtrWidth, Target};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, OptVariable, RecordFields, Subs, TagExt, TupleElems,
@@ -114,7 +114,7 @@ macro_rules! inc_stat {
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
-    pub target_info: TargetInfo,
+    pub target: Target,
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
 
@@ -128,13 +128,13 @@ pub struct LayoutCache<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
-    pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
+    pub fn new(interner: TLLayoutInterner<'a>, target: Target) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
         cache.push(Default::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
         raw_cache.push(Default::default());
         Self {
-            target_info,
+            target,
             cache,
             raw_function_cache: raw_cache,
 
@@ -964,39 +964,39 @@ impl<'a> UnionLayout<'a> {
         self.discriminant().layout()
     }
 
-    fn stores_tag_id_in_pointer_bits(tags: &[&[InLayout<'a>]], target_info: TargetInfo) -> bool {
-        tags.len() < target_info.ptr_width() as usize
+    fn stores_tag_id_in_pointer_bits(tags: &[&[InLayout<'a>]], target: Target) -> bool {
+        tags.len() < target.ptr_width() as usize
     }
 
     pub const POINTER_MASK_32BIT: usize = 0b0000_0111;
     pub const POINTER_MASK_64BIT: usize = 0b0000_0011;
 
-    pub fn tag_id_pointer_bits_and_mask(target_info: TargetInfo) -> (usize, usize) {
-        match target_info.ptr_width() {
+    pub fn tag_id_pointer_bits_and_mask(target: Target) -> (usize, usize) {
+        match target.ptr_width() {
             PtrWidth::Bytes8 => (3, Self::POINTER_MASK_64BIT),
             PtrWidth::Bytes4 => (2, Self::POINTER_MASK_32BIT),
         }
     }
 
     // i.e. it is not implicit and not stored in the pointer bits
-    pub fn stores_tag_id_as_data(&self, target_info: TargetInfo) -> bool {
+    pub fn stores_tag_id_as_data(&self, target: Target) -> bool {
         match self {
             UnionLayout::NonRecursive(_) => true,
             UnionLayout::Recursive(tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
-            } => !Self::stores_tag_id_in_pointer_bits(tags, target_info),
+            } => !Self::stores_tag_id_in_pointer_bits(tags, target),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
 
-    pub fn stores_tag_id_in_pointer(&self, target_info: TargetInfo) -> bool {
+    pub fn stores_tag_id_in_pointer(&self, target: Target) -> bool {
         match self {
             UnionLayout::NonRecursive(_) => false,
             UnionLayout::Recursive(tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
-            } => Self::stores_tag_id_in_pointer_bits(tags, target_info),
+            } => Self::stores_tag_id_in_pointer_bits(tags, target),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
@@ -1049,7 +1049,7 @@ impl<'a> UnionLayout<'a> {
         };
 
         // because we store a refcount, the alignment must be at least the size of a pointer
-        allocation.max(interner.target_info().ptr_width() as u32)
+        allocation.max(interner.target().ptr_width() as u32)
     }
 
     /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
@@ -1059,7 +1059,7 @@ impl<'a> UnionLayout<'a> {
     {
         let (data_width, data_align) = self.data_size_and_alignment_help_match(interner);
 
-        if self.stores_tag_id_as_data(interner.target_info()) {
+        if self.stores_tag_id_as_data(interner.target()) {
             use Discriminant::*;
             match self.discriminant() {
                 U0 => (round_up_to_alignment(data_width, data_align), data_align),
@@ -1089,7 +1089,7 @@ impl<'a> UnionLayout<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        if !self.stores_tag_id_as_data(interner.target_info()) {
+        if !self.stores_tag_id_as_data(interner.target()) {
             return None;
         };
 
@@ -1151,7 +1151,7 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => interner.target_info().ptr_width() as u32,
+            | UnionLayout::NullableUnwrapped { .. } => interner.target().ptr_width() as u32,
         }
     }
 
@@ -2686,7 +2686,7 @@ impl<'a> LayoutRepr<'a> {
             LayoutRepr::Builtin(builtin) => {
                 use Builtin::*;
 
-                match interner.target_info().ptr_width() {
+                match interner.target().ptr_width() {
                     PtrWidth::Bytes4 => {
                         // more things fit into a register
                         false
@@ -2700,7 +2700,7 @@ impl<'a> LayoutRepr<'a> {
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
             LayoutRepr::Struct(_) => {
                 // TODO: write tests for this!
-                self.stack_size(interner) as usize > interner.target_info().max_by_value_size()
+                self.stack_size(interner) as usize > interner.target().max_by_value_size()
             }
 
             LayoutRepr::LambdaSet(lambda_set) => interner
@@ -2739,7 +2739,7 @@ impl<'a> LayoutRepr<'a> {
         use LayoutRepr::*;
 
         match self {
-            Builtin(builtin) => builtin.stack_size(interner.target_info()),
+            Builtin(builtin) => builtin.stack_size(interner.target()),
             Struct(field_layouts) => {
                 let mut sum = 0;
 
@@ -2754,9 +2754,9 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner),
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
-                interner.target_info().ptr_width() as u32
+                interner.target().ptr_width() as u32
             }
-            Erased(e) => e.stack_size_without_alignment(interner.target_info()),
+            Erased(e) => e.stack_size_without_alignment(interner.target()),
         }
     }
 
@@ -2801,17 +2801,17 @@ impl<'a> LayoutRepr<'a> {
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => interner.target_info().ptr_width() as u32,
+                    | NonNullableUnwrapped(_) => interner.target().ptr_width() as u32,
                 }
             }
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .alignment_bytes(interner),
-            Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
+            Builtin(builtin) => builtin.alignment_bytes(interner.target()),
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
-                interner.target_info().ptr_width() as u32
+                interner.target().ptr_width() as u32
             }
-            Erased(e) => e.alignment_bytes(interner.target_info()),
+            Erased(e) => e.alignment_bytes(interner.target()),
         }
     }
 
@@ -2819,7 +2819,7 @@ impl<'a> LayoutRepr<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        let ptr_width = interner.target_info().ptr_width() as u32;
+        let ptr_width = interner.target().ptr_width() as u32;
 
         use LayoutRepr::*;
         match self {
@@ -2834,7 +2834,7 @@ impl<'a> LayoutRepr<'a> {
             }
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
             FunctionPointer(_) => ptr_width,
-            Erased(e) => e.allocation_alignment_bytes(interner.target_info()),
+            Erased(e) => e.allocation_alignment_bytes(interner.target()),
         }
     }
 
@@ -2994,15 +2994,15 @@ impl<'a> LayoutRepr<'a> {
 pub type SeenRecPtrs<'a> = VecSet<InLayout<'a>>;
 
 impl<'a> Layout<'a> {
-    pub fn usize(target_info: TargetInfo) -> InLayout<'a> {
-        match target_info.ptr_width() {
+    pub fn usize(target: Target) -> InLayout<'a> {
+        match target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => Layout::U32,
             roc_target::PtrWidth::Bytes8 => Layout::U64,
         }
     }
 
-    pub fn isize(target_info: TargetInfo) -> InLayout<'a> {
-        match target_info.ptr_width() {
+    pub fn isize(target: Target) -> InLayout<'a> {
+        match target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => Layout::I32,
             roc_target::PtrWidth::Bytes8 => Layout::I64,
         }
@@ -3067,10 +3067,10 @@ impl<'a> Builtin<'a> {
     pub const WRAPPER_LEN: u32 = 1;
     pub const WRAPPER_CAPACITY: u32 = 2;
 
-    pub fn stack_size(&self, target_info: TargetInfo) -> u32 {
+    pub fn stack_size(&self, target: Target) -> u32 {
         use Builtin::*;
 
-        let ptr_width = target_info.ptr_width() as u32;
+        let ptr_width = target.ptr_width() as u32;
 
         match self {
             Int(int) => int.stack_size(),
@@ -3082,20 +3082,20 @@ impl<'a> Builtin<'a> {
         }
     }
 
-    pub fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub fn alignment_bytes(&self, target: Target) -> u32 {
         use std::mem::align_of;
         use Builtin::*;
 
-        let ptr_width = target_info.ptr_width() as u32;
+        let ptr_width = target.ptr_width() as u32;
 
         // for our data structures, what counts is the alignment of the `( ptr, len )` tuple, and
         // since both of those are one pointer size, the alignment of that structure is a pointer
         // size
         match self {
-            Int(int_width) => int_width.alignment_bytes(target_info),
-            Float(float_width) => float_width.alignment_bytes(target_info),
+            Int(int_width) => int_width.alignment_bytes(target),
+            Float(float_width) => float_width.alignment_bytes(target),
             Bool => align_of::<bool>() as u32,
-            Decimal => IntWidth::I128.alignment_bytes(target_info),
+            Decimal => IntWidth::I128.alignment_bytes(target),
             // we often treat these as i128 (64-bit systems)
             // or i64 (32-bit systems).
             //
@@ -3186,8 +3186,8 @@ impl<'a> Builtin<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        let target_info = interner.target_info();
-        let ptr_width = target_info.ptr_width() as u32;
+        let target = interner.target();
+        let ptr_width = target.ptr_width() as u32;
 
         let allocation = match self {
             Builtin::Str => ptr_width,
@@ -3196,10 +3196,10 @@ impl<'a> Builtin<'a> {
                 e.alignment_bytes(interner).max(ptr_width)
             }
             // The following are usually not heap-allocated, but they might be when inside a Box.
-            Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
-            Builtin::Float(float_width) => float_width.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Int(int_width) => int_width.alignment_bytes(target).max(ptr_width),
+            Builtin::Float(float_width) => float_width.alignment_bytes(target).max(ptr_width),
             Builtin::Bool => (core::mem::align_of::<bool>() as u32).max(ptr_width),
-            Builtin::Decimal => IntWidth::I128.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Decimal => IntWidth::I128.alignment_bytes(target).max(ptr_width),
         };
 
         allocation.max(ptr_width)
@@ -4788,7 +4788,7 @@ mod test {
 
     #[test]
     fn width_and_alignment_union_empty_struct() {
-        let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let mut interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
 
         let lambda_set = LambdaSet {
             args: &(&[] as &[InLayout]),
@@ -4813,7 +4813,7 @@ mod test {
 
     #[test]
     fn memcpy_size_result_u32_unit() {
-        let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let mut interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
 
         let ok_tag = &[interner.insert(Layout {
             repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)).direct(),
@@ -4829,13 +4829,13 @@ mod test {
 
     #[test]
     fn void_stack_size() {
-        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
         assert_eq!(Layout::VOID_NAKED.repr(&interner).stack_size(&interner), 0);
     }
 
     #[test]
     fn align_u128_in_tag_union() {
-        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
         assert_eq!(interner.alignment_bytes(Layout::U128), 16);
     }
 }

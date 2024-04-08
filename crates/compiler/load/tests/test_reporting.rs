@@ -123,7 +123,7 @@ mod test_reporting {
             let mut file = File::create(file_path).unwrap();
             writeln!(file, "{module_src}").unwrap();
             let load_config = LoadConfig {
-                target_info: roc_target::TargetInfo::default_x86_64(),
+                target: roc_target::Target::LinuxX64,
                 render: RenderTarget::Generic,
                 palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
@@ -11167,9 +11167,9 @@ In roc, functions are always written as a lambda, like{}
         }
 
     Note: I can't derive decoding for a record with an optional field,
-    which in this case is `.y`. Optional record fields are polymorphic over
-    records that may or may not contain them at compile time, but are not
-    a concept that extends to runtime!
+    which in this case is `.y`. Default value record fields are polymorphic
+    over records that may or may not contain them at compile time, but are
+    not a concept that extends to runtime!
     Maybe you wanted to use a `Result`?
     "
     );
