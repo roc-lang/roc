@@ -569,6 +569,7 @@ pub trait RocRefcounted {
     fn is_refcounted() -> bool;
 }
 
+#[macro_export]
 macro_rules! roc_refcounted_noop_impl {
     ( $( $T:tt),+ ) => {
         $(
