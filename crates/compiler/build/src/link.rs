@@ -486,7 +486,10 @@ pub fn rebuild_host(
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                "native",
+                // This used to be "native" but that caused segfaults that were hard to
+                // reproduce and investigate.
+                // For context: github.com/roc-lang/roc/pull/6591#issuecomment-2039808944
+                "x86_64-native",
                 opt_level,
                 shared_lib_path,
                 builtins_host_tempfile.path(),

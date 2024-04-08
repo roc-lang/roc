@@ -24,9 +24,10 @@ use roc_target::{PtrWidth, Target};
 
 use crate::llvm::{
     bitcode::{
-        call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
-        call_str_bitcode_fn, call_void_bitcode_fn, pass_list_or_string_to_zig_32bit,
-        pass_string_to_zig_wasm, BitcodeReturns,
+        call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_bitcode_fn_returning_record,
+        call_bitcode_fn_with_record_arg, call_list_bitcode_fn, call_str_bitcode_fn,
+        call_void_bitcode_fn, pass_list_or_string_to_zig_32bit, pass_string_to_zig_wasm,
+        BitcodeReturns,
     },
     build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
@@ -1172,9 +1173,44 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
         }
-        I128OfDec => {
-            arguments!(dec);
-            dec_unary_op(env, bitcode::DEC_TO_I128, dec)
+        NumWithoutDecimalPoint | NumWithDecimalPoint => {
+            // Dec uses an I128 under the hood, so no conversion is needed.
+            arguments!(arg);
+            arg
+        }
+        NumF32ToParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F32_TO_PARTS;
+            call_bitcode_fn_returning_record(
+                env,
+                layout,
+                layout_interner,
+                "num.F32Parts",
+                arg,
+                fn_name,
+            )
+        }
+        NumF64ToParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F64_TO_PARTS;
+            call_bitcode_fn_returning_record(
+                env,
+                layout,
+                layout_interner,
+                "num.F64Parts",
+                arg,
+                fn_name,
+            )
+        }
+        NumF32FromParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F32_FROM_PARTS;
+            call_bitcode_fn_with_record_arg(env, arg, fn_name)
+        }
+        NumF64FromParts => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F64_FROM_PARTS;
+            call_bitcode_fn_with_record_arg(env, arg, fn_name)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
