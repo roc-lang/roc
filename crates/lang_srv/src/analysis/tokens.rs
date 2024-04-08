@@ -698,7 +698,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::ParensAround(e) => Loc::at(region, *e).iter_tokens(arena),
             Expr::MultipleRecordBuilders(e) => e.iter_tokens(arena),
             Expr::UnappliedRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _) | Expr::MalformedClosure | Expr::PrecedenceConflict(_) => {
+            Expr::MalformedIdent(_, _) | Expr::MalformedClosure | Expr::PrecedenceConflict(_) | Expr::MalformedSuffixed(_)=> {
                 bumpvec![in arena;]
             }
         }

@@ -31,6 +31,8 @@ impl<'a> Formattable for Expr<'a> {
                 true
             }
 
+            MalformedSuffixed(loc_expr) => loc_expr.is_multiline(),
+
             // These expressions never have newlines
             Float(..)
             | Num(..)
@@ -561,6 +563,10 @@ impl<'a> Formattable for Expr<'a> {
             MalformedIdent(str, _) => {
                 buf.indent(indent);
                 buf.push_str(str)
+            }
+            MalformedSuffixed(loc_expr) => {
+                buf.indent(indent);
+                loc_expr.format_with_options(buf, parens, newlines, indent);
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}

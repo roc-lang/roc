@@ -1377,6 +1377,10 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::MalformedSuffixed(..) => {
+            use roc_problem::can::RuntimeError::*;
+            (RuntimeError(MalformedSuffixed(region)), Output::default())
+        }
         ast::Expr::MultipleRecordBuilders(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -2449,6 +2453,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
         ast::Expr::MultipleRecordBuilders(loc_expr)
+        | ast::Expr::MalformedSuffixed(loc_expr)
         | ast::Expr::UnappliedRecordBuilder(loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)

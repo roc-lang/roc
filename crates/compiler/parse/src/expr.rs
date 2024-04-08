@@ -2089,6 +2089,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
+        | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
         | Expr::MultipleRecordBuilders { .. }
         | Expr::UnappliedRecordBuilder { .. }

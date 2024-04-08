@@ -2494,6 +2494,7 @@ pub fn can_defs_with_return<'a>(
         if !output.references.has_type_or_value_lookup(symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
         {
+            dbg!(&symbol, &region);
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }

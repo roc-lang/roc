@@ -340,6 +340,7 @@ pub enum Expr<'a> {
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
     MalformedClosure,
+    MalformedSuffixed(&'a Loc<Expr<'a>>),
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
@@ -748,7 +749,7 @@ impl<'a> Defs<'a> {
     }
 
     // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
-    pub fn split_defs_around(&self, target: usize) -> SplitDefsAround {
+    pub fn split_defs_around(self, target: usize) -> SplitDefsAround<'a> {
         let mut before = self.clone();
         let mut after = self.clone();
 
@@ -1807,6 +1808,7 @@ impl<'a> Malformed for Expr<'a> {
 
             MalformedIdent(_, _) |
             MalformedClosure |
+            MalformedSuffixed(..) |
             PrecedenceConflict(_) |
             MultipleRecordBuilders(_) |
             UnappliedRecordBuilder(_) => true,

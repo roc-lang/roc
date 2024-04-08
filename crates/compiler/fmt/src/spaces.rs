@@ -764,6 +764,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
+            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
             Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),

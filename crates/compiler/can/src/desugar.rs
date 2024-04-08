@@ -1,6 +1,6 @@
 #![allow(clippy::manual_map)]
 
-use crate::suffixed::unwrap_suffixed_expression;
+use crate::suffixed::{apply_task_await, unwrap_suffixed_expression, EUnwrapped};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
@@ -168,7 +168,7 @@ pub fn desugar_defs_node_values<'a>(
     // been desugared
     if top_level_def {
         for value_def in defs.value_defs.iter_mut() {
-            *value_def = desugar_value_def_suffixed(arena, *value_def);
+            *value_def = dbg!(desugar_value_def_suffixed(arena, *value_def));
         }
     }
 }
@@ -183,13 +183,20 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
     match value_def {
         Body(loc_pattern, loc_expr) => {
             // note called_from_def is passed as `false` as this is a top_level_def
-            let result = unwrap_suffixed_expression(arena, loc_expr, false);
-
-            match result {
+            match unwrap_suffixed_expression(arena, loc_expr, None) {
                 Ok(new_expr) => Body(loc_pattern, new_expr),
-                Err(err) => {
-                    internal_error!("this should have been desugared elsewhere... {:?}", err)
-                }
+                Err(EUnwrapped::UnwrappedSubExpr {
+                    sub_arg,
+                    sub_pat,
+                    sub_new,
+                }) => Body(
+                    loc_pattern,
+                    apply_task_await(&arena, loc_expr.region, sub_arg, sub_pat, sub_new),
+                ),
+                Err(..) => Body(
+                    loc_pattern,
+                    arena.alloc(Loc::at(loc_expr.region, MalformedSuffixed(loc_expr))),
+                ),
             }
         }
         ann @ Annotation(_, _) => ann,
@@ -201,9 +208,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
             body_expr,
         } => {
             // note called_from_def is passed as `false` as this is a top_level_def
-            let result = unwrap_suffixed_expression(arena, body_expr, false);
-
-            match result {
+            match unwrap_suffixed_expression(arena, body_expr, None) {
                 Ok(new_expr) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
@@ -211,8 +216,23 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     body_pattern,
                     body_expr: new_expr,
                 },
-                Err(err) => {
-                    internal_error!("this should have been desugared elsewhere... {:?}", err)
+                Err(EUnwrapped::UnwrappedSubExpr {
+                    sub_arg,
+                    sub_pat,
+                    sub_new,
+                }) => AnnotatedBody {
+                    ann_pattern,
+                    ann_type,
+                    comment,
+                    body_pattern,
+                    body_expr: apply_task_await(&arena, body_expr.region, sub_arg, sub_pat, sub_new),
+                },
+                Err(..) => AnnotatedBody {
+                    ann_pattern,
+                    ann_type,
+                    comment,
+                    body_pattern,
+                    body_expr: arena.alloc(Loc::at(body_expr.region, MalformedSuffixed(body_expr))),
                 }
             }
         }
@@ -247,6 +267,7 @@ pub fn desugar_expr<'a>(
         | Underscore { .. }
         | MalformedIdent(_, _)
         | MalformedClosure
+        | MalformedSuffixed(..)
         | PrecedenceConflict { .. }
         | MultipleRecordBuilders { .. }
         | UnappliedRecordBuilder { .. }

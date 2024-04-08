@@ -5985,6 +5985,11 @@ fn build_pending_specializations<'a>(
                         // this seems to work for now
                         *shadowed
                     }
+                    Pattern::RecordDestructure { .. } => {
+                        // this seems to work for now, we added to enable suffixed expressions
+                        // the issue is likely that we can have a `main = say! "hi"` which is 
+                        symbol
+                    }
                     _ => todo!("top-level destrucuture patterns are not implemented"),
                 };
 
