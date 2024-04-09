@@ -2255,6 +2255,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_bitcode_bc"
+version = "0.0.1"
+dependencies = [
+ "dunce",
+ "roc_command_utils",
+ "roc_error_macros",
+ "tempfile",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.0.1"
 dependencies = [
@@ -2559,6 +2569,7 @@ dependencies = [
  "inkwell",
  "morphic_lib",
  "roc_alias_analysis",
+ "roc_bitcode_bc",
  "roc_builtins",
  "roc_collections",
  "roc_debug_flags",
