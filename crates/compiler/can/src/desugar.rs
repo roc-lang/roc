@@ -168,8 +168,6 @@ pub fn desugar_defs_node_values<'a>(
     // been desugared
     if top_level_def {
         for value_def in defs.value_defs.iter_mut() {
-            // TODO REMOVE AFTER DEBUGGING
-            // *value_def = dbg!(desugar_value_def_suffixed(arena, *value_def));
             *value_def = desugar_value_def_suffixed(arena, *value_def);
         }
     }
@@ -193,7 +191,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_new,
                 }) => Body(
                     loc_pattern,
-                    apply_task_await(&arena, loc_expr.region, sub_arg, sub_pat, sub_new),
+                    apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new),
                 ),
                 Err(..) => Body(
                     loc_pattern,
@@ -227,7 +225,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     ann_type,
                     comment,
                     body_pattern,
-                    body_expr: apply_task_await(&arena, body_expr.region, sub_arg, sub_pat, sub_new),
+                    body_expr: apply_task_await(arena, body_expr.region, sub_arg, sub_pat, sub_new),
                 },
                 Err(..) => AnnotatedBody {
                     ann_pattern,
@@ -235,7 +233,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     comment,
                     body_pattern,
                     body_expr: arena.alloc(Loc::at(body_expr.region, MalformedSuffixed(body_expr))),
-                }
+                },
             }
         }
 

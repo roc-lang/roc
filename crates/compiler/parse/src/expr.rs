@@ -1082,7 +1082,7 @@ fn parse_defs_end<'a>(
                                         );
 
                                         defs.replace_with_value_def(
-                                            defs.tags.len() - 1,
+                                            defs.tags.len().saturating_sub(1),
                                             value_def,
                                             region,
                                         );
@@ -1104,7 +1104,7 @@ fn parse_defs_end<'a>(
                                         );
 
                                         defs.replace_with_value_def(
-                                            defs.tags.len() - 1,
+                                            defs.tags.len().saturating_sub(1),
                                             value_def,
                                             region,
                                         );

@@ -707,7 +707,6 @@ impl<'a> Defs<'a> {
     ) {
         let mut new_defs = Defs::default();
 
-        
         for (tag_index, tag) in self.tags.iter().enumerate() {
             let space_before = {
                 let start = self.space_before[tag_index].start();
@@ -767,7 +766,7 @@ impl<'a> Defs<'a> {
     }
 
     /// Split the defs around a given target index
-    /// 
+    ///
     /// This is useful for unwrapping suffixed `!`
     pub fn split_defs_around(&self, target: usize) -> SplitDefsAround<'a> {
         let mut before = Defs::default();
@@ -792,36 +791,45 @@ impl<'a> Defs<'a> {
                 Ok(type_def_index) => {
                     let type_def = self.type_defs[type_def_index.index()];
 
-                    if tag_index < target {
-                        // before
-                        let type_def_index = Index::push_new(&mut before.type_defs, type_def);
-                        let tag = EitherIndex::from_left(type_def_index);
-                        before.push_def_help(tag, region, space_before, space_after);
-                    } else if tag_index > target {
-                        // after
-                        let type_def_index = Index::push_new(&mut after.type_defs, type_def);
-                        let tag = EitherIndex::from_left(type_def_index);
-                        after.push_def_help(tag, region, space_before, space_after);
-                    } else {
-                        // target, do nothing
+                    match tag_index.cmp(&target) {
+                        std::cmp::Ordering::Less => {
+                            // before
+                            let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                            let tag = EitherIndex::from_left(type_def_index);
+                            before.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // after
+                            let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                            let tag = EitherIndex::from_left(type_def_index);
+                            after.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // target, do nothing
+                        }
                     }
                 }
                 Err(value_def_index) => {
                     let value_def = self.value_defs[value_def_index.index()];
 
-                    if tag_index < target {
-                        // before
-                        let new_value_def_index =
-                            Index::push_new(&mut before.value_defs, value_def);
-                        let tag = EitherIndex::from_right(new_value_def_index);
-                        before.push_def_help(tag, region, space_before, space_after);
-                    } else if tag_index > target {
-                        // after
-                        let new_value_def_index = Index::push_new(&mut after.value_defs, value_def);
-                        let tag = EitherIndex::from_right(new_value_def_index);
-                        after.push_def_help(tag, region, space_before, space_after);
-                    } else {
-                        // target, do nothing
+                    match tag_index.cmp(&target) {
+                        std::cmp::Ordering::Less => {
+                            // before
+                            let new_value_def_index =
+                                Index::push_new(&mut before.value_defs, value_def);
+                            let tag = EitherIndex::from_right(new_value_def_index);
+                            before.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // after
+                            let new_value_def_index =
+                                Index::push_new(&mut after.value_defs, value_def);
+                            let tag = EitherIndex::from_right(new_value_def_index);
+                            after.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // target, do nothing
+                        }
                     }
                 }
             }
