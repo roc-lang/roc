@@ -1763,33 +1763,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "peg"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "400bcab7d219c38abf8bd7cc2054eb9bbbd4312d66f6a5557d572a203f646f61"
-dependencies = [
- "peg-macros",
- "peg-runtime",
-]
-
-[[package]]
-name = "peg-macros"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46e61cce859b76d19090f62da50a9fe92bab7c2a5f09e183763559a2ac392c90"
-dependencies = [
- "peg-runtime",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "peg-runtime"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36bae92c60fa2398ce4678b98b2c4b5a7c61099961ca1fa305aec04a9ad28922"
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2282,16 +2255,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc_bitcode_bc"
-version = "0.0.1"
-dependencies = [
- "dunce",
- "roc_command_utils",
- "roc_error_macros",
- "tempfile",
-]
-
-[[package]]
 name = "roc_build"
 version = "0.0.1"
 dependencies = [
@@ -2338,7 +2301,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_target",
- "tempfile",
 ]
 
 [[package]]
@@ -2505,8 +2467,6 @@ name = "roc_docs"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "peg",
- "pretty_assertions",
  "pulldown-cmark",
  "roc_builtins",
  "roc_can",
@@ -2599,7 +2559,6 @@ dependencies = [
  "inkwell",
  "morphic_lib",
  "roc_alias_analysis",
- "roc_bitcode_bc",
  "roc_builtins",
  "roc_collections",
  "roc_debug_flags",
@@ -3016,7 +2975,6 @@ dependencies = [
  "roc_repl_eval",
  "roc_reporting",
  "roc_target",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -3084,9 +3042,7 @@ dependencies = [
  "arrayvec 0.7.4",
  "bumpalo",
  "indoc",
- "insta",
  "lazy_static",
- "libtest-mimic",
  "pretty_assertions",
  "regex",
  "roc_builtins",
@@ -3100,7 +3056,6 @@ dependencies = [
  "roc_exhaustive",
  "roc_load",
  "roc_module",
- "roc_packaging",
  "roc_parse",
  "roc_problem",
  "roc_region",
@@ -3870,9 +3825,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "insta",
  "lazy_static",
- "pretty_assertions",
  "regex",
  "roc_can",
  "roc_derive",
@@ -4226,10 +4179,8 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "insta",
  "lazy_static",
  "libtest-mimic",
- "pretty_assertions",
  "regex",
  "roc_builtins",
  "roc_collections",
