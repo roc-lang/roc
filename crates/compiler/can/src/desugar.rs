@@ -168,7 +168,9 @@ pub fn desugar_defs_node_values<'a>(
     // been desugared
     if top_level_def {
         for value_def in defs.value_defs.iter_mut() {
-            *value_def = dbg!(desugar_value_def_suffixed(arena, *value_def));
+            // TODO REMOVE AFTER DEBUGGING
+            // *value_def = dbg!(desugar_value_def_suffixed(arena, *value_def));
+            *value_def = desugar_value_def_suffixed(arena, *value_def);
         }
     }
 }
