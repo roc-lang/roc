@@ -698,17 +698,60 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
+    /// Replace the `value_def` at the given index
     pub fn replace_with_value_def(
         &mut self,
         index: usize,
-        value_def: ValueDef<'a>,
-        region: Region,
+        new_value_def: ValueDef<'a>,
+        new_region: Region,
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
-        let tag = EitherIndex::from_right(value_def_index);
+        let mut new_defs = Defs::default();
 
-        self.tags[index] = tag;
-        self.regions[index] = region;
+        
+        for (tag_index, tag) in self.tags.iter().enumerate() {
+            let space_before = {
+                let start = self.space_before[tag_index].start();
+                let len = self.space_before[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+            let space_after = {
+                let start = self.space_after[tag_index].start();
+                let len = self.space_after[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+
+            match tag.split() {
+                Ok(type_def_index) => {
+                    let type_def = self.type_defs[type_def_index.index()];
+                    let region = self.regions[tag_index];
+
+                    let type_def_index = Index::push_new(&mut new_defs.type_defs, type_def);
+                    let tag = EitherIndex::from_left(type_def_index);
+                    new_defs.push_def_help(tag, region, space_before, space_after);
+                }
+                Err(value_def_index) => {
+                    let (value_def, region) = if tag_index != index {
+                        // use the existing values
+                        (
+                            self.value_defs[value_def_index.index()],
+                            self.regions[tag_index],
+                        )
+                    } else {
+                        // use the new values
+                        (new_value_def, new_region)
+                    };
+
+                    let new_value_def_index = Index::push_new(&mut new_defs.value_defs, value_def);
+                    let tag = EitherIndex::from_right(new_value_def_index);
+                    new_defs.push_def_help(tag, region, space_before, space_after)
+                }
+            }
+        }
+
+        // replace the defs with our new defs
+        *self = new_defs;
     }
 
     pub fn push_type_def(
@@ -723,43 +766,65 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
-    // Find the first definition that is suffixed
-    // We need the tag_index so we can use it to remove the value
-    // We need the value index to know if it is the first
-    pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
+    /// Split the defs around a given target index
+    /// 
+    /// This is useful for unwrapping suffixed `!`
+    pub fn split_defs_around(&self, target: usize) -> SplitDefsAround<'a> {
+        let mut before = Defs::default();
+        let mut after = Defs::default();
+
         for (tag_index, tag) in self.tags.iter().enumerate() {
-            if let Err(value_index) = tag.split() {
-                let index = value_index.index();
+            let region = self.regions[tag_index];
+            let space_before = {
+                let start = self.space_before[tag_index].start();
+                let len = self.space_before[tag_index].len();
 
-                // a statement e.g. `Stdout.line! "hello world"`
-                if let ValueDef::Stmt(_) = &self.value_defs[index] {
-                    return Some((tag_index, index));
+                &self.spaces[start..(start + len)]
+            };
+            let space_after = {
+                let start = self.space_after[tag_index].start();
+                let len = self.space_after[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+
+            match tag.split() {
+                Ok(type_def_index) => {
+                    let type_def = self.type_defs[type_def_index.index()];
+
+                    if tag_index < target {
+                        // before
+                        let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                        let tag = EitherIndex::from_left(type_def_index);
+                        before.push_def_help(tag, region, space_before, space_after);
+                    } else if tag_index > target {
+                        // after
+                        let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                        let tag = EitherIndex::from_left(type_def_index);
+                        after.push_def_help(tag, region, space_before, space_after);
+                    } else {
+                        // target, do nothing
+                    }
                 }
+                Err(value_def_index) => {
+                    let value_def = self.value_defs[value_def_index.index()];
 
-                // a definition with a suffixed expression e.g. `args = Arg.list!`
-                if let ValueDef::Body(_, loc_expr) = &self.value_defs[index] {
-                    if is_loc_expr_suffixed(loc_expr) {
-                        return Some((tag_index, index));
+                    if tag_index < target {
+                        // before
+                        let new_value_def_index =
+                            Index::push_new(&mut before.value_defs, value_def);
+                        let tag = EitherIndex::from_right(new_value_def_index);
+                        before.push_def_help(tag, region, space_before, space_after);
+                    } else if tag_index > target {
+                        // after
+                        let new_value_def_index = Index::push_new(&mut after.value_defs, value_def);
+                        let tag = EitherIndex::from_right(new_value_def_index);
+                        after.push_def_help(tag, region, space_before, space_after);
+                    } else {
+                        // target, do nothing
                     }
                 }
             }
-        }
-
-        None
-    }
-
-    // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
-    pub fn split_defs_around(self, target: usize) -> SplitDefsAround<'a> {
-        let mut before = self.clone();
-        let mut after = self.clone();
-
-        before.tags = self.tags[0..target].to_vec();
-
-        if target >= self.tags.len() {
-            after.tags = self.tags.clone();
-            after.tags.clear();
-        } else {
-            after.tags = self.tags[(target + 1)..].to_vec();
         }
 
         SplitDefsAround { before, after }
