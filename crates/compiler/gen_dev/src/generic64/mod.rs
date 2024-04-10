@@ -2278,6 +2278,25 @@ impl<
         refcount_proc_name
     }
 
+    fn build_indirect_inc_n(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::IndirectIncN,
+        );
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol {
         let ident_ids = self
             .interns
@@ -2348,7 +2367,7 @@ impl<
 
         // function pointer to a function that takes a pointer, and increments
         let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
-            self.increment_fn_pointer(closure_env_layout)
+            self.increment_n_fn_pointer(closure_env_layout)
         } else {
             // null pointer
             self.load_literal_i64(&Symbol::DEV_TMP, 0);
@@ -2404,6 +2423,9 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(new_element_layout, Symbol::DEV_TMP3);
+
                 //    list: RocList,
                 //    caller: Caller1,
                 //    data: Opaque,
@@ -2412,6 +2434,7 @@ impl<
                 //    alignment: u32,
                 //    old_element_width: usize,
                 //    new_element_width: usize,
+                //    new_element_refcounted: bool,
 
                 let arguments = [
                     xs,
@@ -2422,6 +2445,7 @@ impl<
                     alignment,
                     old_element_width,
                     new_element_width,
+                    Symbol::DEV_TMP3,
                 ];
 
                 let layouts = [
@@ -2433,6 +2457,7 @@ impl<
                     Layout::U32,
                     usize_,
                     usize_,
+                    Layout::BOOL,
                 ];
 
                 self.build_fn_call_stack_return(
@@ -2445,6 +2470,7 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
             HigherOrder::ListMap2 { xs, ys } => {
                 let old_element_layout1 = argument_layouts[0];
@@ -2488,6 +2514,9 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(new_element_layout, Symbol::DEV_TMP3);
+
                 //    list1: RocList,
                 //    list2: RocList,
                 //    caller: Caller1,
@@ -2498,6 +2527,7 @@ impl<
                 //    old_element_width1: usize,
                 //    old_element_width2: usize,
                 //    new_element_width: usize,
+                //    new_element_refcounted: bool,
 
                 let arguments = [
                     xs,
@@ -2512,6 +2542,7 @@ impl<
                     new_element_width,
                     dec1,
                     dec2,
+                    Symbol::DEV_TMP3,
                 ];
 
                 let layouts = [
@@ -2525,8 +2556,9 @@ impl<
                     usize_,
                     usize_,
                     usize_,
-                    ptr, // dec1
-                    ptr, // dec2
+                    ptr,          // dec1
+                    ptr,          // dec2
+                    Layout::BOOL, // new_element_refcounted
                 ];
 
                 self.build_fn_call_stack_return(
@@ -2539,6 +2571,7 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
             HigherOrder::ListMap3 { xs, ys, zs } => {
                 let old_element_layout1 = argument_layouts[0];
@@ -2591,6 +2624,9 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(new_element_layout, Symbol::DEV_TMP3);
+
                 //    list1: RocList,
                 //    list2: RocList,
                 //    caller: Caller1,
@@ -2601,6 +2637,7 @@ impl<
                 //    old_element_width1: usize,
                 //    old_element_width2: usize,
                 //    new_element_width: usize,
+                //    new_element_refcounted: bool,
 
                 let arguments = [
                     xs,
@@ -2618,6 +2655,7 @@ impl<
                     dec1,
                     dec2,
                     dec3,
+                    Symbol::DEV_TMP3,
                 ];
 
                 let layouts = [
@@ -2629,13 +2667,14 @@ impl<
                     ptr,
                     Layout::BOOL,
                     Layout::U32,
-                    usize_, // old_element_width_1
-                    usize_, // old_element_width_2
-                    usize_, // old_element_width_3
-                    usize_, // new_element_width
-                    ptr,    // dec1
-                    ptr,    // dec2
-                    ptr,    // dec3
+                    usize_,       // old_element_width_1
+                    usize_,       // old_element_width_2
+                    usize_,       // old_element_width_3
+                    usize_,       // new_element_width
+                    ptr,          // dec1
+                    ptr,          // dec2
+                    ptr,          // dec3
+                    Layout::BOOL, // new_element_refcounted
                 ];
 
                 self.build_fn_call_stack_return(
@@ -2648,6 +2687,7 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
             HigherOrder::ListMap4 { xs, ys, zs, ws } => {
                 let old_element_layout1 = argument_layouts[0];
@@ -2709,6 +2749,9 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(new_element_layout, Symbol::DEV_TMP3);
+
                 let arguments = [
                     xs,
                     ys,
@@ -2728,6 +2771,7 @@ impl<
                     dec2,
                     dec3,
                     dec4,
+                    Symbol::DEV_TMP3,
                 ];
 
                 let layouts = [
@@ -2740,15 +2784,16 @@ impl<
                     ptr,
                     Layout::BOOL,
                     Layout::U32,
-                    usize_, // old_element_width_1
-                    usize_, // old_element_width_2
-                    usize_, // old_element_width_3
-                    usize_, // old_element_width_4
-                    usize_, // new_element_width
-                    ptr,    // dec1
-                    ptr,    // dec2
-                    ptr,    // dec3
-                    ptr,    // dec4
+                    usize_,       // old_element_width_1
+                    usize_,       // old_element_width_2
+                    usize_,       // old_element_width_3
+                    usize_,       // old_element_width_4
+                    usize_,       // new_element_width
+                    ptr,          // dec1
+                    ptr,          // dec2
+                    ptr,          // dec3
+                    ptr,          // dec4
+                    Layout::BOOL, // new_element_refcounted
                 ];
 
                 self.build_fn_call_stack_return(
@@ -2761,6 +2806,7 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
             HigherOrder::ListSortWith { xs } => {
                 let element_layout = argument_layouts[0];
@@ -2788,6 +2834,12 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
+
+                let inc_elem_fn = self.increment_fn_pointer(element_layout);
+                let dec_elem_fn = self.decrement_fn_pointer(element_layout);
+
                 //    input: RocList,
                 //    caller: CompareFn,
                 //    data: Opaque,
@@ -2795,6 +2847,9 @@ impl<
                 //    data_is_owned: bool,
                 //    alignment: u32,
                 //    element_width: usize,
+                //    element_refcounted: bool,
+                //    inc: Inc,
+                //    dec: Dec,
 
                 let arguments = [
                     xs,
@@ -2804,6 +2859,9 @@ impl<
                     Symbol::DEV_TMP2,
                     alignment,
                     element_width,
+                    Symbol::DEV_TMP3,
+                    inc_elem_fn,
+                    dec_elem_fn,
                 ];
 
                 let layouts = [
@@ -2813,6 +2871,9 @@ impl<
                     ptr,
                     Layout::BOOL,
                     Layout::U32,
+                    usize_,
+                    Layout::BOOL,
+                    usize_,
                     usize_,
                 ];
 
@@ -2852,6 +2913,12 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -2863,11 +2930,17 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            // inc
+            inc_elem_fn,
+            // dec
+            dec_elem_fn,
         ];
         let lowlevel_arg_layouts = [ret_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_CLONE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2875,17 +2948,18 @@ impl<
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             &ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_with_capacity(
@@ -2902,6 +2976,11 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -2913,11 +2992,15 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            // Inc element fn
+            inc_elem_fn,
         ];
         let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_WITH_CAPACITY.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2925,17 +3008,18 @@ impl<
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_reserve(
@@ -2959,12 +3043,15 @@ impl<
             _ => unreachable!(),
         };
         self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
+        self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(element_layout);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
         let update_mode = 0u8;
         self.load_literal(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             &u8_layout,
             &Literal::Int((update_mode as i128).to_ne_bytes()),
         );
@@ -2982,9 +3069,12 @@ impl<
             spare,
             // element_width
             Symbol::DEV_TMP2,
-            // update_mode
+            // element_refcounted
             Symbol::DEV_TMP3,
-
+            // Inc element fn
+            inc_elem_fn,
+            // update_mode
+            Symbol::DEV_TMP4,
          ];
         let lowlevel_arg_layouts = [
             list_layout,
@@ -2995,7 +3085,7 @@ impl<
         ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             bitcode::LIST_RESERVE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3004,17 +3094,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_list_append_unsafe(
@@ -3155,6 +3246,12 @@ impl<
         // Load the elements size.
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3188,7 +3285,7 @@ impl<
         // Load address of output element into register.
         let reg = self
             .storage_manager
-            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP5);
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
 
         let lowlevel_args = bumpalo::vec![
@@ -3199,6 +3296,9 @@ impl<
             Symbol::DEV_TMP2,
             Symbol::DEV_TMP3,
             Symbol::DEV_TMP4,
+            inc_elem_fn,
+            dec_elem_fn,
+            Symbol::DEV_TMP5,
          ];
         let lowlevel_arg_layouts = [
             list_layout,
@@ -3206,11 +3306,15 @@ impl<
             index_layout,
             u64_layout,
             u64_layout,
+            Layout::BOOL,
+            u64_layout,
+            u64_layout,
             u64_layout,
         ];
 
+        let out = self.debug_symbol("out");
         self.build_fn_call(
-            &Symbol::DEV_TMP5,
+            &out,
             bitcode::LIST_REPLACE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3220,17 +3324,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
         self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             out_list_offset,
-            &Symbol::DEV_TMP5,
+            &out,
             &list_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP5);
+        self.free_symbol(&out);
     }
 
     fn build_list_concat(
@@ -3252,6 +3357,12 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3265,11 +3376,23 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            inc_elem_fn,
+            dec_elem_fn,
          ];
-        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, Layout::U32, Layout::U64];
+        let lowlevel_arg_layouts = [
+            list_a_layout,
+            list_b_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            Layout::U64,
+            Layout::U64,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_CONCAT.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3278,17 +3401,18 @@ impl<
 
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_prepend(
@@ -3320,6 +3444,11 @@ impl<
         // Load element_witdh argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3333,11 +3462,15 @@ impl<
             Symbol::DEV_TMP2,
             // element_width
             Symbol::DEV_TMP3,
+            // element_refcounted
+            Symbol::DEV_TMP4,
+            // inc
+            inc_elem_fn,
         ];
         let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             bitcode::LIST_PREPEND.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3346,17 +3479,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
@@ -3403,15 +3537,20 @@ impl<
         let element_alignment_symbol = self.debug_symbol("element_alignment");
         self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        self.load_layout_refcounted(*element_in_layout, element_refcounted);
+
         let allocation_symbol = self.debug_symbol("list_allocation");
         self.allocate_with_refcount(
             allocation_symbol,
             data_bytes_symbol,
             element_alignment_symbol,
+            element_refcounted,
         );
 
         self.free_symbol(&data_bytes_symbol);
         self.free_symbol(&element_alignment_symbol);
+        self.free_symbol(&element_refcounted);
 
         enum Origin {
             S(Symbol),
@@ -3862,11 +4001,17 @@ impl<
 
         match reuse {
             None => {
+                let element_refcounted = self.debug_symbol("element_refcounted");
+                self.load_layout_refcounted(element_layout, element_refcounted);
+
                 self.allocate_with_refcount(
                     allocation,
                     element_width_symbol,
                     element_alignment_symbol,
+                    element_refcounted,
                 );
+
+                self.free_symbol(&element_refcounted);
             }
             Some(reuse) => {
                 self.allocate_with_refcount_if_null(allocation, reuse, element_layout);
@@ -5180,11 +5325,12 @@ impl<
         dst: Symbol,
         data_bytes: Symbol,
         element_alignment: Symbol,
+        element_refcounted: Symbol,
     ) {
         self.build_fn_call(
             &dst,
             bitcode::UTILS_ALLOCATE_WITH_REFCOUNT.to_string(),
-            &[data_bytes, element_alignment],
+            &[data_bytes, element_alignment, element_refcounted],
             &[Layout::U64, Layout::U32],
             &Layout::U64,
         );
@@ -5217,10 +5363,14 @@ impl<
         let element_alignment = self.debug_symbol("element_alignment");
         self.load_layout_alignment(layout, element_alignment);
 
-        self.allocate_with_refcount(dst, data_bytes, element_alignment);
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        self.load_layout_refcounted(layout, element_refcounted);
+
+        self.allocate_with_refcount(dst, data_bytes, element_alignment, element_refcounted);
 
         self.free_symbol(&data_bytes);
         self.free_symbol(&element_alignment);
+        self.free_symbol(&element_refcounted);
 
         let mut tmp = bumpalo::vec![in self.env.arena];
 
@@ -5607,6 +5757,15 @@ impl<
         let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
 
         self.load_literal(&symbol, &u32_layout, &alignment_literal);
+    }
+
+    /// Loads if the layout is refcounted (recursively checking) of `layout` into the given `symbol`
+    fn load_layout_refcounted(&mut self, layout: InLayout<'_>, symbol: Symbol) {
+        let u64_layout = Layout::BOOL;
+        let refcounted = self.layout_interner.contains_refcounted(layout);
+        let refcounted_literal = Literal::Bool(refcounted);
+
+        self.load_literal(&symbol, &u64_layout, &refcounted_literal);
     }
 
     /// Loads the stack size of `layout` into the given `symbol`

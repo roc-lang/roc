@@ -275,22 +275,32 @@ impl<'a> LowLevelCall<'a> {
 
             ListClone => {
                 let input_list: Symbol = self.arguments[0];
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
                 //  input_list: &RocList       i32
                 //  alignment: u32             i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
 
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[self.ret_symbol, input_list]);
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CLONE);
             }
@@ -337,7 +347,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Increment refcount
                 if self.ret_layout_raw.is_refcounted(backend.layout_interner) {
-                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
+                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::IncN);
                     backend.code_builder.get_local(elem_local);
                     backend.code_builder.i32_const(1);
                     backend.code_builder.call(inc_fn);
@@ -359,7 +369,7 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 // Byte offsets of each field in the return struct
-                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw {
+                let (ret_list_offset, ret_elem_offset, elem_in_layout) = match self.ret_layout_raw {
                     LayoutRepr::Struct(&[f1, f2]) => {
                         let l1 = backend.layout_interner.get_repr(f1);
                         let l2 = backend.layout_interner.get_repr(f2);
@@ -387,20 +397,31 @@ impl<'a> LowLevelCall<'a> {
 
                 let (elem_width, elem_alignment) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
 
                 // Ensure the new element is stored in memory so we can pass a pointer to Zig
-                let (new_elem_local, new_elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, new_elem, elem_layout, backend.env.arena);
+                let (new_elem_local, new_elem_offset, _) = ensure_symbol_is_in_memory(
+                    backend,
+                    new_elem,
+                    elem_in_layout,
+                    backend.env.arena,
+                );
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
 
                 // Load all the arguments for Zig
-                //    (List return pointer)  i32
-                //    list: RocList,         i32
-                //    alignment: u32,        i32
-                //    index: usize,          i32
-                //    element: Opaque,       i32
-                //    element_width: usize,  i32
-                //    out_element: ?[*]u8,   i32
+                //    (List return pointer)      i32
+                //    list: RocList,             i32
+                //    alignment: u32,            i32
+                //    index: usize,              i32
+                //    element: Opaque,           i32
+                //    element_width: usize,      i32
+                //    element_refcounted: bool   i32
+                //    inc: Inc                   i32
+                //    dec: Dec                   i32
+                //    out_element: ?[*]u8,       i32
 
                 let code_builder = &mut backend.code_builder;
 
@@ -421,6 +442,9 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 code_builder.i32_const(elem_width as i32);
+                code_builder.i32_const(elem_refcounted as i32);
+                code_builder.i32_const(inc_fn_ptr);
+                code_builder.i32_const(dec_fn_ptr);
 
                 code_builder.get_local(ret_local);
                 if (ret_offset + ret_elem_offset) > 0 {
@@ -435,33 +459,33 @@ impl<'a> LowLevelCall<'a> {
                 // List.withCapacity : U64 -> List elem
 
                 let capacity: Symbol = self.arguments[0];
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
                 //  capacity: u64              i64
                 //  alignment: u32             i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
 
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[self.ret_symbol, capacity]);
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr as i32);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY);
             }
             ListConcat => {
                 // List.concat : List elem, List elem -> List elem
-                // Zig arguments          Wasm types
-                //  (return pointer)       i32
-                //  list_a: RocList        i32
-                //  list_b: RocList        i32
-                //  alignment: u32         i32
-                //  element_width: usize   i32
 
                 // Load the arguments that have symbols
                 backend.storage.load_symbols_for_call(
@@ -472,12 +496,29 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 // Load monomorphization constants
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+
+                // Zig arguments          Wasm types
+                //  (return pointer)           i32
+                //  list_a: RocList            i32
+                //  list_b: RocList            i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
+
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT);
             }
@@ -489,10 +530,12 @@ impl<'a> LowLevelCall<'a> {
                 let list: Symbol = self.arguments[0];
                 let spare: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -500,6 +543,8 @@ impl<'a> LowLevelCall<'a> {
                 //  alignment: u32             i32
                 //  spare: u64                 i64
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
                 //  update_mode: UpdateMode    i32
 
                 // return pointer and list
@@ -517,7 +562,8 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[spare]);
 
                 backend.code_builder.i32_const(elem_width as i32);
-
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE);
@@ -528,16 +574,21 @@ impl<'a> LowLevelCall<'a> {
 
                 let list: Symbol = self.arguments[0];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
                 //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  dec: Dec                   i32
                 //  update_mode: UpdateMode    i32
 
                 // return pointer and list
@@ -549,9 +600,9 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
-
                 backend.code_builder.i32_const(elem_width as i32);
-
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(dec_fn_ptr);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_RELEASE_EXCESS_CAPACITY);
@@ -598,12 +649,15 @@ impl<'a> LowLevelCall<'a> {
                 let list: Symbol = self.arguments[0];
                 let elem: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
                 let (elem_local, elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, elem, elem_layout, backend.env.arena);
+                    ensure_symbol_is_in_memory(backend, elem, elem_in_layout, backend.env.arena);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -611,6 +665,8 @@ impl<'a> LowLevelCall<'a> {
                 //  alignment: u32             i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
@@ -628,6 +684,8 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_add();
                 }
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND);
             }
@@ -639,27 +697,20 @@ impl<'a> LowLevelCall<'a> {
                 let start: Symbol = self.arguments[1];
                 let len: Symbol = self.arguments[2];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
 
-                // The refcount function receives a pointer to an element in the list
-                // This is the same as a Struct containing the element
-                let in_memory_layout =
-                    backend
-                        .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Struct(
-                            backend.env.arena.alloc([elem_layout]),
-                        ));
-                let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
-                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
                 //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
+                //  element_recounted: bool,   i32
                 //  start: u64,                i64
                 //  len: u64,                  i64
                 //  dec: Dec,                  i32
@@ -673,6 +724,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[start, len]);
@@ -690,16 +742,7 @@ impl<'a> LowLevelCall<'a> {
                     .layout_interner
                     .stack_size_and_alignment(elem_layout);
 
-                // The refcount function receives a pointer to an element in the list
-                // This is the same as a Struct containing the element
-                let in_memory_layout =
-                    backend
-                        .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Struct(
-                            backend.env.arena.alloc([elem_layout]),
-                        ));
-                let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
-                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_layout, HelperOp::Dec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -732,10 +775,14 @@ impl<'a> LowLevelCall<'a> {
                 let index_1: Symbol = self.arguments[1];
                 let index_2: Symbol = self.arguments[2];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -744,6 +791,9 @@ impl<'a> LowLevelCall<'a> {
                 //  element_width: usize,      i32
                 //  index_1: u64,              i64
                 //  index_2: u64,              i64
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
                 //  update_mode: UpdateMode,   i32
 
                 // Load the return pointer and the list
@@ -759,6 +809,9 @@ impl<'a> LowLevelCall<'a> {
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[index_1, index_2]);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP);
@@ -2633,14 +2686,14 @@ pub fn call_higher_order_lowlevel<'a>(
     let wrapper_fn_idx =
         backend.register_helper_proc(wrapper_sym, wrapper_layout, helper_proc_source);
     let wrapper_fn_ptr = backend.get_fn_ptr(wrapper_fn_idx);
-    let inc_fn_ptr = if !closure_data_exists {
+    let inc_n_fn_ptr = if !closure_data_exists {
         // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
         // That results in an exception (type signature mismatch in indirect call).
         // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
-        let inc_fn = backend.get_refcount_fn_index(Layout::I32, HelperOp::Inc);
+        let inc_fn = backend.get_refcount_fn_index(Layout::I32, HelperOp::IncN);
         backend.get_fn_ptr(inc_fn)
     } else {
-        let inc_fn = backend.get_refcount_fn_index(wrapped_captures_layout, HelperOp::Inc);
+        let inc_fn = backend.get_refcount_fn_index(wrapped_captures_layout, HelperOp::IncN);
         backend.get_fn_ptr(inc_fn)
     };
 
@@ -2652,7 +2705,7 @@ pub fn call_higher_order_lowlevel<'a>(
             return_sym,
             *return_layout,
             wrapper_fn_ptr,
-            inc_fn_ptr,
+            inc_n_fn_ptr,
             closure_data_exists,
             wrapped_captured_environment,
             *owns_captured_environment,
@@ -2665,7 +2718,7 @@ pub fn call_higher_order_lowlevel<'a>(
             return_sym,
             *return_layout,
             wrapper_fn_ptr,
-            inc_fn_ptr,
+            inc_n_fn_ptr,
             closure_data_exists,
             wrapped_captured_environment,
             *owns_captured_environment,
@@ -2678,7 +2731,7 @@ pub fn call_higher_order_lowlevel<'a>(
             return_sym,
             *return_layout,
             wrapper_fn_ptr,
-            inc_fn_ptr,
+            inc_n_fn_ptr,
             closure_data_exists,
             wrapped_captured_environment,
             *owns_captured_environment,
@@ -2691,32 +2744,39 @@ pub fn call_higher_order_lowlevel<'a>(
             return_sym,
             *return_layout,
             wrapper_fn_ptr,
-            inc_fn_ptr,
+            inc_n_fn_ptr,
             closure_data_exists,
             wrapped_captured_environment,
             *owns_captured_environment,
         ),
 
         ListSortWith { xs } => {
-            let elem_layout = unwrap_list_elem_layout(
+            let elem_in_layout = unwrap_list_elem_layout(
                 backend
                     .layout_interner
                     .get_repr(backend.storage.symbol_layouts[xs]),
             );
-            let elem_layout = backend.layout_interner.get_repr(elem_layout);
+            let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
             let (element_width, alignment) =
                 elem_layout.stack_size_and_alignment(backend.layout_interner);
 
+            let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+            let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+            let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+
             let cb = &mut backend.code_builder;
 
-            // (return pointer)      i32
-            // input: RocList,       i32
-            // caller: CompareFn,    i32
-            // data: Opaque,         i32
-            // inc_n_data: IncN,     i32
-            // data_is_owned: bool,  i32
-            // alignment: u32,       i32
-            // element_width: usize, i32
+            // (return pointer)           i32
+            // input: RocList,            i32
+            // caller: CompareFn,         i32
+            // data: Opaque,              i32
+            // inc_n_data: IncN,          i32
+            // data_is_owned: bool,       i32
+            // alignment: u32,            i32
+            // element_width: usize,      i32
+            // element_refcounted: bool   i32
+            // inc: Inc                   i32
+            // dec: Dec                   i32
 
             backend.storage.load_symbols(cb, &[return_sym, *xs]);
             cb.i32_const(wrapper_fn_ptr);
@@ -2729,10 +2789,13 @@ pub fn call_higher_order_lowlevel<'a>(
                 // but that's a specialization that our Zig code doesn't have! Pass a null pointer.
                 cb.i32_const(0);
             }
-            cb.i32_const(inc_fn_ptr);
+            cb.i32_const(inc_n_fn_ptr);
             cb.i32_const(*owns_captured_environment as i32);
             cb.i32_const(alignment as i32);
             cb.i32_const(element_width as i32);
+            cb.i32_const(elem_refcounted as i32);
+            cb.i32_const(inc_fn_ptr);
+            cb.i32_const(dec_fn_ptr);
 
             backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH);
         }
@@ -2770,10 +2833,11 @@ fn list_map_n<'a>(
         backend.env.arena,
     );
 
-    let elem_ret = unwrap_list_elem_layout(backend.layout_interner.get_repr(return_layout));
-    let elem_ret = backend.layout_interner.get_repr(elem_ret);
+    let elem_in_ret = unwrap_list_elem_layout(backend.layout_interner.get_repr(return_layout));
+    let elem_ret = backend.layout_interner.get_repr(elem_in_ret);
     let (elem_ret_size, elem_ret_align) =
         elem_ret.stack_size_and_alignment(backend.layout_interner);
+    let elem_ret_refcounted = backend.layout_interner.contains_refcounted(elem_in_ret);
 
     let cb = &mut backend.code_builder;
 
@@ -2812,6 +2876,7 @@ fn list_map_n<'a>(
         }
     };
 
+    backend.code_builder.i32_const(elem_ret_refcounted as i32);
     backend.call_host_fn_after_loading_args(zig_fn_name);
 }
 
@@ -2844,4 +2909,18 @@ fn ensure_symbol_is_in_memory<'a>(
             (frame_ptr, offset, in_memory_layout)
         }
     }
+}
+
+fn build_refcount_element_fn<'a>(
+    backend: &mut WasmBackend<'a, '_>,
+    elem_layout: InLayout<'a>,
+    rc_op: HelperOp,
+) -> i32 {
+    // The refcount function receives a pointer to an element in the list
+    // This is the same as a Struct containing the element
+    let in_memory_layout = backend
+        .layout_interner
+        .insert_direct_no_semantic(LayoutRepr::Struct(backend.env.arena.alloc([elem_layout])));
+    let rc_fn = backend.get_refcount_fn_index(in_memory_layout, rc_op);
+    backend.get_fn_ptr(rc_fn)
 }

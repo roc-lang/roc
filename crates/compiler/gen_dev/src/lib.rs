@@ -111,6 +111,7 @@ struct ListArgument<'a> {
 
     alignment: Symbol,
     element_width: Symbol,
+    element_refcounted: Symbol,
 }
 
 // Track when a variable is last used (and hence when it can be disregarded). This is non-trivial
@@ -408,10 +409,19 @@ trait Backend<'a> {
         let element_width = self.debug_symbol("element_width");
         self.load_literal_i64(&element_width, element_width_int as i64);
 
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        let refcounted = self.interner().contains_refcounted(element_layout);
+        self.load_literal(
+            &element_refcounted,
+            &Layout::BOOL,
+            &Literal::Bool(refcounted),
+        );
+
         ListArgument {
             element_layout,
             alignment,
             element_width,
+            element_refcounted,
         }
     }
 
@@ -422,6 +432,26 @@ trait Backend<'a> {
 
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
+
+        let element_increment_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_increment_symbol),
+            [box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_increment, element_increment_string);
+
+        element_increment
+    }
+
+    fn increment_n_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self
+            .interner_mut()
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
+
+        let element_increment = self.debug_symbol("element_increment_n");
+        let element_increment_symbol = self.build_indirect_inc_n(layout);
 
         let element_increment_string = self.lambda_name_to_string(
             LambdaName::no_niche(element_increment_symbol),
@@ -1883,6 +1913,7 @@ trait Backend<'a> {
                     list,
                     list_argument.alignment,
                     list_argument.element_width,
+                    list_argument.element_refcounted,
                     start,
                     len,
                     self.decrement_fn_pointer(element_layout),
@@ -1894,6 +1925,7 @@ trait Backend<'a> {
                     arg_layouts[0],
                     Layout::U32,
                     layout_usize,
+                    Layout::BOOL,
                     Layout::U64,
                     Layout::U64,
                     layout_usize,
@@ -1913,6 +1945,9 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
+                let inc_elem_fn = self.increment_fn_pointer(list_argument.element_layout);
+                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
+
                 let layout_usize = Layout::U64;
 
                 //    list: RocList,
@@ -1920,6 +1955,9 @@ trait Backend<'a> {
                 //    element_width: usize,
                 //    index_1: u64,
                 //    index_2: u64,
+                //    element_refcounted: bool,
+                //    inc: Inc
+                //    dec: Dec
                 //    update_mode: UpdateMode,
 
                 self.build_fn_call(
@@ -1931,6 +1969,9 @@ trait Backend<'a> {
                         list_argument.element_width,
                         i,
                         j,
+                        list_argument.element_refcounted,
+                        inc_elem_fn,
+                        dec_elem_fn,
                         update_mode,
                     ],
                     &[
@@ -1939,6 +1980,9 @@ trait Backend<'a> {
                         layout_usize,
                         Layout::U64,
                         Layout::U64,
+                        Layout::BOOL,
+                        layout_usize,
+                        layout_usize,
                         Layout::U8,
                     ],
                     ret_layout,
@@ -1953,11 +1997,15 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
+                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
+
                 let layout_usize = Layout::U64;
 
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
+                //    element_refcounted: bool,
+                //    dec_elem_fn: Dec,
                 //    update_mode: UpdateMode,
 
                 self.build_fn_call(
@@ -1967,6 +2015,8 @@ trait Backend<'a> {
                         list,
                         list_argument.alignment,
                         list_argument.element_width,
+                        list_argument.element_refcounted,
+                        dec_elem_fn,
                         update_mode,
                     ],
                     &[list_layout, Layout::U32, layout_usize, Layout::U8],
@@ -2434,6 +2484,7 @@ trait Backend<'a> {
     );
 
     fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_inc_n(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
 
     fn build_list_clone(
