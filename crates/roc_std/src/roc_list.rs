@@ -101,7 +101,7 @@ where
             let elem_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr).cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
-            let rc_ptr = alloc_ptr.offset(offset as isize);
+            let rc_ptr = alloc_ptr.add(offset);
             rc_ptr
                 .cast::<Storage>()
                 .write(Storage::new_reference_counted());
@@ -946,13 +946,6 @@ where
         }
 
         Ok(out)
-    }
-}
-
-const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
-    match lhs % rhs {
-        0 => lhs,
-        r => lhs + (rhs - r),
     }
 }
 

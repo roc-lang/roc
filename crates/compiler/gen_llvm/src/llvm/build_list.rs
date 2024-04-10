@@ -507,36 +507,6 @@ pub(crate) fn list_len_usize<'ctx>(
         .into_int_value()
 }
 
-pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
-    builder: &Builder<'ctx>,
-    wrapper_struct: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    builder
-        .build_extract_value(
-            wrapper_struct,
-            Builtin::WRAPPER_CAPACITY,
-            "list_capacity_or_ref_ptr",
-        )
-        .unwrap()
-        .into_int_value()
-}
-
-// Gets a pointer to just after the refcount for a list or seamless slice.
-// The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn list_allocation_ptr<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    wrapper_struct: StructValue<'ctx>,
-) -> PointerValue<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[wrapper_struct],
-        &[],
-        BitcodeReturns::Basic,
-        bitcode::LIST_ALLOCATION_PTR,
-    )
-    .into_pointer_value()
-}
-
 pub(crate) fn destructure<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
@@ -876,21 +846,6 @@ pub(crate) fn empty_polymorphic_list<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValu
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
     BasicValueEnum::StructValue(struct_type.const_zero())
-}
-
-pub(crate) fn load_list<'ctx>(
-    builder: &Builder<'ctx>,
-    wrapper_struct: StructValue<'ctx>,
-    ptr_type: PointerType<'ctx>,
-) -> (IntValue<'ctx>, PointerValue<'ctx>) {
-    let ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-
-    let length = builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
-        .unwrap()
-        .into_int_value();
-
-    (length, ptr)
 }
 
 pub(crate) fn load_list_ptr<'ctx>(
