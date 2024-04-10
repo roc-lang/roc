@@ -559,8 +559,8 @@ impl Hash for U128 {
 ///
 /// For aggregate types, this must recurse down the structure.
 pub trait RocRefcounted {
-    /// Increments the refcount n times.
-    fn inc(&mut self, n: usize);
+    /// Increments the refcount.
+    fn inc(&mut self);
 
     /// Decrements the refcount potentially freeing the underlying allocation.
     fn dec(&mut self);
@@ -574,7 +574,7 @@ macro_rules! roc_refcounted_noop_impl {
     ( $( $T:tt),+ ) => {
         $(
             impl RocRefcounted for $T {
-                fn inc(&mut self, _: usize) {}
+                fn inc(&mut self) {}
                 fn dec(&mut self) {}
                 fn is_refcounted() -> bool {
                     false
@@ -596,8 +596,8 @@ macro_rules! roc_refcounted_arr_impl {
         where
             T: RocRefcounted,
         {
-            fn inc(&mut self, n: usize) {
-                self.iter_mut().for_each(|x| x.inc(n));
+            fn inc(&mut self) {
+                self.iter_mut().for_each(|x| x.inc());
             }
             fn dec(&mut self) {
                 self.iter_mut().for_each(|x| x.dec());
@@ -625,9 +625,9 @@ macro_rules! roc_refcounted_tuple_impl {
         where
             $($T : RocRefcounted, )*
         {
-            fn inc(&mut self, n: usize) {
+            fn inc(&mut self) {
                 $(
-                self.$idx.inc(n);
+                self.$idx.inc();
                 )*
             }
             fn dec(&mut self) {

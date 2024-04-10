@@ -667,7 +667,7 @@ impl<T> RocRefcounted for RocList<T>
 where
     T: RocRefcounted,
 {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         if self.elements.is_none() {
             // Empty, non-allocated list, no refcounting to do.
             return;
@@ -676,7 +676,7 @@ where
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
-            std::ptr::write(ptr, Ord::max(0, ((value as isize) + n as isize) as usize));
+            std::ptr::write(ptr, Ord::max(0, ((value as isize) + 1) as usize));
         }
     }
 

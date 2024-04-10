@@ -793,9 +793,9 @@ impl From<SendSafeRocStr> for RocStr {
 }
 
 impl RocRefcounted for RocStr {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         if !self.is_small_str() {
-            unsafe { self.0.heap_allocated.deref_mut().inc(n) }
+            unsafe { self.0.heap_allocated.deref_mut().inc() }
         }
     }
 
@@ -890,11 +890,11 @@ impl BigString {
         unsafe { std::ptr::write(ptr, 0) }
     }
 
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
-            std::ptr::write(ptr, Ord::max(0, ((value as isize) + n as isize) as usize));
+            std::ptr::write(ptr, Ord::max(0, ((value as isize) + 1) as usize));
         }
     }
 
@@ -995,7 +995,7 @@ impl Clone for BigString {
             capacity_or_alloc_ptr: self.capacity_or_alloc_ptr,
         };
 
-        this.inc(1);
+        this.inc();
 
         this
     }

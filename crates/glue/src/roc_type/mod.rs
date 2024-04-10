@@ -35,9 +35,9 @@ pub struct File {
 }
 
 impl RocRefcounted for File {
-    fn inc(&mut self, n: usize) {
-        self.content.inc(n);
-        self.name.inc(n);
+    fn inc(&mut self) {
+        self.content.inc();
+        self.name.inc();
     }
 
     fn dec(&mut self) {
@@ -70,14 +70,14 @@ pub struct Types {
 }
 
 impl RocRefcounted for Types {
-    fn inc(&mut self, n: usize) {
-        self.aligns.inc(n);
-        self.deps.inc(n);
-        self.entrypoints.inc(n);
-        self.sizes.inc(n);
-        self.types.inc(n);
-        self.typesByName.inc(n);
-        self.target.inc(n);
+    fn inc(&mut self) {
+        self.aligns.inc();
+        self.deps.inc();
+        self.entrypoints.inc();
+        self.sizes.inc();
+        self.types.inc();
+        self.typesByName.inc();
+        self.target.inc();
     }
 
     fn dec(&mut self) {
@@ -193,8 +193,8 @@ pub struct R8 {
 }
 
 impl RocRefcounted for R8 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
     }
 
     fn dec(&mut self) {
@@ -368,10 +368,10 @@ pub struct R14 {
 }
 
 impl RocRefcounted for R14 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
-        self.payload.inc(n);
-        self.tagName.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
+        self.payload.inc();
+        self.tagName.inc();
     }
 
     fn dec(&mut self) {
@@ -423,12 +423,12 @@ pub union RocSingleTagPayload {
 }
 
 impl RocRefcounted for RocSingleTagPayload {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         unsafe {
             match self.discriminant() {
-                discriminant_RocSingleTagPayload::HasClosure => self.HasClosure.deref_mut().inc(n),
+                discriminant_RocSingleTagPayload::HasClosure => self.HasClosure.deref_mut().inc(),
                 discriminant_RocSingleTagPayload::HasNoClosure => {
-                    self.HasNoClosure.deref_mut().inc(n)
+                    self.HasNoClosure.deref_mut().inc()
                 }
             }
         }
@@ -568,9 +568,9 @@ pub struct R1 {
 }
 
 impl RocRefcounted for R1 {
-    fn inc(&mut self, n: usize) {
-        self.fields.inc(n);
-        self.name.inc(n);
+    fn inc(&mut self) {
+        self.fields.inc();
+        self.name.inc();
     }
 
     fn dec(&mut self) {
@@ -621,11 +621,11 @@ pub union RocStructFields {
 }
 
 impl RocRefcounted for RocStructFields {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         unsafe {
             match self.discriminant() {
-                discriminant_RocStructFields::HasClosure => self.HasClosure.deref_mut().inc(n),
-                discriminant_RocStructFields::HasNoClosure => self.HasNoClosure.deref_mut().inc(n),
+                discriminant_RocStructFields::HasClosure => self.HasClosure.deref_mut().inc(),
+                discriminant_RocStructFields::HasNoClosure => self.HasNoClosure.deref_mut().inc(),
             }
         }
     }
@@ -658,8 +658,8 @@ pub struct R3 {
 }
 
 impl RocRefcounted for R3 {
-    fn inc(&mut self, n: usize) {
-        self.getter.inc(n);
+    fn inc(&mut self) {
+        self.getter.inc();
     }
 
     fn dec(&mut self) {
@@ -746,8 +746,8 @@ pub struct Tuple1 {
 }
 
 impl RocRefcounted for Tuple1 {
-    fn inc(&mut self, n: usize) {
-        self.f0.inc(n);
+    fn inc(&mut self) {
+        self.f0.inc();
     }
 
     fn dec(&mut self) {
@@ -777,23 +777,23 @@ pub union RocType {
 }
 
 impl RocRefcounted for RocType {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         unsafe {
             match self.discriminant() {
                 discriminant_RocType::Bool => {}
                 discriminant_RocType::EmptyTagUnion => {}
-                discriminant_RocType::Function => self.Function.deref_mut().inc(n),
-                discriminant_RocType::Num => self.Num.inc(n),
-                discriminant_RocType::RecursivePointer => self.RecursivePointer.inc(n),
-                discriminant_RocType::RocBox => self.RocBox.inc(n),
-                discriminant_RocType::RocDict => self.RocDict.inc(n),
-                discriminant_RocType::RocList => self.RocList.inc(n),
-                discriminant_RocType::RocResult => self.RocResult.inc(n),
-                discriminant_RocType::RocSet => self.RocSet.inc(n),
+                discriminant_RocType::Function => self.Function.deref_mut().inc(),
+                discriminant_RocType::Num => self.Num.inc(),
+                discriminant_RocType::RecursivePointer => self.RecursivePointer.inc(),
+                discriminant_RocType::RocBox => self.RocBox.inc(),
+                discriminant_RocType::RocDict => self.RocDict.inc(),
+                discriminant_RocType::RocList => self.RocList.inc(),
+                discriminant_RocType::RocResult => self.RocResult.inc(),
+                discriminant_RocType::RocSet => self.RocSet.inc(),
                 discriminant_RocType::RocStr => {}
-                discriminant_RocType::Struct => self.Struct.deref_mut().inc(n),
-                discriminant_RocType::TagUnion => self.TagUnion.deref_mut().inc(n),
-                discriminant_RocType::TagUnionPayload => self.TagUnionPayload.deref_mut().inc(n),
+                discriminant_RocType::Struct => self.Struct.deref_mut().inc(),
+                discriminant_RocType::TagUnion => self.TagUnion.deref_mut().inc(),
+                discriminant_RocType::TagUnionPayload => self.TagUnionPayload.deref_mut().inc(),
                 discriminant_RocType::Unit => {}
                 discriminant_RocType::Unsized => {}
             }
@@ -846,8 +846,8 @@ pub struct R4 {
 }
 
 impl RocRefcounted for R4 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
     }
 
     fn dec(&mut self) {
@@ -869,9 +869,9 @@ pub struct R2 {
 }
 
 impl RocRefcounted for R2 {
-    fn inc(&mut self, n: usize) {
-        self.accessors.inc(n);
-        self.name.inc(n);
+    fn inc(&mut self) {
+        self.accessors.inc();
+        self.name.inc();
     }
 
     fn dec(&mut self) {
@@ -893,8 +893,8 @@ pub struct Tuple2 {
 }
 
 impl RocRefcounted for Tuple2 {
-    fn inc(&mut self, n: usize) {
-        self.f1.inc(n);
+    fn inc(&mut self) {
+        self.f1.inc();
     }
 
     fn dec(&mut self) {
@@ -920,24 +920,20 @@ pub union RocTagUnion {
 }
 
 impl RocRefcounted for RocTagUnion {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         unsafe {
             match self.discriminant() {
-                discriminant_RocTagUnion::Enumeration => self.Enumeration.deref_mut().inc(n),
+                discriminant_RocTagUnion::Enumeration => self.Enumeration.deref_mut().inc(),
                 discriminant_RocTagUnion::NonNullableUnwrapped => {
-                    self.NonNullableUnwrapped.deref_mut().inc(n)
+                    self.NonNullableUnwrapped.deref_mut().inc()
                 }
-                discriminant_RocTagUnion::NonRecursive => self.NonRecursive.deref_mut().inc(n),
+                discriminant_RocTagUnion::NonRecursive => self.NonRecursive.deref_mut().inc(),
                 discriminant_RocTagUnion::NullableUnwrapped => {
-                    self.NullableUnwrapped.deref_mut().inc(n)
+                    self.NullableUnwrapped.deref_mut().inc()
                 }
-                discriminant_RocTagUnion::NullableWrapped => {
-                    self.NullableWrapped.deref_mut().inc(n)
-                }
-                discriminant_RocTagUnion::Recursive => self.Recursive.deref_mut().inc(n),
-                discriminant_RocTagUnion::SingleTagStruct => {
-                    self.SingleTagStruct.deref_mut().inc(n)
-                }
+                discriminant_RocTagUnion::NullableWrapped => self.NullableWrapped.deref_mut().inc(),
+                discriminant_RocTagUnion::Recursive => self.Recursive.deref_mut().inc(),
+                discriminant_RocTagUnion::SingleTagStruct => self.SingleTagStruct.deref_mut().inc(),
             }
         }
     }
@@ -977,9 +973,9 @@ pub struct R10 {
 }
 
 impl RocRefcounted for R10 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
-        self.tags.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tags.inc();
     }
 
     fn dec(&mut self) {
@@ -1004,10 +1000,10 @@ pub struct R9 {
 }
 
 impl RocRefcounted for R9 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
-        self.nonNullTag.inc(n);
-        self.nullTag.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
+        self.nonNullTag.inc();
+        self.nullTag.inc();
     }
 
     fn dec(&mut self) {
@@ -1032,9 +1028,9 @@ pub struct R7 {
 }
 
 impl RocRefcounted for R7 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
-        self.tags.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tags.inc();
     }
 
     fn dec(&mut self) {
@@ -1064,9 +1060,9 @@ pub struct R6 {
 }
 
 impl RocRefcounted for R6 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
-        self.tagName.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tagName.inc();
     }
 
     fn dec(&mut self) {
@@ -1089,9 +1085,9 @@ pub struct R5 {
 }
 
 impl RocRefcounted for R5 {
-    fn inc(&mut self, n: usize) {
-        self.name.inc(n);
-        self.tags.inc(n);
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tags.inc();
     }
 
     fn dec(&mut self) {
@@ -1126,10 +1122,10 @@ pub struct RocFn {
 }
 
 impl RocRefcounted for RocFn {
-    fn inc(&mut self, n: usize) {
-        self.args.inc(n);
-        self.externName.inc(n);
-        self.functionName.inc(n);
+    fn inc(&mut self) {
+        self.args.inc();
+        self.externName.inc();
+        self.functionName.inc();
     }
 
     fn dec(&mut self) {
