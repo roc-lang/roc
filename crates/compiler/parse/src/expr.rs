@@ -67,6 +67,20 @@ pub struct ExprParseOptions {
     ///
     /// > Just foo if foo == 2 -> ...
     pub check_for_arrow: bool,
+
+    /// Check for a suffixed expression, if we find one then 
+    /// subsequent parsing for this expression should have an increased
+    /// indent, this is so we can distinguish between the end of the 
+    /// statement and the next expression.
+    pub suffixed_found: bool,
+}
+
+impl ExprParseOptions {
+    pub fn set_suffixed_found(&self) -> Self {
+        let mut new = *self;
+        new.suffixed_found = true;
+        new
+    }
 }
 
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -327,13 +341,13 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
-        let new_indent = if is_loc_expr_suffixed(&expr) {
-            min_indent + 1
+        let new_options = if is_loc_expr_suffixed(&expr) {
+            options.set_suffixed_found()
         } else {
-            min_indent
+            options
         };
 
-        match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), new_indent) {
+        match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
             Err((_, _)) => Ok((MadeProgress, expr.value, state)),
             Ok((_, spaces_before_op, state)) => {
                 let expr_state = ExprState {
@@ -344,7 +358,14 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     end,
                 };
 
-                parse_expr_end(new_indent, options, expr_state, arena, state, initial_state)
+                parse_expr_end(
+                    min_indent,
+                    new_options,
+                    expr_state,
+                    arena,
+                    state,
+                    initial_state,
+                )
             }
         }
     })
@@ -1082,7 +1103,7 @@ fn parse_defs_end<'a>(
                                         );
 
                                         defs.replace_with_value_def(
-                                            defs.tags.len().saturating_sub(1),
+                                            defs.tags.len() - 1,
                                             value_def,
                                             region,
                                         );
@@ -1104,7 +1125,7 @@ fn parse_defs_end<'a>(
                                         );
 
                                         defs.replace_with_value_def(
-                                            defs.tags.len().saturating_sub(1),
+                                            defs.tags.len() - 1,
                                             value_def,
                                             region,
                                         );
@@ -1733,21 +1754,51 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        // For suffixed expressions we restrict multi-line statements to be indented
-                        // so that we can parse a statement like,
-                        // ```
-                        // "hello"
-                        //     |> sayHi!
-                        // ```
-                        // if we don't do this then we do not know where the statement ends
-                        // and the next expressions starts
-                        let new_indent = if is_loc_expr_suffixed(&new_expr) {
-                            min_indent + 1
+                        let new_options = if is_loc_expr_suffixed(&new_expr) {
+                            options.set_suffixed_found()
                         } else {
-                            min_indent
+                            options
                         };
 
-                        parse_expr_end(new_indent, options, expr_state, arena, state, initial_state)
+                        match parse_expr_end(
+                            min_indent,
+                            new_options,
+                            expr_state,
+                            arena,
+                            state,
+                            initial_state,
+                        ) {
+                            Ok((progress, expr, state)) => {
+                                if let Expr::BinOps(..) = expr {
+                                    let def_region = expr.get_region_spanning_binops();
+                                    let mut new_expr = Loc::at(def_region, expr);
+
+                                    if is_loc_expr_suffixed(&new_expr) {
+                                        // We have parsed a statement such as `"hello" |> line!`
+                                        // put the spaces from after the operator in front of the call
+                                        if !spaces_after_operator.is_empty() {
+                                            new_expr = arena.alloc(expr).with_spaces_before(
+                                                spaces_after_operator,
+                                                def_region,
+                                            );
+                                        }
+
+                                        let value_def = ValueDef::Stmt(arena.alloc(new_expr));
+
+                                        let mut defs = Defs::default();
+                                        defs.push_value_def(value_def, def_region, &[], &[]);
+
+                                        return parse_defs_expr(
+                                            options, min_indent, defs, arena, state,
+                                        );
+                                    }
+                                }
+
+                                // else return the parsed expression
+                                Ok((progress, expr, state))
+                            }
+                            Err(err) => Err(err),
+                        }
                     }
                 }
             }
@@ -1767,7 +1818,7 @@ fn parse_expr_end<'a>(
     initial_state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let parser = skip_first!(
-        crate::blankspace::check_indent(EExpr::IndentEnd),
+        crate::blankspace::check_indent(EExpr::IndentEnd, options.suffixed_found),
         loc_term_or_underscore(options)
     );
 
@@ -1829,6 +1880,12 @@ fn parse_expr_end<'a>(
         Ok((_, mut arg, state)) => {
             let new_end = state.pos();
 
+            let new_options = if is_loc_expr_suffixed(&arg) {
+                options.set_suffixed_found()
+            } else {
+                options
+            };
+
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
             if !expr_state.spaces_after.is_empty() {
                 arg = arena
@@ -1853,7 +1910,14 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
-                    parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
+                    parse_expr_end(
+                        min_indent,
+                        new_options,
+                        expr_state,
+                        arena,
+                        state,
+                        initial_state,
+                    )
                 }
             }
         }
@@ -1969,6 +2033,7 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
     expr_start(ExprParseOptions {
         accept_multi_backpassing,
         check_for_arrow: true,
+        suffixed_found: false,
     })
 }
 
@@ -2175,6 +2240,7 @@ pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
         let options = ExprParseOptions {
             accept_multi_backpassing: true,
             check_for_arrow: true,
+            suffixed_found: false,
         };
 
         let mut output = Defs::default();
