@@ -362,6 +362,7 @@ pub fn listMap(
     alignment: u32,
     old_element_width: usize,
     new_element_width: usize,
+    inc_old_element: Inc,
     new_elements_refcount: bool,
 ) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
@@ -375,22 +376,14 @@ pub fn listMap(
         }
 
         while (i < size) : (i += 1) {
-            caller(data, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+            const element = source_ptr + (i * old_element_width);
+            inc_old_element(element);
+            caller(data, element, target_ptr + (i * new_element_width));
         }
 
         return output;
     } else {
         return RocList.empty();
-    }
-}
-
-fn decrementTail(list: RocList, start_index: usize, element_width: usize, dec: Dec) void {
-    if (list.bytes) |source| {
-        var i = start_index;
-        while (i < list.len()) : (i += 1) {
-            const element = source + i * element_width;
-            dec(element);
-        }
     }
 }
 
@@ -405,16 +398,11 @@ pub fn listMap2(
     a_width: usize,
     b_width: usize,
     c_width: usize,
-    dec_a: Dec,
-    dec_b: Dec,
+    inc_a: Inc,
+    inc_b: Inc,
     c_elements_refcounted: bool,
 ) callconv(.C) RocList {
     const output_length = @min(list1.len(), list2.len());
-
-    // if the lists don't have equal length, we must consume the remaining elements
-    // In this case we consume by (recursively) decrementing the elements
-    decrementTail(list1, output_length, a_width, dec_a);
-    decrementTail(list2, output_length, b_width, dec_b);
 
     if (data_is_owned) {
         inc_n_data(data, output_length);
@@ -430,6 +418,10 @@ pub fn listMap2(
                 const element_a = source_a + i * a_width;
                 const element_b = source_b + i * b_width;
                 const target = target_ptr + i * c_width;
+
+                inc_a(element_a);
+                inc_b(element_b);
+
                 caller(data, element_a, element_b, target);
             }
 
@@ -455,17 +447,13 @@ pub fn listMap3(
     b_width: usize,
     c_width: usize,
     d_width: usize,
-    dec_a: Dec,
-    dec_b: Dec,
-    dec_c: Dec,
+    inc_a: Inc,
+    inc_b: Inc,
+    inc_c: Inc,
     d_elements_refcounted: bool,
 ) callconv(.C) RocList {
     const smaller_length = @min(list1.len(), list2.len());
     const output_length = @min(smaller_length, list3.len());
-
-    decrementTail(list1, output_length, a_width, dec_a);
-    decrementTail(list2, output_length, b_width, dec_b);
-    decrementTail(list3, output_length, c_width, dec_c);
 
     if (data_is_owned) {
         inc_n_data(data, output_length);
@@ -483,6 +471,10 @@ pub fn listMap3(
                     const element_b = source_b + i * b_width;
                     const element_c = source_c + i * c_width;
                     const target = target_ptr + i * d_width;
+
+                    inc_a(element_a);
+                    inc_b(element_b);
+                    inc_c(element_c);
 
                     caller(data, element_a, element_b, element_c, target);
                 }
@@ -514,18 +506,13 @@ pub fn listMap4(
     c_width: usize,
     d_width: usize,
     e_width: usize,
-    dec_a: Dec,
-    dec_b: Dec,
-    dec_c: Dec,
-    dec_d: Dec,
+    inc_a: Inc,
+    inc_b: Inc,
+    inc_c: Inc,
+    inc_d: Inc,
     e_elements_refcounted: bool,
 ) callconv(.C) RocList {
     const output_length = @min(@min(list1.len(), list2.len()), @min(list3.len(), list4.len()));
-
-    decrementTail(list1, output_length, a_width, dec_a);
-    decrementTail(list2, output_length, b_width, dec_b);
-    decrementTail(list3, output_length, c_width, dec_c);
-    decrementTail(list4, output_length, d_width, dec_d);
 
     if (data_is_owned) {
         inc_n_data(data, output_length);
@@ -544,7 +531,13 @@ pub fn listMap4(
                         const element_b = source_b + i * b_width;
                         const element_c = source_c + i * c_width;
                         const element_d = source_d + i * d_width;
+
                         const target = target_ptr + i * e_width;
+
+                        inc_a(element_a);
+                        inc_b(element_b);
+                        inc_c(element_c);
+                        inc_d(element_d);
 
                         caller(data, element_a, element_b, element_c, element_d, target);
                     }
@@ -604,6 +597,7 @@ pub fn listReleaseExcessCapacity(
     alignment: u32,
     element_width: usize,
     elements_refcounted: bool,
+    inc: Inc,
     dec: Dec,
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
@@ -615,13 +609,20 @@ pub fn listReleaseExcessCapacity(
         list.decref(alignment, element_width, elements_refcounted, dec);
         return RocList.empty();
     } else {
-        // TODO: this needs to decrement all list elements not owned by the new list.
-        // Will need to use utils.decref directly to avoid extra work.
+        // TODO: This can be made more efficient, but has to work around the `decref`.
+        // If the list is unique, we can avoid incrementing and decrementing the live items.
+        // We can just decrement the dead elements and free the old list.
+        // This pattern is also like true in other locations like listConcat and listDropAt.
         var output = RocList.allocateExact(alignment, old_length, element_width, elements_refcounted);
         if (list.bytes) |source_ptr| {
             const dest_ptr = output.bytes orelse unreachable;
 
             @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
+            var i: usize = 0;
+            while (i < old_length) : (i += 1) {
+                const element = source_ptr + i * element_width;
+                inc(element);
+            }
         }
         list.decref(alignment, element_width, elements_refcounted, dec);
         return output;
@@ -814,6 +815,7 @@ pub fn listDropAt(
     element_width: usize,
     elements_refcounted: bool,
     drop_index_u64: u64,
+    inc: Inc,
     dec: Dec,
 ) callconv(.C) RocList {
     const size = list.len();
@@ -865,8 +867,6 @@ pub fn listDropAt(
             return new_list;
         }
 
-        // TODO: all of these elements need to have their refcount incremented.
-        // Also, probably use utils.decref to avoid dercementing all elements.
         const output = RocList.allocate(alignment, size - 1, element_width, elements_refcounted);
         const target_ptr = output.bytes orelse unreachable;
 
@@ -877,6 +877,12 @@ pub fn listDropAt(
         const tail_source = source_ptr + (drop_index + 1) * element_width;
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target[0..tail_size], tail_source[0..tail_size]);
+
+        var i: usize = 0;
+        while (i < output.len()) : (i += 1) {
+            const cloned_elem = target_ptr + i * element_width;
+            inc(cloned_elem);
+        }
 
         list.decref(alignment, element_width, elements_refcounted, dec);
 
@@ -1019,6 +1025,13 @@ pub fn listConcat(
         const source_b = list_b.bytes orelse unreachable;
         @memcpy(source_a[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
 
+        // Increment refcount of all cloned elements.
+        var i: usize = 0;
+        while (i < list_b.len()) : (i += 1) {
+            const cloned_elem = source_b + i * element_width;
+            inc(cloned_elem);
+        }
+
         // decrement list b.
         list_b.decref(alignment, element_width, elements_refcounted, dec);
 
@@ -1040,6 +1053,13 @@ pub fn listConcat(
         mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b[0..byte_count_a], source_a[0..byte_count_a]);
 
+        // Increment refcount of all cloned elements.
+        var i: usize = 0;
+        while (i < list_a.len()) : (i += 1) {
+            const cloned_elem = source_a + i * element_width;
+            inc(cloned_elem);
+        }
+
         // decrement list a.
         list_a.decref(alignment, element_width, elements_refcounted, dec);
 
@@ -1056,6 +1076,18 @@ pub fn listConcat(
 
     @memcpy(target[0..(list_a.len() * element_width)], source_a[0..(list_a.len() * element_width)]);
     @memcpy(target[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
+
+    // Increment refcount of all cloned elements.
+    var i: usize = 0;
+    while (i < list_a.len()) : (i += 1) {
+        const cloned_elem = source_a + i * element_width;
+        inc(cloned_elem);
+    }
+    i = 0;
+    while (i < list_b.len()) : (i += 1) {
+        const cloned_elem = source_b + i * element_width;
+        inc(cloned_elem);
+    }
 
     // decrement list a and b.
     list_a.decref(alignment, element_width, elements_refcounted, dec);

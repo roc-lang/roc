@@ -222,6 +222,7 @@ pub(crate) fn list_release_excess_capacity<'a, 'ctx>(
     element_layout: InLayout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
+    let inc_element_fn = build_inc_wrapper(env, layout_interner, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
     call_list_bitcode_fn_1(
         env,
@@ -230,6 +231,7 @@ pub(crate) fn list_release_excess_capacity<'a, 'ctx>(
             env.alignment_intvalue(layout_interner, element_layout),
             layout_width(env, layout_interner, element_layout),
             layout_refcounted(env, layout_interner, element_layout),
+            inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
             pass_update_mode(env, update_mode),
         ],
@@ -369,6 +371,7 @@ pub(crate) fn list_drop_at<'a, 'ctx>(
     count: IntValue<'ctx>,
     element_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    let inc_element_fn = build_inc_wrapper(env, layout_interner, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
     call_list_bitcode_fn_1(
         env,
@@ -378,6 +381,7 @@ pub(crate) fn list_drop_at<'a, 'ctx>(
             layout_width(env, layout_interner, element_layout),
             layout_refcounted(env, layout_interner, element_layout),
             count.into(),
+            inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_DROP_AT,
@@ -564,11 +568,14 @@ pub(crate) fn list_sort_with<'a, 'ctx>(
 pub(crate) fn list_map<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    let inc_elem = build_inc_wrapper(env, layout_interner, layout_ids, element_layout);
+
     call_list_bitcode_fn_1(
         env,
         list.into_struct_value(),
@@ -580,6 +587,7 @@ pub(crate) fn list_map<'a, 'ctx>(
             env.alignment_intvalue(layout_interner, return_layout),
             layout_width(env, layout_interner, element_layout),
             layout_width(env, layout_interner, return_layout),
+            inc_elem.as_global_value().as_pointer_value().into(),
             layout_refcounted(env, layout_interner, return_layout),
         ],
         bitcode::LIST_MAP,
@@ -597,8 +605,8 @@ pub(crate) fn list_map2<'a, 'ctx>(
     element2_layout: InLayout<'a>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let dec_a = build_dec_wrapper(env, layout_interner, layout_ids, element1_layout);
-    let dec_b = build_dec_wrapper(env, layout_interner, layout_ids, element2_layout);
+    let inc_a = build_inc_wrapper(env, layout_interner, layout_ids, element1_layout);
+    let inc_b = build_inc_wrapper(env, layout_interner, layout_ids, element2_layout);
 
     call_list_bitcode_fn(
         env,
@@ -612,8 +620,8 @@ pub(crate) fn list_map2<'a, 'ctx>(
             layout_width(env, layout_interner, element1_layout),
             layout_width(env, layout_interner, element2_layout),
             layout_width(env, layout_interner, return_layout),
-            dec_a.as_global_value().as_pointer_value().into(),
-            dec_b.as_global_value().as_pointer_value().into(),
+            inc_a.as_global_value().as_pointer_value().into(),
+            inc_b.as_global_value().as_pointer_value().into(),
             layout_refcounted(env, layout_interner, return_layout),
         ],
         BitcodeReturns::List,
@@ -634,9 +642,9 @@ pub(crate) fn list_map3<'a, 'ctx>(
     element3_layout: InLayout<'a>,
     result_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let dec_a = build_dec_wrapper(env, layout_interner, layout_ids, element1_layout);
-    let dec_b = build_dec_wrapper(env, layout_interner, layout_ids, element2_layout);
-    let dec_c = build_dec_wrapper(env, layout_interner, layout_ids, element3_layout);
+    let inc_a = build_inc_wrapper(env, layout_interner, layout_ids, element1_layout);
+    let inc_b = build_inc_wrapper(env, layout_interner, layout_ids, element2_layout);
+    let inc_c = build_inc_wrapper(env, layout_interner, layout_ids, element3_layout);
 
     call_list_bitcode_fn(
         env,
@@ -655,9 +663,9 @@ pub(crate) fn list_map3<'a, 'ctx>(
             layout_width(env, layout_interner, element2_layout),
             layout_width(env, layout_interner, element3_layout),
             layout_width(env, layout_interner, result_layout),
-            dec_a.as_global_value().as_pointer_value().into(),
-            dec_b.as_global_value().as_pointer_value().into(),
-            dec_c.as_global_value().as_pointer_value().into(),
+            inc_a.as_global_value().as_pointer_value().into(),
+            inc_b.as_global_value().as_pointer_value().into(),
+            inc_c.as_global_value().as_pointer_value().into(),
             layout_refcounted(env, layout_interner, result_layout),
         ],
         BitcodeReturns::List,
@@ -680,10 +688,10 @@ pub(crate) fn list_map4<'a, 'ctx>(
     element4_layout: InLayout<'a>,
     result_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let dec_a = build_dec_wrapper(env, layout_interner, layout_ids, element1_layout);
-    let dec_b = build_dec_wrapper(env, layout_interner, layout_ids, element2_layout);
-    let dec_c = build_dec_wrapper(env, layout_interner, layout_ids, element3_layout);
-    let dec_d = build_dec_wrapper(env, layout_interner, layout_ids, element4_layout);
+    let inc_a = build_inc_wrapper(env, layout_interner, layout_ids, element1_layout);
+    let inc_b = build_inc_wrapper(env, layout_interner, layout_ids, element2_layout);
+    let inc_c = build_inc_wrapper(env, layout_interner, layout_ids, element3_layout);
+    let inc_d = build_inc_wrapper(env, layout_interner, layout_ids, element4_layout);
 
     call_list_bitcode_fn(
         env,
@@ -704,10 +712,10 @@ pub(crate) fn list_map4<'a, 'ctx>(
             layout_width(env, layout_interner, element3_layout),
             layout_width(env, layout_interner, element4_layout),
             layout_width(env, layout_interner, result_layout),
-            dec_a.as_global_value().as_pointer_value().into(),
-            dec_b.as_global_value().as_pointer_value().into(),
-            dec_c.as_global_value().as_pointer_value().into(),
-            dec_d.as_global_value().as_pointer_value().into(),
+            inc_a.as_global_value().as_pointer_value().into(),
+            inc_b.as_global_value().as_pointer_value().into(),
+            inc_c.as_global_value().as_pointer_value().into(),
+            inc_d.as_global_value().as_pointer_value().into(),
             layout_refcounted(env, layout_interner, result_layout),
         ],
         BitcodeReturns::List,

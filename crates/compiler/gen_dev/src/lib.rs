@@ -1997,6 +1997,7 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
+                let inc_elem_fn = self.increment_fn_pointer(list_argument.element_layout);
                 let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
@@ -2016,10 +2017,19 @@ trait Backend<'a> {
                         list_argument.alignment,
                         list_argument.element_width,
                         list_argument.element_refcounted,
+                        inc_elem_fn,
                         dec_elem_fn,
                         update_mode,
                     ],
-                    &[list_layout, Layout::U32, layout_usize, Layout::U8],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        Layout::BOOL,
+                        layout_usize,
+                        layout_usize,
+                        Layout::U8,
+                    ],
                     ret_layout,
                 );
             }
@@ -2036,12 +2046,14 @@ trait Backend<'a> {
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 let layout_usize = Layout::U64;
+                let element_increment = self.increment_fn_pointer(element_layout);
                 let element_decrement = self.decrement_fn_pointer(element_layout);
 
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
                 //    drop_index: u64,
+                //    inc: Inc,
                 //    dec: Dec,
 
                 self.build_fn_call(
@@ -2052,6 +2064,7 @@ trait Backend<'a> {
                         list_argument.alignment,
                         list_argument.element_width,
                         drop_index,
+                        element_increment,
                         element_decrement,
                     ],
                     &[
@@ -2059,6 +2072,7 @@ trait Backend<'a> {
                         Layout::U32,
                         layout_usize,
                         Layout::U64,
+                        layout_usize,
                         layout_usize,
                     ],
                     ret_layout,

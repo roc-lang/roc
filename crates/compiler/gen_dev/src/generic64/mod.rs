@@ -2426,6 +2426,8 @@ impl<
                 // Load element_refcounted argument (bool).
                 self.load_layout_refcounted(new_element_layout, Symbol::DEV_TMP3);
 
+                let inc = self.increment_fn_pointer(old_element_layout);
+
                 //    list: RocList,
                 //    caller: Caller1,
                 //    data: Opaque,
@@ -2445,6 +2447,7 @@ impl<
                     alignment,
                     old_element_width,
                     new_element_width,
+                    inc,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2457,6 +2460,7 @@ impl<
                     Layout::U32,
                     usize_,
                     usize_,
+                    ptr,
                     Layout::BOOL,
                 ];
 
@@ -2499,8 +2503,8 @@ impl<
 
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
+                let inc1 = self.increment_fn_pointer(old_element_layout1);
+                let inc2 = self.increment_fn_pointer(old_element_layout2);
 
                 self.build_fn_pointer(&caller, caller_string);
 
@@ -2540,8 +2544,8 @@ impl<
                     old_element_width1,
                     old_element_width2,
                     new_element_width,
-                    dec1,
-                    dec2,
+                    inc1,
+                    inc2,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2556,8 +2560,8 @@ impl<
                     usize_,
                     usize_,
                     usize_,
-                    ptr,          // dec1
-                    ptr,          // dec2
+                    ptr,          // inc1
+                    ptr,          // inc2
                     Layout::BOOL, // new_element_refcounted
                 ];
 
@@ -2608,9 +2612,9 @@ impl<
 
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-                let dec3 = self.decrement_fn_pointer(old_element_layout3);
+                let inc1 = self.increment_fn_pointer(old_element_layout1);
+                let inc2 = self.increment_fn_pointer(old_element_layout2);
+                let inc3 = self.increment_fn_pointer(old_element_layout3);
 
                 self.build_fn_pointer(&caller, caller_string);
 
@@ -2652,9 +2656,9 @@ impl<
                     old_element_width2,
                     old_element_width3,
                     new_element_width,
-                    dec1,
-                    dec2,
-                    dec3,
+                    inc1,
+                    inc2,
+                    inc3,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2671,9 +2675,9 @@ impl<
                     usize_,       // old_element_width_2
                     usize_,       // old_element_width_3
                     usize_,       // new_element_width
-                    ptr,          // dec1
-                    ptr,          // dec2
-                    ptr,          // dec3
+                    ptr,          // inc1
+                    ptr,          // inc2
+                    ptr,          // inc3
                     Layout::BOOL, // new_element_refcounted
                 ];
 
@@ -2732,10 +2736,10 @@ impl<
 
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-                let dec3 = self.decrement_fn_pointer(old_element_layout3);
-                let dec4 = self.decrement_fn_pointer(old_element_layout4);
+                let inc1 = self.increment_fn_pointer(old_element_layout1);
+                let inc2 = self.increment_fn_pointer(old_element_layout2);
+                let inc3 = self.increment_fn_pointer(old_element_layout3);
+                let inc4 = self.increment_fn_pointer(old_element_layout4);
 
                 self.build_fn_pointer(&caller, caller_string);
 
@@ -2767,10 +2771,10 @@ impl<
                     old_element_width3,
                     old_element_width4,
                     new_element_width,
-                    dec1,
-                    dec2,
-                    dec3,
-                    dec4,
+                    inc1,
+                    inc2,
+                    inc3,
+                    inc4,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2789,10 +2793,10 @@ impl<
                     usize_,       // old_element_width_3
                     usize_,       // old_element_width_4
                     usize_,       // new_element_width
-                    ptr,          // dec1
-                    ptr,          // dec2
-                    ptr,          // dec3
-                    ptr,          // dec4
+                    ptr,          // inc1
+                    ptr,          // inc2
+                    ptr,          // inc3
+                    ptr,          // inc4
                     Layout::BOOL, // new_element_refcounted
                 ];
 
