@@ -93,63 +93,85 @@ pub fn unwrap_suffixed_expression<'a>(
     loc_expr: &'a Loc<Expr<'a>>,
     maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
-    match loc_expr.value {
-        Expr::Var { suffixed, .. } if suffixed == 0 => Ok(loc_expr),
+    let result = {
+        match loc_expr.value {
+            Expr::Var { suffixed, .. } if suffixed == 0 => Ok(loc_expr),
 
-        Expr::Var {
-            module_name,
-            ident,
-            suffixed,
-        } if suffixed > 0 => {
-            let unwrapped_var = arena.alloc(Loc::at(
-                loc_expr.region,
-                Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed: suffixed.saturating_sub(1),
-                },
-            ));
+            Expr::Var {
+                module_name,
+                ident,
+                suffixed,
+            } if suffixed > 0 => {
+                let unwrapped_var = arena.alloc(Loc::at(
+                    loc_expr.region,
+                    Expr::Var {
+                        module_name,
+                        ident,
+                        suffixed: suffixed.saturating_sub(1),
+                    },
+                ));
 
-            init_unwrapped_err(arena, unwrapped_var, maybe_def_pat)
+                init_unwrapped_err(arena, unwrapped_var, maybe_def_pat)
+            }
+
+            Expr::Defs(..) => unwrap_suffixed_expression_defs_help(arena, loc_expr, maybe_def_pat),
+
+            Expr::Apply(..) => {
+                unwrap_suffixed_expression_apply_help(arena, loc_expr, maybe_def_pat)
+            }
+
+            Expr::When(..) => unwrap_suffixed_expression_when_help(arena, loc_expr, maybe_def_pat),
+
+            Expr::If(..) => {
+                unwrap_suffixed_expression_if_then_else_help(arena, loc_expr, maybe_def_pat)
+            }
+
+            Expr::Closure(..) => {
+                unwrap_suffixed_expression_closure_help(arena, loc_expr, maybe_def_pat)
+            }
+
+            Expr::ParensAround(..) => {
+                unwrap_suffixed_expression_parens_help(arena, loc_expr, maybe_def_pat)
+            }
+
+            Expr::SpaceBefore(..) | Expr::SpaceAfter(..) => {
+                internal_error!(
+                    "SpaceBefore and SpaceAfter should have been removed in desugar_expr"
+                )
+            }
+
+            Expr::BinOps(..) => {
+                internal_error!("BinOps should have been desugared in desugar_expr")
+            }
+
+            // we only need to unwrap some expressions, leave the rest as is
+            _ => Ok(loc_expr),
         }
+    };
 
-        Expr::Defs(..) => unwrap_suffixed_expression_defs_help(arena, loc_expr, maybe_def_pat),
-
-        Expr::Apply(..) => unwrap_suffixed_expression_apply_help(arena, loc_expr, maybe_def_pat),
-
-        Expr::When(..) => unwrap_suffixed_expression_when_help(arena, loc_expr, maybe_def_pat),
-
-        Expr::If(..) => {
-            unwrap_suffixed_expression_if_then_else_help(arena, loc_expr, maybe_def_pat)
-        }
-
-        Expr::Closure(..) => {
-            unwrap_suffixed_expression_closure_help(arena, loc_expr, maybe_def_pat)
-        }
-
-        Expr::ParensAround(..) => {
-            unwrap_suffixed_expression_parens_help(arena, loc_expr, maybe_def_pat)
-        }
-
-        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) => {
-            internal_error!("SpaceBefore and SpaceAfter should have been removed in desugar_expr")
-        }
-
-        Expr::BinOps(..) => internal_error!("BinOps should have been desugared in desugar_expr"),
-
-        // we only need to unwrap some expressions, leave the rest as is
-        _ => Ok(loc_expr),
+    #[cfg(all(test, debug_assertions))]
+    {
+        // only run in tests
+        dbg!(
+            "unwrap_suffixed_expression",
+            &loc_expr,
+            maybe_def_pat,
+            &result
+        );
     }
+
+    result
 }
 
 pub fn unwrap_suffixed_expression_parens_help<'a>(
     arena: &'a Bump,
     loc_expr: &'a Loc<Expr<'a>>,
-    maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
+    _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
         Expr::ParensAround(sub_loc_expr) => {
-            match unwrap_suffixed_expression(arena, arena.alloc(Loc::at_zero(*sub_loc_expr)), maybe_def_pat)
+            // note we use `None` here as we always want to generate a new pattern from child expressions
+            match unwrap_suffixed_expression(arena, arena.alloc(Loc::at_zero(*sub_loc_expr)), None)
             {
                 Ok(new_expr) => {
                     let new_parens = arena.alloc(Loc::at(
@@ -158,12 +180,8 @@ pub fn unwrap_suffixed_expression_parens_help<'a>(
                     ));
                     Ok(new_parens)
                 }
-                Err(EUnwrapped::UnwrappedDefExpr(unwrapped_parens)) => {
-                    let new_parens = arena.alloc(Loc::at(
-                        loc_expr.region,
-                        ParensAround(&unwrapped_parens.value),
-                    ));
-                    Err(EUnwrapped::UnwrappedDefExpr(new_parens))
+                Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                    internal_error!("unreachable, child expressions from ParensAround should generate UnwrappedSubExpr instead");
                 }
                 Err(EUnwrapped::UnwrappedSubExpr {
                     sub_arg,
@@ -190,44 +208,38 @@ pub fn unwrap_suffixed_expression_parens_help<'a>(
 pub fn unwrap_suffixed_expression_closure_help<'a>(
     arena: &'a Bump,
     loc_expr: &'a Loc<Expr<'a>>,
-    maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
+    _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
-        Expr::Closure(args, return_expr) => {
-            let count_suffixed_args = args
+        Expr::Closure(closure_args, closure_loc_ret) => {
+
+            // Check to make sure that arguments are not suffixed
+            let suffixed_arg_count = closure_args
                 .iter()
                 .filter(|loc_pat| loc_pat.value.is_suffixed())
                 .count();
 
-            if count_suffixed_args > 0 {
+            if suffixed_arg_count > 0 {
                 debug_assert!(false,"closure arguments should not be suffixed");
                 return Err(EUnwrapped::Malformed);
             }
 
-            // check the return expression
-            match unwrap_suffixed_expression(arena, return_expr, maybe_def_pat) {
-                Ok(new_expr) => {
-                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(args, new_expr)));
+            // note we use `None` here as we don't want to pass a DefExpr up and 
+            // unwrap the definition pattern for the closure
+            match unwrap_suffixed_expression(arena, closure_loc_ret, None) {
+                Ok(unwrapped_expr) => {
+                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(closure_args, unwrapped_expr)));
                     Ok(new_closure)
                 }
-                Err(EUnwrapped::UnwrappedDefExpr(unwrapped_return)) => {
-                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(args, unwrapped_return)));
-                    Err(EUnwrapped::UnwrappedDefExpr(new_closure))
+                Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
+                    let new_closure_loc_ret = apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new);
+                    let new_closure = arena.alloc(Loc::at(loc_expr.region, Expr::Closure(closure_args, new_closure_loc_ret)));
+                    Ok(new_closure)
                 }
-                Err(EUnwrapped::UnwrappedSubExpr {
-                    sub_arg,
-                    sub_pat,
-                    sub_new,
-                }) => {
-                    let new_closure =
-                        arena.alloc(Loc::at(loc_expr.region, Expr::Closure(args, sub_new)));
-                    Err(EUnwrapped::UnwrappedSubExpr {
-                        sub_arg,
-                        sub_pat,
-                        sub_new: new_closure,
-                    })
+                Err(err) => {
+                    debug_assert!(false,"the closure Defs was malformd, got {:#?}", err);
+                    Err(EUnwrapped::Malformed)
                 }
-                Err(err) => Err(err),
             }
         }
         _ => internal_error!("unreachable, expected a Closure node to be passed into unwrap_suffixed_expression_closure_help"),
@@ -267,6 +279,24 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                 }
             }
 
+            // special case for when our Apply function is a suffixed Var (but not multiple suffixed)
+            if let Expr::Var { module_name, ident, suffixed } = function.value {
+                if suffixed == 1 {
+                    let unwrapped_function = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::Var {
+                            module_name,
+                            ident,
+                            suffixed: suffixed - 1,
+                        },
+                    ));
+
+                    let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
+
+                    return init_unwrapped_err(arena, new_apply, maybe_def_pat);
+                }
+            }
+
             // function is another expression
             match unwrap_suffixed_expression(arena, function, maybe_def_pat) {
                 Ok(new_function) => {
@@ -279,9 +309,9 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                 }
                 Err(EUnwrapped::UnwrappedSubExpr { sub_arg: unwrapped_function, sub_pat, sub_new }) => {
 
-                    let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
+                    let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(sub_new, local_args, called_via)));
 
-                    Err(EUnwrapped::UnwrappedSubExpr { sub_arg: new_apply, sub_pat, sub_new})
+                    Err(EUnwrapped::UnwrappedSubExpr { sub_arg: unwrapped_function, sub_pat, sub_new:new_apply})
                 }
                 Err(err) => Err(err)
             }
@@ -437,29 +467,38 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
     match loc_expr.value {
         Expr::Defs(defs, loc_ret) => {
 
+            let mut local_defs = defs.clone();
+            let tags = local_defs.tags.clone();
+
             // try an unwrap each def, if none can be unwrapped, then try to unwrap the loc_ret
-            for (tag_index, type_or_value_def) in defs.defs().enumerate() {
+            for (tag_index, type_or_value_def_index) in tags.iter().enumerate() {
                 use ValueDef::*;
 
-                let maybe_suffixed_value_def = match type_or_value_def.err() {
-                    None | Some(Annotation(..)) | Some(Dbg{..}) | Some(Expect{..}) | Some(ExpectFx{..}) | Some(Stmt(..))=> None,
-                    Some(AnnotatedBody { body_pattern, body_expr, .. }) => Some((body_pattern, body_expr)),
-                    Some(Body (def_pattern, def_expr, .. )) => Some((def_pattern, def_expr)),
+                let mut current_value_def = match type_or_value_def_index.split() {
+                    Ok(..) => {
+                        // ignore type definitions
+                        continue;
+                    },
+                    Err(value_index) => *local_defs.value_defs.get(value_index.index()).unwrap(),
+                };
+
+                let maybe_suffixed_value_def = match current_value_def {
+                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) => None,
+                    AnnotatedBody { body_pattern, body_expr, .. } => Some((body_pattern, body_expr)),
+                    Body (def_pattern, def_expr, .. ) => Some((def_pattern, def_expr)),
                 };
 
                 match maybe_suffixed_value_def {
                     None => {
                         // We can't unwrap this def type, continue
-                        continue;
                     },
                     Some((def_pattern, def_expr)) => {
-                        match unwrap_suffixed_expression(arena, def_expr, Some(*def_pattern)) {
-                            Ok(..) => {
-                                // Nothing further to unwrap with this def, continue
-                                continue;
+                        match unwrap_suffixed_expression(arena, def_expr, Some(def_pattern)) {
+                            Ok(unwrapped_def) => {
+                                current_value_def.replace_expr(unwrapped_def);
+                                local_defs.replace_with_value_def(tag_index, current_value_def, def_expr.region);
                             }
                             Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
-                                let local_defs = defs.clone();
                                 let split_defs = local_defs.split_defs_around(tag_index);
                                 let before_empty = split_defs.before.is_empty();
                                 let after_empty = split_defs.after.is_empty();
@@ -475,7 +514,6 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                             return Err(EUnwrapped::Malformed);
                                         },
                                     };
-
                                     return unwrap_suffixed_expression(arena, apply_task_await(arena,def_expr.region,unwrapped_expr,def_pattern,next_expr), maybe_def_pat);
                                 } else if before_empty {
                                     // NIL before, SOME after -> FIRST DEF
@@ -520,7 +558,6 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                 }
                             }
                             Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
-                                let mut local_defs = defs.clone();
                                 let new_body_def = ValueDef::Body(def_pattern, sub_new);
                                 local_defs.replace_with_value_def(tag_index,new_body_def, sub_new.region);
                                 let new_defs_expr = arena.alloc(Loc::at(def_expr.region,Defs(arena.alloc(local_defs), loc_ret)));
@@ -536,11 +573,11 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
             // try to unwrap the loc_ret
             match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat){
                 Ok(new_loc_ret) => {
-                    Ok(arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(defs), new_loc_ret))))
+                            Ok(arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(local_defs), new_loc_ret))))
                 },
                 Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
                     let new_loc_ret = apply_task_await(arena, loc_expr.region,sub_arg,sub_pat,sub_new);
-                    let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(defs), new_loc_ret)));
+                    let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(local_defs), new_loc_ret)));
                     unwrap_suffixed_expression(arena, new_defs, maybe_def_pat)
                 }
                 Err(EUnwrapped::UnwrappedDefExpr(..)) => {

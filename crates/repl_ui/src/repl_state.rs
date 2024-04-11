@@ -233,6 +233,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                         ExprParseOptions {
                             accept_multi_backpassing: true,
                             check_for_arrow: true,
+                            suffixed_found: false,
                         },
                         0,
                         arena,
@@ -257,6 +258,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
+                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,
@@ -305,6 +307,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
+                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,
