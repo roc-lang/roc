@@ -359,6 +359,21 @@ impl Expr<'_> {
             }
         }
     }
+
+    pub fn get_region_spanning_binops(&self) -> Region {
+        match self {
+            Expr::BinOps(firsts, last) => {
+                let mut region = last.region;
+
+                for (loc_expr, _) in firsts.iter() {
+                    region = Region::span_across(&loc_expr.region, &region);
+                }
+
+                region
+            }
+            _ => internal_error!("other expr types not supported"),
+        }
+    }
 }
 
 pub fn split_loc_exprs_around<'a>(
@@ -377,44 +392,40 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
         Expr::Var { suffixed, .. } => suffixed > 0,
 
         // expression with arguments, `line! "Foo"`
-        Expr::Apply(sub_loc_expr, _, _) => is_loc_expr_suffixed(sub_loc_expr),
+        Expr::Apply(sub_loc_expr, apply_args, _) => {
+            let is_function_suffixed = is_loc_expr_suffixed(sub_loc_expr);
+            let any_args_suffixed = apply_args.iter().any(|arg| is_loc_expr_suffixed(arg));
 
-        // expression in a pipeline, `"hi" |> say!`
-        Expr::BinOps(chain, sub_loc_expr) => {
-            let sum: isize = chain
-                .iter()
-                .map(|(chain_loc_expr, _)| -> isize {
-                    if is_loc_expr_suffixed(chain_loc_expr) {
-                        1
-                    } else {
-                        0
-                    }
-                })
-                .sum();
-
-            is_loc_expr_suffixed(sub_loc_expr) || sum > 0
+            any_args_suffixed || is_function_suffixed
         }
 
-        // // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
-        // Expr::If(if_thens, final_else) => {
-        //     let sum: isize = if_thens
-        //         .iter()
-        //         .map(|(if_then, else_expr)| -> isize {
-        //             if is_loc_expr_suffixed(if_then) || is_loc_expr_suffixed(else_expr) {
-        //                 1
-        //             } else {
-        //                 0
-        //             }
-        //         })
-        //         .sum();
+        // expression in a pipeline, `"hi" |> say!`
+        Expr::BinOps(firsts, last) => {
+            let is_expr_suffixed = is_loc_expr_suffixed(last);
+            let any_chain_suffixed = firsts
+                .iter()
+                .any(|(chain_loc_expr, _)| is_loc_expr_suffixed(chain_loc_expr));
 
-        //     is_loc_expr_suffixed(final_else) || sum > 0
-        // }
+            is_expr_suffixed || any_chain_suffixed
+        }
 
-        // // expression in parens `(read!)`
-        // Expr::ParensAround(sub_loc_expr) => {
-        //     is_loc_expr_suffixed(&Loc::at(loc_expr.region, *sub_loc_expr))
-        // }
+        // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
+        Expr::If(if_thens, final_else) => {
+            let any_if_thens_suffixed = if_thens.iter().any(|(if_then, else_expr)| {
+                is_loc_expr_suffixed(if_then) || is_loc_expr_suffixed(else_expr)
+            });
+
+            is_loc_expr_suffixed(final_else) || any_if_thens_suffixed
+        }
+
+        // expression in parens `(read!)`
+        Expr::ParensAround(sub_loc_expr) => {
+            is_loc_expr_suffixed(&Loc::at(loc_expr.region, *sub_loc_expr))
+        }
+
+        // expression in a closure
+        Expr::Closure(_, sub_loc_expr) => is_loc_expr_suffixed(sub_loc_expr),
+
         _ => false,
     }
 }
@@ -538,6 +549,16 @@ pub enum ValueDef<'a> {
     },
 
     Stmt(&'a Loc<Expr<'a>>),
+}
+
+impl<'a> ValueDef<'a> {
+    pub fn replace_expr(&mut self, new_expr: &'a Loc<Expr<'a>>) {
+        match self {
+            ValueDef::Body(_, expr) => *expr = new_expr,
+            ValueDef::AnnotatedBody { body_expr, .. } => *body_expr = new_expr,
+            _ => internal_error!("replacing expr in unsupported ValueDef"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -702,55 +723,14 @@ impl<'a> Defs<'a> {
     pub fn replace_with_value_def(
         &mut self,
         index: usize,
-        new_value_def: ValueDef<'a>,
-        new_region: Region,
+        value_def: ValueDef<'a>,
+        region: Region,
     ) {
-        let mut new_defs = Defs::default();
+        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let tag = EitherIndex::from_right(value_def_index);
 
-        for (tag_index, tag) in self.tags.iter().enumerate() {
-            let space_before = {
-                let start = self.space_before[tag_index].start();
-                let len = self.space_before[tag_index].len();
-
-                &self.spaces[start..(start + len)]
-            };
-            let space_after = {
-                let start = self.space_after[tag_index].start();
-                let len = self.space_after[tag_index].len();
-
-                &self.spaces[start..(start + len)]
-            };
-
-            match tag.split() {
-                Ok(type_def_index) => {
-                    let type_def = self.type_defs[type_def_index.index()];
-                    let region = self.regions[tag_index];
-
-                    let type_def_index = Index::push_new(&mut new_defs.type_defs, type_def);
-                    let tag = EitherIndex::from_left(type_def_index);
-                    new_defs.push_def_help(tag, region, space_before, space_after);
-                }
-                Err(value_def_index) => {
-                    let (value_def, region) = if tag_index != index {
-                        // use the existing values
-                        (
-                            self.value_defs[value_def_index.index()],
-                            self.regions[tag_index],
-                        )
-                    } else {
-                        // use the new values
-                        (new_value_def, new_region)
-                    };
-
-                    let new_value_def_index = Index::push_new(&mut new_defs.value_defs, value_def);
-                    let tag = EitherIndex::from_right(new_value_def_index);
-                    new_defs.push_def_help(tag, region, space_before, space_after)
-                }
-            }
-        }
-
-        // replace the defs with our new defs
-        *self = new_defs;
+        self.tags[index] = tag;
+        self.regions[index] = region;
     }
 
     pub fn push_type_def(
