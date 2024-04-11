@@ -586,22 +586,29 @@ trait Backend<'a> {
                 let dst = Symbol::DEV_TMP;
 
                 let layout = *self.layout_map().get(symbol).unwrap();
+                debug_assert!(!matches!(self.interner().get_repr(layout), LayoutRepr::Builtin(Builtin::List(_))), "List are no longer safe to refcount through pointer alone. They must go through the zig bitcode functions");
+
                 let alignment_bytes = self.interner().allocation_alignment_bytes(layout);
                 let alignment = self.debug_symbol("alignment");
                 self.load_literal_i32(&alignment, alignment_bytes as i32);
+
+                // elems_refcounted (always false except for list which are refcounted differently)
+                let elems_refcounted = self.debug_symbol("elems_refcounted");
+                self.load_literal(&elems_refcounted, &Layout::BOOL, &Literal::Bool(false));
 
                 // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
 
                 self.build_fn_call(
                     &dst,
                     bitcode::UTILS_FREE_DATA_PTR.to_string(),
-                    &[*symbol, alignment],
-                    &[Layout::I64, Layout::I32],
+                    &[*symbol, alignment, elems_refcounted],
+                    &[Layout::I64, Layout::I32, Layout::BOOL],
                     &Layout::UNIT,
                 );
 
                 self.free_symbol(&dst);
                 self.free_symbol(&alignment);
+                self.free_symbol(&elems_refcounted);
 
                 self.build_stmt(layout_ids, following, ret_layout)
             }

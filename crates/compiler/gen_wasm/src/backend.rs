@@ -986,6 +986,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
     fn stmt_refcounting_free(&mut self, value: Symbol, following: &'a Stmt<'a>) {
         let layout = self.storage.symbol_layouts[&value];
+        debug_assert!(!matches!(self.layout_interner.get_repr(layout), LayoutRepr::Builtin(Builtin::List(_))), "List are no longer safe to refcount through pointer alone. They must go through the zig bitcode functions");
+
         let alignment = self.layout_interner.allocation_alignment_bytes(layout);
 
         // Get pointer and offset
@@ -1009,6 +1011,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // push the allocation's alignment
         self.code_builder.i32_const(alignment as i32);
+
+        // elems_refcounted (always false except for list which are refcounted differently)
+        self.code_builder.i32_const(false as i32);
 
         self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR);
 
