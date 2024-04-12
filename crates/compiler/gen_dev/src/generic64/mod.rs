@@ -2533,6 +2533,8 @@ impl<
                 //    old_element_width1: usize,
                 //    old_element_width2: usize,
                 //    new_element_width: usize,
+                //    inc1: Inc
+                //    inc2: Inc
                 //    new_element_refcounted: bool,
 
                 let arguments = [
@@ -2943,7 +2945,15 @@ impl<
             // dec
             dec_elem_fn,
         ];
-        let lowlevel_arg_layouts = [ret_layout, Layout::U32, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [
+            ret_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            usize_layout,
+            usize_layout,
+        ];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
@@ -3003,7 +3013,14 @@ impl<
             // Inc element fn
             inc_elem_fn,
         ];
-        let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
+        let layout_usize = Layout::U64;
+        let lowlevel_arg_layouts = [
+            capacity_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            layout_usize,
+        ];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
@@ -3082,11 +3099,14 @@ impl<
             // update_mode
             Symbol::DEV_TMP4,
          ];
+        let usize_layout = Layout::U64;
         let lowlevel_arg_layouts = [
             list_layout,
             Layout::U32,
             spare_layout,
             Layout::U64,
+            Layout::BOOL,
+            usize_layout,
             u8_layout,
         ];
 
@@ -3473,7 +3493,15 @@ impl<
             // inc
             inc_elem_fn,
         ];
-        let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [
+            list_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::U64,
+            Layout::BOOL,
+            usize_layout,
+        ];
 
         self.build_fn_call(
             &Symbol::DEV_TMP5,
