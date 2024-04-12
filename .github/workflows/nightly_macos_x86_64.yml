@@ -1,5 +1,5 @@
 on:
-    pull_request:
+    #pull_request:
     workflow_dispatch:
     schedule:
         - cron: "0 9 * * *" # 9=9am utc+0
