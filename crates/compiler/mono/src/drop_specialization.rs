@@ -1557,7 +1557,9 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | ListDropAt
         | ListSwap
         | ListReleaseExcessCapacity
-        | StrReleaseExcessCapacity => RC::Rc,
+        | StrReleaseExcessCapacity
+        | ListIncref
+        | ListDecref => RC::Rc,
 
         Eq | NotEq => RC::NoRc,
 

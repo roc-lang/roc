@@ -2013,6 +2013,7 @@ trait Backend<'a> {
                 //    alignment: u32,
                 //    element_width: usize,
                 //    element_refcounted: bool,
+                //    inc_elem_fn: Inc,
                 //    dec_elem_fn: Dec,
                 //    update_mode: UpdateMode,
 
@@ -2036,6 +2037,74 @@ trait Backend<'a> {
                         layout_usize,
                         layout_usize,
                         Layout::U8,
+                    ],
+                    ret_layout,
+                );
+            }
+
+            LowLevel::ListIncref => {
+                let list = args[0];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+
+                let layout_isize = Layout::I64;
+
+                let amount = if args.len() == 2 {
+                    // amount explicitly specified,
+                    args[1]
+                } else {
+                    // amount implicit 1.
+                    let sym = self.debug_symbol("amount");
+                    self.load_literal_i64(&sym, 1);
+                    sym
+                };
+
+                //    list: RocList,
+                //    amount: isize,
+                //    element_refcounted: bool,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_INCREF.to_string(),
+                    &[list, amount, list_argument.element_refcounted],
+                    &[list_layout, layout_isize, Layout::BOOL],
+                    ret_layout,
+                );
+            }
+
+            LowLevel::ListDecref => {
+                let list = args[0];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+
+                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    element_refcounted: bool,
+                //    dec_elem_fn: Dec,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_DECREF.to_string(),
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        list_argument.element_refcounted,
+                        dec_elem_fn,
+                    ],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        Layout::BOOL,
+                        layout_usize,
                     ],
                     ret_layout,
                 );

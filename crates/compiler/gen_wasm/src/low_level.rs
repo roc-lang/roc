@@ -305,6 +305,69 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CLONE);
             }
 
+            ListIncref => {
+                let input_list: Symbol = self.arguments[0];
+                let list_layout = backend
+                    .layout_interner
+                    .get_repr(backend.storage.symbol_layouts[&input_list]);
+                let elem_in_layout = unwrap_list_elem_layout(list_layout);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+
+                // Zig arguments              Wasm types
+                //  input_list: &RocList       i32
+                //  amount: isize              i32
+                //  element_refcounted: bool   i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[input_list]);
+                if self.arguments.len() == 2 {
+                    // amount explicitly specified.
+                    let amount = self.arguments[1];
+                    backend
+                        .storage
+                        .load_symbols(&mut backend.code_builder, &[amount]);
+                } else {
+                    // implicit 1 amount
+                    backend.code_builder.i32_const(1);
+                }
+                backend.code_builder.i32_const(elem_refcounted as i32);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_INCREF);
+            }
+
+            ListDecref => {
+                let input_list: Symbol = self.arguments[0];
+                let list_layout = backend
+                    .layout_interner
+                    .get_repr(backend.storage.symbol_layouts[&input_list]);
+                let elem_in_layout = unwrap_list_elem_layout(list_layout);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+
+                // Zig arguments              Wasm types
+                //  input_list: &RocList       i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  dec: Dec                   i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[input_list]);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(dec_fn_ptr);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DECREF);
+            }
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
