@@ -212,7 +212,6 @@ fn generate_entry_docs(
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
-                    // TODO is this right for suffixed??
                     if let Pattern::Identifier {
                         ident: identifier,
                         suffixed: _,
@@ -238,7 +237,6 @@ fn generate_entry_docs(
                     ann_type,
                     ..
                 } => {
-                    // TODO is this right for suffixed??
                     if let Pattern::Identifier {
                         ident: identifier,
                         suffixed: _,
@@ -259,7 +257,6 @@ fn generate_entry_docs(
                 }
 
                 ValueDef::Body(pattern, _) => {
-                    // TODO is this right for suffixed??
                     if let Pattern::Identifier {
                         ident: identifier,
                         suffixed: _,
@@ -292,7 +289,6 @@ fn generate_entry_docs(
                 }
 
                 ValueDef::Stmt(loc_expr) => {
-                    // TODO is this right for suffixed??
                     if let roc_parse::ast::Expr::Var {
                         ident: identifier, ..
                     } = loc_expr.value
@@ -320,7 +316,6 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        // TODO is this right for suffixed??
                         if let Pattern::Identifier {
                             ident: ident_name,
                             suffixed: _,
@@ -359,7 +354,6 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        // TODO is this right for suffixed??
                         if let Pattern::Identifier {
                             ident: ident_name,
                             suffixed: _,
@@ -388,7 +382,6 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        // TODO is this right for suffixed??
                         if let Pattern::Identifier {
                             ident: ident_name,
                             suffixed: _,
@@ -655,7 +648,6 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
                 .vars
                 .iter()
                 .filter_map(|loc_pattern| match loc_pattern.value {
-                    // TODO is this right for suffixed??
                     ast::Pattern::Identifier { ident, suffixed: _ } => Some(ident.to_string()),
                     _ => None,
                 })

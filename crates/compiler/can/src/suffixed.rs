@@ -128,7 +128,7 @@ pub fn unwrap_suffixed_expression<'a>(
                     },
                 ));
 
-                // we generate an intermedite pattern `#!a0` etc
+                // we generate an intermediate pattern `#!a0` etc
                 // so we dont unwrap the definition pattern
                 let (mut answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
 
@@ -362,6 +362,9 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
     _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     Ok(loc_expr)
+
+    // TODO - the logic below is mostly correct, however it needs to be
+    // translated to this new method and tests added, leaving this for a future PR
 
     // consider each if-statement, if it is suffixed we need to desugar e.g.
     // ```

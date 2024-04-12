@@ -265,7 +265,6 @@ pub fn canonicalize_def_header_pattern<'a>(
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
-        // TODO should we use suffixed here?
         Identifier {
             ident: name,
             suffixed: _,
@@ -377,7 +376,6 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        // TODO do we need to use suffixed here?
         Identifier {
             ident: name,
             suffixed: _,
@@ -634,7 +632,6 @@ pub fn canonicalize_pattern<'a>(
 
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
-                    // TODO should we use suffixed here?
                     Identifier {
                         ident: label,
                         suffixed: _,

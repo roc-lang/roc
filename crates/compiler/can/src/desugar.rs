@@ -495,12 +495,6 @@ pub fn desugar_expr<'a>(
             desugar_defs_node_values(arena, &mut defs, src, line_info, module_path, false);
             let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
 
-            // Desugar any suffixed nodes, such as `foo = bar!`
-            // desugar_defs_node_suffixed(
-            //     arena,
-            //     arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
-            // )
-
             arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))
         }
         Apply(loc_fn, loc_args, called_via) => {
@@ -683,15 +677,6 @@ pub fn desugar_expr<'a>(
                 value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
                 region: loc_expr.region,
             })
-
-            // Desugar any suffixed nodes, such as `if isTrue! then ...`
-            // desugar_if_node_suffixed(
-            //     arena,
-            //     arena.alloc(Loc {
-            //         value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
-            //         region: loc_expr.region,
-            //     }),
-            // )
         }
         Expect(condition, continuation) => {
             let desugared_condition =

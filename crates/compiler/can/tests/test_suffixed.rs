@@ -7,6 +7,11 @@ mod suffixed_tests {
     use roc_test_utils::assert_multiline_str_eq;
 
     /**
+     * This example tests a suffixed statement, followed
+     * by a Body with an empty record pattern.
+     *
+     * The def final expression is explicitly provided.
+     *
     ```roc
     main =
         line! "Ahoy"
@@ -44,8 +49,8 @@ mod suffixed_tests {
     }
 
     /**
-    The hello world of examples
-
+     * The most simple suffixed example. A single statement
+     * without arguments and a final expression.
     ```roc
     main =
         foo!
@@ -80,8 +85,8 @@ mod suffixed_tests {
     }
 
     /**
-    The hello world of examples
-
+     * A single suffixed statement with arguments applied.
+     * Note there is no final expression.
     ```roc
     main = foo! "bar" {} "baz"
 
@@ -109,8 +114,8 @@ mod suffixed_tests {
     }
 
     /**
-    The hello world of examples
-
+     * Multiple suffixed statements with no
+     * arguments, and no final expression.
     ```roc
     main =
         foo!
@@ -147,6 +152,8 @@ mod suffixed_tests {
     }
 
     /**
+     * A definition with a closure that contains a Defs node, which also
+     * contains a suffixed binops statement.
     ```roc
     main =
         x = \msg ->
@@ -188,8 +195,11 @@ mod suffixed_tests {
     }
 
     /**
-    Example of unwrapping a pipline statement
-
+     * Example of unwrapping a pipline statement
+     *
+     * Note pipelines are desugared into Apply functions,
+     * however this also tests the parser.
+     *
     ```roc
     main =
         "hello"
@@ -228,8 +238,12 @@ mod suffixed_tests {
     }
 
     /**
-    Example with a Parens sub-expression in an Apply function
-
+     * Example with a parens suffixed sub-expression
+     * in the function part of an Apply.
+     *
+     * Note how the parens unwraps into an intermediate answer #!a0 instead of
+     * unwrapping the def `do`.
+     *
     ```roc
     main =
         do = (sayMultiple!) "hi"
@@ -263,8 +277,8 @@ mod suffixed_tests {
     }
 
     /**
-    Example of handling Var's with single and multiple suffixes
-
+     * Example of unwrapping mixed Body defs with
+     * Var's of both single and multiple suffixes
     ```roc
     main =
         a = foo!
@@ -311,8 +325,10 @@ mod suffixed_tests {
     }
 
     /**
-    Example with multiple suffixes on a var
-
+     * Example with a multiple suffixed Var
+     *
+     * Note it unwraps into an intermediate answer `#!a0`
+     *
     ```roc
     main =
         foo!!
@@ -350,8 +366,7 @@ mod suffixed_tests {
     }
 
     /**
-    Example of nesting suffixed Apply functions
-
+     * A suffixed expression in the function part of the Apply
     ```roc
     main =
         x = (foo! "bar") "hello"
@@ -385,7 +400,7 @@ mod suffixed_tests {
     }
 
     /**
-    Example of an Applly with an argument that needs to be unwrapped
+     * A suffixed expression in an Apply argument position.
     ```roc
     main =
        x = bar (foo! "hello")
@@ -419,8 +434,7 @@ mod suffixed_tests {
     }
 
     /**
-    Example with multiple defs, the suffixed is not the first def
-
+     * Example where the suffixed def is not the first def
     ```roc
     main =
         msg = "hello"
@@ -455,8 +469,8 @@ mod suffixed_tests {
     }
 
     /**
-    Example of a suffixed inside a closure, and annotated blocks
-
+     * Annotated defs and a suffixed expression
+     * with annotations inside a closure
     ```roc
     main =
         x : Str -> Task _ _
@@ -505,8 +519,7 @@ mod suffixed_tests {
     }
 
     /**
-    Example of a suffixed inside a closure, and annotated blocks
-
+     * Nested suffixed expressions
     ```roc
     main =
         z = foo! (bar! baz) (blah stuff)

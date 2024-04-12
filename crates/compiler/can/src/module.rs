@@ -312,9 +312,6 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    // if module_path.contains("test.roc"){
-    //     dbg!(&loc_defs);
-    // }
 
     crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path, true);
 

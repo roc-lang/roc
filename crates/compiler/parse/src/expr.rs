@@ -713,9 +713,9 @@ pub fn parse_single_def<'a>(
                     //     Stdout.line! "Bar"
                     //     a=Stdout.line! "Foo"
                     //     Task.ok {}
-                    operator_result_state.line_indent() + 1,
+                    &operator_result_state.line_indent() + 1,
                     arena,
-                    operator_result_state.clone(),
+                    operator_result_state,
                     loc_pattern,
                     spaces_before_current,
                 );
