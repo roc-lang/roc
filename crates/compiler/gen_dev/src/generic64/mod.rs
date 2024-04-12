@@ -1082,6 +1082,8 @@ impl<
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
+        debug_assert_eq!(args.len(), arg_layouts.len());
+
         // Save used caller saved regs.
         self.storage_manager
             .push_used_caller_saved_regs_to_stack(&mut self.buf);
@@ -5335,7 +5337,7 @@ impl<
             &dst,
             bitcode::UTILS_ALLOCATE_WITH_REFCOUNT.to_string(),
             &[data_bytes, element_alignment, element_refcounted],
-            &[Layout::U64, Layout::U32],
+            &[Layout::U64, Layout::U32, Layout::BOOL],
             &Layout::U64,
         );
     }

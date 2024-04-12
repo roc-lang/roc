@@ -53,10 +53,6 @@ impl HelperOp {
     fn is_dec(&self) -> bool {
         matches!(self, Self::Dec)
     }
-
-    fn is_inc(&self) -> bool {
-        matches!(self, Self::Inc | Self::IncN)
-    }
 }
 
 #[derive(Debug)]
