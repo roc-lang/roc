@@ -10,9 +10,10 @@ app "desugar-bang"
 main =
     # is this a valid statement?
     "Foo" |> A.x!
+
     # what about this?
     "Bar"
-    |> B.y!
-        { config: "config" }
+        |> B.y!
+            { config: "config" }
 
     C.z "Bar"

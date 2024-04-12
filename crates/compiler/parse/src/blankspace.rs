@@ -204,7 +204,7 @@ pub fn check_indent<'a, E>(
 where
     E: 'a,
 {
-    let extra_spaces = if inside_suffixed_statement { 4 } else { 0 };
+    let extra_spaces = if inside_suffixed_statement { 1 } else { 0 };
 
     move |_, state: State<'a>, min_indent: u32| {
         if state.column() >= (min_indent + extra_spaces) {

@@ -93,7 +93,7 @@ pub fn unwrap_suffixed_expression<'a>(
     loc_expr: &'a Loc<Expr<'a>>,
     maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
-    let result = {
+    let unwrapped_expression = {
         match loc_expr.value {
             Expr::Var { suffixed, .. } if suffixed == 0 => Ok(loc_expr),
 
@@ -101,7 +101,7 @@ pub fn unwrap_suffixed_expression<'a>(
                 module_name,
                 ident,
                 suffixed,
-            } if suffixed > 0 => {
+            } if suffixed == 1 => {
                 let unwrapped_var = arena.alloc(Loc::at(
                     loc_expr.region,
                     Expr::Var {
@@ -112,6 +112,48 @@ pub fn unwrap_suffixed_expression<'a>(
                 ));
 
                 init_unwrapped_err(arena, unwrapped_var, maybe_def_pat)
+            }
+
+            Expr::Var {
+                module_name,
+                ident,
+                suffixed,
+            } if suffixed > 1 => {
+                let unwrapped_var = arena.alloc(Loc::at(
+                    loc_expr.region,
+                    Expr::Var {
+                        module_name,
+                        ident,
+                        suffixed: 0,
+                    },
+                ));
+
+                // we generate an intermedite pattern `#!a0` etc
+                // so we dont unwrap the definition pattern
+                let (mut answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
+
+                // we transfer the suffix from the Var to the intermediate answer Var
+                // as that will need to be unwrapped in a future call
+                if let Expr::Var {
+                    module_name: "",
+                    ident: answer_ident,
+                    suffixed: 0,
+                } = answer_var
+                {
+                    answer_var = Expr::Var {
+                        module_name: "",
+                        ident: answer_ident,
+                        suffixed: suffixed.saturating_sub(1),
+                    }
+                } else {
+                    internal_error!("expected a suffixed Var to be generated");
+                }
+
+                Err(EUnwrapped::UnwrappedSubExpr {
+                    sub_arg: unwrapped_var,
+                    sub_pat: arena.alloc(Loc::at(unwrapped_var.region, answer_pat)),
+                    sub_new: arena.alloc(Loc::at(unwrapped_var.region, answer_var)),
+                })
             }
 
             Expr::Defs(..) => unwrap_suffixed_expression_defs_help(arena, loc_expr, maybe_def_pat),
@@ -149,18 +191,12 @@ pub fn unwrap_suffixed_expression<'a>(
         }
     };
 
-    #[cfg(all(test, debug_assertions))]
-    {
-        // only run in tests
-        dbg!(
-            "unwrap_suffixed_expression",
-            &loc_expr,
-            maybe_def_pat,
-            &result
-        );
-    }
+    // KEEP THIS HERE FOR DEBUGGING
+    // USEFUL TO SEE THE UNWRAPPING
+    // OF AST NODES AS THEY DESCEND
+    // dbg!(&loc_expr, &unwrapped_expression);
 
-    result
+    unwrapped_expression
 }
 
 pub fn unwrap_suffixed_expression_parens_help<'a>(

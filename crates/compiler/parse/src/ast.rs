@@ -305,6 +305,11 @@ pub enum Expr<'a> {
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
+
+    /// Used in place of an expression when the final expression is empty
+    /// This may happen if the final expression is actually a suffixed statement
+    EmptyDefsFinal(),
+
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -425,6 +430,21 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
 
         // expression in a closure
         Expr::Closure(_, sub_loc_expr) => is_loc_expr_suffixed(sub_loc_expr),
+
+        // expressions inside a Defs
+        // note we ignore the final expression as it should not be suffixed
+        Expr::Defs(defs, _) => {
+            let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
+                Ok(_) => false,
+                Err(value_index) => match defs.value_defs[value_index.index()] {
+                    ValueDef::Body(_, loc_expr) => is_loc_expr_suffixed(loc_expr),
+                    ValueDef::AnnotatedBody { body_expr, .. } => is_loc_expr_suffixed(body_expr),
+                    _ => false,
+                },
+            });
+
+            any_defs_suffixed
+        }
 
         _ => false,
     }
@@ -1828,6 +1848,7 @@ impl<'a> Malformed for Expr<'a> {
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
             IngestedFile(_, _) |
+            EmptyDefsFinal() |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),

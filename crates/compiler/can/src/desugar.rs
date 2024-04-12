@@ -189,10 +189,33 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_arg,
                     sub_pat,
                     sub_new,
-                }) => Body(
-                    loc_pattern,
-                    apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new),
-                ),
+                }) => {
+                    let ok_wrapped_return = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::Apply(
+                            arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Expr::Var {
+                                    module_name: ModuleName::TASK,
+                                    ident: "ok",
+                                    suffixed: 0,
+                                },
+                            )),
+                            arena.alloc([sub_new]),
+                            CalledVia::BangSuffix,
+                        ),
+                    ));
+                    Body(
+                        loc_pattern,
+                        apply_task_await(
+                            arena,
+                            loc_expr.region,
+                            sub_arg,
+                            sub_pat,
+                            ok_wrapped_return,
+                        ),
+                    )
+                }
                 Err(..) => Body(
                     loc_pattern,
                     arena.alloc(Loc::at(loc_expr.region, MalformedSuffixed(loc_expr))),
@@ -740,6 +763,29 @@ pub fn desugar_expr<'a>(
                 ),
                 region: loc_expr.region,
             })
+        }
+
+        // Replace an empty final def with a `Task.ok {}`
+        EmptyDefsFinal() => {
+            let mut apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+            apply_args
+                .push(arena.alloc(Loc::at(loc_expr.region, Expr::Record(Collection::empty()))));
+
+            arena.alloc(Loc::at(
+                loc_expr.region,
+                Expr::Apply(
+                    arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::Var {
+                            module_name: ModuleName::TASK,
+                            ident: "ok",
+                            suffixed: 0,
+                        },
+                    )),
+                    arena.alloc(apply_args),
+                    CalledVia::BangSuffix,
+                ),
+            ))
         }
 
         // note this only exists after desugaring
