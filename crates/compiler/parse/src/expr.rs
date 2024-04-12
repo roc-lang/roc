@@ -2703,41 +2703,42 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
             specialize_err(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
             and!(
                 spaces(),
-                optional(either!(
-                    and!(byte(b':', ERecord::Colon), record_field_expr()),
-                    and!(
-                        byte(b'?', ERecord::QuestionMark),
+                and!(
+                    optional(skip_first!(byte(b':', ERecord::Colon), record_field_expr())),
+                    optional(skip_first!(
+                        skip_first!(spaces(), byte(b'?', ERecord::QuestionMark)),
                         spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
-                    )
-                ))
+                    ))
+                )
             )
         ),
         |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
             match opt_loc_val {
-                Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
+                (Some(RecordFieldExpr::Value(loc_val)), None) => {
                     RequiredValue(loc_label, spaces, arena.alloc(loc_val))
                 }
 
-                Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
+                (Some(RecordFieldExpr::Apply(arrow_spaces, loc_val)), None) => {
                     ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
                 }
 
-                Some(Either::Second((_, loc_val))) => {
-                    OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+                (None, Some(loc_val)) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
 
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
-                None => {
+                (None, None) => {
                     if !spaces.is_empty() {
                         SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
                     } else {
                         LabelOnly(loc_label)
                     }
                 }
+
+                (Some(_), Some(_)) => todo!(),
             }
         }
     )
+    .trace("record_field")
 }
 
 #[cfg(test)]
@@ -2791,6 +2792,25 @@ mod test {
     fn default() {
         let mut arena = bumpalo::Bump::new();
         let input = &b"x ? 0.0"[0..];
+        let state = State::new(input);
+        let parser = record_field();
+
+        let actual = parser.parse(&mut arena, state, 0).unwrap();
+        let spaces = vec![];
+        let pattern = Loc::new(4, 7, Expr::Float("0.0"));
+        let expected = (
+            MadeProgress,
+            RecordField::OptionalValue(Loc::new(0, 1, "x"), &spaces, &pattern),
+            State::new(input).advance(7),
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn both() {
+        let mut arena = bumpalo::Bump::new();
+        let input = &b"x: x1 ? 0.0"[0..];
         let state = State::new(input);
         let parser = record_field();
 
@@ -3105,6 +3125,7 @@ where
         }
         "<-" => good!(BinOp::Backpassing, 2),
         "!" => Err((NoProgress, to_error("!", state.pos()))),
+        "?" => Err((NoProgress, to_error("?", state.pos()))),
         _ => bad_made_progress!(chomped),
     }
 }
