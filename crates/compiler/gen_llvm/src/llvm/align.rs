@@ -21,7 +21,7 @@ impl LlvmAlignment<'_> for IntWidth {
                 // 128-bit integers are not consistently represented by LLVM.
                 // - AArch64 uses 16-byte alignment (https://godbolt.org/z/dYrfG5o4b)
                 // - x86-64 uses 8-byte alignment (https://godbolt.org/z/qj5Mann6b)
-                let arch = interner.target_info().architecture;
+                let arch = interner.target().architecture();
                 match arch {
                     Architecture::X86_64 => 8,
                     _ => 16,
@@ -33,7 +33,7 @@ impl LlvmAlignment<'_> for IntWidth {
 
 impl<'a> LlvmAlignment<'a> for FloatWidth {
     fn llvm_alignment_bytes(&self, interner: &STLayoutInterner<'a>) -> u32 {
-        self.alignment_bytes(interner.target_info())
+        self.alignment_bytes(interner.target())
     }
 }
 
@@ -48,7 +48,7 @@ impl<'a> LlvmAlignment<'a> for Builtin<'a> {
         use std::mem::align_of;
         use Builtin::*;
 
-        let ptr_width = interner.target_info().ptr_width() as u32;
+        let ptr_width = interner.target().ptr_width() as u32;
 
         // for our data structures, what counts is the alignment of the `( ptr, len )` tuple, and
         // since both of those are one pointer size, the alignment of that structure is a pointer
@@ -99,7 +99,7 @@ impl<'a> LlvmAlignment<'a> for UnionLayout<'a> {
             Recursive(_)
             | NullableWrapped { .. }
             | NullableUnwrapped { .. }
-            | NonNullableUnwrapped(_) => interner.target_info().ptr_width() as u32,
+            | NonNullableUnwrapped(_) => interner.target().ptr_width() as u32,
         }
     }
 }
@@ -120,7 +120,7 @@ impl<'a> LlvmAlignment<'a> for LayoutRepr<'a> {
                 .llvm_alignment_bytes(interner),
             Builtin(builtin) => builtin.llvm_alignment_bytes(interner),
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) | Erased(_) => {
-                interner.target_info().ptr_width() as u32
+                interner.target().ptr_width() as u32
             }
         }
     }

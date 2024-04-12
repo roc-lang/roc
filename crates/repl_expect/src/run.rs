@@ -11,7 +11,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_can::expr::ExpectLookup;
-use roc_collections::{MutSet, VecMap};
+use roc_collections::{MutMap, MutSet, VecMap};
 use roc_error_macros::internal_error;
 use roc_gen_llvm::{
     llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
@@ -26,9 +26,8 @@ use roc_mono::{
 };
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::subs::Subs;
-use target_lexicon::Triple;
 
 pub struct ExpectMemory<'a> {
     ptr: *mut u8,
@@ -469,7 +468,7 @@ fn render_expect_failure<'a>(
     offset: usize,
 ) -> std::io::Result<usize> {
     // we always run programs as the host
-    let target_info = (&target_lexicon::Triple::host()).into();
+    let target = target_lexicon::Triple::host().into();
 
     let frame = ExpectFrame::at_offset(start, offset);
     let module_id = frame.module_id;
@@ -487,7 +486,7 @@ fn render_expect_failure<'a>(
     let symbols = split_expect_lookups(&data.subs, current);
 
     let (offset, expressions, variables) = crate::get_values(
-        target_info,
+        target,
         arena,
         &data.subs,
         interns,
@@ -613,20 +612,18 @@ pub struct ExpectFunctions<'a> {
 
 pub fn expect_mono_module_to_dylib<'a>(
     arena: &'a Bump,
-    target: Triple,
+    target: Target,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
 ) -> Result<
     (
         libloading::Library,
-        ExpectFunctions<'a>,
+        MutMap<ModuleId, ExpectFunctions<'a>>,
         STLayoutInterner<'a>,
     ),
     libloading::Error,
 > {
-    let target_info = TargetInfo::from(&target);
-
     let MonomorphizedModule {
         toplevel_expects,
         procedures,
@@ -638,7 +635,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     let context = Context::create();
     let builder = context.create_builder();
     let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-        &target, &context, "",
+        target, &context, "",
     ));
 
     let module = arena.alloc(module);
@@ -656,7 +653,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         context: &context,
         interns,
         module,
-        target_info,
+        target,
         mode,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
@@ -666,50 +663,68 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let capacity = toplevel_expects.pure.len() + toplevel_expects.fx.len();
-    let mut expect_symbols = BumpVec::with_capacity_in(capacity, env.arena);
-
-    expect_symbols.extend(toplevel_expects.pure.keys().copied());
-    expect_symbols.extend(toplevel_expects.fx.keys().copied());
+    let expects_symbols = toplevel_expects
+        .iter()
+        .map(|(module_id, expects)| {
+            (
+                *module_id,
+                bumpalo::collections::Vec::from_iter_in(
+                    expects
+                        .pure
+                        .keys()
+                        .copied()
+                        .chain(expects.fx.keys().copied()),
+                    env.arena,
+                ),
+            )
+        })
+        .collect();
 
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         &layout_interner,
         opt_level,
-        expect_symbols.into_bump_slice(),
+        expects_symbols,
         procedures,
     );
 
-    let expects_fx = bumpalo::collections::Vec::from_iter_in(
-        toplevel_expects
-            .fx
-            .into_iter()
-            .zip(expect_names.iter().skip(toplevel_expects.pure.len()))
-            .map(|((symbol, region), name)| ToplevelExpect {
-                symbol,
-                region,
-                name,
-            }),
-        env.arena,
-    );
+    let mut modules_expects: MutMap<ModuleId, ExpectFunctions> = MutMap::default();
 
-    let expects_pure = bumpalo::collections::Vec::from_iter_in(
-        toplevel_expects
-            .pure
-            .into_iter()
-            .zip(expect_names.iter())
-            .map(|((symbol, region), name)| ToplevelExpect {
-                symbol,
-                region,
-                name,
-            }),
-        env.arena,
-    );
+    for (module_id, expects) in toplevel_expects.into_iter() {
+        let expect_names = expect_names.get(&module_id).unwrap();
 
-    let expects = ExpectFunctions {
-        pure: expects_pure,
-        fx: expects_fx,
-    };
+        let expects_fx = bumpalo::collections::Vec::from_iter_in(
+            expects
+                .fx
+                .into_iter()
+                .zip(expect_names.iter().skip(expects.pure.len()))
+                .map(|((symbol, region), name)| ToplevelExpect {
+                    symbol,
+                    region,
+                    name,
+                }),
+            env.arena,
+        );
+
+        let expects_pure =
+            bumpalo::collections::Vec::from_iter_in(
+                expects.pure.into_iter().zip(expect_names.iter()).map(
+                    |((symbol, region), name)| ToplevelExpect {
+                        symbol,
+                        region,
+                        name,
+                    },
+                ),
+                env.arena,
+            );
+
+        let expect_funs = ExpectFunctions {
+            pure: expects_pure,
+            fx: expects_fx,
+        };
+
+        modules_expects.insert(module_id, expect_funs);
+    }
 
     env.dibuilder.finalize();
 
@@ -735,5 +750,6 @@ pub fn expect_mono_module_to_dylib<'a>(
         env.module.print_to_file(path).unwrap();
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, layout_interner))
+    llvm_module_to_dylib(env.module, target, opt_level)
+        .map(|dy_lib| (dy_lib, modules_expects, layout_interner))
 }

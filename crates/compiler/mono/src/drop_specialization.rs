@@ -1181,7 +1181,7 @@ fn specialize_list<'a, 'i>(
                                 newer_continuation = arena.alloc(Stmt::Let(
                                     index_symbol,
                                     Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
-                                    Layout::isize(layout_interner.target_info()),
+                                    Layout::isize(layout_interner.target()),
                                     index,
                                 ));
                             }
@@ -1592,8 +1592,12 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumToFloatChecked
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
-        | NumCountOneBits => RC::NoRc,
-        I128OfDec => RC::NoRc,
+        | NumCountOneBits
+        | NumF32ToParts
+        | NumF64ToParts
+        | NumF32FromParts
+        | NumF64FromParts => RC::NoRc,
+        NumWithoutDecimalPoint | NumWithDecimalPoint => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,

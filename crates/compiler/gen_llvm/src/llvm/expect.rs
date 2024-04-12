@@ -184,8 +184,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
     let after_header = offset;
 
     let space_for_offsets = env.ptr_int().const_int(
-        (lookups.len() * env.target_info.ptr_size() + lookups.len() * std::mem::size_of::<u32>())
-            as _,
+        (lookups.len() * env.target.ptr_size() + lookups.len() * std::mem::size_of::<u32>()) as _,
         false,
     );
 
@@ -232,9 +231,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
             {
                 build_copy(env, original_ptr, offset, lookup_start.into());
 
-                let ptr_width = env
-                    .ptr_int()
-                    .const_int(env.target_info.ptr_size() as _, false);
+                let ptr_width = env.ptr_int().const_int(env.target.ptr_size() as _, false);
 
                 offset = env.builder.new_build_int_add(offset, ptr_width, "offset");
             }
@@ -698,7 +695,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                 let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
 
                 let layout = LayoutRepr::struct_(field_layouts);
-                let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                let layout = if union_layout.stores_tag_id_in_pointer(env.target) {
                     layout
                 } else {
                     // [...fields, tag ID]
@@ -914,7 +911,7 @@ fn write_pointer_with_tag_id<'a, 'ctx>(
     union_layout: UnionLayout<'a>,
     tag_id: usize,
 ) {
-    if union_layout.stores_tag_id_in_pointer(env.target_info) {
+    if union_layout.stores_tag_id_in_pointer(env.target) {
         // first, store tag id as u32
         let tag_id_intval = env.context.i32_type().const_int(tag_id as _, false);
         build_copy(env, ptr, offset, tag_id_intval.into());

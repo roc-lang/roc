@@ -17,6 +17,7 @@ mod helpers;
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
+use roc_load_internal::docs::DocDef;
 use roc_load_internal::file::{
     ExecutionMode, LoadConfig, LoadResult, LoadStart, LoadingProblem, Threading,
 };
@@ -30,7 +31,7 @@ use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_reporting::report::{strip_colors, RenderTarget};
 use roc_solve::FunctionKind;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use std::collections::HashMap;
@@ -40,7 +41,7 @@ fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
     exposed_types: ExposedByModule,
-    target_info: TargetInfo,
+    target: Target,
     function_kind: FunctionKind,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
@@ -53,7 +54,7 @@ fn load_and_typecheck(
         DEFAULT_PALETTE,
     )?;
     let load_config = LoadConfig {
-        target_info,
+        target,
         function_kind,
         render: RenderTarget::Generic,
         palette: DEFAULT_PALETTE,
@@ -74,7 +75,7 @@ fn load_and_typecheck(
     }
 }
 
-const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
+const TARGET: Target = Target::LinuxX64;
 
 // HELPERS
 
@@ -183,7 +184,7 @@ fn multiple_modules_help<'a>(
             arena,
             full_file_path,
             Default::default(),
-            TARGET_INFO,
+            TARGET,
             FunctionKind::LambdaSet,
         )
     };
@@ -203,7 +204,7 @@ fn load_fixture(
         &arena,
         filename,
         subs_by_module,
-        TARGET_INFO,
+        TARGET,
         FunctionKind::LambdaSet,
     );
     let mut loaded_module = match loaded {
@@ -366,7 +367,7 @@ fn interface_with_deps() {
         &arena,
         filename,
         subs_by_module,
-        TARGET_INFO,
+        TARGET,
         FunctionKind::LambdaSet,
     );
 
@@ -421,6 +422,53 @@ fn load_unit() {
             "unit" => "Unit",
         },
     );
+}
+
+#[test]
+fn load_docs() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("no_deps", "Docs", subs_by_module);
+
+    let module_docs = loaded_module
+        .docs_by_module
+        .get(&loaded_module.module_id)
+        .expect("module should have docs");
+
+    let all_docs = module_docs
+        .entries
+        .iter()
+        .map(|a| match a {
+            roc_load_internal::docs::DocEntry::DocDef(DocDef { name, docs, .. }) => {
+                (Some(name.clone()), docs.clone().map(|a| a.to_string()))
+            }
+
+            roc_load_internal::docs::DocEntry::ModuleDoc(docs)
+            | roc_load_internal::docs::DocEntry::DetachedDoc(docs) => (None, Some(docs.clone())),
+        })
+        .collect::<Vec<_>>();
+
+    let expected = vec![
+        (None, Some("An interface for docs tests\n")),
+        (Some("User"), Some("This is a user\n")),
+        (
+            Some("makeUser"),
+            Some("Makes a user\n\nTakes a name Str.\n"),
+        ),
+        (Some("getName"), Some("Gets the user's name\n")),
+        (Some("getNameExposed"), None),
+    ]
+    .into_iter()
+    .map(|(ident_str_opt, doc_str_opt)| {
+        (
+            ident_str_opt.map(|a| a.to_string()),
+            doc_str_opt.map(|b| b.to_string()),
+        )
+    })
+    .collect::<Vec<_>>();
+
+    // let has_all_docs = expected.map(|a| docs.contains(&a)).all(|a| a);
+    // assert!(has_all_docs, "Some of the expected docs were not created")
+    assert_eq!(expected, all_docs);
 }
 
 #[test]

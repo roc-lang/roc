@@ -28,7 +28,7 @@ use roc_mono::list_element_layout;
 mod generic64;
 mod object_builder;
 pub use object_builder::build_module;
-use roc_target::TargetInfo;
+use roc_target::Target;
 mod run_roc;
 
 #[derive(Debug, Clone, Copy)]
@@ -312,7 +312,7 @@ trait Backend<'a> {
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation>;
-    fn target_info(&self) -> TargetInfo;
+    fn target(&self) -> Target;
 
     fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
         self.module_interns_helpers_mut().1
@@ -2027,6 +2027,36 @@ trait Backend<'a> {
                         self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout);
                     }
                 }
+            }
+
+            LowLevel::NumWithoutDecimalPoint => {
+                let intrinsic = bitcode::DEC_TO_I128.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumWithDecimalPoint => {
+                let intrinsic = bitcode::DEC_FROM_I128.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF32ToParts => {
+                let intrinsic = bitcode::NUM_F32_TO_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64ToParts => {
+                let intrinsic = bitcode::NUM_F64_TO_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF32FromParts => {
+                let intrinsic = bitcode::NUM_F32_FROM_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64FromParts => {
+                let intrinsic = bitcode::NUM_F64_FROM_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
             }
 
             x => todo!("low level, {:?}", x),

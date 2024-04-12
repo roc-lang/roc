@@ -226,6 +226,10 @@ pub const RocDec = extern struct {
         return self.num;
     }
 
+    pub fn fromI128(num: i128) RocDec {
+        return .{ .num = num };
+    }
+
     pub fn eq(self: RocDec, other: RocDec) bool {
         return self.num == other.num;
     }
@@ -1473,6 +1477,10 @@ pub fn fromU64C(arg: u64) callconv(.C) i128 {
 
 pub fn toI128(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.toI128, .{arg});
+}
+
+pub fn fromI128(arg: i128) callconv(.C) RocDec {
+    return @call(.always_inline, RocDec.fromI128, .{arg});
 }
 
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {

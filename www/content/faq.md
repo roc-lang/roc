@@ -1,6 +1,6 @@
 # FAQ
 
-## Where did the name Roc come from?
+## [Where did the name Roc come from?](#name-origin) {#name-origin}
 
 The Roc programming language is named after [a mythical bird](<https://en.wikipedia.org/wiki/Roc_(mythology)>).
 
@@ -30,7 +30,7 @@ fantastical, and it has incredible potential for puns. Here are some different w
 
 Fun fact: "roc" translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."
 
-## Why can't functions be compared for equality using the `==` operator?
+## [Why can't functions be compared for equality using the `==` operator?](#function-equality) {#function-equality}
 
 Function equality has been proven to be undecidable in the general case because of the [halting problem](https://en.wikipedia.org/wiki/Halting_problem).
 So while we as humans might be able to look at `\x -> x + 1` and `\x -> 1 + x` and know that they're equivalent,
@@ -75,7 +75,7 @@ brittle to change. Disallowing function equality at compile time eliminates all 
 Note that you can provide a custom implementation of the `Eq` ability for an opaque type that contains a function,
 in any way you like (including ignoring the function for equality).
 
-## Why is there no way to specify "import everything this module exposes" in `imports`?
+## [Why is there no way to specify "import everything this module exposes" in `imports`?](#import-everything) {#import-everything}
 
 In [Elm](https://elm-lang.org), it's possible to import a module in a way that brings everything that module
 exposes into scope. It can be convenient, but like all programming language features, it has downsides.
@@ -104,7 +104,7 @@ whether the feature should be in the language at all. In the case of this featur
 language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
 performance-boosting advice not to use it.
 
-## Why doesn't Roc have a `Maybe` or `Option` or `Optional` type, or `null` or `nil` or `undefined`?
+## [Why doesn't Roc have a `Maybe` or `Option` or `Optional` type, or `null` or `nil` or `undefined`?](#option-type) {#option-type}
 
 It's common for programming languages to have a [null reference](https://en.wikipedia.org/wiki/Null_pointer)
 (e.g. `null` in C, `nil` in Ruby, `None` in Python, or `undefined` in JavaScript).
@@ -123,7 +123,7 @@ instead of `List.first : List a -> Maybe a`.) This is not only more self-descrip
 other operations that can fail; there's no need to have functions like `Result.toMaybe` or `Maybe.toResult`,
 because in Roc, the convention is that operations that can fail always use `Result`.
 
-Second, optional record fields can be handled using Roc's Optional Record Field language feature, so using a type like `Maybe` there would be less ergonomic.
+Second, optional record fields can be handled using Roc's Default Value Record Field language feature, so using a type like `Maybe` there would be less ergonomic.
 
 To describe something that's neither an optional field nor an operation that can fail, an explicit tag union can be
 more descriptive than something like `Maybe`. For example, if a record type has an `artist` field, but the artist
@@ -150,7 +150,7 @@ the data model that would break their call sites, even if that change would impr
 
 On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]`, so that design would not fit those languages as well as it fits Roc.
 
-## Why doesn't Roc have a builtin "arbitrary-sized" number type like BigNum or BigDecimal?
+## [Why doesn't Roc have a builtin "arbitrary-sized" number type like BigNum or BigDecimal?](#arbitrary-numbers) {#arbitrary-numbers}
 
 Like all programming languages, Roc is subject to the limitations of the universe. Almost all numbers in mathematics cannot even be represented in the universe because you'd run out of matter trying to write them down, and therefore Roc must choose what subset of mathematics to support—including which numbers to support.
 
@@ -163,7 +163,7 @@ For heap-allocated numbers to be worth including in Roc's builtins, a sufficient
 
 So far, this has not happened.
 
-## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
+## [Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?](#arbitrary-rank-types) {#arbitrary-rank-types}
 
 _Since this is a FAQ answer, it assumes familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
 
@@ -182,7 +182,7 @@ where it can accurately tell you the type of anything, even if you have no type 
 This is one factor that higher-rank and higher-kinded types have in common. There are other factors which are specific
 to each.
 
-### Higher-rank types
+### [Higher-rank types](#higher-rank-types) {#higher-rank-types}
 
 Supporting higher-rank types in Roc has been discussed before, but it has several important downsides:
 
@@ -193,7 +193,7 @@ Supporting higher-rank types in Roc has been discussed before, but it has severa
 
 As such, the plan is for Roc to stick with Rank-1 types indefinitely.
 
-### Higher-kinded polymorphism
+### [Higher-kinded polymorphism](#higher-kinded-polymorphism) {#higher-kinded-polymorphism}
 
 The explicit plan is that Roc will never support higher-kinded polymorphism.
 
@@ -240,7 +240,7 @@ arguing between the two sides of the divide. Again, it's completely reasonable f
 but given that languages can only choose one of these options, it seems clear that the right choice for Roc
 is for it to never have higher-kinded polymorphism.
 
-## Why aren't Roc functions curried by default?
+## [Why aren't Roc functions curried by default?](#curried-functions) {#curried-functions}
 
 Although technically any language with first-class functions makes it possible to curry
 any function (e.g. anyone can manually curry a Roc function `\x, y, z ->` by writing `\x -> \y -> \z ->` instead),
@@ -262,7 +262,7 @@ but it would most likely be possible to optimize that away at the cost of slight
 These downsides seem to outweigh the one upside (conciseness in some places). Here are some more details about each of
 the downsides.
 
-### Currying and the `|>` operator
+### [Currying and the `|>` operator](#curried-pipes) {#curried-pipes}
 
 In Roc, both of these expressions evaluate to `"Hello, World!"`
 
@@ -356,7 +356,7 @@ in tension.
 
 As a historical note, these stylistic benefits (of `|> Num.sub 1` working as expected, and being able to write `List.map numbers \num ->`) were not among the original reasons Roc did not have currying. These benefits were discovered after the decision had already been made that Roc would not be a curried language, and they served to reinforce after the fact that the decision was the right one for Roc given the language's goals.
 
-### Currying and learning curve
+### [Currying and learning curve](#curried-learning-curve) {#curried-learning-curve}
 
 Currying leads to function signatures that look surprising to beginners. For example, in Roc, the
 [`Bool.and`](https://www.roc-lang.org/builtins/Bool#and) function has the type `Bool, Bool -> Bool`. If Roc were a
@@ -378,7 +378,7 @@ because Elm has currying, and Elm's learning curve is famously gentle.
 That said, beginners who feel confused while learning the language are less likely to continue with it.
 And however easy Roc would be to learn if it had currying, the language is certainly easier to learn without it.
 
-### Pointfree function composition
+### [Pointfree function composition](#pointfree-composition) {#pointfree-composition}
 
 [Pointfree function composition](https://en.wikipedia.org/wiki/Tacit_programming) is where you define
 a new function by composing together two existing functions without naming intermediate arguments.
@@ -413,7 +413,7 @@ language would have the downside of facilitating an antipattern in the language.
 Stacking up all these downsides of currying against the one upside of making certain function calls more concise,
 it seems clear that Roc should not be a curried language.
 
-## Will Roc ever have linear types, dependent types, refinement types, or uniqueness types?
+## [Will Roc ever have linear types, dependent types, refinement types, or uniqueness types?](#advanced-types) {#advanced-types}
 
 The plan is for Roc to never have linear types, dependent types, refinement types, or uniqueness types.
 
@@ -425,7 +425,7 @@ Dependent types are too risky of a bet for Roc to take. They have been implement
 
 Perhaps more success stories will emerge over time, but in the meantime it remains an open question whether dependent types are net beneficial in practice to application development. Further experimentation would be required to answer this question, and Roc is not the right language to do those experiments.
 
-## Will Roc's compiler ever be self-hosted? (That is, will it ever be written in Roc?)
+## [Will Roc's compiler ever be self-hosted? (That is, will it ever be written in Roc?)](#self-hosted-compiler) {#self-hosted-compiler}
 
 The plan is to never implement Roc's compiler in Roc.
 
@@ -433,7 +433,7 @@ The goal is for Roc's compiler to deliver the best user experience possible. Com
 
 Roc isn't trying to be the best possible language for high-performance compiler development, but it is trying to have a high-performance compiler. The best tool for that job is a language other than Roc, so that's what we're using!
 
-## Why does Roc use the license it does?
+## [Why does Roc use the license it does?](#permissive-license) {#permissive-license}
 
 The short explanation for why Roc is released under the [Universal Permissive License](https://opensource.org/licenses/UPL):
 
@@ -445,7 +445,7 @@ The short explanation for why Roc is released under the [Universal Permissive Li
 
 There's also [a longer explanation](https://github.com/roc-lang/roc/issues/1199) with more detail about the motivation and thought process, if you're interested.
 
-## Why does Roc use both Rust and Zig?
+## [Why does Roc use both Rust and Zig?](#rust-and-zig) {#rust-and-zig}
 
 Roc's compiler has always been written in [Rust](https://www.rust-lang.org/). Roc's standard library was briefly written in Rust, but was soon rewritten in [Zig](https://ziglang.org/).
 

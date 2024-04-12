@@ -707,7 +707,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
- "hashbrown 0.14.3",
+ "hashbrown",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -1077,9 +1077,9 @@ checksum = "6fb8d784f27acf97159b40fc4db5ecd8aa23b9ad5ef69cdd136d3bc80665f0c0"
 
 [[package]]
 name = "h2"
-version = "0.3.21"
+version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91fc23aa11be92976ef4729127f1a74adf36d8436f7816b185d18df956790833"
+checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
 dependencies = [
  "bytes",
  "fnv",
@@ -1087,7 +1087,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http",
- "indexmap 1.9.3",
+ "indexmap",
  "slab",
  "tokio",
  "tokio-util",
@@ -1099,12 +1099,6 @@ name = "half"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eabb4a44450da02c90444cf74558da904edde8fb4e9035a9a6a4e15445af0bd7"
-
-[[package]]
-name = "hashbrown"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
@@ -1296,22 +1290,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
-dependencies = [
- "autocfg",
- "hashbrown 0.12.3",
-]
-
-[[package]]
-name = "indexmap"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d530e1a18b1cb4c484e6e34556a0d948706958449fca0cab753d649f2bce3d1f"
 dependencies = [
  "equivalent",
- "hashbrown 0.14.3",
+ "hashbrown",
 ]
 
 [[package]]
@@ -1709,8 +1693,8 @@ checksum = "a6a622008b6e321afc04970976f62ee297fdbaa6f95318ca343e3eebb9648441"
 dependencies = [
  "crc32fast",
  "flate2",
- "hashbrown 0.14.3",
- "indexmap 2.1.0",
+ "hashbrown",
+ "indexmap",
  "memchr",
  "ruzstd",
 ]
@@ -1777,33 +1761,6 @@ dependencies = [
  "smallvec",
  "windows-targets 0.48.5",
 ]
-
-[[package]]
-name = "peg"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "400bcab7d219c38abf8bd7cc2054eb9bbbd4312d66f6a5557d572a203f646f61"
-dependencies = [
- "peg-macros",
- "peg-runtime",
-]
-
-[[package]]
-name = "peg-macros"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46e61cce859b76d19090f62da50a9fe92bab7c2a5f09e183763559a2ac392c90"
-dependencies = [
- "peg-runtime",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "peg-runtime"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36bae92c60fa2398ce4678b98b2c4b5a7c61099961ca1fa305aec04a9ad28922"
 
 [[package]]
 name = "percent-encoding"
@@ -2354,7 +2311,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_target",
- "tempfile",
 ]
 
 [[package]]
@@ -2417,6 +2373,7 @@ dependencies = [
  "mimalloc",
  "parking_lot",
  "pretty_assertions",
+ "regex",
  "roc_build",
  "roc_builtins",
  "roc_can",
@@ -2457,7 +2414,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "fnv",
- "hashbrown 0.14.3",
+ "hashbrown",
  "im",
  "im-rc",
  "smallvec",
@@ -2520,8 +2477,6 @@ name = "roc_docs"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "peg",
- "pretty_assertions",
  "pulldown-cmark",
  "roc_builtins",
  "roc_can",
@@ -2652,7 +2607,7 @@ dependencies = [
  "cli_utils",
  "dircpy",
  "fnv",
- "indexmap 2.1.0",
+ "indexmap",
  "indoc",
  "libc",
  "libloading",
@@ -2851,7 +2806,7 @@ dependencies = [
  "arrayvec 0.7.4",
  "bitvec",
  "bumpalo",
- "hashbrown 0.14.3",
+ "hashbrown",
  "parking_lot",
  "roc_builtins",
  "roc_can",
@@ -3031,7 +2986,6 @@ dependencies = [
  "roc_repl_eval",
  "roc_reporting",
  "roc_target",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -3099,9 +3053,7 @@ dependencies = [
  "arrayvec 0.7.4",
  "bumpalo",
  "indoc",
- "insta",
  "lazy_static",
- "libtest-mimic",
  "pretty_assertions",
  "regex",
  "roc_builtins",
@@ -3115,7 +3067,6 @@ dependencies = [
  "roc_exhaustive",
  "roc_load",
  "roc_module",
- "roc_packaging",
  "roc_parse",
  "roc_problem",
  "roc_region",
@@ -3167,6 +3118,7 @@ dependencies = [
 name = "roc_target"
 version = "0.0.1"
 dependencies = [
+ "roc_error_macros",
  "strum",
  "strum_macros",
  "target-lexicon",
@@ -3884,9 +3836,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "insta",
  "lazy_static",
- "pretty_assertions",
  "regex",
  "roc_can",
  "roc_derive",
@@ -4240,10 +4190,8 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "insta",
  "lazy_static",
  "libtest-mimic",
- "pretty_assertions",
  "regex",
  "roc_builtins",
  "roc_collections",

@@ -8,7 +8,7 @@ use {
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
-    roc_target::TargetInfo,
+    roc_target::Target,
     roc_types::subs::{Subs, Variable},
 };
 
@@ -23,7 +23,7 @@ use app::{ExpectMemory, ExpectReplApp};
 #[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
-    target_info: TargetInfo,
+    target: Target,
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
@@ -58,7 +58,7 @@ pub fn get_values<'a>(
         app.offset = start;
 
         // TODO: pass layout_cache to jit_to_ast directly
-        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target);
         let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
         let proc_layout = ProcLayout {
@@ -76,7 +76,7 @@ pub fn get_values<'a>(
             subs,
             interns,
             layout_interner.fork(),
-            target_info,
+            target,
         );
 
         app.offset += layout_cache.interner.stack_size_and_alignment(layout).0 as usize;
@@ -102,17 +102,13 @@ mod test {
 
     use crate::run::expect_mono_module_to_dylib;
 
-    use super::*;
-
     fn run_expect_test(source: &str, expected: &str) {
         let arena = bumpalo::Bump::new();
         let arena = &arena;
 
-        let triple = Triple::host();
-        let target = &triple;
+        let target = Triple::host().into();
 
         let opt_level = roc_mono::ir::OptLevel::Normal;
-        let target_info = TargetInfo::from(target);
         let function_kind = FunctionKind::LambdaSet;
 
         // Step 1: compile the app and generate the .o file
@@ -122,7 +118,7 @@ mod test {
         std::fs::write(&filename, source).unwrap();
 
         let load_config = LoadConfig {
-            target_info,
+            target,
             function_kind,
             render: RenderTarget::ColorTerminal,
             palette: DEFAULT_PALETTE,
@@ -150,14 +146,9 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
-            arena,
-            target.clone(),
-            loaded,
-            opt_level,
-            LlvmBackendMode::CliTest,
-        )
-        .unwrap();
+        let (dy_lib, expects_by_module, layout_interner) =
+            expect_mono_module_to_dylib(arena, target, loaded, opt_level, LlvmBackendMode::CliTest)
+                .unwrap();
 
         let arena = &bumpalo::Bump::new();
         let interns = arena.alloc(interns);
@@ -168,23 +159,27 @@ mod test {
         let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
 
         // communicate the mmapped name to zig/roc
-        let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+        let set_shared_buffer = run_roc_dylib!(dy_lib, "set_shared_buffer", (*mut u8, usize), ());
         let mut result = RocCallResult::default();
         unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
-        let (_failed, _passed) = crate::run::run_expects_with_memory(
-            &mut writer,
-            RenderTarget::ColorTerminal,
-            arena,
-            interns,
-            &layout_interner.into_global(),
-            &lib,
-            &mut expectations,
-            expects,
-            &mut memory,
-        )
-        .unwrap();
+
+        let global_layout_interner = layout_interner.into_global();
+        for (_, expect_funcs) in expects_by_module {
+            let (_failed, _passed) = crate::run::run_expects_with_memory(
+                &mut writer,
+                RenderTarget::ColorTerminal,
+                arena,
+                interns,
+                &global_layout_interner,
+                &dy_lib,
+                &mut expectations,
+                expect_funcs,
+                &mut memory,
+            )
+            .unwrap();
+        }
 
         // Remove ANSI escape codes from the answer - for example:
         //

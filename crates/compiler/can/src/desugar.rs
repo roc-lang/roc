@@ -131,7 +131,7 @@ fn desugar_value_def<'a>(
     }
 }
 
-pub fn desugar_defs<'a>(
+pub fn desugar_defs_node_values<'a>(
     arena: &'a Bump,
     defs: &mut roc_parse::ast::Defs<'a>,
     src: &'a str,
@@ -140,6 +140,224 @@ pub fn desugar_defs<'a>(
 ) {
     for value_def in defs.value_defs.iter_mut() {
         *value_def = desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
+    }
+}
+
+fn desugar_defs_node_suffixed<'a>(
+    arena: &'a Bump,
+    loc_expr: &'a Loc<Expr<'a>>,
+) -> &'a Loc<Expr<'a>> {
+    match loc_expr.value {
+        Defs(defs, loc_ret) => {
+            match defs.search_suffixed_defs() {
+                None => loc_expr,
+                Some((tag_index, value_index)) => {
+                    if defs.value_defs.len() == 1 {
+                        // We have only one value_def and it must be Suffixed
+                        // replace Defs with an Apply(Task.await) and Closure of loc_return
+
+                        debug_assert!(
+                            value_index == 0,
+                            "we have only one value_def and so it must be Suffixed "
+                        );
+
+                        // Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
+                        let (suffixed_sub_apply_loc, pattern) = unwrap_suffixed_def_and_pattern(
+                            arena,
+                            loc_expr.region,
+                            defs.value_defs[0],
+                        );
+
+                        // Create Closure for the result of the recursion,
+                        // use the pattern from our Suffixed Def as closure argument
+                        let closure_expr = Closure(arena.alloc([*pattern]), loc_ret);
+
+                        // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
+                        let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, suffixed_sub_apply_loc)));
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
+
+                        arena.alloc(Loc::at(
+                            loc_expr.region,
+                            Apply(
+                                arena.alloc(Loc {
+                                    region: loc_expr.region,
+                                    value: Var {
+                                        module_name: ModuleName::TASK,
+                                        ident: "await",
+                                    },
+                                }),
+                                arena.alloc(task_await_apply_args),
+                                CalledVia::BangSuffix,
+                            ),
+                        ))
+                    } else if value_index == 0 {
+                        // We have a Suffixed in first index, and also other nodes in Defs
+                        // pop the first Suffixed and recurse on Defs (without first) to handle any other Suffixed
+                        // the result will be wrapped in an Apply(Task.await) and Closure
+
+                        debug_assert!(
+                            defs.value_defs.len() > 1,
+                            "we know we have other Defs that will need to be considered"
+                        );
+
+                        // Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
+                        let (suffixed_sub_apply_loc, pattern) = unwrap_suffixed_def_and_pattern(
+                            arena,
+                            loc_expr.region,
+                            defs.value_defs[0],
+                        );
+
+                        // Get a mutable copy of the defs
+                        let mut copied_defs = defs.clone();
+
+                        // Remove the suffixed def
+                        copied_defs.remove_value_def(tag_index);
+
+                        // Recurse using new Defs to get new expression
+                        let new_loc_expr = desugar_defs_node_suffixed(
+                            arena,
+                            arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Defs(arena.alloc(copied_defs), loc_ret),
+                            )),
+                        );
+
+                        // Create Closure for the result of the recursion,
+                        // use the pattern from our Suffixed Def as closure argument
+                        let closure_expr = Closure(arena.alloc([*pattern]), new_loc_expr);
+
+                        // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
+                        let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, suffixed_sub_apply_loc)));
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
+
+                        arena.alloc(Loc::at(
+                            loc_expr.region,
+                            Apply(
+                                arena.alloc(Loc {
+                                    region: loc_expr.region,
+                                    value: Var {
+                                        module_name: ModuleName::TASK,
+                                        ident: "await",
+                                    },
+                                }),
+                                arena.alloc(task_await_apply_args),
+                                CalledVia::BangSuffix,
+                            ),
+                        ))
+                    } else {
+                        // The first Suffixed is in the middle of our Defs
+                        // We will keep the defs before the Suffixed in our Defs node
+                        // We take the defs after the Suffixed and create a new Defs node using the current loc_return
+                        // Then recurse on the new Defs node, wrap the result in an Apply(Task.await) and Closure,
+                        // which will become the new loc_return
+
+                        let (before, after) = {
+                            let values = defs.split_values_either_side_of(tag_index);
+                            (values.before, values.after)
+                        };
+
+                        // If there are no defs after, then just use loc_ret as we dont need a Defs node
+                        let defs_after_suffixed_desugared = {
+                            if !after.is_empty() {
+                                desugar_defs_node_suffixed(
+                                    arena,
+                                    arena.alloc(Loc::at(
+                                        loc_expr.region,
+                                        Defs(arena.alloc(after), loc_ret),
+                                    )),
+                                )
+                            } else {
+                                loc_ret
+                            }
+                        };
+
+                        // Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
+                        let (suffixed_sub_apply_loc, pattern) = unwrap_suffixed_def_and_pattern(
+                            arena,
+                            loc_expr.region,
+                            defs.value_defs[value_index],
+                        );
+
+                        // Create Closure for the result of the recursion,
+                        // use the pattern from our Suffixed Def as closure argument
+                        let closure_expr =
+                            Closure(arena.alloc([*pattern]), defs_after_suffixed_desugared);
+
+                        // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
+                        let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, suffixed_sub_apply_loc)));
+                        task_await_apply_args
+                            .push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
+
+                        let new_loc_return = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            Apply(
+                                arena.alloc(Loc {
+                                    region: loc_expr.region,
+                                    value: Var {
+                                        module_name: ModuleName::TASK,
+                                        ident: "await",
+                                    },
+                                }),
+                                arena.alloc(task_await_apply_args),
+                                CalledVia::BangSuffix,
+                            ),
+                        ));
+
+                        arena.alloc(Loc::at(
+                            loc_expr.region,
+                            Defs(arena.alloc(before), new_loc_return),
+                        ))
+                    }
+                }
+            }
+        }
+        _ => unreachable!(
+            "should only be passed a Defs node as it is called from within desugar_expr for Defs"
+        ),
+    }
+}
+
+// Unwrap Suffixed def within Apply, and the pattern so we can use in the call to Task.await
+fn unwrap_suffixed_def_and_pattern<'a>(
+    arena: &'a Bump,
+    region: Region,
+    value_def: ValueDef<'a>,
+) -> (
+    roc_parse::ast::Expr<'a>,
+    &'a Loc<roc_parse::ast::Pattern<'a>>,
+) {
+    match value_def {
+        ValueDef::Body(pattern, suffixed_expression) => match suffixed_expression.value {
+            // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
+            Apply(sub_loc, suffixed_args, called_via) => match sub_loc.value {
+                Suffixed(sub_expr) => (
+                    Apply(
+                        arena.alloc(Loc::at(region, *sub_expr)),
+                        suffixed_args,
+                        called_via,
+                    ),
+                    pattern,
+                ),
+                _ => unreachable!("should have a suffixed Apply inside Body def"),
+            },
+            // The Suffixed has NIL arguments applied e.g. `Stdin.line!`
+            Suffixed(sub_expr) => (*sub_expr, pattern),
+            _ => {
+                unreachable!("should have a suffixed Apply inside Body def")
+            }
+        },
+        _ => unreachable!("should have a suffixed Body def"),
     }
 }
 
@@ -363,11 +581,14 @@ pub fn desugar_expr<'a>(
         ),
         Defs(defs, loc_ret) => {
             let mut defs = (*defs).clone();
-            desugar_defs(arena, &mut defs, src, line_info, module_path);
-
+            desugar_defs_node_values(arena, &mut defs, src, line_info, module_path);
             let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
 
-            arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))
+            // Desugar any Suffixed nodes
+            desugar_defs_node_suffixed(
+                arena,
+                arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret))),
+            )
         }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
@@ -619,6 +840,30 @@ pub fn desugar_expr<'a>(
             })
         }
         LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
+        Suffixed(expr) => {
+            // Rewrite `Suffixed(BinOps([args...], Var(...)))` to `BinOps([args...], Suffixed(Var(...)))`
+            // This is to handle cases like e.g. `"Hello" |> line!`
+            if let BinOps(args, sub_expr) = expr {
+                return desugar_expr(
+                    arena,
+                    arena.alloc(Loc::at(
+                        loc_expr.region,
+                        BinOps(
+                            args,
+                            arena.alloc(Loc::at(sub_expr.region, Suffixed(&sub_expr.value))),
+                        ),
+                    )),
+                    src,
+                    line_info,
+                    module_path,
+                );
+            }
+
+            // Suffixed are also desugared in Defs
+            // Any nodes that don't get desugared will be caught by canonicalize_expr
+            // and we can handle those cases as required
+            loc_expr
+        }
     }
 }
 
