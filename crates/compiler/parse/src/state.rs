@@ -6,7 +6,7 @@ use crate::parser::Progress;
 /// A position in a source file.
 // NB: [Copy] is explicitly NOT derived to reduce the chance of bugs due to accidentally re-using
 // parser state.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
     /// Beware: original_bytes[0] always points at the start of the file.

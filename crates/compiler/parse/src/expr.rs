@@ -2740,6 +2740,73 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     )
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn ident_ony() {
+        let mut arena = bumpalo::Bump::new();
+        let input = &b"x"[0..];
+        let state = State::new(input);
+        let parser = record_field();
+
+        let actual = parser.parse(&mut arena, state, 0).unwrap();
+        let expected = (
+            MadeProgress,
+            RecordField::LabelOnly(Loc::new(0, 1, "x")),
+            State::new(b"x").advance(1),
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn aliased() {
+        let mut arena = bumpalo::Bump::new();
+        let input = &b"x: x1"[0..];
+        let state = State::new(input);
+        let parser = record_field();
+
+        let actual = parser.parse(&mut arena, state, 0).unwrap();
+        let spaces = vec![];
+        let expression = Loc::new(
+            3,
+            5,
+            Expr::Var {
+                module_name: "",
+                ident: "x1",
+            },
+        );
+        let expected = (
+            MadeProgress,
+            RecordField::RequiredValue(Loc::new(0, 1, "x"), &spaces, &expression),
+            State::new(input).advance(5),
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn default() {
+        let mut arena = bumpalo::Bump::new();
+        let input = &b"x ? 0.0"[0..];
+        let state = State::new(input);
+        let parser = record_field();
+
+        let actual = parser.parse(&mut arena, state, 0).unwrap();
+        let spaces = vec![];
+        let pattern = Loc::new(4, 7, Expr::Float("0.0"));
+        let expected = (
+            MadeProgress,
+            RecordField::OptionalValue(Loc::new(0, 1, "x"), &spaces, &pattern),
+            State::new(input).advance(7),
+        );
+
+        assert_eq!(actual, expected);
+    }
+}
+
 enum RecordFieldExpr<'a> {
     Apply(&'a [CommentOrNewline<'a>], Loc<Expr<'a>>),
     Value(Loc<Expr<'a>>),
