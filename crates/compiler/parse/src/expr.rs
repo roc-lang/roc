@@ -2706,7 +2706,7 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                 and!(
                     optional(skip_first!(byte(b':', ERecord::Colon), record_field_expr())),
                     optional(skip_first!(
-                        skip_first!(spaces(), byte(b'?', ERecord::QuestionMark)),
+                        and!(ignore(spaces()), byte(b'?', ERecord::QuestionMark)),
                         spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
                     ))
                 )
@@ -2739,6 +2739,16 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
         }
     )
     .trace("record_field")
+}
+
+fn ignore<'a, P, Output, E: 'a>(parser: P) -> impl Parser<'a, (), E>
+where
+    P: Parser<'a, Output, E>,
+{
+    move |arena, state, min_indent| match parser.parse(arena, state, min_indent) {
+        Ok((_, _, state)) => Ok((NoProgress, (), state)),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]
