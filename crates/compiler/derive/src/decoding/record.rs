@@ -380,7 +380,7 @@ struct DecodingFieldArgs {
 }
 
 /// Expression for custom decoder.
-/// 
+///
 /// ```roc
 /// Decode.custom \bytes, fmt ->
 ///    # Uses a single-branch `when` because `let` is more expensive to monomorphize

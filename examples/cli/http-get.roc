@@ -18,14 +18,14 @@ main =
                 method: Get,
                 headers: [],
                 url,
-                body: Http.emptyBody,
+                mimeType: "",
+                body: [],
                 timeout: NoTimeout,
             }
 
             output <- Http.send request
-                |> Task.onErr \err -> err
-                    |> Http.errorToString
-                    |> Task.ok
+                |> Task.await \resp -> resp |> Http.handleStringResponse |> Task.fromResult
+                |> Task.onErr \err -> crash (Http.errorToString err)
                 |> Task.await
 
             Stdout.line output
