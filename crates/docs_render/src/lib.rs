@@ -7,6 +7,6 @@ mod render_package;
 mod render_type;
 
 pub use render_package::{
-    AbilityImpl, AbilityMember, BodyEntry, Docs, RecordField, SidebarEntry, TypeAnn, TypeAnnVisitor,
+    AbilityImpl, AbilityMember, BodyEntry, Docs, RecordField, SidebarEntry, TypeAnn,
 };
 pub use render_type::TypeRenderer;

@@ -1,12 +1,11 @@
 use crate::file::{self, Assets};
 use crate::problem::Problem;
 use bumpalo::{collections::string::String, Bump};
-use core::{fmt::Debug, slice::Iter};
+use core::{fmt::Debug, slice};
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_docs_render::{
-    AbilityImpl, AbilityMember, BodyEntry, Docs, SidebarEntry, TypeAnn, TypeAnnVisitor,
-    TypeRenderer,
+    AbilityImpl, AbilityMember, BodyEntry, Docs, SidebarEntry, TypeAnn, TypeRenderer,
 };
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
@@ -21,7 +20,6 @@ use roc_region::all::Region;
 use roc_types::types::{Alias, Type};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::slice::IterMut;
 
 pub fn generate_docs_html<'a>(
     arena: &'a Bump,
@@ -131,20 +129,29 @@ struct Annotation {
     typ: Type,
 }
 
-impl<'a, Ability: AbilityImpl<'a> + Debug + 'a> TypeAnn<'a, Ability> for Annotation {
+impl<'a>
+    TypeAnn<
+        'a,
+        AbilityAnn<'a>,
+        slice::Iter<'a, &'a str>,
+        slice::Iter<'a, &'a str>,
+        slice::Iter<'a, AbilityAnn<'a>>,
+        slice::Iter<'a, AbilityMember<'a, Self>>,
+    > for Annotation
+{
     fn visit<
-        VisitAbility: Fn(AbilityMemberIter, &'a mut String<'a>),
-        VisitAlias: Fn(StrIter, &'a Self, &'a mut String<'a>),
-        VisitOpaque: Fn(StrIter, AbilityIter, &'a mut String<'a>),
+        // visit functions
+        VisitAbility: Fn(slice::Iter<'a, AbilityMember<'a, Self>>, &'a mut String<'a>),
+        VisitAlias: Fn(slice::Iter<'a, &'a str>, &'a Self, &'a mut String<'a>),
+        VisitOpaque: Fn(slice::Iter<'a, &'a str>, slice::Iter<'a, AbilityAnn<'a>>, &'a mut String<'a>),
         VisitValue: Fn(&'a Self, &'a mut String<'a>),
-        // Iterators
-        StrIter: Iterator<Item = &'a &'a str>,
-        AbilityIter: Iterator<Item = &'a Ability>,
-        AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Self>>,
     >(
         &self,
         buf: &mut String<'_>,
-        visitor: TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue>,
+        visit_ability: VisitAbility,
+        visit_type_alias: VisitAlias,
+        visit_opaque_type: VisitOpaque,
+        visit_value: VisitValue,
     ) {
         match &self.typ {
             Type::EmptyRec
@@ -154,7 +161,7 @@ impl<'a, Ability: AbilityImpl<'a> + Debug + 'a> TypeAnn<'a, Ability> for Annotat
             | Type::Tuple(_, _)
             | Type::TagUnion(_, _)
             | Type::FunctionOrTagUnion(_, _, _)
-            | Type::RangedNumber(_) => (visitor.value)(&self, buf),
+            | Type::RangedNumber(_) => (visit_value)(&self, buf),
             Type::ClosureTag {
                 name,
                 captures,
@@ -173,13 +180,47 @@ impl<'a, Ability: AbilityImpl<'a> + Debug + 'a> TypeAnn<'a, Ability> for Annotat
                 let todo = (); // TODO actually populate these.
                 let type_var_names = &["TODO type variable names"];
 
-                (visitor.type_alias)(type_var_names.iter(), &self, buf)
+                (visit_type_alias)(type_var_names.iter(), &self, buf)
             }
             Type::RecursiveTagUnion(_, _, _) => todo!(),
-            Type::Apply(_, _, _) => (visitor.opaque_type)(),
+            Type::Apply(_, _, _) => (visit_opaque_type)(todo!(), todo!(), todo!()),
             Type::Variable(_) => todo!(),
             Type::Error => todo!(),
         }
+    }
+}
+
+struct SBEntry<'a> {
+    /// In the source code, this will appear in a module's `exposes` list like:
+    ///
+    /// [
+    ///     Foo,
+    ///     Bar,
+    ///     ## Heading
+    ///     Baz,
+    ///     Blah,
+    /// ]
+    pub link_text: &'a str,
+
+    /// The entries this module exposes (types, values, abilities)
+    pub exposed: &'a [&'a str],
+
+    /// These doc comments get interpreted as flat strings; Markdown is not allowed
+    /// in them, because they will be rendered in the sidebar as plain text.
+    pub doc_comment: Option<&'a str>,
+}
+
+impl<'a> SidebarEntry<'a, slice::Iter<'a, &'a str>> for SBEntry<'a> {
+    fn link_text(&self) -> &'a str {
+        self.link_text
+    }
+
+    fn exposed(&self) -> slice::Iter<'a, &'a str> {
+        self.exposed.into_iter()
+    }
+
+    fn doc_comment(&self) -> Option<&'a str> {
+        self.doc_comment
     }
 }
 
@@ -193,14 +234,15 @@ impl<'a>
         Alias,
         TypeRenderer,
         // Iterators
-        Iter<'a, AbilityAnn<'a>>,
-        Iter<'a, (ModuleId, &'a str)>,
-        IterMut<'a, SidebarEntry<'a, Iter<'a, &'a str>>>,
-        Iter<'a, &'a str>,
-        Iter<'a, BodyEntry<'a, Annotation>>,
-        Iter<'a, AbilityMember<'a, Annotation>>,
-        Iter<'a, (&'a str, Iter<'a, Annotation>)>,
-        Iter<'a, Annotation>,
+        slice::Iter<'a, AbilityAnn<'a>>,
+        slice::Iter<'a, AbilityMember<'a, Annotation>>,
+        slice::Iter<'a, (ModuleId, &'a str)>,
+        SBEntry<'a>,
+        slice::IterMut<'a, SBEntry<'a>>,
+        slice::Iter<'a, &'a str>,
+        slice::Iter<'a, BodyEntry<'a, Annotation>>,
+        slice::Iter<'a, (&'a str, slice::Iter<'a, Annotation>)>,
+        slice::Iter<'a, Annotation>,
     > for IoDocs<'a>
 {
     fn package_name(&self) -> &'a str {
@@ -235,15 +277,15 @@ impl<'a>
         todo!()
     }
 
-    fn module_names(&self) -> Iter<'a, (ModuleId, &'a str)> {
+    fn module_names(&self) -> slice::Iter<'a, (ModuleId, &'a str)> {
         todo!()
     }
 
-    fn package_sidebar_entries(&self) -> IterMut<'a, SidebarEntry<'a, Iter<'a, &'a str>>> {
+    fn package_sidebar_entries(&self) -> slice::IterMut<'a, SBEntry<'a>> {
         todo!()
     }
 
-    fn body_entries(&self) -> Iter<'a, BodyEntry<'a, Annotation>> {
+    fn body_entries(&self) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
         todo!()
     }
 

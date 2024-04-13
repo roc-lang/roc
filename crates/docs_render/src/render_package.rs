@@ -4,7 +4,7 @@ use core::fmt::{Debug, Write};
 
 /// A named heading in the sidebar, with some number of
 /// entries beneath it.
-pub struct SidebarEntry<'a, StrIter> {
+pub trait SidebarEntry<'a, StrIter> {
     /// In the source code, this will appear in a module's `exposes` list like:
     ///
     /// [
@@ -14,14 +14,14 @@ pub struct SidebarEntry<'a, StrIter> {
     ///     Baz,
     ///     Blah,
     /// ]
-    pub link_text: &'a str,
+    fn link_text(&self) -> &'a str;
 
     /// The entries this module exposes (types, values, abilities)
-    pub exposed: StrIter,
+    fn exposed(&self) -> StrIter;
 
     /// These doc comments get interpreted as flat strings; Markdown is not allowed
     /// in them, because they will be rendered in the sidebar as plain text.
-    pub doc_comment: Option<&'a str>,
+    fn doc_comment(&self) -> Option<&'a str>;
 }
 
 pub struct RecordField<'a, Type> {
@@ -50,16 +50,23 @@ pub trait Docs<
     Ability: AbilityImpl<'a> + Debug + 'a,
     ModuleId: PartialEq + Copy + Debug + 'a,
     IdentId: PartialEq + Copy + Debug + 'a,
-    Type: TypeAnn<'a, Ability> + Debug + 'a,
+    Type: TypeAnn<'a,
+        Ability,
+        StrIter,
+        StrIter,
+        AbilityIter,
+        AbilityMemberIter,
+    > + Debug + 'a,
     Alias,
     TypeVisitor: roc_docs_types::TypeVisitor<Type>,
-    // Iterators
+    // iterators
     AbilityIter: Iterator<Item = &'a Ability>,
+    AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Type>>,
     ModuleNames: Iterator<Item = &'a (ModuleId, &'a str)>,
-    Sidebar: Iterator<Item = &'a mut SidebarEntry<'a, StrIter>>,
+    SBEntry: SidebarEntry<'a, StrIter> + 'a,
+    SBEntries: Iterator<Item = &'a mut SBEntry>,
     StrIter: Iterator<Item = &'a &'a str> + 'a,
     BodyEntries: Iterator<Item = &'a BodyEntry<'a, Type>>,
-    AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Type>>,
     VisitAbleVars: Iterator<Item = &'a (&'a str, TypesIter)>,
     TypesIter: Iterator<Item = &'a Type> + 'a,
 >: Sized
@@ -72,7 +79,7 @@ pub trait Docs<
 
     // Required iterators
     fn module_names(&self) -> ModuleNames;
-    fn package_sidebar_entries(&self) -> Sidebar;
+    fn package_sidebar_entries(&self) -> SBEntries;
     fn body_entries(&self) -> BodyEntries;
 
     // Required lookups
@@ -217,15 +224,12 @@ pub trait Docs<
     }
 
     fn render_sidebar(&self, buf: &mut String<'_>) {
-        for SidebarEntry {
-            link_text: module_name,
-            doc_comment,
-            exposed,
-        } in self.package_sidebar_entries()
-        {
-            if let Some(heading) = doc_comment {
+        for entry in self.package_sidebar_entries() {
+            if let Some(heading) = entry.doc_comment() {
                 let _ = write!(buf, "\t<h3 class=\"sidebar-heading\">{heading}</a>\n");
             }
+
+            let module_name = entry.link_text();
 
             // Sidebar entries should all be relative URLs and unqualified names
             let _ = write!(
@@ -233,7 +237,7 @@ pub trait Docs<
                 "<div class='sidebar-entry'><a class='sidebar-module-link' href='{module_name}'>{module_name}</a><div class='sidebar-sub-entries'>",
             );
 
-            for name in exposed {
+            for name in entry.exposed() {
                 let _ = write!(buf, "<a href='{module_name}#{name}'>{name}</a>",);
             }
 
@@ -286,21 +290,28 @@ pub trait Docs<
 
             type_ann.visit(
                 buf,
-                TypeAnnVisitor {
-                    ability: |members, buf| self.render_ability_decl(arena, members, buf),
-                    type_alias: |type_var_names: StrIter, alias, buf| {
-                        self.render_type_alias_decl(arena, type_var_names, alias, buf)
-                    },
-                    opaque_type: |type_var_names: StrIter, abilities: AbilityIter, buf| {
-                        self.render_opaque_type_decl(arena, type_var_names, abilities, buf)
-                    },
-                    value: |val, buf| self.render_val_decl(arena, val, buf),
+                // visit_ability
+                |members, buf| self.render_ability_decl(arena, members, buf),
+                // visit_type_alias
+                |type_var_names: StrIter, alias, buf| {
+                    self.render_type_alias_decl(arena, type_var_names, alias, buf)
                 },
+                // visit_opaque_type
+                |type_var_names: StrIter, abilities: AbilityIter, buf| {
+                    self.render_opaque_type_decl(arena, type_var_names, abilities, buf)
+                },
+                // visit_value
+                |val, buf| self.render_val_decl(arena, val, buf)
             )
         }
     }
 
-    fn render_ability_decl(&self, arena: &'a Bump, members: AbilityMemberIter, buf: &mut String<'a>) {
+    fn render_ability_decl(
+        &self,
+        arena: &'a Bump,
+        members: AbilityMemberIter,
+        buf: &mut String<'a>,
+    ) {
         buf.push_str(" <span class='kw'>implements {</span>");
 
         let mut any_rendered = false;
@@ -393,21 +404,27 @@ pub trait AbilityImpl<'a> {
     fn docs_url(&self) -> &'a str;
 }
 
-pub trait TypeAnn<'a, Ability: AbilityImpl<'a> + Debug + 'a>: Sized + 'a {
+pub trait TypeAnn<
+    'a,
+    Ability: AbilityImpl<'a> + Debug + 'a,
+    // iterators
+    AliasVarNames: Iterator<Item = &'a &'a str>,
+    OpaqueVarNames: Iterator<Item = &'a &'a str>,
+    AbilityIter: Iterator<Item = &'a Ability>,
+    AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Self>>,
+>: Sized + 'a {
     fn visit<
-        // visit functions
         VisitAbility: Fn(AbilityMemberIter, &'a mut String<'a>),
-        VisitAlias: Fn(StrIter, &'a Self, &'a mut String<'a>),
-        VisitOpaque: Fn(StrIter, AbilityIter, &'a mut String<'a>),
+        VisitAlias: Fn(AliasVarNames, &'a Self, &'a mut String<'a>),
+        VisitOpaque: Fn(OpaqueVarNames, AbilityIter, &'a mut String<'a>),
         VisitValue: Fn(&'a Self, &'a mut String<'a>),
-        // iterators
-        StrIter: Iterator<Item = &'a &'a str>,
-        AbilityIter: Iterator<Item = &'a Ability>,
-        AbilityMemberIter: Iterator<Item = &'a AbilityMember<'a, Self>>,
     >(
         &self,
         buf: &mut String<'_>,
-        visitor: TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue>,
+        visit_ability: VisitAbility,
+        visit_type_alias: VisitAlias,
+        visit_opaque_type: VisitOpaque,
+        visit_value: VisitValue,
     );
 }
 
@@ -420,12 +437,18 @@ pub trait TypeAnn<'a, Ability: AbilityImpl<'a> + Debug + 'a>: Sized + 'a {
 // },
 // value: |val, buf| self.render_val_decl(arena, val, buf),
 
-pub struct TypeAnnVisitor<VisitAbility, VisitAlias, VisitOpaque, VisitValue> {
-    pub ability: VisitAbility,
-    pub type_alias: VisitAlias,
-    pub opaque_type: VisitOpaque,
-    pub value: VisitValue,
-}
+// pub struct TypeAnnVisitor<
+//     'a,
+//     VisitAbility: Fn(AbilityMemberIter, &'a mut String<'a>),
+//     VisitAlias: Fn(AliasVarNames, &'a Self, &'a mut String<'a>),
+//     VisitOpaque: Fn(OpaqueVarNames, AbilityIter, &'a mut String<'a>),
+//     VisitValue: Fn(&'a Self, &'a mut String<'a>),
+// > {
+//     pub ability: VisitAbility,
+//     pub type_alias: VisitAlias,
+//     pub opaque_type: VisitOpaque,
+//     pub value: VisitValue,
+// }
 
 pub fn render_package_name_link(name: &str, buf: &mut String<'_>) {
     let _ = write!(buf, "<h1 class='pkg-full-name'><a href='/'>{name}</a></h1>");
