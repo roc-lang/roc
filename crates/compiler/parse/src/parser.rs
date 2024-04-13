@@ -43,6 +43,14 @@ impl Progress {
             NoProgress
         }
     }
+
+    pub fn and(&self, other: Self) -> Self {
+        if (*self == MadeProgress) && (other == MadeProgress) {
+            MadeProgress
+        } else {
+            NoProgress
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2696,43 +2696,47 @@ impl<'a> Spaceable<'a> for RecordField<'a> {
 }
 
 pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
+    use crate::both;
     use RecordField::*;
 
     map_with_arena!(
         and!(
             specialize_err(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
             and!(
-                spaces(),
-                and!(
-                    optional(skip_first!(byte(b':', ERecord::Colon), record_field_expr())),
-                    optional(skip_first!(
-                        and!(ignore(spaces()), byte(b'?', ERecord::QuestionMark)),
-                        spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
-                    ))
-                )
+                optional(both!(
+                    both!(spaces(), byte(b':', ERecord::Colon)),
+                    record_field_expr()
+                )),
+                optional(both!(
+                    both!(spaces(), byte(b'?', ERecord::QuestionMark)),
+                    spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
+                ))
             )
         ),
-        |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
+        |arena: &'a bumpalo::Bump,
+         (loc_label, opt_loc_val): (
+            Loc<&'a str>,
+            (
+                Option<((&'a [CommentOrNewline<'a>], ()), RecordFieldExpr<'a>)>,
+                Option<((&'a [CommentOrNewline<'a>], ()), Loc<Expr<'a>>)>
+            )
+        )| {
             match opt_loc_val {
-                (Some(RecordFieldExpr::Value(loc_val)), None) => {
-                    RequiredValue(loc_label, spaces, arena.alloc(loc_val))
+                (Some((spaces, RecordFieldExpr::Value(loc_val))), None) => {
+                    RequiredValue(loc_label, spaces.0, arena.alloc(loc_val))
                 }
 
-                (Some(RecordFieldExpr::Apply(arrow_spaces, loc_val)), None) => {
-                    ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
+                (Some((spaces, RecordFieldExpr::Apply(arrow_spaces, loc_val))), None) => {
+                    ApplyValue(loc_label, spaces.0, arrow_spaces, arena.alloc(loc_val))
                 }
 
-                (None, Some(loc_val)) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
+                (None, Some((spaces, loc_val))) => {
+                    OptionalValue(loc_label, spaces.0, arena.alloc(loc_val))
+                }
 
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
-                (None, None) => {
-                    if !spaces.is_empty() {
-                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                    } else {
-                        LabelOnly(loc_label)
-                    }
-                }
+                (None, None) => LabelOnly(loc_label),
 
                 (Some(_), Some(_)) => todo!(),
             }
@@ -2741,14 +2745,19 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     .trace("record_field")
 }
 
-fn ignore<'a, P, Output, E: 'a>(parser: P) -> impl Parser<'a, (), E>
-where
-    P: Parser<'a, Output, E>,
-{
-    move |arena, state, min_indent| match parser.parse(arena, state, min_indent) {
-        Ok((_, _, state)) => Ok((NoProgress, (), state)),
-        Err(err) => Err(err),
-    }
+#[macro_export]
+macro_rules! both {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
+            .parse(arena, state, min_indent)
+        {
+            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.and(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
+        }
+    };
 }
 
 #[cfg(test)]
