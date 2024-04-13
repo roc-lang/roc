@@ -1562,7 +1562,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             // Allocate heap space and store its address in a local variable
             let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
             let heap_alignment = self.layout_interner.alignment_bytes(elem_layout);
-            self.allocate_with_refcount(Some(size), heap_alignment, 1);
+            let elems_refcounted = self.layout_interner.contains_refcounted(elem_layout);
+            self.allocate_with_refcount(size, heap_alignment, elems_refcounted);
             self.code_builder.set_local(heap_local_id);
 
             let (stack_local_id, stack_offset) =
@@ -1676,13 +1677,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     }
                     self.code_builder.else_();
                     {
-                        self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                        self.allocate_with_refcount(data_size, data_alignment, false);
                         self.code_builder.set_local(*local_id);
                     }
                     self.code_builder.end();
                 } else {
                     // Call the allocator to get a memory address.
-                    self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                    self.allocate_with_refcount(data_size, data_alignment, false);
                     self.code_builder.set_local(*local_id);
                 }
                 (*local_id, 0)
@@ -1965,53 +1966,31 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      * Refcounting & Heap allocation
      *******************************************************************/
 
-    /// Allocate heap space and write an initial refcount
-    /// If the data size is known at compile time, pass it in comptime_data_size.
-    /// If size is only known at runtime, push *data* size to the VM stack first.
+    /// Allocates heap space and write an initial refcount of 1.
     /// Leaves the *data* address on the VM stack
+    ///
+    /// elements_refcounted should only ever be set for lists.
     fn allocate_with_refcount(
         &mut self,
-        comptime_data_size: Option<u32>,
+        data_size: u32,
         alignment_bytes: u32,
-        initial_refcount: u32,
+        elements_refcounted: bool,
     ) {
         if !self.can_relocate_heap {
             // This will probably only happen for test hosts.
             panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export symbols __heap_base and __heap_end");
         }
-        // Add extra bytes for the refcount
-        let extra_bytes = alignment_bytes.max(PTR_SIZE);
 
-        if let Some(data_size) = comptime_data_size {
-            // Data size known at compile time and passed as an argument
-            self.code_builder
-                .i32_const((data_size + extra_bytes) as i32);
-        } else {
-            // Data size known only at runtime and is on top of VM stack
-            self.code_builder.i32_const(extra_bytes as i32);
-            self.code_builder.i32_add();
-        }
+        // Zig arguments              Wasm types
+        //  data_bytes: usize          i32
+        //  element_alignment: u32     i32
+        //  element_refcounted: bool   i32
 
-        // Provide a constant for the alignment argument
+        self.code_builder.i32_const(data_size as i32);
         self.code_builder.i32_const(alignment_bytes as i32);
+        self.code_builder.i32_const(elements_refcounted as i32);
 
-        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_host_fn_after_loading_args("roc_alloc");
-
-        // Save the allocation address to a temporary local variable
-        let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.tee_local(local_id);
-
-        // Write the initial refcount
-        let refcount_offset = extra_bytes - PTR_SIZE;
-        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.i32_const(encoded_refcount);
-        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
-
-        // Put the data address on the VM stack
-        self.code_builder.get_local(local_id);
-        self.code_builder.i32_const(extra_bytes as i32);
-        self.code_builder.i32_add();
+        self.call_host_fn_after_loading_args(bitcode::UTILS_ALLOCATE_WITH_REFCOUNT);
     }
 
     fn expr_reset(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
