@@ -19,7 +19,9 @@ Defs {
                 before_name: [],
                 name: @8-12 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: None,
                 exposed: None,

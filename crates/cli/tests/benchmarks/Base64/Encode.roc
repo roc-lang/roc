@@ -1,6 +1,9 @@
 interface Base64.Encode
     exposes [toBytes]
-    imports [Bytes.Encode.{ ByteEncoder }]
+    imports []
+
+
+import Bytes.Encode exposing [ByteEncoder]
 
 InvalidChar : U8
 

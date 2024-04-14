@@ -12,6 +12,7 @@ use crate::ident::{
     integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
     Ident,
 };
+use crate::module::module_name_help;
 use crate::parser::{
     self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
     reset_min_indent, sep_by1, sep_by1_e, set_min_indent, specialize_err, specialize_err_ref, then,
@@ -957,7 +958,7 @@ fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport
             specialize_err(|_, pos| EImport::PackageShorthand(pos), lowercase_ident()),
             byte(b'.', EImport::PackageShorthandDot)
         )),
-        name: specialize_err(|_, pos| EImport::ModuleName(pos), uppercase_ident()),
+        name: module_name_help(EImport::ModuleName)
     })
 }
 

@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::path::Path;
 
 use crate::header::{
-    self, AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader,
+    self, AppHeader, HostedHeader, InterfaceHeader, ModuleName, PackageHeader, PlatformHeader,
 };
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
@@ -11,7 +11,6 @@ use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_module::ident::ModuleName;
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -460,7 +459,7 @@ pub fn wrap_in_task_ok<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a 
             arena.alloc(Loc::at(
                 loc_expr.region,
                 Expr::Var {
-                    module_name: ModuleName::TASK,
+                    module_name: roc_module::ident::ModuleName::TASK,
                     ident: "ok",
                     suffixed: 0,
                 },
@@ -893,7 +892,7 @@ impl header::Keyword for ImportExposingKeyword {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImportedModuleName<'a> {
     pub package: Option<&'a str>,
-    pub name: &'a str,
+    pub name: ModuleName<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

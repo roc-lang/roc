@@ -1,4 +1,4 @@
 import Json exposing [int]
-import JsonEncode as JE
+import Json.Encode as JE
 
 JE.encode (int 42)

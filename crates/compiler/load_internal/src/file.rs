@@ -2387,7 +2387,6 @@ fn update<'a>(
                 exposed_symbols.insert(*symbol);
             }
 
-            // [modules-revamp] TODO: revise this
             // NOTE we currently re-parse the headers when a module is imported twice.
             // We need a proper solution that marks a phase as in-progress so it's not repeated
             // debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
@@ -5214,7 +5213,7 @@ fn parse<'a>(
             ValueDef::ModuleImport(import) => {
                 let qualified_module_name = QualifiedModuleName {
                     opt_package: import.name.value.package,
-                    module: import.name.value.name.into(),
+                    module: import.name.value.name.as_str().into(),
                 };
 
                 imported.push((qualified_module_name, *region));
