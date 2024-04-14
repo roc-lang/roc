@@ -20,6 +20,7 @@ use std::fs::{self, FileType};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Instant;
 use target_lexicon::Triple;
 
 #[macro_use]
@@ -228,27 +229,28 @@ fn main() -> io::Result<()> {
             let out_dir = matches.get_one::<OsString>(FLAG_OUTPUT).unwrap();
 
             if matches.get_flag(FLAG_EXPERIMENTAL) {
+                let start_time = Instant::now();
                 let arena = Bump::new();
 
                 let todo = (); // TODO make this a CLI flag to the `docs` subcommand instead of an env var
                 let user_specified_base_url = std::env::var("ROC_DOCS_URL_ROOT").ok();
-                let out_dir = out_dir.as_ref();
 
-                match roc_docs::generate(
+                match roc_docs_io::generate_docs_html(
                     &arena,
-                    root_path.as_path(),
+                    "DOCUMENTATION",
+                    root_path,
                     out_dir,
-                    user_specified_base_url,
+                    user_specified_base_url.as_deref(),
                 ) {
                     Ok(()) => {
+                        let elapsed_ms = start_time.elapsed().as_millis();
                         println!(
-                            "🎉 Docs generated into {} in {} ms",
-                            build_dir.display(),
-                            end_time
+                            "🎉 Docs generated into {} in {elapsed_ms} ms",
+                            Path::new(out_dir).display(),
                         );
                     }
                     Err(problem) => {
-                        use roc_docs::Problem::*;
+                        use roc_docs_io::Problem::*;
 
                         match problem {
                             FailedToLoadModule => todo!(),

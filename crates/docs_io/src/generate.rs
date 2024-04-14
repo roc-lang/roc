@@ -23,11 +23,12 @@ use std::path::{Path, PathBuf};
 
 pub fn generate_docs_html<'a>(
     arena: &'a Bump,
-    pkg_name: &'a str,
-    root_file: PathBuf,
-    build_dir: impl AsRef<Path>,
+    pkg_name: &str,
+    root_file: impl AsRef<Path>,
+    out_dir: impl AsRef<Path>,
+    opt_user_specified_base_url: Option<&'a str>,
 ) -> Result<(), Problem> {
-    let loaded_module = load_module_for_docs(root_file);
+    let loaded_module = load_module_for_docs(root_file.as_ref().to_path_buf());
 
     // Copy over the assets
     // For debug builds, read assets from fs to speed up build
@@ -52,13 +53,13 @@ pub fn generate_docs_html<'a>(
     let assets = {
         // Construct the absolute path to the static assets
         let workspace_dir = std::env!("ROC_WORKSPACE_DIR");
-        let static_dir = Path::new(workspace_dir).join("crates/docs/src/static");
+        let static_dir = Path::new(workspace_dir).join("crates/docs_io/src/static");
 
         // Read the assets from the filesystem
         let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
         let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
         let favicon_svg =
-            fs::read_to_string(static_dir.join("../../../www/public/favicon.svg")).unwrap();
+            fs::read_to_string(static_dir.join("../../../../www/public/favicon.svg")).unwrap();
         let raw_template_html = fs::read_to_string(static_dir.join("index.html")).unwrap();
 
         Assets {
@@ -75,7 +76,7 @@ pub fn generate_docs_html<'a>(
     // inside it. That way, if you have a shell open to that directory,
     // it doesn't get messed up from the dir having been deleted out from
     // under the shell.
-    file::populate_build_dir(arena, build_dir.as_ref(), &assets)?;
+    file::populate_build_dir(arena, out_dir.as_ref(), &assets)?;
 
     IoDocs {
         arena,
@@ -84,8 +85,9 @@ pub fn generate_docs_html<'a>(
         // TODO get this from the platform's source file rather than hardcoding it!
         // github.com/roc-lang/roc/issues/5712
         pkg_name: "Documentation",
+        opt_user_specified_base_url,
     }
-    .generate(build_dir)
+    .generate(out_dir)
 }
 
 struct IoDocs<'a> {
@@ -93,6 +95,7 @@ struct IoDocs<'a> {
     loaded_module: LoadedModule,
     raw_template_html: &'a str,
     pkg_name: &'a str,
+    opt_user_specified_base_url: Option<&'a str>,
 }
 
 impl<'a> IoDocs<'a> {
@@ -140,14 +143,16 @@ impl<'a>
     > for Annotation
 {
     fn visit<
+        'b,
+        'c,
         // visit functions
-        VisitAbility: Fn(slice::Iter<'a, AbilityMember<'a, Self>>, &'a mut String<'a>),
-        VisitAlias: Fn(slice::Iter<'a, &'a str>, &'a Self, &'a mut String<'a>),
-        VisitOpaque: Fn(slice::Iter<'a, &'a str>, slice::Iter<'a, AbilityAnn<'a>>, &'a mut String<'a>),
-        VisitValue: Fn(&'a Self, &'a mut String<'a>),
+        VisitAbility: Fn(slice::Iter<'a, AbilityMember<'a, Self>>, &'b mut String<'c>),
+        VisitAlias: Fn(slice::Iter<'a, &'a str>, &'a Self, &'b mut String<'c>),
+        VisitOpaque: Fn(slice::Iter<'a, &'a str>, slice::Iter<'a, AbilityAnn<'a>>, &'b mut String<'c>),
+        VisitValue: Fn(&'a Self, &'b mut String<'c>),
     >(
-        &self,
-        buf: &mut String<'_>,
+        &'a self,
+        buf: &'b mut String<'c>,
         visit_ability: VisitAbility,
         visit_type_alias: VisitAlias,
         visit_opaque_type: VisitOpaque,
@@ -254,43 +259,53 @@ impl<'a>
     }
 
     fn user_specified_base_url(&self) -> Option<&'a str> {
-        todo!()
+        self.opt_user_specified_base_url
     }
 
     fn package_doc_comment_html(&self) -> &'a str {
-        todo!()
+        "TODO package_doc_comment_html"
     }
 
     fn base_url(&self, module_id: ModuleId) -> &'a str {
-        todo!()
+        "TODO base_url"
     }
 
     fn module_name(&self, module_id: ModuleId) -> &'a str {
-        todo!()
+        "TODO module_name"
     }
 
     fn ident_name(&self, module_id: ModuleId, ident_id: IdentId) -> &'a str {
-        todo!()
+        "TODO ident_name"
     }
 
     fn opt_alias(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Alias> {
-        todo!()
+        let todo = ();
+
+        None
     }
 
     fn module_names(&self) -> slice::Iter<'a, (ModuleId, &'a str)> {
-        todo!()
+        let todo = ();
+
+        [].iter()
     }
 
     fn package_sidebar_entries(&self) -> slice::IterMut<'a, SBEntry<'a>> {
-        todo!()
+        let todo = ();
+
+        [].iter_mut()
     }
 
     fn body_entries(&self) -> slice::Iter<'a, BodyEntry<'a, Annotation>> {
-        todo!()
+        let todo = ();
+
+        [].iter()
     }
 
     fn opt_type(&self, module_id: ModuleId, ident_id: IdentId) -> Option<Annotation> {
-        todo!()
+        let todo = ();
+
+        None
     }
 
     fn visit_type<'b>(
@@ -300,7 +315,7 @@ impl<'a>
         typ: &Annotation,
         buf: &mut String<'b>,
     ) {
-        todo!()
+        let todo = ();
     }
 }
 

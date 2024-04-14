@@ -1,6 +1,6 @@
 //! Provides a binary that is only used for static build servers.
 use clap::{value_parser, Arg, Command};
-use roc_docs::generate_docs_html;
+use roc_docs_io::generate_docs_html;
 use std::io;
 use std::path::PathBuf;
 
