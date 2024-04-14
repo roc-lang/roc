@@ -100,7 +100,9 @@ Defs {
                 ],
                 name: @25-29 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -135,7 +137,9 @@ Defs {
                 before_name: [],
                 name: @58-62 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -175,7 +179,9 @@ Defs {
                 before_name: [],
                 name: @109-113 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -202,7 +208,9 @@ Defs {
                 before_name: [],
                 name: @145-149 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -242,7 +250,9 @@ Defs {
                 before_name: [],
                 name: @196-200 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -290,7 +300,9 @@ Defs {
                 before_name: [],
                 name: @261-265 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: None,
                 exposed: Some(
@@ -327,7 +339,9 @@ Defs {
                 before_name: [],
                 name: @321-325 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -367,7 +381,9 @@ Defs {
                 before_name: [],
                 name: @372-376 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: None,
                 exposed: Some(
@@ -396,7 +412,9 @@ Defs {
                 before_name: [],
                 name: @418-422 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -436,7 +454,9 @@ Defs {
                 before_name: [],
                 name: @469-473 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -489,7 +509,9 @@ Defs {
                 ],
                 name: @542-546 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -557,7 +579,9 @@ Defs {
                 before_name: [],
                 name: @682-683 ImportedModuleName {
                     package: None,
-                    name: "A",
+                    name: ModuleName(
+                        "A",
+                    ),
                 },
                 alias: None,
                 exposed: None,
@@ -568,7 +592,9 @@ Defs {
                 before_name: [],
                 name: @717-718 ImportedModuleName {
                     package: None,
-                    name: "B",
+                    name: ModuleName(
+                        "B",
+                    ),
                 },
                 alias: None,
                 exposed: None,

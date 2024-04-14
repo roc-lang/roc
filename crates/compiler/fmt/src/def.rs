@@ -305,7 +305,7 @@ impl<'a> Formattable for ImportedModuleName<'a> {
             buf.push_str(".");
         }
 
-        buf.push_str(self.name);
+        self.name.format(buf, indent);
     }
 }
 

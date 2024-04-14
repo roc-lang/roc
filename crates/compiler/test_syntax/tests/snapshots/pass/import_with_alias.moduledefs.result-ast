@@ -5,7 +5,7 @@ Defs {
     ],
     regions: [
         @0-23,
-        @24-49,
+        @24-50,
     ],
     space_before: [
         Slice(start = 0, length = 0),
@@ -25,7 +25,9 @@ Defs {
                 before_name: [],
                 name: @7-17 ImportedModuleName {
                     package: None,
-                    name: "JsonEncode",
+                    name: ModuleName(
+                        "JsonEncode",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -45,9 +47,11 @@ Defs {
         ModuleImport(
             ModuleImport {
                 before_name: [],
-                name: @31-42 ImportedModuleName {
+                name: @31-43 ImportedModuleName {
                     package: None,
-                    name: "BytesDecode",
+                    name: ModuleName(
+                        "Bytes.Decode",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -56,7 +60,7 @@ Defs {
                             item: ImportAsKeyword,
                             after: [],
                         },
-                        item: @47-49 ImportAlias(
+                        item: @48-50 ImportAlias(
                             "BD",
                         ),
                     },

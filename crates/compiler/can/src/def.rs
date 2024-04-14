@@ -2969,7 +2969,7 @@ fn to_pending_value_def<'a>(
         }),
 
         ModuleImport(module_import) => {
-            let module_name = ModuleName::from(module_import.name.value.name);
+            let module_name = ModuleName::from(module_import.name.value.name.as_str());
             let pq_module_name = QualifiedModuleName {
                 opt_package: module_import.name.value.package,
                 module: module_name.clone(),

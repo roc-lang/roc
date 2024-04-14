@@ -1224,7 +1224,6 @@ fn adjust_header_paths<'a>(
         debug_assert_eq!(*header_id, header_output.module_id);
 
         if let HeaderType::Module { name, .. } = header_type {
-            // [modules-revamp] TODO: Privacy changes
             // Modules can have names like Foo.Bar.Baz,
             // in which case we need to adjust the src_dir to
             // remove the "Bar/Baz" directories in order to correctly
@@ -2439,7 +2438,6 @@ fn update<'a>(
                 exposed_symbols.insert(*symbol);
             }
 
-            // [modules-revamp] TODO: revise this
             // NOTE we currently re-parse the headers when a module is imported twice.
             // We need a proper solution that marks a phase as in-progress so it's not repeated
             // debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
@@ -3861,10 +3859,7 @@ fn parse_header<'a>(
         )) => {
             let module_name = match opt_expected_module_name {
                 Some(pq_name) => arena.alloc_str(pq_name.as_inner().as_str()),
-                None => {
-                    // [modules-revamp] [privacy-changes] TODO: Support test/check on nested modules
-                    arena.alloc_str(filename.file_stem().unwrap().to_str().unwrap())
-                }
+                None => arena.alloc_str(filename.file_stem().unwrap().to_str().unwrap()),
             };
 
             let info = HeaderInfo {
@@ -5272,7 +5267,7 @@ fn parse<'a>(
             ValueDef::ModuleImport(import) => {
                 let qualified_module_name = QualifiedModuleName {
                     opt_package: import.name.value.package,
-                    module: import.name.value.name.into(),
+                    module: import.name.value.name.as_str().into(),
                 };
 
                 imported.push((qualified_module_name, *region));

@@ -37,7 +37,9 @@ Defs {
                     package: Some(
                         "json",
                     ),
-                    name: "Decode",
+                    name: ModuleName(
+                        "Decode",
+                    ),
                 },
                 alias: None,
                 exposed: None,
@@ -50,7 +52,9 @@ Defs {
                     package: Some(
                         "json",
                     ),
-                    name: "Decode",
+                    name: ModuleName(
+                        "Decode",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {
@@ -74,7 +78,9 @@ Defs {
                     package: Some(
                         "json",
                     ),
-                    name: "Decode",
+                    name: ModuleName(
+                        "Decode",
+                    ),
                 },
                 alias: None,
                 exposed: Some(
@@ -108,7 +114,9 @@ Defs {
                     package: Some(
                         "json",
                     ),
-                    name: "Decode",
+                    name: ModuleName(
+                        "Decode",
+                    ),
                 },
                 alias: Some(
                     KeywordItem {

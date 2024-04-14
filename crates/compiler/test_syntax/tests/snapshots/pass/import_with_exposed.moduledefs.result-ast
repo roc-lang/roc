@@ -30,7 +30,9 @@ Defs {
                 before_name: [],
                 name: @7-11 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: None,
                 exposed: Some(
@@ -57,7 +59,9 @@ Defs {
                 before_name: [],
                 name: @43-47 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: None,
                 exposed: Some(
@@ -89,7 +93,9 @@ Defs {
                 before_name: [],
                 name: @83-87 ImportedModuleName {
                     package: None,
-                    name: "Json",
+                    name: ModuleName(
+                        "Json",
+                    ),
                 },
                 alias: None,
                 exposed: Some(

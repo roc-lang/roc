@@ -1,7 +1,9 @@
 use std::fmt::Debug;
 use std::path::Path;
 
-use crate::header::{self, AppHeader, HostedHeader, ModuleHeader, PackageHeader, PlatformHeader};
+use crate::header::{
+    self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
+};
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
@@ -184,10 +186,10 @@ fn header_import_to_defs<'a>(
 
             let value_def = match spaced.item {
                 header::ImportsEntry::Package(pkg_name, name, exposed) => {
-                    header_import_to_value_def(arena, Some(pkg_name), name, exposed, import.region)
+                    header_import_to_value_def(Some(pkg_name), name, exposed, import.region)
                 }
                 header::ImportsEntry::Module(name, exposed) => {
-                    header_import_to_value_def(arena, None, name, exposed, import.region)
+                    header_import_to_value_def(None, name, exposed, import.region)
                 }
                 header::ImportsEntry::IngestedFile(path, typed_ident) => {
                     ValueDef::IngestedFileImport(IngestedFileImport {
@@ -236,7 +238,6 @@ fn header_import_to_defs<'a>(
 }
 
 fn header_import_to_value_def<'a>(
-    arena: &'a Bump,
     pkg_name: Option<&'a str>,
     name: header::ModuleName<'a>,
     exposed: Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
@@ -263,7 +264,7 @@ fn header_import_to_value_def<'a>(
             region,
             value: ImportedModuleName {
                 package: pkg_name,
-                name: arena.alloc(name).as_str(),
+                name,
             },
         },
         alias: None,
@@ -927,7 +928,7 @@ impl header::Keyword for ImportExposingKeyword {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImportedModuleName<'a> {
     pub package: Option<&'a str>,
-    pub name: &'a str,
+    pub name: ModuleName<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

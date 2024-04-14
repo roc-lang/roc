@@ -58,7 +58,9 @@ Full {
                         package: Some(
                             "pf",
                         ),
-                        name: "Stdout",
+                        name: ModuleName(
+                            "Stdout",
+                        ),
                     },
                     alias: None,
                     exposed: None,
