@@ -358,14 +358,31 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     end,
                 };
 
-                parse_expr_end(
+                match parse_expr_end(
                     min_indent,
                     new_options,
                     expr_state,
                     arena,
                     state,
                     initial_state,
-                )
+                ) {
+                    Err(err) => Err(err),
+                    Ok((progress, expr, new_state)) => {
+                        // We need to check if we have just parsed a suffixed statement,
+                        // if so, this is a defs node.
+                        if is_loc_expr_suffixed(&Loc::at_zero(expr)) {
+                            let def_region = Region::new(end, new_state.pos());
+                            let value_def = ValueDef::Stmt(arena.alloc(Loc::at(def_region, expr)));
+
+                            let mut defs = Defs::default();
+                            defs.push_value_def(value_def, def_region, &[], &[]);
+
+                            return parse_defs_expr(options, min_indent, defs, arena, new_state);
+                        } else {
+                            Ok((progress, expr, new_state))
+                        }
+                    }
+                }
             }
         }
     })

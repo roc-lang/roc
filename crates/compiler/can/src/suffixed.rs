@@ -568,10 +568,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                     };
 
                                     return unwrap_suffixed_expression(arena, apply_task_await(arena,def_expr.region,unwrapped_expr,def_pattern,next_expr), maybe_def_pat);
-                                } else {
+                                } else if after_empty {
                                     // SOME before, NIL after -> LAST DEF
-                                    debug_assert!(after_empty);
-
                                     match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat){
                                         Ok(new_loc_ret) => {
                                             let applied_task_await = apply_task_await(arena, loc_expr.region, unwrapped_expr, def_pattern, new_loc_ret);
@@ -592,6 +590,27 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                             return Err(EUnwrapped::Malformed);
                                         },
                                     }
+                                } else {
+                                    // SOME before, SOME after -> MIDDLE DEF
+                                    let after_defs = arena.alloc(Loc::at(def_expr.region, Defs(arena.alloc(split_defs.after), loc_ret)));
+
+                                    match unwrap_suffixed_expression(arena,after_defs,maybe_def_pat){
+                                        Ok(new_loc_ret) => {
+                                            let applied_await = apply_task_await(arena, loc_expr.region, unwrapped_expr, def_pattern, new_loc_ret);
+                                            let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(split_defs.before), applied_await)));
+                                            return unwrap_suffixed_expression(arena, new_defs, maybe_def_pat);
+                                        },
+                                        Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
+                                            let new_loc_ret = apply_task_await(arena, def_expr.region, sub_arg, sub_pat, sub_new);
+                                            let applied_await = apply_task_await(arena, loc_expr.region, unwrapped_expr, def_pattern, new_loc_ret);
+                                            let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(split_defs.before), applied_await)));
+                                            return unwrap_suffixed_expression(arena, new_defs, maybe_def_pat);
+                                        }
+                                        Err(EUnwrapped::UnwrappedDefExpr(..)) | Err(EUnwrapped::Malformed) => {
+                                            // TODO handle case when we have maybe_def_pat so can return an unwrapped up
+                                            return Err(EUnwrapped::Malformed);
+                                        },
+                                    };
                                 }
                             }
                             Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
