@@ -71,7 +71,7 @@ mod suffixed_tests {
     
             ok {}
         "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-28], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @24-28 Apply(@24-28 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@24-28 Var { module_name: "", ident: "foo", suffixed: 0 }, @24-28 Closure([@24-28 RecordDestructure([])], @54-59 Apply(@54-56 Var { module_name: "", ident: "ok", suffixed: 0 }, [@57-59 Record([])], Space))], BangSuffix))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-24], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @20-24 Apply(@20-24 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@20-24 Var { module_name: "", ident: "foo", suffixed: 0 }, @20-24 Closure([@20-24 RecordDestructure([])], @42-47 Apply(@42-44 Var { module_name: "", ident: "ok", suffixed: 0 }, [@45-47 Record([])], Space))], BangSuffix))] }"#,
         );
     }
 

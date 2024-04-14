@@ -10,7 +10,6 @@ app "desugar-bang"
 main =
     # is this a valid statement?
     "Foo" |> A.x!
-
     # what about this?
     "Bar"
         |> B.y!

@@ -1,5 +1,4 @@
 main =
     a! "Bar"
-    x =
-        B.b! "Foo"
+    x = B.b! "Foo"
     c! x

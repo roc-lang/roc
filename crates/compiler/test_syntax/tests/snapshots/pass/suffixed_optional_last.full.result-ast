@@ -99,85 +99,62 @@ Full {
                     ident: "main",
                     suffixed: 0,
                 },
-                @100-202 SpaceBefore(
-                    Defs(
-                        Defs {
-                            tags: [
-                                Index(2147483648),
-                            ],
-                            regions: [
-                                @145-202,
-                            ],
-                            space_before: [
-                                Slice(start = 0, length = 0),
-                            ],
-                            space_after: [
-                                Slice(start = 0, length = 0),
-                            ],
-                            spaces: [],
-                            type_defs: [],
-                            value_defs: [
-                                Stmt(
-                                    @145-202 BinOps(
-                                        [
-                                            (
-                                                @100-114 SpaceAfter(
-                                                    Str(
-                                                        PlainLine(
-                                                            "jq --version",
-                                                        ),
-                                                    ),
-                                                    [
-                                                        Newline,
-                                                    ],
-                                                ),
-                                                @123-125 Pizza,
-                                            ),
-                                            (
-                                                @126-133 SpaceAfter(
-                                                    Var {
-                                                        module_name: "Cmd",
-                                                        ident: "new",
-                                                        suffixed: 0,
-                                                    },
-                                                    [
-                                                        Newline,
-                                                    ],
-                                                ),
-                                                @142-144 Pizza,
-                                            ),
-                                            (
-                                                @145-155 SpaceAfter(
-                                                    Var {
-                                                        module_name: "Cmd",
-                                                        ident: "status",
-                                                        suffixed: 0,
-                                                    },
-                                                    [
-                                                        Newline,
-                                                    ],
-                                                ),
-                                                @164-166 Pizza,
-                                            ),
-                                        ],
-                                        @167-202 Apply(
-                                            @167-179 Var {
-                                                module_name: "Task",
-                                                ident: "mapErr",
-                                                suffixed: 1,
-                                            },
-                                            [
-                                                @180-202 Tag(
-                                                    "UnableToCheckJQVersion",
-                                                ),
-                                            ],
-                                            Space,
+                @88-202 SpaceBefore(
+                    BinOps(
+                        [
+                            (
+                                @100-114 SpaceAfter(
+                                    Str(
+                                        PlainLine(
+                                            "jq --version",
                                         ),
                                     ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @123-125 Pizza,
+                            ),
+                            (
+                                @126-133 SpaceAfter(
+                                    Var {
+                                        module_name: "Cmd",
+                                        ident: "new",
+                                        suffixed: 0,
+                                    },
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @142-144 Pizza,
+                            ),
+                            (
+                                @145-155 SpaceAfter(
+                                    Var {
+                                        module_name: "Cmd",
+                                        ident: "status",
+                                        suffixed: 0,
+                                    },
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @164-166 Pizza,
+                            ),
+                        ],
+                        @167-202 Apply(
+                            @167-179 Var {
+                                module_name: "Task",
+                                ident: "mapErr",
+                                suffixed: 1,
+                            },
+                            [
+                                @180-202 Tag(
+                                    "UnableToCheckJQVersion",
                                 ),
                             ],
-                        },
-                        EmptyDefsFinal,
+                            Space,
+                        ),
                     ),
                     [
                         Newline,
