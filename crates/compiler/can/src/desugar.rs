@@ -751,7 +751,7 @@ pub fn desugar_expr<'a>(
         }
 
         // Replace an empty final def with a `Task.ok {}`
-        EmptyDefsFinal() => {
+        EmptyDefsFinal => {
             let mut apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
             apply_args
                 .push(arena.alloc(Loc::at(loc_expr.region, Expr::Record(Collection::empty()))));

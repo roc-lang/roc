@@ -701,7 +701,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::MalformedIdent(_, _)
             | Expr::MalformedClosure
             | Expr::PrecedenceConflict(_)
-            | Expr::EmptyDefsFinal()
+            | Expr::EmptyDefsFinal
             | Expr::MalformedSuffixed(_) => {
                 bumpvec![in arena;]
             }

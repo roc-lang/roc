@@ -48,7 +48,7 @@ impl<'a> Formattable for Expr<'a> {
             | Tag(_)
             | OpaqueRef(_)
             | IngestedFile(_, _)
-            | EmptyDefsFinal()
+            | EmptyDefsFinal
             | Crash => false,
 
             // These expressions always have newlines
@@ -428,7 +428,7 @@ impl<'a> Formattable for Expr<'a> {
                                 indent,
                             );
                         }
-                        EmptyDefsFinal() => {
+                        EmptyDefsFinal => {
                             // no need to print anything
                         }
                         _ => {
@@ -447,7 +447,7 @@ impl<'a> Formattable for Expr<'a> {
                     buf.push(')');
                 }
             }
-            EmptyDefsFinal() => {
+            EmptyDefsFinal => {
                 // no need to print anything
             }
             Expect(condition, continuation) => {

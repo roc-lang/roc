@@ -308,7 +308,7 @@ pub enum Expr<'a> {
 
     /// Used in place of an expression when the final expression is empty
     /// This may happen if the final expression is actually a suffixed statement
-    EmptyDefsFinal(),
+    EmptyDefsFinal,
 
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -1848,7 +1848,7 @@ impl<'a> Malformed for Expr<'a> {
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
             IngestedFile(_, _) |
-            EmptyDefsFinal() |
+            EmptyDefsFinal |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),

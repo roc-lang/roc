@@ -951,7 +951,7 @@ pub fn parse_single_def_assignment<'a>(
             Err(_) => {
                 // Unable to parse more defs, continue and return the first parsed expression as a stement
                 let empty_return =
-                    arena.alloc(Loc::at(first_loc_expr.region, Expr::EmptyDefsFinal()));
+                    arena.alloc(Loc::at(first_loc_expr.region, Expr::EmptyDefsFinal));
                 let value_def = ValueDef::Body(
                     arena.alloc(def_loc_pattern),
                     arena.alloc(Loc::at(
@@ -1242,7 +1242,7 @@ fn parse_defs_expr<'a>(
                             MadeProgress,
                             Expr::Defs(
                                 arena.alloc(local_defs),
-                                arena.alloc(Loc::at_zero(Expr::EmptyDefsFinal())),
+                                arena.alloc(Loc::at_zero(Expr::EmptyDefsFinal)),
                             ),
                             state,
                         ));
@@ -2169,7 +2169,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::SpaceAfter(..)
         | Expr::ParensAround(..)
         | Expr::RecordBuilder(..)
-        | Expr::EmptyDefsFinal() => unreachable!(),
+        | Expr::EmptyDefsFinal => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {

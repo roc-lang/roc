@@ -623,7 +623,7 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        &ast::Expr::EmptyDefsFinal() => {
+        &ast::Expr::EmptyDefsFinal => {
             internal_error!("EmptyDefsFinal should have been desugared")
         }
         &ast::Expr::Num(str) => {
@@ -2431,7 +2431,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _)
-        | ast::Expr::EmptyDefsFinal() => false,
+        | ast::Expr::EmptyDefsFinal => false,
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
