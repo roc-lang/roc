@@ -30,7 +30,13 @@ target-wasm32 = ["roc_build/target-wasm32"]
 target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 
-target-all = ["target-aarch64", "target-arm", "target-x86", "target-x86_64", "target-wasm32"]
+target-all = [
+    "target-aarch64",
+    "target-arm",
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32",
+]
 
 sanitizers = ["roc_build/sanitizers"]
 
@@ -41,6 +47,7 @@ roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
 roc_docs = { path = "../docs" }
+roc_docs_io = { path = "../docs_io" }
 roc_error_macros = { path = "../error_macros" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_gen_llvm = { path = "../compiler/gen_llvm" }

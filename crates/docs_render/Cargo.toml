@@ -1,0 +1,17 @@
+[package]
+name = "roc_docs_render"
+description = "Generates html documentation from Roc files and is used for Rocs builtins."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_types = { path = "../compiler/types" }
+bumpalo.workspace = true
+pulldown-cmark.workspace = true
+const_format.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

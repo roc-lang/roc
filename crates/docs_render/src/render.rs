@@ -1,32 +1,10 @@
-use bumpalo::{collections::String, Bump};
+use bumpalo::{collections::string::String, Bump};
 use const_format::formatcp;
-use core::fmt::Write;
-use core::{fmt, iter};
-use roc_can::expr::Declarations;
-use roc_collections::VecMap;
-use roc_load::docs::{DocEntry, ModuleDocumentation, TypeAnnotation};
-use roc_module::symbol::{IdentId, IdentIds, Interns, ModuleId, Symbol};
-use roc_types::types::Alias;
-use roc_types::{
-    subs::Subs,
-    types::{AliasKind, Type},
+use core::{
+    fmt::{self, Write},
+    iter,
 };
-
-pub struct ModuleDocs<
-    'a,
-    Sidebar: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntry, S>> + Clone,
-    ExposedSidebarEntry: Iterator<Item = S> + Clone,
-    S: AsRef<str> + fmt::Display,
-> {
-    pub arena: &'a Bump,
-    pub module_name: &'a str,
-    pub package_doc_comment_html: &'a str,
-    pub home: ModuleId,
-    pub home_ident_ids: &'a IdentIds,
-    pub interns: &'a Interns,
-    pub package_sidebar_entries: Sidebar,
-    pub base_urls: VecMap<ModuleId, &'a str>,
-}
+use roc_types::types::{AliasKind, Type};
 
 pub struct RecordField<'a> {
     field_name: &'a str,
@@ -96,14 +74,217 @@ pub struct SidebarEntry<'a, I: Iterator<Item = S> + Clone, S: AsRef<str> + fmt::
     pub doc_comment: Option<&'a str>,
 }
 
+pub struct Docs<
+    'a,
+    ModuleId,
+    Symbol,
+    DocsById,
+    ExposedSidebarEntries,
+    SidebarEntries,
+    Decls,
+    ExposedAliases,
+    AliasIter,
+    AliasBySymbol,
+    Sidebar,
+    ExposedSidebarEntry,
+    GetBaseUrl,
+    WriteToDisk,
+    NameFromIdentId,
+> {
+    pub arena: &'a Bump,
+    pub module_name: &'a str,
+    pub package_doc_comment_html: &'a str,
+    pub home: ModuleId,
+    pub interns: &'a Interns,
+    pub package_sidebar_entries: Sidebar,
+    pub base_url: GetBaseUrl,
+    pub user_specified_base_url: Option<&'a str>,
+    pub package_name: &'a str,
+    pub docs_by_id: DocsById,
+    pub raw_template_html: &'a str,
+    pub declarations: Decls,
+    pub exposed_aliases: ExposedAliases,
+    pub alias_by_symbol: AliasBySymbol,
+    pub write_to_disk: WriteToDisk,
+    pub name_from_ident_id: NameFromIdentId,
+}
+
 impl<
         'a,
-        Sidebar: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntry, S>> + Clone,
-        ExposedSidebarEntry: Iterator<Item = S> + Clone,
-        S: AsRef<str> + fmt::Display,
-    > ModuleDocs<'a, Sidebar, ExposedSidebarEntry, S>
+        ModuleId: 'a,
+        Symbol,
+        IdentId,
+        DocsById: Iterator<Item = &'a (ModuleId, ModuleDocumentation)> + Clone,
+        ExposedSidebarEntries: Iterator<Item = &'a str> + Clone,
+        SidebarEntries: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntries, &'a str>> + Clone,
+        Decls: Fn(ModuleId) -> Option<&'a Declarations>,
+        ExposedAliases: Fn(ModuleId) -> AliasIter,
+        AliasIter: Iterator<Item = (Symbol, &'a Alias)> + Clone,
+        AliasBySymbol: Fn(Symbol) -> Option<&'a Alias>,
+        Sidebar: Iterator<Item = SidebarEntry<'a, ExposedSidebarEntry, &'a str>> + Clone,
+        ExposedSidebarEntry: Iterator<Item = &'a str> + Clone,
+        GetBaseUrl: Fn(ModuleId) -> &'a str,
+        WriteToDisk: Fn(&'a str, &'a str) -> Result<(), Problem>,
+        NameFromIdentId: Fn(IdentId, ModuleId) -> &'a str,
+        Problem,
+    >
+    Docs<
+        'a,
+        ModuleId,
+        Symbol,
+        DocsById,
+        ExposedSidebarEntries,
+        SidebarEntries,
+        Decls,
+        ExposedAliases,
+        AliasIter,
+        AliasBySymbol,
+        Sidebar,
+        ExposedSidebarEntry,
+        GetBaseUrl,
+        WriteToDisk,
+        NameFromIdentId,
+    >
 {
-    #[allow(dead_code)]
+    pub fn render_to_disk(&self) -> Result<(), Problem> {
+        let arena = self.arena;
+        let raw_template_html = self.raw_template_html;
+        let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);
+        let mut module_template_html =
+            String::with_capacity_in(raw_template_html.len() + 2048, arena);
+        let mut sidebar_links = String::with_capacity_in(4096, arena);
+
+        let buf = &mut buf;
+        let sidebar_links = &mut sidebar_links;
+
+        self.render_sidebar(sidebar_links);
+
+        // Write index.html for package (/index.html)
+        {
+            let mut src = raw_template_html;
+
+            {
+                src = advance_past("<!-- base -->", src, buf);
+                write_base_url(self.user_specified_base_url, buf);
+            }
+
+            {
+                src = advance_past("<!-- Prefetch links -->", src, buf);
+
+                for (index, (_, module)) in self.docs_by_id.clone().enumerate() {
+                    if index > 0 {
+                        buf.push_str("\n    ");
+                    }
+
+                    let _ = write!(
+                        buf,
+                        "<link rel='prefetch' href='{}'/>",
+                        module.name.as_str()
+                    );
+                }
+            }
+
+            // Set module_template_html to be all the replacements we've made so far,
+            // plus the rest of the source template. We'll use this partially-completed
+            // template later on for the individual modules.
+            {
+                module_template_html.push_str(&buf);
+                module_template_html.push_str(&src);
+            }
+
+            {
+                src = advance_past("<!-- Page title -->", src, buf);
+                let _ = write!(buf, "<title>{package_name}</title>");
+            }
+
+            {
+                src = advance_past("<!-- Module links -->", src, buf);
+                buf.push_str(&sidebar_links);
+            }
+
+            {
+                src = advance_past("<!-- Package Name -->", src, buf);
+                html::render_package_name_link(package_name, buf);
+            }
+
+            {
+                src = advance_past("<!-- Module Docs -->", src, buf);
+
+                if module_docs.package_doc_comment_html.is_empty() {
+                    buf.push_str("Choose a module from the list to see its documentation.");
+                } else {
+                    buf.push_str(module_docs.package_doc_comment_html);
+                }
+            }
+
+            {
+                // Write the rest of the template into the buffer.
+                buf.push_str(&src);
+
+                // Finally, write the accumulated buffer to disk.
+                file::write(arena, &build_dir.join("index.html"), &buf)?;
+
+                buf.clear(); // We're done with this now. It's ready to be reused!
+            }
+        }
+
+        // Write each package module's index.html file
+        for (module_id, docs) in docs_by_id {
+            let mut src = module_template_html.as_str();
+
+            {
+                let name = docs.name.as_str();
+
+                {
+                    src = advance_past("<!-- Page title -->", src, buf);
+                    let _ = write!(buf, "<title>{name} - {package_name}</title>",);
+                }
+
+                {
+                    src = advance_past("<!-- Module links -->", src, buf);
+                    buf.push_str(sidebar_links);
+                }
+
+                {
+                    src = advance_past("<!-- Package Name -->", src, buf);
+                    html::render_package_name_link(package_name, buf);
+                }
+            }
+
+            {
+                src = advance_past("<!-- Module Docs -->", src, buf);
+                html::render_module(
+                    arena,
+                    *module_id,
+                    &docs,
+                    declarations(*module_id),
+                    exposed_aliases(*module_id),
+                    &alias_by_symbol,
+                    buf,
+                );
+            }
+
+            {
+                // Write the rest of the template into the buffer.
+                buf.push_str(&src);
+            }
+
+            {
+                let name = docs.name.as_str();
+                let module_dir = build_dir.join(name.replace('.', "/").as_str());
+
+                file::create_dir_all(arena, &module_dir)?;
+
+                // Finally, write the accumulated buffer to disk.
+                file::write(arena, &module_dir.join("index.html"), &buf)?;
+            }
+
+            buf.clear(); // We're done with this now. It's ready to be reused in the next iteration of the loop!
+        }
+
+        Ok(())
+    }
+
     pub fn render_sidebar(&self, buf: &mut String<'_>) {
         for SidebarEntry {
             link_text: module_name,
@@ -409,20 +590,7 @@ impl<
     }
 
     fn unqualified_name(&self, ident_id: IdentId) -> &str {
-        self.name_from_ident_id(ident_id, &self.home_ident_ids)
-    }
-
-    fn name_from_ident_id(&self, ident_id: IdentId, ident_ids: &'a IdentIds) -> &'a str {
-        ident_ids.get_name(ident_id).unwrap_or_else(|| {
-            if cfg!(debug_assertions) {
-                unreachable!("docs generation tried to render a relative URL for IdentId {:?} but it was not found in home_identids, which should never happen!", ident_id);
-            }
-
-            // In release builds, don't panic, just gracefully continue
-            // by not writing the url. It'll be a bug, but at least
-            // it won't block the user from seeing *some* docs rendered.
-            ""
-        })
+        self.name_from_ident_id(ident_id, self.home)
     }
 }
 
@@ -437,7 +605,6 @@ pub fn render_module<'a>(
     decls: Option<&Declarations>,
     aliases: impl Iterator<Item = (Symbol, &'a Alias)> + Clone,
     alias_by_symbol: impl Fn(Symbol) -> Option<&'a Alias>,
-    subs: &Subs,
     buf: &mut String<'_>,
 ) {
     let indent = Indentation::default();
@@ -679,4 +846,41 @@ fn is_multiline(_first: &Type) -> bool {
     let todo = ();
 
     true
+}
+
+fn advance_past<'a>(needle: &'static str, src: &'a str, buf: &mut String<'_>) -> &'a str {
+    if let Some(start_index) = src.find(needle) {
+        // Copy over everything up to this point.
+        buf.push_str(&src[..start_index]);
+
+        // Advance past the end of this string.
+        &src[(start_index + needle.len())..]
+    } else {
+        unreachable!( // TODO replace this with a panic in debug builds and a much more concise crash in release
+            "Compiler bug in docs generation code: could not find doc template section {:?} in the template - this should never happen!\n\nNOTE: advance_past must be called on each template section in the order they appear in the template! This improves performance, but means that working on sections out of order can lead to this error.\n\nAt this point, the remaining template was:\n\n{src}",
+            needle
+        );
+    }
+}
+
+fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut String) {
+    // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
+    match user_specified_base_url {
+        Some(root_builtins_path) => {
+            let root_builtins_path = root_builtins_path.as_ref();
+
+            if !root_builtins_path.starts_with('/') {
+                buf.push('/');
+            }
+
+            buf.push_str(&root_builtins_path);
+
+            if !root_builtins_path.ends_with('/') {
+                buf.push('/');
+            }
+        }
+        None => {
+            buf.push('/');
+        }
+    }
 }
