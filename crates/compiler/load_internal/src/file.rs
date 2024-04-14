@@ -3449,7 +3449,7 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
-                    let mut parent_dir: PathBuf = filename.clone().into();
+                    let mut parent_dir: PathBuf = filename.into();
                     parent_dir.pop();
 
                     let packages = unspace(arena, header.packages.value.items);

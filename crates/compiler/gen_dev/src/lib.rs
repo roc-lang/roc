@@ -2029,6 +2029,36 @@ trait Backend<'a> {
                 }
             }
 
+            LowLevel::NumWithoutDecimalPoint => {
+                let intrinsic = bitcode::DEC_TO_I128.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumWithDecimalPoint => {
+                let intrinsic = bitcode::DEC_FROM_I128.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF32ToParts => {
+                let intrinsic = bitcode::NUM_F32_TO_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64ToParts => {
+                let intrinsic = bitcode::NUM_F64_TO_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF32FromParts => {
+                let intrinsic = bitcode::NUM_F32_FROM_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64FromParts => {
+                let intrinsic = bitcode::NUM_F64_FROM_PARTS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }

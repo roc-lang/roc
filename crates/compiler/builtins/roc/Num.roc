@@ -149,6 +149,12 @@ module [
     toF32Checked,
     toF64,
     toF64Checked,
+    withoutDecimalPoint,
+    withDecimalPoint,
+    f32ToParts,
+    f64ToParts,
+    f32FromParts,
+    f64FromParts,
 ]
 
 import Bool exposing [Bool]
@@ -1404,3 +1410,26 @@ toU64Checked : Int * -> Result U64 [OutOfBounds]
 toU128Checked : Int * -> Result U128 [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
+
+## Turns a [Dec] into its [I128] representation by removing the decimal point.
+## This is equivalent to multiplying the [Dec] by 10^18.
+withoutDecimalPoint : Dec -> I128
+
+## Turns a [I128] into the coresponding [Dec] by adding the decimal point.
+## This is equivalent to dividing the [I128] by 10^18.
+withDecimalPoint : I128 -> Dec
+
+## Splits a [F32] into its components according to IEEE 754 standard.
+f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
+
+## Splits a [F64] into its components according to IEEE 754 standard.
+f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
+
+## Combine parts of a [F32] according to IEEE 754 standard.
+## The fraction should not be bigger than 0x007F_FFFF, any bigger value will be truncated.
+f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
+
+## Combine parts of a [F64] according to IEEE 754 standard.
+## The fraction should not be bigger than 0x000F_FFFF_FFFF_FFFF, any bigger value will be truncated.
+## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
+f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64

@@ -31,6 +31,9 @@ jobs:
       - name: roc format check on builtins
         run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
+      - name: ensure there are no unused dependencies
+        run: cargo +nightly-2023-08-20 udeps --all-targets
+
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 

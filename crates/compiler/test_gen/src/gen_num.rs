@@ -3681,3 +3681,155 @@ fn num_max() {
     assert_evals_to!(r"Num.max Num.minI64 Num.maxI64", i64::MAX, i64);
     assert_evals_to!(r"Num.max Num.maxI64 Num.minI64", i64::MAX, i64);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn with_decimal_point() {
+    assert_evals_to!(
+        r"Num.withDecimalPoint 0",
+        RocDec::from_str("0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withDecimalPoint 123000000000000000000",
+        RocDec::from_str("123.0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withDecimalPoint Num.maxI128",
+        RocDec::from_str("170141183460469231731.687303715884105727").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withDecimalPoint Num.minI128",
+        RocDec::from_str("-170141183460469231731.687303715884105728").unwrap(),
+        RocDec
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn without_decimal_point() {
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint 0",
+        RocDec::from_str("0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint 123.000000000000000000",
+        123000000000000000000,
+        i128
+    );
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint 170141183460469231731.687303715884105727",
+        i128::MAX,
+        i128
+    );
+    assert_evals_to!(
+        r"Num.withoutDecimalPoint -170141183460469231731.687303715884105728",
+        i128::MIN,
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_to_parts() {
+    assert_evals_to!(r"Num.f32ToParts 0", (0, 0, false), (u32, u8, bool));
+    assert_evals_to!(
+        r"Num.f32ToParts Num.maxF32",
+        (0x7FFFFF, 0xFE, false),
+        (u32, u8, bool)
+    );
+    assert_evals_to!(
+        r"Num.f32ToParts Num.minF32",
+        (0x7FFFFF, 0xFE, true),
+        (u32, u8, bool)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_to_parts() {
+    assert_evals_to!(r"Num.f64ToParts 0", (0, 0, false), (u64, u16, bool));
+    assert_evals_to!(
+        r"Num.f64ToParts Num.maxF64",
+        (0xFFFFFFFFFFFFF, 0x7FE, false),
+        (u64, u16, bool)
+    );
+    assert_evals_to!(
+        r"Num.f64ToParts Num.minF64",
+        (0xFFFFFFFFFFFFF, 0x7FE, true),
+        (u64, u16, bool)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_from_parts() {
+    assert_evals_to!(
+        r"
+    Num.f32FromParts {
+        sign: Bool.false,
+        exponent: 0,
+        fraction: 0
+    }",
+        0.0,
+        f32
+    );
+    assert_evals_to!(
+        r"
+    Num.f32FromParts {
+        sign: Bool.false,
+        exponent: 0xFE,
+        fraction: 0x7FFFFF
+    }",
+        f32::MAX,
+        f32
+    );
+    assert_evals_to!(
+        r"
+    Num.f32FromParts {
+        sign: Bool.true,
+        exponent: 0xFE,
+        fraction: 0x7FFFFF
+    }",
+        f32::MIN,
+        f32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_from_parts() {
+    assert_evals_to!(
+        r"
+    Num.f64FromParts {
+        sign: Bool.false,
+        exponent: 0,
+        fraction: 0
+    }",
+        0.0,
+        f64
+    );
+    assert_evals_to!(
+        r"
+    Num.f64FromParts {
+        sign: Bool.false,
+        exponent: 0x7FE,
+        fraction: 0xFFFFFFFFFFFFF
+    }",
+        f64::MAX,
+        f64
+    );
+    assert_evals_to!(
+        r"
+    Num.f64FromParts {
+        sign: Bool.true,
+        exponent: 0x7FE,
+        fraction: 0xFFFFFFFFFFFFF
+    }",
+        f64::MIN,
+        f64
+    );
+}

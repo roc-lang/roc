@@ -334,6 +334,10 @@ pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
 pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_trailing_zero_bits");
 pub const NUM_COUNT_ONE_BITS: IntrinsicName = int_intrinsic!("roc_builtins.num.count_one_bits");
+pub const NUM_F32_TO_PARTS: &str = "roc_builtins.num.f32_to_parts";
+pub const NUM_F64_TO_PARTS: &str = "roc_builtins.num.f64_to_parts";
+pub const NUM_F32_FROM_PARTS: &str = "roc_builtins.num.f32_from_parts";
+pub const NUM_F64_FROM_PARTS: &str = "roc_builtins.num.f64_from_parts";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
@@ -415,6 +419,7 @@ pub const DEC_SUB_SATURATED: &str = "roc_builtins.dec.sub_saturated";
 pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
+pub const DEC_FROM_I128: &str = "roc_builtins.dec.from_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 pub const DEC_ROUND: IntrinsicName = int_intrinsic!("roc_builtins.dec.round");
 pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");

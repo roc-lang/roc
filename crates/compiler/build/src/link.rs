@@ -486,7 +486,10 @@ pub fn rebuild_host(
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                "native",
+                // This used to be "native" but that caused segfaults that were hard to
+                // reproduce and investigate.
+                // For context: github.com/roc-lang/roc/pull/6591#issuecomment-2039808944
+                "x86_64-native",
                 opt_level,
                 shared_lib_path,
                 builtins_host_tempfile.path(),
@@ -523,7 +526,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2023-07-09", "cargo"]);
+            cmd.args(["run", "nightly-2023-08-20", "cargo"]);
 
             cmd
         } else {
