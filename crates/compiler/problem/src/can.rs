@@ -47,6 +47,8 @@ pub enum Problem {
         new_import_region: Region,
         existing_import: ScopeModuleSource,
     },
+    ExplicitBuiltinImport(ModuleId, Region),
+    ExplicitBuiltinTypeImport(Symbol, Region),
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -229,6 +231,8 @@ impl Problem {
             Problem::UnusedImport(_, _) => Warning,
             Problem::UnusedModuleImport(_, _) => Warning,
             Problem::ImportNameConflict { .. } => RuntimeError,
+            Problem::ExplicitBuiltinImport(_, _) => Warning,
+            Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
@@ -307,6 +311,8 @@ impl Problem {
                 new_import_region: region,
                 ..
             }
+            | Problem::ExplicitBuiltinImport(_, region)
+            | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)

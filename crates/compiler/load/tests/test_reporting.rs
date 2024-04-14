@@ -4921,8 +4921,6 @@ mod test_reporting {
             r#"
             app "dict" imports [ Dict ] provides [main] to "./platform"
 
-            import Dict
-
             myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert (Dict.empty {}) "foo" 42
 
@@ -4934,8 +4932,8 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    5│  myDict : Dict.Dict Num.I64 Str
-    6│  myDict = Dict.insert (Dict.empty {}) "foo" 42
+    3│  myDict : Dict.Dict Num.I64 Str
+    4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
@@ -4952,7 +4950,7 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
-            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             HSet a : Set a
 

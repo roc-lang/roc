@@ -3007,9 +3007,17 @@ fn to_pending_value_def<'a>(
 
             let mut exposed_symbols;
 
+            let is_automatically_imported =
+                !env.home.is_builtin() && module_id.is_automatically_imported();
+
             match module_import.exposed {
                 None => {
                     exposed_symbols = Vec::new();
+
+                    if is_automatically_imported {
+                        env.problems
+                            .push(Problem::ExplicitBuiltinImport(module_id, region));
+                    }
                 }
                 Some(exposed_kw) => {
                     let exposed_ids = env
@@ -3032,9 +3040,18 @@ fn to_pending_value_def<'a>(
                                 match scope.import_symbol(ident, symbol, loc_name.region) {
                                     Ok(()) => {}
                                     Err((_shadowed_symbol, _region)) => {
-                                        internal_error!(
-                                            "TODO gracefully handle shadowing in imports."
-                                        )
+                                        if is_automatically_imported
+                                            && Symbol::builtin_types_in_scope(module_id)
+                                                .iter()
+                                                .any(|(_, (s, _))| *s == symbol)
+                                        {
+                                            env.problem(Problem::ExplicitBuiltinTypeImport(
+                                                symbol,
+                                                loc_name.region,
+                                            ));
+                                        } else {
+                                            todo!("[modules-revamp] Handle shadowing of imported symbols");
+                                        }
                                     }
                                 }
                             }
