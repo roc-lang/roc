@@ -1080,6 +1080,81 @@ fn used_exposed_and_qualified() {
 }
 
 #[test]
+fn explicit_builtin_import() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                module [main]
+
+                import Bool
+
+                main = Bool.true
+                "#
+        ),
+    )];
+    let err = multiple_modules("explicit_builtin_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_import/Main.roc ─────────────
+            
+            The builtin Bool was imported here:
+            
+            3│  import Bool
+                ^^^^^^^^^^^
+            
+            Builtins are imported automatically, so you can remove this import.
+            
+            Tip: Learn more about builtins in the tutorial: 
+            <https://www.roc-lang.org/tutorial#builtin-modules>
+            "
+        )
+    );
+}
+
+#[test]
+fn explicit_builtin_type_import() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                module [main]
+
+                import Dict exposing [Dict, isEmpty]
+
+                myDict : Dict * *
+                myDict =
+                    Dict.empty {}
+
+                main = isEmpty myDict
+                "#
+        ),
+    )];
+    let err = multiple_modules("explicit_builtin_type_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_type_import/Main.roc ────────
+            
+            `Dict.Dict` was imported here:
+            
+            3│  import Dict exposing [Dict, isEmpty]
+                                      ^^^^
+            
+            All types from builtins are automatically exposed, so you can remove
+            `Dict` from the exposing list.
+            
+            Tip: Learn more about builtins in the tutorial: 
+            <https://www.roc-lang.org/tutorial#builtin-modules>
+            "
+        )
+    );
+}
+
+#[test]
 fn import_with_alias() {
     let modules = vec![
         (

@@ -384,6 +384,11 @@ impl ModuleId {
             .get_name(self)
             .unwrap_or_else(|| internal_error!("Could not find ModuleIds for {:?}", self))
     }
+
+    pub fn is_automatically_imported(self) -> bool {
+        // The deprecated TotallyNotJson module is not automatically imported.
+        self.is_builtin() && self != ModuleId::JSON
+    }
 }
 
 impl fmt::Debug for ModuleId {

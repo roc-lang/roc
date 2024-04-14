@@ -21,6 +21,7 @@ const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const IMPORT_NAME_CONFLICT: &str = "IMPORT NAME CONFLICT";
+const EXPLICIT_BUILTIN_IMPORT: &str = "EXPLICIT BUILTIN IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
 const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
@@ -181,6 +182,40 @@ pub fn can_problem<'b>(
             ]);
             title = IMPORT_NAME_CONFLICT.to_string();
         }
+
+        Problem::ExplicitBuiltinImport(module_id, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The builtin "),
+                    alloc.module(module_id),
+                    alloc.reflow(" was imported here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Builtins are imported automatically, so you can remove this import."),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+            ]);
+
+            title = EXPLICIT_BUILTIN_IMPORT.to_string();
+        }
+
+        Problem::ExplicitBuiltinTypeImport(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" was imported here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("All types from builtins are automatically exposed, so you can remove "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" from the exposing list.")
+                ]),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+            ]);
+
+            title = EXPLICIT_BUILTIN_IMPORT.to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),

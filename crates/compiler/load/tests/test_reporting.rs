@@ -4916,8 +4916,6 @@ mod test_reporting {
             r#"
             app [main] { pf: platform "../../tests/platform.roc" }
 
-            import Dict
-
             myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert (Dict.empty {}) "foo" 42
 
@@ -4929,8 +4927,8 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    5│  myDict : Dict.Dict Num.I64 Str
-    6│  myDict = Dict.insert (Dict.empty {}) "foo" 42
+    3│  myDict : Dict.Dict Num.I64 Str
+    4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
@@ -4948,8 +4946,6 @@ mod test_reporting {
         indoc!(
             r#"
             app [main] { pf: platform "../../tests/platform.roc" }
-
-            import Set
 
             HSet a : Set.Set a
 
