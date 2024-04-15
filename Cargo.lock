@@ -40,9 +40,9 @@ dependencies = [
 
 [[package]]
 name = "aligned"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80a21b9440a626c7fc8573a9e3d3a06b75c7c97754c2949bc7857b90353ca655"
+checksum = "377e4c0ba83e4431b10df45c1d4666f178ea9c552cac93e60c3a88bf32785923"
 dependencies = [
  "as-slice",
 ]
@@ -2743,7 +2743,7 @@ dependencies = [
  "roc_solve",
  "roc_solve_problem",
  "roc_target",
- "roc_test_utils",
+ "roc_test_utils_dir",
  "roc_types",
  "ven_pretty",
 ]
@@ -2778,7 +2778,7 @@ dependencies = [
  "roc_solve",
  "roc_solve_problem",
  "roc_target",
- "roc_test_utils",
+ "roc_test_utils_dir",
  "roc_tracing",
  "roc_types",
  "roc_unify",
@@ -3129,6 +3129,12 @@ name = "roc_test_utils"
 version = "0.0.1"
 dependencies = [
  "pretty_assertions",
+]
+
+[[package]]
+name = "roc_test_utils_dir"
+version = "0.0.1"
+dependencies = [
  "remove_dir_all 0.8.2",
 ]
 
@@ -3867,6 +3873,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_test_utils",
+ "roc_test_utils_dir",
  "walkdir",
 ]
 

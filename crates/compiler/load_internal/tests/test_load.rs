@@ -32,6 +32,7 @@ use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_reporting::report::{strip_colors, RenderTarget};
 use roc_solve::FunctionKind;
 use roc_target::Target;
+use roc_test_utils_dir::TmpDir;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use std::collections::HashMap;
@@ -153,7 +154,7 @@ fn multiple_modules_help<'a>(
     // We can't have all tests use "tmp" because tests run in parallel,
     // so append the test name to the tmp path.
     let tmp = format!("tmp/{subdir}");
-    let dir = roc_test_utils::TmpDir::new(&tmp);
+    let dir = TmpDir::new(&tmp);
 
     let app_module = files.pop().unwrap();
 
