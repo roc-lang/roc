@@ -657,6 +657,12 @@ pub fn apply_task_await<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
     loc_new: &'a Loc<Expr<'a>>,
 ) -> &'a Loc<Expr<'a>> {
+    // If the pattern and the new are the same then we don't need to unwrap anything
+    // e.g. `Task.await foo \{} -> Task.ok {}` is the same as `foo`
+    if is_pattern_empty_record(loc_pat) && is_expr_task_ok(loc_new) {
+        return loc_arg;
+    }
+
     let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
 
     // apply the unwrapped suffixed expression
@@ -685,4 +691,35 @@ pub fn apply_task_await<'a>(
             CalledVia::BangSuffix,
         ),
     ))
+}
+
+fn is_pattern_empty_record<'a>(loc_pat: &'a Loc<Pattern<'a>>) -> bool {
+    match loc_pat.value {
+        Pattern::RecordDestructure(collection) => collection.is_empty(),
+        _ => false,
+    }
+}
+
+fn is_expr_task_ok<'a>(loc_expr: &'a Loc<Expr<'a>>) -> bool {
+    match loc_expr.value {
+        Expr::Apply(function, arguments, _) => {
+            let is_task_ok = match function.value {
+                Var {
+                    module_name, ident, ..
+                } => module_name == ModuleName::TASK && ident == "ok",
+                _ => false,
+            };
+
+            let is_arg_empty_record = arguments
+                .first()
+                .map(|arg_loc_expr| match arg_loc_expr.value {
+                    Expr::Record(collection) => collection.is_empty(),
+                    _ => false,
+                })
+                .unwrap_or(false);
+
+            is_task_ok && is_arg_empty_record
+        }
+        _ => false,
+    }
 }

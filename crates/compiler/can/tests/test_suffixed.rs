@@ -31,6 +31,9 @@ mod suffixed_tests {
         Task.await [line "Ahoy"] \{} ->
             Task.await [Stdout.line "there"] \{} ->
                 Task.ok {}
+
+    main =
+        Task.await [line "Ahoy"] \{} -> Stdout.line "there"
     ```
     */
     #[test]
@@ -43,7 +46,7 @@ mod suffixed_tests {
                 
                 Task.ok {}
             "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-125], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @29-36 Apply(@29-36 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-36 Apply(@29-36 Var { module_name: "", ident: "line", suffixed: 0 }, [@30-36 Str(PlainLine("Ahoy"))], Space), @29-36 Closure([@29-36 RecordDestructure([])], @58-81 Apply(@58-81 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@58-81 Apply(@58-81 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@58-65 Str(PlainLine("There"))], BinOp(Pizza)), @58-81 Closure([@53-55 RecordDestructure([])], @115-125 Apply(@115-122 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@123-125 Record([])], Space))], BangSuffix))], BangSuffix))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-125], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @29-36 Apply(@29-36 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-36 Apply(@29-36 Var { module_name: "", ident: "line", suffixed: 0 }, [@30-36 Str(PlainLine("Ahoy"))], Space), @29-36 Closure([@29-36 RecordDestructure([])], @58-81 Apply(@58-81 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@58-65 Str(PlainLine("There"))], BinOp(Pizza)))], BangSuffix))] }"#,
         );
     }
 
@@ -109,6 +112,11 @@ mod suffixed_tests {
             Task.await bar \{} ->
                 Task.await baz \{} ->
                     Task.ok {}
+
+    main =
+        Task.await foo \{} ->
+            Task.await bar \{} ->
+                baz
     ```
     */
     #[test]
@@ -120,7 +128,7 @@ mod suffixed_tests {
                 bar!
                 baz!
             "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-70], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @28-28 Apply(@28-28 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@28-28 Var { module_name: "", ident: "foo", suffixed: 0 }, @28-28 Closure([@28-28 RecordDestructure([])], @45-49 Apply(@45-49 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@45-49 Var { module_name: "", ident: "bar", suffixed: 0 }, @45-49 Closure([@45-49 RecordDestructure([])], @66-70 Apply(@66-70 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@66-70 Var { module_name: "", ident: "baz", suffixed: 0 }, @66-70 Closure([@66-70 RecordDestructure([])], Apply(Var { module_name: "Task", ident: "ok", suffixed: 0 }, [Record([])], BangSuffix))], BangSuffix))], BangSuffix))], BangSuffix))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-70], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @28-28 Apply(@28-28 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@28-28 Var { module_name: "", ident: "foo", suffixed: 0 }, @28-28 Closure([@28-28 RecordDestructure([])], @45-49 Apply(@45-49 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@45-49 Var { module_name: "", ident: "bar", suffixed: 0 }, @45-49 Closure([@45-49 RecordDestructure([])], @66-70 Var { module_name: "", ident: "baz", suffixed: 0 })], BangSuffix))], BangSuffix))] }"#,
         );
     }
 
@@ -175,6 +183,9 @@ mod suffixed_tests {
     main =
         Task.await [line [Str.concat "hello" "world"]] \{} ->
             Task.ok {}
+
+    main =
+        line (Str.concat "hello" "world")
     ```
     */
     #[test]
@@ -188,7 +199,7 @@ mod suffixed_tests {
         
                 Task.ok {}
             "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-130], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @24-94 Apply(@24-94 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@24-94 Apply(@24-94 Var { module_name: "", ident: "line", suffixed: 0 }, [@24-69 Apply(@51-61 Var { module_name: "Str", ident: "concat", suffixed: 0 }, [@24-31 Str(PlainLine("hello")), @62-69 Str(PlainLine("world"))], BinOp(Pizza))], BinOp(Pizza)), @24-94 Closure([@51-94 RecordDestructure([])], @120-130 Apply(@120-127 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@128-130 Record([])], Space))], BangSuffix))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-130], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @24-94 Apply(@24-94 Var { module_name: "", ident: "line", suffixed: 0 }, [@24-69 Apply(@51-61 Var { module_name: "Str", ident: "concat", suffixed: 0 }, [@24-31 Str(PlainLine("hello")), @62-69 Str(PlainLine("world"))], BinOp(Pizza))], BinOp(Pizza)))] }"#,
         );
     }
 
@@ -464,6 +475,10 @@ mod suffixed_tests {
         Task.await [line a] \{} ->
             Task.await [line b] \{} ->
                 Task.ok {}
+
+    foo : Str, {}, Str -> Task {} I32
+    foo = \a, _, b ->
+        Task.await [line a] \{} -> line b
     ```
     */
     #[test]
@@ -481,7 +496,7 @@ mod suffixed_tests {
                     
                 foo "bar" {} "baz"
             "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-249], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @25-249 Defs(Defs { tags: [Index(2147483650)], regions: [@81-193], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Annotation(@25-28 Identifier { ident: "foo", suffixed: 0 }, @31-58 Function([@31-34 Apply("", "Str", []), @36-38 Record { fields: [], ext: None }, @40-43 Apply("", "Str", [])], @47-58 Apply("", "Task", [@52-54 Record { fields: [], ext: None }, @55-58 Apply("", "I32", [])]))), AnnotatedBody { ann_pattern: @25-28 Identifier { ident: "foo", suffixed: 0 }, ann_type: @31-58 Function([@31-34 Apply("", "Str", []), @36-38 Record { fields: [], ext: None }, @40-43 Apply("", "Str", [])], @47-58 Apply("", "Task", [@52-54 Record { fields: [], ext: None }, @55-58 Apply("", "I32", [])])), comment: None, body_pattern: @75-78 Identifier { ident: "foo", suffixed: 0 }, body_expr: @81-193 Closure([@82-83 Identifier { ident: "a", suffixed: 0 }, @85-86 Underscore(""), @88-89 Identifier { ident: "b", suffixed: 0 }], @114-193 Defs(Defs { tags: [Index(2147483648), Index(2147483649)], regions: [@119-121, @142-149], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0), Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@119-121 RecordDestructure([]), @119-121 Apply(@114-119 Var { module_name: "", ident: "line", suffixed: 1 }, [@120-121 Var { module_name: "", ident: "a", suffixed: 0 }], Space)), Body(@142-149 RecordDestructure([]), @142-149 Apply(@142-147 Var { module_name: "", ident: "line", suffixed: 1 }, [@148-149 Var { module_name: "", ident: "b", suffixed: 0 }], Space))] }, @183-193 Apply(@183-190 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@191-193 Record([])], Space))) }, AnnotatedBody { ann_pattern: @25-28 Identifier { ident: "foo", suffixed: 0 }, ann_type: @31-58 Function([@31-34 Apply("", "Str", []), @36-38 Record { fields: [], ext: None }, @40-43 Apply("", "Str", [])], @47-58 Apply("", "Task", [@52-54 Record { fields: [], ext: None }, @55-58 Apply("", "I32", [])])), comment: None, body_pattern: @75-78 Identifier { ident: "foo", suffixed: 0 }, body_expr: @81-193 Closure([@82-83 Identifier { ident: "a", suffixed: 0 }, @85-86 Underscore(""), @88-89 Identifier { ident: "b", suffixed: 0 }], @119-121 Apply(@119-121 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@119-121 Apply(@119-121 Var { module_name: "", ident: "line", suffixed: 0 }, [@120-121 Var { module_name: "", ident: "a", suffixed: 0 }], Space), @119-121 Closure([@119-121 RecordDestructure([])], @142-149 Apply(@142-149 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@142-149 Apply(@142-149 Var { module_name: "", ident: "line", suffixed: 0 }, [@148-149 Var { module_name: "", ident: "b", suffixed: 0 }], Space), @142-149 Closure([@142-149 RecordDestructure([])], @183-193 Apply(@183-190 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@191-193 Record([])], Space))], BangSuffix))], BangSuffix)) }] }, @231-249 Apply(@231-234 Var { module_name: "", ident: "foo", suffixed: 0 }, [@235-240 Str(PlainLine("bar")), @241-243 Record([]), @244-249 Str(PlainLine("baz"))], Space)))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-249], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @25-249 Defs(Defs { tags: [Index(2147483650)], regions: [@81-193], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Annotation(@25-28 Identifier { ident: "foo", suffixed: 0 }, @31-58 Function([@31-34 Apply("", "Str", []), @36-38 Record { fields: [], ext: None }, @40-43 Apply("", "Str", [])], @47-58 Apply("", "Task", [@52-54 Record { fields: [], ext: None }, @55-58 Apply("", "I32", [])]))), AnnotatedBody { ann_pattern: @25-28 Identifier { ident: "foo", suffixed: 0 }, ann_type: @31-58 Function([@31-34 Apply("", "Str", []), @36-38 Record { fields: [], ext: None }, @40-43 Apply("", "Str", [])], @47-58 Apply("", "Task", [@52-54 Record { fields: [], ext: None }, @55-58 Apply("", "I32", [])])), comment: None, body_pattern: @75-78 Identifier { ident: "foo", suffixed: 0 }, body_expr: @81-193 Closure([@82-83 Identifier { ident: "a", suffixed: 0 }, @85-86 Underscore(""), @88-89 Identifier { ident: "b", suffixed: 0 }], @114-193 Defs(Defs { tags: [Index(2147483648), Index(2147483649)], regions: [@119-121, @142-149], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0), Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@119-121 RecordDestructure([]), @119-121 Apply(@114-119 Var { module_name: "", ident: "line", suffixed: 1 }, [@120-121 Var { module_name: "", ident: "a", suffixed: 0 }], Space)), Body(@142-149 RecordDestructure([]), @142-149 Apply(@142-147 Var { module_name: "", ident: "line", suffixed: 1 }, [@148-149 Var { module_name: "", ident: "b", suffixed: 0 }], Space))] }, @183-193 Apply(@183-190 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@191-193 Record([])], Space))) }, AnnotatedBody { ann_pattern: @25-28 Identifier { ident: "foo", suffixed: 0 }, ann_type: @31-58 Function([@31-34 Apply("", "Str", []), @36-38 Record { fields: [], ext: None }, @40-43 Apply("", "Str", [])], @47-58 Apply("", "Task", [@52-54 Record { fields: [], ext: None }, @55-58 Apply("", "I32", [])])), comment: None, body_pattern: @75-78 Identifier { ident: "foo", suffixed: 0 }, body_expr: @81-193 Closure([@82-83 Identifier { ident: "a", suffixed: 0 }, @85-86 Underscore(""), @88-89 Identifier { ident: "b", suffixed: 0 }], @119-121 Apply(@119-121 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@119-121 Apply(@119-121 Var { module_name: "", ident: "line", suffixed: 0 }, [@120-121 Var { module_name: "", ident: "a", suffixed: 0 }], Space), @119-121 Closure([@119-121 RecordDestructure([])], @142-149 Apply(@142-149 Var { module_name: "", ident: "line", suffixed: 0 }, [@148-149 Var { module_name: "", ident: "b", suffixed: 0 }], Space))], BangSuffix)) }] }, @231-249 Apply(@231-234 Var { module_name: "", ident: "foo", suffixed: 0 }, [@235-240 Str(PlainLine("bar")), @241-243 Record([]), @244-249 Str(PlainLine("baz"))], Space)))] }"#,
         );
     }
 
@@ -508,6 +523,11 @@ mod suffixed_tests {
         Task.await [Stdout.line a] \{} ->
             Task.await [printBar] \{} ->
                 Task.ok {}
+
+    main =
+        a = "Foo"
+        Task.await [Stdout.line a] \{} ->
+            printBar
     ```
     */
     #[test]
@@ -524,7 +544,7 @@ mod suffixed_tests {
                 b = "Bar"
                 Stdout.line b
             "#,
-            r#"Defs { tags: [Index(2147483648), Index(2147483649)], regions: [@0-90, @120-186], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 2)], space_after: [Slice(start = 0, length = 0), Slice(start = 2, length = 0)], spaces: [Newline, Newline], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @23-90 Defs(Defs { tags: [Index(2147483649)], regions: [@27-32], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "a", suffixed: 0 }, @27-32 Str(PlainLine("Foo"))), Body(@23-24 Identifier { ident: "a", suffixed: 0 }, @27-32 Str(PlainLine("Foo")))] }, @23-90 Apply(@23-90 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@49-63 Apply(@49-63 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@62-63 Var { module_name: "", ident: "a", suffixed: 0 }], Space), @23-90 Closure([@49-63 RecordDestructure([])], @81-90 Apply(@81-90 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@81-90 Var { module_name: "", ident: "printBar", suffixed: 0 }, @81-90 Closure([@81-90 RecordDestructure([])], Apply(Var { module_name: "Task", ident: "ok", suffixed: 0 }, [Record([])], BangSuffix))], BangSuffix))], BangSuffix))), Body(@120-128 Identifier { ident: "printBar", suffixed: 0 }, @147-186 Defs(Defs { tags: [Index(2147483649)], regions: [@151-156], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@147-148 Identifier { ident: "b", suffixed: 0 }, @151-156 Str(PlainLine("Bar"))), Body(@147-148 Identifier { ident: "b", suffixed: 0 }, @151-156 Str(PlainLine("Bar")))] }, @173-186 Apply(@173-184 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@185-186 Var { module_name: "", ident: "b", suffixed: 0 }], Space)))] }"#,
+            r#"Defs { tags: [Index(2147483648), Index(2147483649)], regions: [@0-90, @120-186], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 2)], space_after: [Slice(start = 0, length = 0), Slice(start = 2, length = 0)], spaces: [Newline, Newline], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @23-90 Defs(Defs { tags: [Index(2147483649)], regions: [@27-32], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "a", suffixed: 0 }, @27-32 Str(PlainLine("Foo"))), Body(@23-24 Identifier { ident: "a", suffixed: 0 }, @27-32 Str(PlainLine("Foo")))] }, @23-90 Apply(@23-90 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@49-63 Apply(@49-63 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@62-63 Var { module_name: "", ident: "a", suffixed: 0 }], Space), @23-90 Closure([@49-63 RecordDestructure([])], @81-90 Var { module_name: "", ident: "printBar", suffixed: 0 })], BangSuffix))), Body(@120-128 Identifier { ident: "printBar", suffixed: 0 }, @147-186 Defs(Defs { tags: [Index(2147483649)], regions: [@151-156], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@147-148 Identifier { ident: "b", suffixed: 0 }, @151-156 Str(PlainLine("Bar"))), Body(@147-148 Identifier { ident: "b", suffixed: 0 }, @151-156 Str(PlainLine("Bar")))] }, @173-186 Apply(@173-184 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@185-186 Var { module_name: "", ident: "b", suffixed: 0 }], Space)))] }"#,
         );
     }
 }
