@@ -163,11 +163,18 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
+<<<<<<< HEAD
 app [main] {
-    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br"
 }
 
 import pf.Stdout
+=======
+app "hello"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
+    imports [pf.Stdout]
+    provides [main] to pf
+>>>>>>> main
 
 main =
     Stdout.line "I'm a Roc application!"
@@ -1440,7 +1447,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app [main] {
-    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" 
 }
 ```
 
@@ -1591,7 +1598,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app [main] {
-    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" 
 }
 
 import pf.Stdout
@@ -1626,7 +1633,7 @@ Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
 app [main] {
-    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br"
 }
 
 import pf.Stdout
@@ -1674,7 +1681,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app [main] {
-    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br"
 }
 
 import pf.Stdout

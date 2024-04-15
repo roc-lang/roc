@@ -1,4 +1,4 @@
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
 
 import pf.Http
 import pf.Task exposing [Task]
@@ -20,14 +20,14 @@ main =
                 method: Get,
                 headers: [],
                 url,
-                body: Http.emptyBody,
+                mimeType: "",
+                body: [],
                 timeout: NoTimeout,
             }
 
             output <- Http.send request
-                |> Task.onErr \err -> err
-                    |> Http.errorToString
-                    |> Task.ok
+                |> Task.await \resp -> resp |> Http.handleStringResponse |> Task.fromResult
+                |> Task.onErr \err -> crash (Http.errorToString err)
                 |> Task.await
 
             Stdout.line output
