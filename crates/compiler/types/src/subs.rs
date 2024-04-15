@@ -2913,7 +2913,7 @@ where
 
     pub fn iter_all(
         &self,
-    ) -> impl Iterator<Item = (SubsIndex<L>, SubsIndex<VariableSubsSlice>)> + ExactSizeIterator
+    ) -> impl ExactSizeIterator<Item = (SubsIndex<L>, SubsIndex<VariableSubsSlice>)>
     {
         self.labels().into_iter().zip(self.variables())
     }
@@ -2923,7 +2923,7 @@ where
     pub fn iter_from_subs<'a>(
         &'a self,
         subs: &'a Subs,
-    ) -> impl Iterator<Item = (&'a L, &'a [Variable])> + ExactSizeIterator {
+    ) -> impl ExactSizeIterator<Item = (&'a L, &'a [Variable])> {
         self.iter_all().map(move |(name_index, payload_index)| {
             (
                 L::index_subs(subs, name_index),
