@@ -2913,8 +2913,7 @@ where
 
     pub fn iter_all(
         &self,
-    ) -> impl ExactSizeIterator<Item = (SubsIndex<L>, SubsIndex<VariableSubsSlice>)>
-    {
+    ) -> impl ExactSizeIterator<Item = (SubsIndex<L>, SubsIndex<VariableSubsSlice>)> {
         self.labels().into_iter().zip(self.variables())
     }
 

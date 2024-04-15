@@ -255,7 +255,6 @@ fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 fn loc_possibly_negative_or_negated_term<'a>(
     options: ExprParseOptions,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-
     one_of![
         |arena, state: State<'a>, min_indent: u32| {
             let initial = state.clone();
