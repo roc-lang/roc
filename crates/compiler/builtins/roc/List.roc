@@ -2,6 +2,7 @@ interface List
     exposes [
         isEmpty,
         get,
+        getUnchecked,
         set,
         replace,
         update,
@@ -228,6 +229,13 @@ isEmpty = \list ->
 # unsafe primitive that does not perform a bounds check
 # but will cause a reference count increment on the value it got out of the list
 getUnsafe : List a, U64 -> a
+
+getUnchecked : List a, U64 -> a
+getUnchecked\ list,index->
+    if index < List.len list then
+        Ok (List.getUnsafe list index)
+    else
+        crash "Index:$(index) is out of bounds"
 
 ## Returns an element from a list at the given index.
 ##
