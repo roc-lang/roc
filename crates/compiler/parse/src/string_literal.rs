@@ -2,8 +2,8 @@ use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, byte, loc, reset_min_indent, specialize_err_ref, then, BadInputError, ESingleQuote,
-    EString, Parser,
+    allocated, byte, loc, reset_min_indent, skip_second, specialize_err_ref, then, BadInputError,
+    ESingleQuote, EString, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -374,12 +374,12 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                             // Parse an arbitrary expression, then give a
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
-                            let (_progress, loc_expr, new_state) = skip_second!(
+                            let (_progress, loc_expr, new_state) = skip_second(
                                 specialize_err_ref(
                                     EString::Format,
-                                    loc(allocated(reset_min_indent(expr::expr_help())))
+                                    loc(allocated(reset_min_indent(expr::expr_help()))),
                                 ),
-                                byte(b')', EString::FormatEnd)
+                                byte(b')', EString::FormatEnd),
                             )
                             .parse(arena, state, min_indent)?;
 
@@ -483,12 +483,12 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                     let original_byte_count = state.bytes().len();
 
                     // Parse an arbitrary expression, followed by ')'
-                    let (_progress, loc_expr, new_state) = skip_second!(
+                    let (_progress, loc_expr, new_state) = skip_second(
                         specialize_err_ref(
                             EString::Format,
-                            loc(allocated(reset_min_indent(expr::expr_help())))
+                            loc(allocated(reset_min_indent(expr::expr_help()))),
                         ),
-                        byte(b')', EString::FormatEnd)
+                        byte(b')', EString::FormatEnd),
                     )
                     .parse(arena, state, min_indent)?;
 

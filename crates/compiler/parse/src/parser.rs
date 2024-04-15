@@ -1427,7 +1427,7 @@ macro_rules! skip_first {
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = skip_second!(
+/// let parser = skip_second(
 ///    lowercase_ident(),
 ///    word(", world", |_| ())
 /// );
@@ -1439,19 +1439,21 @@ macro_rules! skip_first {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! skip_second {
-    ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+pub fn skip_second<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, First, E>
+where
+    E: 'a,
+    P1: Parser<'a, First, E>,
+    P2: Parser<'a, Second, E>,
+{
+    move |arena, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
 #[macro_export]
@@ -2535,7 +2537,10 @@ macro_rules! either {
 #[macro_export]
 macro_rules! between {
     ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
-        skip_first!($opening_brace, skip_second!($parser, $closing_brace))
+        skip_first!(
+            $opening_brace,
+            $crate::parser::skip_second($parser, $closing_brace)
+        )
     };
 }
 

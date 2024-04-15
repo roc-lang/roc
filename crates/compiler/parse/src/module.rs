@@ -9,9 +9,9 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, byte, increment_min_indent, optional, reset_min_indent, specialize_err,
-    two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides,
-    ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
+    backtrackable, byte, increment_min_indent, optional, reset_min_indent, skip_second,
+    specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages,
+    EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
@@ -30,9 +30,9 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
-    skip_second!(
-        specialize_err(SyntaxError::Expr, crate::expr::toplevel_defs(),),
-        end_of_file()
+    skip_second(
+        specialize_err(SyntaxError::Expr, crate::expr::toplevel_defs()),
+        end_of_file(),
     )
 }
 
@@ -345,7 +345,7 @@ fn requires<'a>(
 #[inline(always)]
 fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a>> {
     record!(PlatformRequires {
-        rigids: skip_second!(requires_rigids(), space0_e(ERequires::ListStart)),
+        rigids: skip_second(requires_rigids(), space0_e(ERequires::ListStart)),
         signature: requires_typed_ident()
     })
 }
@@ -369,7 +369,7 @@ fn requires_rigids<'a>(
 fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>> {
     skip_first!(
         byte(b'{', ERequires::ListStart),
-        skip_second!(
+        skip_second(
             reset_min_indent(space0_around_ee(
                 specialize_err(ERequires::TypedIdent, loc!(typed_ident()),),
                 ERequires::ListStart,
@@ -414,10 +414,13 @@ where
 {
     map!(
         and!(
-            skip_second!(
+            skip_second(
+                // parse any leading space before the keyword
                 backtrackable(space0_e(indent_problem1)),
+                // parse the keyword
                 crate::parser::keyword(K::KEYWORD, expectation)
             ),
+            // parse the trailing space
             space0_e(indent_problem2)
         ),
         |(before, after)| {
@@ -611,7 +614,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
             and!(
                 and!(
                     // e.g. `pf.`
-                    optional(backtrackable(skip_second!(
+                    optional(backtrackable(skip_second(
                         shortname(),
                         byte(b'.', EImports::ShorthandDot)
                     ))),

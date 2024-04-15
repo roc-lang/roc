@@ -11,9 +11,9 @@ use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident}
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
-    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, specialize_err, specialize_err_ref, then,
-    two_bytes, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord,
-    EString, EType, EWhen, Either, ParseResult, Parser,
+    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_second, specialize_err,
+    specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber,
+    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -43,9 +43,9 @@ pub fn test_parse_expr<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
 ) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
-    let parser = skip_second!(
+    let parser = skip_second(
         space0_before_optional_after(loc_expr(true), EExpr::IndentStart, EExpr::IndentEnd),
-        expr_end()
+        expr_end(),
     );
 
     match parser.parse(arena, state, min_indent) {
@@ -2629,9 +2629,9 @@ mod when {
 }
 
 fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
-    skip_second!(
+    skip_second(
         and!(
-            skip_second!(
+            skip_second(
                 space0_around_ee(
                     specialize_err_ref(EIf::Condition, loc_expr(true)),
                     EIf::IndentCondition,
@@ -2645,7 +2645,7 @@ fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
                 EIf::IndentElseToken,
             )
         ),
-        parser::keyword(keyword::ELSE, EIf::Else)
+        parser::keyword(keyword::ELSE, EIf::Else),
     )
 }
 
@@ -3073,7 +3073,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
         reset_min_indent(record!(RecordHelp {
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
-            update: optional(backtrackable(skip_second!(
+            update: optional(backtrackable(skip_second(
                 spaces_around(
                     // We wrap the ident in an Expr here,
                     // so that we have a Spaceable value to work with,
