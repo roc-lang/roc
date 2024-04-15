@@ -3036,7 +3036,7 @@ fn to_pending_value_def<'a>(
 
                                 match scope.import_symbol(ident, symbol, loc_name.region) {
                                     Ok(()) => {}
-                                    Err((_shadowed_symbol, _region)) => {
+                                    Err((_shadowed_symbol, existing_symbol_region)) => {
                                         if is_automatically_imported
                                             && Symbol::builtin_types_in_scope(module_id)
                                                 .iter()
@@ -3047,7 +3047,11 @@ fn to_pending_value_def<'a>(
                                                 loc_name.region,
                                             ));
                                         } else {
-                                            todo!("[modules-revamp] Handle shadowing of imported symbols");
+                                            env.problem(Problem::ImportShadowsSymbol {
+                                                region: loc_name.region,
+                                                new_symbol: symbol,
+                                                existing_symbol_region,
+                                            })
                                         }
                                     }
                                 }

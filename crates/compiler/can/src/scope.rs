@@ -390,13 +390,13 @@ impl Scope {
         symbol: Symbol,
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
-        if let Some((s, r)) = self.has_imported_symbol(ident.as_str()) {
-            return Err((s, r));
+        match self.scope_contains_ident(ident.as_str()) {
+            ContainsIdent::InScope(symbol, region) => Err((symbol, region)),
+            ContainsIdent::NotPresent | ContainsIdent::NotInScope(_) => {
+                self.imported_symbols.push((ident, symbol, region));
+                Ok(())
+            }
         }
-
-        self.imported_symbols.push((ident, symbol, region));
-
-        Ok(())
     }
 
     pub fn add_alias(
