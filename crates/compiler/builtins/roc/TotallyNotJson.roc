@@ -232,14 +232,20 @@ escapedByteToJson = \b ->
 encodeList = \lst, encodeElem ->
     Encode.custom \bytes, @Json {} ->
         writeList = \{ buffer, elemsLeft }, elem ->
-            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
-            bufferWithSuffix =
-                if elemsLeft > 1 then
-                    List.append bufferWithElem (Num.toU8 ',')
-                else
-                    bufferWithElem
+            beforeBufferLen = buffer |> List.len
 
-            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
+            # If our encoder returned [] we just skip the elem
+            if bufferWithElem |> List.len == beforeBufferLen then
+                { buffer: bufferWithElem, elemsLeft: elemsLeft - 1 }
+            else
+                bufferWithSuffix =
+                    if elemsLeft > 1 then
+                        List.append bufferWithElem (Num.toU8 ',')
+                    else
+                        bufferWithElem
+
+                { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
 
         head = List.append bytes (Num.toU8 '[')
         { buffer: withList } = List.walk lst { buffer: head, elemsLeft: List.len lst } writeList
@@ -249,21 +255,27 @@ encodeList = \lst, encodeElem ->
 encodeRecord = \fields ->
     Encode.custom \bytes, @Json {} ->
         writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
-            fieldName = key
-            bufferWithKeyValue =
-                List.append buffer (Num.toU8 '"')
-                |> List.concat (Str.toUtf8 fieldName)
-                |> List.append (Num.toU8 '"')
-                |> List.append (Num.toU8 ':') # Note we need to encode using the json config here
-                |> appendWith value (@Json {})
 
-            bufferWithSuffix =
-                if fieldsLeft > 1 then
-                    List.append bufferWithKeyValue (Num.toU8 ',')
-                else
-                    bufferWithKeyValue
+            fieldValue = [] |> appendWith value (json)
+            # If our encoder returned [] we just skip the field
+            if fieldValue == [] then
+                { buffer, fieldsLeft: fieldsLeft - 1 }
+            else
+                fieldName = key
+                bufferWithKeyValue =
+                    List.append buffer (Num.toU8 '"')
+                    |> List.concat (Str.toUtf8 fieldName)
+                    |> List.append (Num.toU8 '"')
+                    |> List.append (Num.toU8 ':') # Note we need to encode using the json config here
+                    |> List.concat fieldValue
 
-            { buffer: bufferWithSuffix, fieldsLeft: fieldsLeft - 1 }
+                bufferWithSuffix =
+                    if fieldsLeft > 1 then
+                        List.append bufferWithKeyValue (Num.toU8 ',')
+                    else
+                        bufferWithKeyValue
+
+                { buffer: bufferWithSuffix, fieldsLeft: fieldsLeft - 1 }
 
         bytesHead = List.append bytes (Num.toU8 '{')
         { buffer: bytesWithRecord } = List.walk fields { buffer: bytesHead, fieldsLeft: List.len fields } writeRecord
@@ -273,16 +285,21 @@ encodeRecord = \fields ->
 encodeTuple = \elems ->
     Encode.custom \bytes, @Json {} ->
         writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
-            bufferWithElem =
-                appendWith buffer elemEncoder (@Json {})
+            beforeBufferLen = buffer |> List.len
 
-            bufferWithSuffix =
-                if elemsLeft > 1 then
-                    List.append bufferWithElem (Num.toU8 ',')
-                else
-                    bufferWithElem
+            bufferWithElem = appendWith buffer (elemEncoder) (@Json {})
 
-            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+            # If our encoder returned [] we just skip the elem
+            if bufferWithElem |> List.len == beforeBufferLen then
+                { buffer: bufferWithElem, elemsLeft: elemsLeft - 1 }
+            else
+                bufferWithSuffix =
+                    if elemsLeft > 1 then
+                        List.append bufferWithElem (Num.toU8 ',')
+                    else
+                        bufferWithElem
+
+                { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
 
         bytesHead = List.append bytes (Num.toU8 '[')
         { buffer: bytesWithRecord } = List.walk elems { buffer: bytesHead, elemsLeft: List.len elems } writeTuple
@@ -1273,7 +1290,7 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                             rest = List.dropFirst bytesAfterValue n
 
                             # Build final record from decoded fields and values
-                            when finalizer updatedRecord is
+                            when finalizer updatedRecord json is
                                 Ok val -> { result: Ok val, rest }
                                 Err e -> { result: Err e, rest }
 
