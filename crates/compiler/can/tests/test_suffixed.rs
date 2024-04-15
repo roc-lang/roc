@@ -547,4 +547,95 @@ mod suffixed_tests {
             r#"Defs { tags: [Index(2147483648), Index(2147483649)], regions: [@0-90, @120-186], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 2)], space_after: [Slice(start = 0, length = 0), Slice(start = 2, length = 0)], spaces: [Newline, Newline], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @23-90 Defs(Defs { tags: [Index(2147483649)], regions: [@27-32], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "a", suffixed: 0 }, @27-32 Str(PlainLine("Foo"))), Body(@23-24 Identifier { ident: "a", suffixed: 0 }, @27-32 Str(PlainLine("Foo")))] }, @23-90 Apply(@23-90 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@49-63 Apply(@49-63 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@62-63 Var { module_name: "", ident: "a", suffixed: 0 }], Space), @23-90 Closure([@49-63 RecordDestructure([])], @81-90 Var { module_name: "", ident: "printBar", suffixed: 0 })], BangSuffix))), Body(@120-128 Identifier { ident: "printBar", suffixed: 0 }, @147-186 Defs(Defs { tags: [Index(2147483649)], regions: [@151-156], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@147-148 Identifier { ident: "b", suffixed: 0 }, @151-156 Str(PlainLine("Bar"))), Body(@147-148 Identifier { ident: "b", suffixed: 0 }, @151-156 Str(PlainLine("Bar")))] }, @173-186 Apply(@173-184 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@185-186 Var { module_name: "", ident: "b", suffixed: 0 }], Space)))] }"#,
         );
     }
+
+    /**
+     * A simple if-then-else statement which is split 
+    ```roc
+
+    main =
+        isTrue = Task.ok Bool.true
+        isFalse = Task.ok Bool.false
+
+        if isFalse! then
+            line "fail"
+        else if isTrue! then
+            line "success"
+        else
+            line "fail"
+
+    main =
+        isTrue = Task.ok Bool.true
+
+        Task.await isFalse \#!a0 ->
+            if #!a0 then
+                line "fail"
+            else
+                Task.await isTrue \#!a1 ->
+                    if #!a0 then
+                        line "success"
+                    else
+                        line "fail"
+    ```
+    */
+    #[test]
+    fn if_simple() {
+        run_test(
+            r#"
+            main =
+                isTrue = Task.ok Bool.true
+                isFalse = Task.ok Bool.false
+
+                if isFalse! then
+                    line "fail"
+                else if isTrue! then 
+                    line "success"
+                else
+                    line "fail"
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-286], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @23-286 Defs(Defs { tags: [Index(2147483650), Index(2147483651)], regions: [@32-49, @76-94], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 1)], space_after: [Slice(start = 0, length = 0), Slice(start = 1, length = 0)], spaces: [Newline], type_defs: [], value_defs: [Body(@23-29 Identifier { ident: "isTrue", suffixed: 0 }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@40-49 Var { module_name: "Bool", ident: "true", suffixed: 0 }], Space)), Body(@66-73 Identifier { ident: "isFalse", suffixed: 0 }, @76-94 Apply(@76-83 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@84-94 Var { module_name: "Bool", ident: "false", suffixed: 0 }], Space)), Body(@23-29 Identifier { ident: "isTrue", suffixed: 0 }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@40-49 Var { module_name: "Bool", ident: "true", suffixed: 0 }], Space)), Body(@66-73 Identifier { ident: "isFalse", suffixed: 0 }, @76-94 Apply(@76-83 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@84-94 Var { module_name: "Bool", ident: "false", suffixed: 0 }], Space))] }, @115-123 Apply(@115-123 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@115-123 Var { module_name: "", ident: "isFalse", suffixed: 0 }, @115-123 Closure([@115-123 Identifier { ident: "#!a0", suffixed: 0 }], @112-286 If([(@115-123 Var { module_name: "", ident: "#!a0", suffixed: 0 }, @149-160 Apply(@149-153 Var { module_name: "", ident: "line", suffixed: 0 }, [@154-160 Str(PlainLine("fail"))], Space))], @185-192 Apply(@185-192 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@185-192 Var { module_name: "", ident: "isTrue", suffixed: 0 }, @185-192 Closure([@185-192 Identifier { ident: "#!a1", suffixed: 0 }], @112-286 If([(@185-192 Var { module_name: "", ident: "#!a1", suffixed: 0 }, @219-233 Apply(@219-223 Var { module_name: "", ident: "line", suffixed: 0 }, [@224-233 Str(PlainLine("success"))], Space))], @275-286 Apply(@275-279 Var { module_name: "", ident: "line", suffixed: 0 }, [@280-286 Str(PlainLine("fail"))], Space)))], BangSuffix)))], BangSuffix)))] }"##,
+        );
+    }
+
+    /**
+     * A more complex example including the use of nested Defs nodes
+    ```roc
+    # OTHER DEFS AND INTERMEDIATE STEPS NOT SHOWN
+    msg =
+        Task.await isTrue \#!a0 ->
+            if !(#!a0) then
+                Task.await line "fail" \{} -> err 1
+            else
+                Task.await isFalsey Bool.false \#!a1 ->
+                    if (#!a0) then
+                        Task.await line "nope" \{} -> ok {}
+                    else
+                        # note the unwrapping here doesn't use {}
+                        # as the parsed Defs is unwrapped earlier to
+                        # an Apply
+                        Task.await line "success" \#!a2 -> Task.ok #!a2
+    ```
+    */
+    #[test]
+    fn if_complex() {
+        run_test(
+            r#"
+            main =
+                isTrue = Task.ok Bool.true
+                isFalsey = \x -> Task.ok x
+                msg : Task {} I32
+                msg = 
+                    if !(isTrue!) then
+                        line! "fail" 
+                        err 1
+                    else if (isFalsey! Bool.false) then 
+                        line! "nope"
+                        ok {}
+                    else
+                        line! "success"
+
+                msg
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-466], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @0-466 Defs(Defs { tags: [Index(2147483652), Index(2147483653), Index(2147483654)], regions: [@32-49, @77-92, @143-445], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 1), Slice(start = 1, length = 1)], space_after: [Slice(start = 0, length = 0), Slice(start = 1, length = 0), Slice(start = 2, length = 0)], spaces: [Newline, Newline], type_defs: [], value_defs: [Body(@23-29 Identifier { ident: "isTrue", suffixed: 0 }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@40-49 Var { module_name: "Bool", ident: "true", suffixed: 0 }], Space)), Body(@66-74 Identifier { ident: "isFalsey", suffixed: 0 }, @77-92 Closure([@78-79 Identifier { ident: "x", suffixed: 0 }], @83-92 Apply(@83-90 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@91-92 Var { module_name: "", ident: "x", suffixed: 0 }], Space))), Annotation(@109-112 Identifier { ident: "msg", suffixed: 0 }, @115-126 Apply("", "Task", [@120-122 Record { fields: [], ext: None }, @123-126 Apply("", "I32", [])])), AnnotatedBody { ann_pattern: @109-112 Identifier { ident: "msg", suffixed: 0 }, ann_type: @115-126 Apply("", "Task", [@120-122 Record { fields: [], ext: None }, @123-126 Apply("", "I32", [])]), comment: None, body_pattern: @143-146 Identifier { ident: "msg", suffixed: 0 }, body_expr: @143-445 If([(@173-183 Apply(@173-174 Var { module_name: "Bool", ident: "not", suffixed: 0 }, [@175-182 ParensAround(Var { module_name: "", ident: "isTrue", suffixed: 1 })], UnaryOp(Not)), @213-256 Defs(Defs { tags: [Index(2147483648)], regions: [@218-225], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@218-225 RecordDestructure([]), @218-225 Apply(@213-218 Var { module_name: "", ident: "line", suffixed: 1 }, [@219-225 Str(PlainLine("fail"))], Space))] }, @251-256 Apply(@251-254 Var { module_name: "", ident: "err", suffixed: 0 }, [@255-256 Num("1")], Space))), (@285-307 ParensAround(Apply(@286-295 Var { module_name: "", ident: "isFalsey", suffixed: 1 }, [@296-306 Var { module_name: "Bool", ident: "false", suffixed: 0 }], Space)), @338-380 Defs(Defs { tags: [Index(2147483648)], regions: [@343-350], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@343-350 RecordDestructure([]), @343-350 Apply(@338-343 Var { module_name: "", ident: "line", suffixed: 1 }, [@344-350 Str(PlainLine("nope"))], Space))] }, @375-380 Apply(@375-377 Var { module_name: "", ident: "ok", suffixed: 0 }, [@378-380 Record([])], Space)))], @430-445 Apply(@430-435 Var { module_name: "", ident: "line", suffixed: 1 }, [@436-445 Str(PlainLine("success"))], Space)) }, Body(@23-29 Identifier { ident: "isTrue", suffixed: 0 }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@40-49 Var { module_name: "Bool", ident: "true", suffixed: 0 }], Space)), Body(@66-74 Identifier { ident: "isFalsey", suffixed: 0 }, @77-92 Closure([@78-79 Identifier { ident: "x", suffixed: 0 }], @83-92 Apply(@83-90 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@91-92 Var { module_name: "", ident: "x", suffixed: 0 }], Space))), AnnotatedBody { ann_pattern: @109-112 Identifier { ident: "msg", suffixed: 0 }, ann_type: @115-126 Apply("", "Task", [@120-122 Record { fields: [], ext: None }, @123-126 Apply("", "I32", [])]), comment: None, body_pattern: @143-146 Identifier { ident: "msg", suffixed: 0 }, body_expr: Apply(Var { module_name: "Task", ident: "await", suffixed: 0 }, [Var { module_name: "", ident: "isTrue", suffixed: 0 }, Closure([Identifier { ident: "#!a0", suffixed: 0 }], @143-445 If([(@173-183 Apply(@173-174 Var { module_name: "Bool", ident: "not", suffixed: 0 }, [@175-182 ParensAround(Var { module_name: "", ident: "#!a0", suffixed: 0 })], UnaryOp(Not)), @218-225 Apply(@218-225 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@218-225 Apply(@218-225 Var { module_name: "", ident: "line", suffixed: 0 }, [@219-225 Str(PlainLine("fail"))], Space), @218-225 Closure([@218-225 RecordDestructure([])], @251-256 Apply(@251-254 Var { module_name: "", ident: "err", suffixed: 0 }, [@255-256 Num("1")], Space))], BangSuffix))], Apply(Var { module_name: "Task", ident: "await", suffixed: 0 }, [Apply(Var { module_name: "", ident: "isFalsey", suffixed: 0 }, [@296-306 Var { module_name: "Bool", ident: "false", suffixed: 0 }], Space), Closure([Identifier { ident: "#!a1", suffixed: 0 }], @143-445 If([(@285-307 ParensAround(Var { module_name: "", ident: "#!a1", suffixed: 0 }), @343-350 Apply(@343-350 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@343-350 Apply(@343-350 Var { module_name: "", ident: "line", suffixed: 0 }, [@344-350 Str(PlainLine("nope"))], Space), @343-350 Closure([@343-350 RecordDestructure([])], @375-380 Apply(@375-377 Var { module_name: "", ident: "ok", suffixed: 0 }, [@378-380 Record([])], Space))], BangSuffix))], @430-445 Apply(@430-445 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@430-445 Apply(@430-445 Var { module_name: "", ident: "line", suffixed: 0 }, [@436-445 Str(PlainLine("success"))], Space), @430-445 Closure([@430-445 Identifier { ident: "#!a2", suffixed: 0 }], @143-445 Apply(@143-445 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@430-445 Var { module_name: "", ident: "#!a2", suffixed: 0 }], BangSuffix))], BangSuffix)))], BangSuffix)))], BangSuffix) }] }, @463-466 Var { module_name: "", ident: "msg", suffixed: 0 }))] }"##,
+        );
+    }
 }

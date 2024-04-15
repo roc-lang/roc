@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{Pattern, ValueDef};
+use roc_parse::ast::{is_loc_expr_suffixed, Pattern, ValueDef};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
@@ -354,138 +354,243 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
     }
 }
 
+/// Unwrap if-then-else statements
 pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
-    _arena: &'a Bump,
+    arena: &'a Bump,
     loc_expr: &'a Loc<Expr<'a>>,
-    _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
+    maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
-    Ok(loc_expr)
+    match loc_expr.value {
+        Expr::If(if_thens, final_else_branch) => {
+            for (index, if_then) in if_thens.iter().enumerate() {
+                let (current_if_then_statement, current_if_then_expression) = if_then;
 
-    // TODO - the logic below is mostly correct, however it needs to be
-    // translated to this new method and tests added, leaving this for a future PR
+                // unwrap suffixed (innermost) expressions e.g. `if true then doThing! then ...`
+                if is_loc_expr_suffixed(current_if_then_expression) {
+                    // split if_thens around the current index
+                    let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
-    // consider each if-statement, if it is suffixed we need to desugar e.g.
-    // ```
-    // if isFalse! then
-    //     "fail"
-    // else
-    //     if isTrue! then
-    //         "success"
-    //     else
-    //         "fail"
-    // ```
-    // desugars to
-    // ```
-    // Task.await (isFalse) \isAnswer0 ->
-    //     if isAnswer0 then
-    //         "fail"
-    //     else
-    //         Task.await (isTrue) \isAnswer1 ->
-    //             if isAnswer1 then
-    //                 "success"
-    //             else
-    //                 "fail"
-    // ```
-    //
-    // Note there are four possible combinations that must be considered
-    // 1. NIL if_thens before the first suffixed, and NIL after e.g. `if y! then "y" else "n"`
-    // 2. NIL if_thens before the first suffixed, and SOME after e.g. `if n! then "n" else if y! "y" else "n"`
-    // 3. SOME if_thens before the first suffixed, and NIL after e.g. `if n then "n" else if y! then "y" else "n"`
-    // 4. SOME if_thens before the first suffixed, and SOME after e.g. `if n then "n" else if y! then "y" else if n then "n"`
-    // fn desugar_if_node_suffixed<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
-    //     match loc_expr.value {
-    //         Expr::If(if_thens, final_else_branch) => {
-    //             // Search for the first suffixied expression e.g. `if isThing! then ...`
-    //             for (index, if_then) in if_thens.iter().enumerate() {
-    //                 let (current_if_then_statement, current_if_then_expression) = if_then;
+                    match unwrap_suffixed_expression(arena, current_if_then_expression, None) {
+                        Ok(unwrapped_expression) => {
+                            let mut new_if_thens = Vec::new_in(arena);
 
-    //                 if is_loc_expr_suffixed(current_if_then_statement) {
-    //                     // split if_thens around the current index
-    //                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
+                            new_if_thens.extend(before);
+                            new_if_thens.push((*current_if_then_statement, *unwrapped_expression));
+                            new_if_thens.extend(after);
 
-    //                     // increment our global counter for ident suffixes
-    //                     // this should be the only place this counter is referenced
-    //                     SUFFIXED_IF_COUNTER.fetch_add(1, Ordering::SeqCst);
-    //                     let count = SUFFIXED_IF_COUNTER.load(Ordering::SeqCst);
+                            let new_if = arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Expr::If(
+                                    arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                    final_else_branch,
+                                ),
+                            ));
 
-    //                     // create a unique identifier for our answer
-    //                     let answer_ident = arena.alloc(format!("#if!{}", count));
-    //                     let pattern = Loc::at(
-    //                         current_if_then_statement.region,
-    //                         Pattern::Identifier {
-    //                             ident: answer_ident,
-    //                             suffixed: 0,
-    //                         },
-    //                     );
+                            return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
+                        }
+                        Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                            internal_error!("unexpected, unwrapped if-then-else Def expr should have intermediate answer as `None` was passed as pattern");
+                        }
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg,
+                            sub_pat,
+                            sub_new,
+                        }) => {
+                            let ok_wrapped_return = arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Expr::Apply(
+                                    arena.alloc(Loc::at(
+                                        loc_expr.region,
+                                        Expr::Var {
+                                            module_name: ModuleName::TASK,
+                                            ident: "ok",
+                                            suffixed: 0,
+                                        },
+                                    )),
+                                    arena.alloc([sub_new]),
+                                    CalledVia::BangSuffix,
+                                ),
+                            ));
 
-    //                     // if we have any after the current index, we will recurse on these as they may also be suffixed
-    //                     let remaining_loc_expr = if after.is_empty() {
-    //                         final_else_branch
-    //                     } else {
-    //                         let after_if = arena
-    //                             .alloc(Loc::at(loc_expr.region, Expr::If(after, final_else_branch)));
+                            let unwrapped_expression = apply_task_await(
+                                arena,
+                                sub_arg.region,
+                                sub_arg,
+                                sub_pat,
+                                ok_wrapped_return,
+                            );
 
-    //                         desugar_if_node_suffixed(arena, after_if)
-    //                     };
+                            let mut new_if_thens = Vec::new_in(arena);
 
-    //                     let closure_expr = Closure(
-    //                         arena.alloc([pattern]),
-    //                         arena.alloc(Loc::at(
-    //                             current_if_then_statement.region,
-    //                             If(
-    //                                 arena.alloc_slice_clone(&[(
-    //                                     Loc::at(
-    //                                         current_if_then_statement.region,
-    //                                         Var {
-    //                                             module_name: "",
-    //                                             ident: answer_ident,
-    //                                             suffixed: 0,
-    //                                         },
-    //                                     ),
-    //                                     *current_if_then_expression,
-    //                                 )]),
-    //                                 remaining_loc_expr,
-    //                             ),
-    //                         )),
-    //                     );
+                            new_if_thens.extend(before);
+                            new_if_thens.push((*current_if_then_statement, *unwrapped_expression));
+                            new_if_thens.extend(after);
 
-    //                     // Apply arguments to Task.await, first is the unwrapped Suffix expr second is the Closure
-    //                     let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
+                            let new_if = arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Expr::If(
+                                    arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                    final_else_branch,
+                                ),
+                            ));
 
-    //                     task_await_apply_args.push(current_if_then_statement);
-    //                     task_await_apply_args.push(arena.alloc(Loc::at(loc_expr.region, closure_expr)));
+                            return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
+                        }
+                        Err(EUnwrapped::Malformed) => return Err(EUnwrapped::Malformed),
+                    }
+                }
 
-    //                     let applied_closure = arena.alloc(Loc::at(
-    //                         loc_expr.region,
-    //                         Apply(
-    //                             arena.alloc(Loc {
-    //                                 region: loc_expr.region,
-    //                                 value: Var {
-    //                                     module_name: ModuleName::TASK,
-    //                                     ident: "await",
-    //                                     suffixed: 0,
-    //                                 },
-    //                             }),
-    //                             arena.alloc(task_await_apply_args),
-    //                             CalledVia::BangSuffix,
-    //                         ),
-    //                     ));
+                // unwrap suffixed statements e.g. `if isThing! then ...`
+                // note we want to split and nest if-then's so we only run Task's
+                // that are required
+                if is_loc_expr_suffixed(current_if_then_statement) {
+                    // split if_thens around the current index
+                    let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
-    //                     if before.is_empty() {
-    //                         return applied_closure;
-    //                     } else {
-    //                         return arena
-    //                             .alloc(Loc::at(loc_expr.region, Expr::If(before, applied_closure)));
-    //                     }
-    //                 }
-    //             }
+                    match unwrap_suffixed_expression(arena, current_if_then_statement, None) {
+                        Ok(unwrapped_statement) => {
+                            let mut new_if_thens = Vec::new_in(arena);
 
-    //             // nothing was suffixed, so just return the original if-statement
-    //             loc_expr
-    //         }
-    //         _ => internal_error!("unreachable, expected an If expression to desugar"),
-    //     }
-    // }
+                            new_if_thens.push((*unwrapped_statement, *current_if_then_expression));
+                            new_if_thens.extend(after);
+
+                            let new_if = arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Expr::If(
+                                    arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                    final_else_branch,
+                                ),
+                            ));
+
+                            return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
+                        }
+                        Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                            internal_error!("unexpected, unwrapped if-then-else Def expr should have intermediate answer as `None` was passed as pattern");
+                        }
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg,
+                            sub_pat,
+                            sub_new,
+                        }) => {
+                            if before.is_empty() {
+                                let mut new_if_thens = Vec::new_in(arena);
+
+                                new_if_thens.extend(before);
+                                new_if_thens.push((*sub_new, *current_if_then_expression));
+                                new_if_thens.extend(after);
+
+                                let new_if = arena.alloc(Loc::at(
+                                    loc_expr.region,
+                                    Expr::If(
+                                        arena.alloc_slice_copy(new_if_thens.as_slice()),
+                                        final_else_branch,
+                                    ),
+                                ));
+
+                                let unwrapped_if_then = apply_task_await(
+                                    arena,
+                                    sub_arg.region,
+                                    sub_arg,
+                                    sub_pat,
+                                    new_if,
+                                );
+
+                                return unwrap_suffixed_expression(
+                                    arena,
+                                    unwrapped_if_then,
+                                    maybe_def_pat,
+                                );
+                            } else {
+                                let mut after_if_thens = Vec::new_in(arena);
+
+                                after_if_thens.push((*sub_new, *current_if_then_expression));
+                                after_if_thens.extend(after);
+
+                                let after_if = arena.alloc(Loc::at(
+                                    loc_expr.region,
+                                    Expr::If(
+                                        arena.alloc_slice_copy(after_if_thens.as_slice()),
+                                        final_else_branch,
+                                    ),
+                                ));
+
+                                let after_if_then = apply_task_await(
+                                    arena,
+                                    sub_arg.region,
+                                    sub_arg,
+                                    sub_pat,
+                                    after_if,
+                                );
+
+                                let before_if_then = arena.alloc(Loc::at(
+                                    loc_expr.region,
+                                    Expr::If(before, after_if_then),
+                                ));
+
+                                return unwrap_suffixed_expression(
+                                    arena,
+                                    before_if_then,
+                                    maybe_def_pat,
+                                );
+                            }
+                        }
+                        Err(EUnwrapped::Malformed) => return Err(EUnwrapped::Malformed),
+                    }
+                }
+            }
+
+            // check the final_else_branch
+            match unwrap_suffixed_expression(arena, final_else_branch, None) {
+                Ok(unwrapped_final_else) => {
+                    return Ok(arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::If(if_thens, unwrapped_final_else),
+                    )));
+                }
+                Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                    internal_error!("unexpected, unwrapped if-then-else Def expr should have intermediate answer as `None` was passed as pattern");
+                }
+                Err(EUnwrapped::UnwrappedSubExpr {
+                    sub_arg,
+                    sub_pat,
+                    sub_new,
+                }) => {
+                    let ok_wrapped_return = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::Apply(
+                            arena.alloc(Loc::at(
+                                loc_expr.region,
+                                Expr::Var {
+                                    module_name: ModuleName::TASK,
+                                    ident: "ok",
+                                    suffixed: 0,
+                                },
+                            )),
+                            arena.alloc([sub_new]),
+                            CalledVia::BangSuffix,
+                        ),
+                    ));
+
+                    let unwrapped_final_else = apply_task_await(
+                        arena,
+                        sub_arg.region,
+                        sub_arg,
+                        sub_pat,
+                        ok_wrapped_return,
+                    );
+
+                    let new_if = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        Expr::If(if_thens, unwrapped_final_else),
+                    ));
+
+                    return unwrap_suffixed_expression(arena, new_if, maybe_def_pat);
+                }
+                Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+            }
+        }
+        _ => internal_error!("unreachable, expected an If expression to desugar"),
+    }
 }
 
 pub fn unwrap_suffixed_expression_when_help<'a>(
