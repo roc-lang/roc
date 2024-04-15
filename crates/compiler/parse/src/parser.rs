@@ -1502,14 +1502,14 @@ macro_rules! collection_inner {
 #[macro_export]
 macro_rules! collection_trailing_sep_e {
     ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
-        between!(
+        $crate::parser::between(
             $opening_brace,
             $crate::parser::reset_min_indent($crate::collection_inner!(
                 $elem,
                 $delimiter,
                 $space_before
             )),
-            $closing_brace
+            $closing_brace,
         )
     };
 }
@@ -2524,7 +2524,7 @@ macro_rules! either {
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = between!(
+/// let parser = between(
 ///     byte(b'(', Problem::NotFound),
 ///     word("hello", Problem::NotFound),
 ///     byte(b')', Problem::NotFound)
@@ -2536,14 +2536,12 @@ macro_rules! either {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! between {
-    ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
-        $crate::parser::skip_first(
-            $opening_brace,
-            $crate::parser::skip_second($parser, $closing_brace),
-        )
-    };
+pub fn between<'a, Before, Inner, After, Err: 'a>(
+    opening_brace: impl Parser<'a, Before, Err>,
+    inner: impl Parser<'a, Inner, Err>,
+    closing_brace: impl Parser<'a, After, Err>,
+) -> impl Parser<'a, Inner, Err> {
+    skip_first(opening_brace, skip_second(inner, closing_brace))
 }
 
 /// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.

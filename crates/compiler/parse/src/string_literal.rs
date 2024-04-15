@@ -2,8 +2,8 @@ use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, byte, loc, reset_min_indent, skip_second, specialize_err_ref, then, BadInputError,
-    ESingleQuote, EString, Parser,
+    allocated, between, byte, loc, reset_min_indent, skip_second, specialize_err_ref, then,
+    BadInputError, ESingleQuote, EString, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -403,10 +403,10 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                             // Parse the hex digits, surrounded by parens, then
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
-                            let (_progress, loc_digits, new_state) = between!(
+                            let (_progress, loc_digits, new_state) = between(
                                 byte(b'(', EString::CodePtOpen),
                                 loc(ascii_hex_digits()),
-                                byte(b')', EString::CodePtEnd)
+                                byte(b')', EString::CodePtEnd),
                             )
                             .parse(arena, state, min_indent)?;
 

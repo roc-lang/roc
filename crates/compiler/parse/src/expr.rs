@@ -10,10 +10,10 @@ use crate::blankspace::{
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
-    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second, specialize_err,
-    specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber,
-    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    self, backtrackable, between, byte, byte_indent, increment_min_indent, line_min_indent,
+    optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second,
+    specialize_err, specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr, EIf, EInParens,
+    EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -3068,7 +3068,7 @@ struct RecordHelp<'a> {
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
-    between!(
+    between(
         byte(b'{', ERecord::Open),
         reset_min_indent(record!(RecordHelp {
             // You can optionally have an identifier followed by an '&' to
@@ -3089,7 +3089,7 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                 RecordField::SpaceBefore
             ),
         })),
-        byte(b'}', ERecord::End)
+        byte(b'}', ERecord::End),
     )
 }
 
