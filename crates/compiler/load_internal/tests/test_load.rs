@@ -1187,6 +1187,66 @@ fn explicit_builtin_type_import() {
 }
 
 #[test]
+fn import_shadows_symbol() {
+    let modules = vec![
+        (
+            "One.roc",
+            indoc!(
+                r#"
+                interface One exposes [one] imports []
+
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                one = 1
+
+                import One exposing [one]
+
+                main = one
+                "#
+            ),
+        ),
+    ];
+    let err = multiple_modules("import_shadows_symbol", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── DUPLICATE NAME in tmp/import_shadows_symbol/Main.roc ────────────────────────
+
+            This import exposes `One.one`:
+
+            5│  import One exposing [one]
+                                     ^^^
+
+            However, the name `one` was already used here:
+
+            3│  one = 1
+                ^^^
+
+            You can rename it, or use the qualified name: `One.one`
+
+            ── UNUSED IMPORT in tmp/import_shadows_symbol/Main.roc ─────────────────────────
+
+            One is imported but not used.
+
+            5│  import One exposing [one]
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            Since One isn't used, you don't need to import it.
+            "
+        )
+    );
+}
+
+#[test]
 fn import_with_alias() {
     let modules = vec![
         (

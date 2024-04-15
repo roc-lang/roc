@@ -216,6 +216,33 @@ pub fn can_problem<'b>(
             title = EXPLICIT_BUILTIN_IMPORT.to_string();
         }
 
+        Problem::ImportShadowsSymbol {
+            region,
+            new_symbol,
+            existing_symbol_region,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This import exposes "),
+                    alloc.symbol_qualified(new_symbol),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("However, the name "),
+                    alloc.symbol_unqualified(new_symbol),
+                    alloc.reflow(" was already used here:"),
+                ]),
+                alloc.region(lines.convert_region(existing_symbol_region)),
+                alloc.concat([
+                    alloc.reflow("You can rename it, or use the qualified name: "),
+                    alloc.symbol_qualified(new_symbol),
+                ]),
+            ]);
+
+            title = DUPLICATE_NAME.to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),

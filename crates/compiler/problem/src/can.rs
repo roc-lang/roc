@@ -49,6 +49,11 @@ pub enum Problem {
     },
     ExplicitBuiltinImport(ModuleId, Region),
     ExplicitBuiltinTypeImport(Symbol, Region),
+    ImportShadowsSymbol {
+        region: Region,
+        new_symbol: Symbol,
+        existing_symbol_region: Region,
+    },
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -233,6 +238,7 @@ impl Problem {
             Problem::ImportNameConflict { .. } => RuntimeError,
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
+            Problem::ImportShadowsSymbol { .. } => RuntimeError,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
@@ -313,6 +319,7 @@ impl Problem {
             }
             | Problem::ExplicitBuiltinImport(_, region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
+            | Problem::ImportShadowsSymbol { region, .. }
             | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
