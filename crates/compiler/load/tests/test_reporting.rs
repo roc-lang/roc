@@ -28,6 +28,7 @@ mod test_reporting {
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::FunctionKind;
     use roc_solve_problem::TypeError;
+    use roc_test_utils_dir::TmpDir;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -115,7 +116,7 @@ mod test_reporting {
             // We can't have all tests use "tmp" because tests run in parallel,
             // so append the test name to the tmp path.
             let tmp = format!("tmp/{subdir}");
-            let dir = roc_test_utils::TmpDir::new(&tmp);
+            let dir = TmpDir::new(&tmp);
 
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);

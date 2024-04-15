@@ -40,7 +40,7 @@ roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_solve_problem = { path = "../solve_problem" }
 ven_pretty = { path = "../../vendor/pretty" }
-roc_test_utils = { path = "../../test_utils" }
+roc_test_utils_dir = { path = "../../test_utils_dir" }
 
 indoc.workspace = true
 insta.workspace = true

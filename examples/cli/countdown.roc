@@ -1,5 +1,5 @@
 app "countdown"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop }]
     provides [main] to pf
 
