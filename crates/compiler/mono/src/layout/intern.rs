@@ -593,6 +593,9 @@ struct LockedGlobalInterner<'a, 'r> {
 fn hash<V: std::hash::Hash>(val: V) -> u64 {
     let mut state = roc_collections::all::BuildHasher::default().build_hasher();
     val.hash(&mut state);
+
+    // clippy suggests a stylistic improvement but the suggested fix doesn't seem to work out
+    #[allow(clippy::manual_hash_one)]
     state.finish()
 }
 

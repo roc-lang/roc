@@ -109,7 +109,7 @@ impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
         f.write_str("RocDict ")?;
 
         f.debug_map()
-            .entries(self.iter().map(|(k, v)| (k, v)))
+            .entries(self.iter())
             .finish()
     }
 }
