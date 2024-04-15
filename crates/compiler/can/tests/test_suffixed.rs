@@ -549,7 +549,7 @@ mod suffixed_tests {
     }
 
     /**
-     * A simple if-then-else statement which is split 
+     * A simple if-then-else statement which is split
     ```roc
 
     main =
