@@ -10,10 +10,11 @@ use crate::blankspace::{
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, between, byte, byte_indent, increment_min_indent, line_min_indent,
-    optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second,
-    specialize_err, specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr, EIf, EInParens,
-    EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    self, backtrackable, between, byte, byte_indent, increment_min_indent, indented_seq,
+    line_min_indent, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
+    skip_second, specialize_err, specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr,
+    EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult,
+    Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -2362,7 +2363,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
     // closure_help_help(options)
     map_with_arena!(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq!(
+        indented_seq(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             byte_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
@@ -2406,7 +2407,7 @@ mod when {
     pub fn expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
         map_with_arena!(
             and!(
-                indented_seq!(
+                indented_seq(
                     parser::keyword(keyword::WHEN, EWhen::When),
                     space0_around_e_no_after_indent_check(
                         specialize_err_ref(EWhen::Condition, expr_start(options)),
@@ -2417,7 +2418,7 @@ mod when {
                 // ambiguity. The formatter will fix it up.
                 //
                 // We require that branches are indented relative to the line containing the `is`.
-                indented_seq!(
+                indented_seq(
                     parser::keyword(keyword::IS, EWhen::Is),
                     branches(options)
                 )
