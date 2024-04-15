@@ -1478,14 +1478,14 @@ mod ability {
     use super::*;
     use crate::{
         ast::{AbilityMember, Spaceable, Spaced},
-        parser::EAbility,
+        parser::{absolute_indented_seq, EAbility},
     };
 
     /// Parses a single ability demand line; see `parse_demand`.
     fn parse_demand_help<'a>() -> impl Parser<'a, AbilityMember<'a>, EAbility<'a>> {
         map!(
             // Require the type to be more indented than the name
-            absolute_indented_seq!(
+            absolute_indented_seq(
                 specialize_err(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
                 skip_first(
                     and!(
