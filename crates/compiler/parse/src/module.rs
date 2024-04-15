@@ -9,7 +9,7 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, byte, increment_min_indent, optional, reset_min_indent, skip_second,
+    backtrackable, byte, increment_min_indent, optional, reset_min_indent, skip_first, skip_second,
     specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages,
     EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
 };
@@ -54,35 +54,35 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
         comments: space0_e(EHeader::IndentStart),
         header: one_of![
             map!(
-                skip_first!(
+                skip_first(
                     keyword("interface", EHeader::Start),
                     increment_min_indent(interface_header())
                 ),
                 Header::Interface
             ),
             map!(
-                skip_first!(
+                skip_first(
                     keyword("app", EHeader::Start),
                     increment_min_indent(app_header())
                 ),
                 Header::App
             ),
             map!(
-                skip_first!(
+                skip_first(
                     keyword("package", EHeader::Start),
                     increment_min_indent(package_header())
                 ),
                 Header::Package
             ),
             map!(
-                skip_first!(
+                skip_first(
                     keyword("platform", EHeader::Start),
                     increment_min_indent(platform_header())
                 ),
                 Header::Platform
             ),
             map!(
-                skip_first!(
+                skip_first(
                     keyword("hosted", EHeader::Start),
                     increment_min_indent(hosted_header())
                 ),
@@ -278,7 +278,7 @@ fn provides_exposed<'a>() -> impl Parser<
 #[inline(always)]
 fn provides_types<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, EProvides<'a>> {
-    skip_first!(
+    skip_first(
         // We only support spaces here, not newlines, because this is not intended
         // to be the design forever. Someday it will hopefully work like Elm,
         // where platform authors can provide functions like Browser.sandbox which
@@ -296,7 +296,7 @@ fn provides_types<'a>(
             byte(b',', EProvides::ListEnd),
             byte(b'}', EProvides::ListEnd),
             Spaced::SpaceBefore
-        )
+        ),
     )
 }
 
@@ -367,16 +367,16 @@ fn requires_rigids<'a>(
 
 #[inline(always)]
 fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>, ERequires<'a>> {
-    skip_first!(
+    skip_first(
         byte(b'{', ERequires::ListStart),
         skip_second(
             reset_min_indent(space0_around_ee(
-                specialize_err(ERequires::TypedIdent, loc!(typed_ident()),),
+                specialize_err(ERequires::TypedIdent, loc!(typed_ident())),
                 ERequires::ListStart,
-                ERequires::ListEnd
+                ERequires::ListEnd,
             )),
-            byte(b'}', ERequires::ListStart)
-        )
+            byte(b'}', ERequires::ListStart),
+        ),
     )
 }
 
@@ -568,7 +568,7 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
                 )),
                 space0_e(ETypedIdent::IndentHasType)
             ),
-            skip_first!(
+            skip_first(
                 byte(b':', ETypedIdent::HasType),
                 space0_before_e(
                     specialize_err(
@@ -622,7 +622,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     module_name_help(EImports::ModuleName)
                 ),
                 // e.g. `.{ Task, after}`
-                optional(skip_first!(
+                optional(skip_first(
                     byte(b'.', EImports::ExposingDot),
                     collection_trailing_sep_e!(
                         byte(b'{', EImports::SetStart),

@@ -9,7 +9,8 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, increment_min_indent, skip_second, then, ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, increment_min_indent, skip_first, skip_second, then, ERecord,
+    ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -437,7 +438,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
                 EType::TIndentStart,
                 EType::TIndentEnd,
             ),
-            zero_or_more!(skip_first!(
+            zero_or_more!(skip_first(
                 byte(b'&', EType::TImplementsClause),
                 space0_before_optional_after(
                     specialize_err(EType::TApply, loc!(concrete_type())),
@@ -469,7 +470,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                 EType::TIndentStart,
                 EType::TIndentEnd
             ),
-            skip_first!(
+            skip_first(
                 // Parse "implements"; we don't care about this keyword
                 word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
@@ -505,7 +506,7 @@ fn implements_clause_chain<'a>(
         // Parse the first clause (there must be one), then the rest
         let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
 
-        let (_, mut clauses, state) = zero_or_more!(skip_first!(
+        let (_, mut clauses, state) = zero_or_more!(skip_first(
             byte(b',', EType::TImplementsClause),
             implements_clause()
         ))
@@ -524,7 +525,7 @@ fn implements_clause_chain<'a>(
 
 /// Parse a implements-abilities clause, e.g. `implements [Eq, Hash]`.
 pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
-    increment_min_indent(skip_first!(
+    increment_min_indent(skip_first(
         // Parse "implements"; we don't care about this keyword
         word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
@@ -540,7 +541,7 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
                 ImplementsAbilities::Implements
             )),
             EType::TIndentEnd,
-        )
+        ),
     ))
 }
 
@@ -584,7 +585,7 @@ fn expression<'a>(
             .parse(arena, state, min_indent)?;
 
         let result = and![
-            zero_or_more!(skip_first!(
+            zero_or_more!(skip_first(
                 byte(b',', EType::TFunctionArgument),
                 one_of![
                     space0_around_ee(
@@ -635,9 +636,9 @@ fn expression<'a>(
             }
             Err(err) => {
                 if !is_trailing_comma_valid {
-                    let (_, comma, _) = optional(backtrackable(skip_first!(
+                    let (_, comma, _) = optional(backtrackable(skip_first(
                         space0_e(EType::TIndentStart),
-                        byte(b',', EType::TStart)
+                        byte(b',', EType::TStart),
                     )))
                     .trace("check trailing comma")
                     .parse(arena, state.clone(), min_indent)?;

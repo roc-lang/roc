@@ -11,7 +11,7 @@ use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident}
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
-    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_second, specialize_err,
+    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second, specialize_err,
     specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber,
     EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
@@ -157,7 +157,7 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
 }
 
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Accessor<'a>>, EExpr<'a>> {
-    zero_or_more!(skip_first!(
+    zero_or_more!(skip_first(
         byte(b'.', EExpr::Access),
         specialize_err(
             |_, pos| EExpr::Access(pos),
@@ -1486,7 +1486,7 @@ mod ability {
             // Require the type to be more indented than the name
             absolute_indented_seq!(
                 specialize_err(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
-                skip_first!(
+                skip_first(
                     and!(
                         // TODO: do we get anything from picking up spaces here?
                         space0_e(EAbility::DemandName),
@@ -1903,9 +1903,9 @@ fn parse_expr_end<'a>(
         min_indent
     };
 
-    let parser = skip_first!(
+    let parser = skip_first(
         crate::blankspace::check_indent(EExpr::IndentEnd),
-        loc_term_or_underscore(options)
+        loc_term_or_underscore(options),
     );
 
     match parser.parse(arena, state.clone(), inner_min_indent) {
@@ -2379,7 +2379,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
                     ),
                     EClosure::Arg,
                 ),
-                skip_first!(
+                skip_first(
                     // Parse the -> which separates params from body
                     two_bytes(b'-', b'>', EClosure::Arrow),
                     // Parse the body
@@ -2514,7 +2514,7 @@ mod when {
             branch_alternatives_help(pattern_indent_level),
             one_of![
                 map!(
-                    skip_first!(
+                    skip_first(
                         parser::keyword(keyword::IF, EWhen::IfToken),
                         // TODO we should require space before the expression but not after
                         space0_around_ee(
@@ -2616,12 +2616,12 @@ mod when {
     /// Parsing the righthandside of a branch in a when conditional.
     fn branch_result<'a>(indent: u32) -> impl Parser<'a, Loc<Expr<'a>>, EWhen<'a>> {
         move |arena, state, _min_indent| {
-            skip_first!(
+            skip_first(
                 two_bytes(b'-', b'>', EWhen::Arrow),
                 space0_before_e(
                     specialize_err_ref(EWhen::Branch, loc_expr(true)),
                     EWhen::IndentBranch,
-                )
+                ),
             )
             .parse(arena, state, indent)
         }

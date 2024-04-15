@@ -4,8 +4,8 @@ use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, backtrackable, byte, fail_when, optional, specialize_err, specialize_err_ref, then,
-    three_bytes, two_bytes, EPattern, PInParens, PList, PRecord, Parser,
+    self, backtrackable, byte, fail_when, optional, skip_first, specialize_err, specialize_err_ref,
+    then, three_bytes, two_bytes, EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
@@ -503,7 +503,7 @@ fn loc_ident_pattern_help<'a>(
 
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     map!(
-        skip_first!(
+        skip_first(
             byte(b'_', EPattern::Underscore),
             optional(lowercase_ident_pattern())
         ),
