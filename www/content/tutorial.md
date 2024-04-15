@@ -163,10 +163,11 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] {
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+}
+
+import pf.Stdout
 
 main =
     Stdout.line "I'm a Roc application!"
@@ -207,9 +208,9 @@ You should see this:
 
 A definition names an expression.
 
--   The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
--   The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
--   The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
+- The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
+- The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
+- The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
 Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are $(total) animals."` refers to `total`.
 
@@ -260,8 +261,8 @@ addAndStringify = \num1, num2 ->
 
 We did two things here:
 
--   We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
--   We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
+- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
+- We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
 Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
 
@@ -411,10 +412,10 @@ returnFoo { foo: "hi!", bar: "blah" }
 Sometimes we assign a def to a field that happens to have the same name—for example, `{ x: x }`.
 In these cases, we shorten it to writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like; here are several different ways to define the same record:
 
--   `{ x: x, y: y }`
--   `{ x, y }`
--   `{ x: x, y }`
--   `{ x, y: y }`
+- `{ x: x, y: y }`
+- `{ x, y }`
+- `{ x: x, y }`
+- `{ x, y: y }`
 
 ### [Record destructuring](#record-destructuring) {#record-destructuring}
 
@@ -452,8 +453,8 @@ fromOriginal = { original & birds: 4, iguanas: 3 }
 
 The `fromScratch` and `fromOriginal` records are equal, although they're defined in different ways.
 
--   `fromScratch` was built using the same record syntax we've been using up to this point.
--   `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
+- `fromScratch` was built using the same record syntax we've been using up to this point.
+- `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
 
 Note that `&` can't introduce new fields to a record, or change the types of existing fields.
 (Trying to do either of these will result in an error at build time!)
@@ -876,9 +877,9 @@ that quite does what you want, and you might find yourself calling `List.get` re
 retrieve every element in the list and use it to build up the new value you want. That approach
 can work, but it has a few downsides:
 
--   Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
--   There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
--   It's more verbose than the alternative we're about to discuss
+- Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
+- There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
+- It's more verbose than the alternative we're about to discuss
 
 The `List.walk` function gives you a way to walk over the elements in a list and build up whatever
 return value you like. It's a great alternative to calling `List.get` on every element in the list
@@ -1160,9 +1161,9 @@ Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, b
 
 A type can be defined to be opaque to hide its internal structure. This is a lot more amazing than it may seem. It can make your code more modular, robust, and easier to read:
 
--   If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
--   You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case.
--   Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
+- If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
+- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case.
+- Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
 
 You can create an opaque type with the `:=` operator. Let's make one called `Username`:
 
@@ -1204,9 +1205,9 @@ Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
--   Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
--   Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
--   Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+- Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
+- Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+- Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 Here are the different fixed-size integer types that Roc supports:
 
@@ -1231,9 +1232,9 @@ As such, it's very important to design your integer operations not to exceed the
 
 Roc has three fractional types:
 
--   `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
--   `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
--   `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+- `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+- `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+- `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
 
 These are different from integers, they can represent numbers with fractional components, such as 1.5 and -0.123.
 
@@ -1376,11 +1377,13 @@ pluralize = \singular, plural, count ->
 This `expect` will fail if you call `pluralize` passing a count of 0.
 
 Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. Different `roc` commands will also handle `expect`s differently:
+
 - `roc build` discards all `expect`s for optimal runtime performance.
 - `roc dev` only runs inline `expect`s that are encountered during normal execution of the program.
 - `roc test` runs top level `expect`s and inline `expect`s that are encountered because of the running of top level `expect`s.
 
 Let's clear up any confusion with an example:
+
 ```roc
 main =
     expect 1 == 2
@@ -1394,6 +1397,7 @@ double = \num ->
 
 expect double 0 == 0
 ```
+
 - `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hello, World!`.
 - `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hello, World!`.
 - `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
@@ -1402,12 +1406,12 @@ expect double 0 == 0
 
 Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
 
--   **Builtins** provide functions that are automatically imported into every module.
--   **Applications** are combined with a platform and compiled into an executable.
--   **Interfaces** provide functions which can be imported into other modules.
--   **Packages** organise modules to share functionality across applications and platforms.
--   **Platforms** provide effects such as IO to interface with the outside world.
--   **Hosted** _note this module type is likely to be deprecated soon_.
+- **Builtins** provide functions that are automatically imported into every module.
+- **Applications** are combined with a platform and compiled into an executable.
+- **Modules** provide functions which can be imported into other modules.
+- **Packages** organise modules to share functionality across applications and platforms.
+- **Platforms** provide effects such as IO to interface with the outside world.
+- **Hosted** _note this module type is likely to be deprecated soon_.
 
 ### [Builtin Modules](#builtin-modules) {#builtin-modules}
 
@@ -1427,39 +1431,36 @@ These modules are not ordinary `.roc` files that live on your filesystem. Rather
 
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
--   They are always imported. You never need to add them to `imports`.
--   All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.)
+- They are always imported. You never need to add them to `imports`.
+- All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.)
 
 ### [App Module Header](#app-module-header) {#app-module-header}
 
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] {
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+}
 ```
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.
 
-The line `app "hello"` shows that this module is a Roc application. The "hello" after the `app` keyword will be removed soon and is no longer used. If the file is named hello.roc, building this application should produce an executable named `hello`. This means when you run `roc dev`, the Roc compiler will build an executable named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable without running it by running `roc build`.
+If the file is named hello.roc, building this application should produce an executable named `hello`. This means when you run `roc dev`, the Roc compiler will build an executable named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable without running it by running `roc build`.
 
-The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
+The `{ pf: platform "https://...tar.br" }` part says three things:
+
+- We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
+- That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
+- We're going to name that package `pf` so we can refer to it more concisely in the future.
+
+After the app header, we have:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
-imports [pf.Stdout]
-provides [main] to pf
+import pf.Stdout
 ```
 
-The `packages { pf: "https://...tar.br" }` part says three things:
-
--   We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
--   That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
--   We're going to name that package `pf` so we can refer to it more concisely in the future.
-
-The `imports [pf.Stdout]` line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
+This line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
 
 This import has a direct interaction with our definition of `main`. Let's look at that again:
 
@@ -1469,19 +1470,21 @@ main = Stdout.line "I'm a Roc application!"
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
 
-When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
+When we write `import pf.Stdout`, it specifies that the `Stdout` module comes from the package we named `pf` in the `{ pf: ... }` section of the header.
 
-If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
+If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported in the same way:
 
 ```roc
-imports [pf.Stdout, AdditionalModule, AnotherModule]
+import pf.Stdout
+import AdditionalModule
+import AnotherModule
 ```
 
 You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
 
 ### [Package Modules](#package-modules) {#package-modules}
 
-Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
+Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different modules and then including these in the package header, `package [ MyInterface ] {}`. The modules that are listed after the `package` keyword are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/lukewilliamboswell/roc-parser/tree/main/package) for an example.
 
@@ -1489,7 +1492,7 @@ Package documentation can be generated using the Roc cli with `roc docs /package
 
 Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.
 
-You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
+You can import a package that is available either locally, or from a URL into a Roc application, platform, or package. This is achieved by specifying the package the header. For example, `app [main] { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
 
 How does the Roc cli import and download a package from a URL?
 
@@ -1505,11 +1508,11 @@ Including the hash solves a number of problems:
 2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
 3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.
 
-### [Interface Modules](#interface-modules) {#interface-modules}
+### [Regular Modules](#regular-modules) {#regular-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
-See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
+See [Html Module](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
 
 ### [Platform Modules](#platform-modules) {#platform-modules}
 
@@ -1517,15 +1520,56 @@ See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-
 
 See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rust-platform/main.roc) for an example.
 
+### [Imports](#imports) {#imports}
+
+Imports can appear at the top-level:
+
+```roc
+app [main] { pf: platform "https://...tar.br" }
+
+import pf.Stdout
+
+main =
+    Stdout.line "Hello, world!"
+```
+
+Ot nested inside [Defs](#defs) and [Expectations](#tests-and-expecations):
+
+```roc
+app [main] { pf: platform "https://...tar.br" }
+
+main =
+    import pf.Stdout
+
+    Stdout.line "Hello, world!"
+```
+
+In this case, `Stdout` is only available within `main`.
+
+They can expose members to the current scope, so they don't need to be prefixed with the module name:
+
+```roc
+import pf.Stdout exposing [line]
+
+main =
+    line "Hello, world!"
+```
+
+And they can use the `as` keyword to specify a different name for the module:
+
+```roc
+import pf.Stdout as Out
+```
+
+You can use this to resolve a naming conflict if two modules from different packages had  the same name.
+
 ### [Importing Files](#importing-files) {#importing-files}
 
 You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
-imports [
-    "some-file" as someStr : Str,
-    "some-file" as someBytes : List U8,
-]
+import "some-file" as someStr : Str
+import "some-file" as someBytes : List U8
 ```
 
 See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
@@ -1536,20 +1580,21 @@ Tasks are technically not part of the Roc language, but they're very common in p
 
 In the `basic-cli` platform, we have four operations we can do:
 
--   Write a string to the terminal
--   Read a string from user input
--   Write a string to a file
--   Read a string from a file
+- Write a string to the terminal
+- Read a string from user input
+- Write a string to a file
+- Read a string from a file
 
 We'll use these four operations to learn about tasks.
 
 Let's start with a basic "Hello World" program.
 
 ```roc
-app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] {
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+}
+
+import pf.Stdout
 
 main =
     Stdout.line "Hello, World!"
@@ -1580,10 +1625,13 @@ Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
-    imports [pf.Stdout, pf.Stdin, pf.Task]
-    provides [main] to pf
+app [main] {
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+}
+
+import pf.Stdout
+import pf.Stdin
+import pf.Task
 
 main =
     Task.await Stdin.line \input ->
@@ -1625,10 +1673,13 @@ main =
 This works, but we can make it a little nicer to read. Let's change it to the following:
 
 ```roc
-app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
-    provides [main] to pf
+app [main] {
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br"
+}
+
+import pf.Stdout
+import pf.Stdin
+import pf.Task exposing [await]
 
 main =
     await (Stdout.line "Type something press Enter:") \_ ->
@@ -1728,9 +1779,9 @@ This way, it reads like a series of instructions:
 
 Some important things to note about backpassing and `await`:
 
--   `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
--   Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
--   Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\input ->` and `input <-` is how they look, so feel free to use whichever looks nicer to you!
+- `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
+- Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
+- Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\input ->` and `input <-` is how they look, so feel free to use whichever looks nicer to you!
 
 See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
 
@@ -1757,9 +1808,9 @@ fullName = \user ->
 
 I can pass this function a record that has more fields than just `firstName` and `lastName`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
 
--   `fullName { firstName: "Sam", lastName: "Sample" }`
--   `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
--   `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
+- `fullName { firstName: "Sam", lastName: "Sample" }`
+- `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
+- `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
 
 This `user` argument is an _open record_ - that is, a description of a minimum set of fields on a record, and their types. When a function takes an open record as an argument, it's okay if you pass it a record with more fields than just the ones specified.
 
@@ -1799,9 +1850,9 @@ addHttps = \record ->
 
 This function uses _constrained records_ in its type. The annotation is saying:
 
--   This function takes a record which has at least a `url` field, and possibly others
--   That `url` field has the type `Str`
--   It returns a record of exactly the same type as the one it was given
+- This function takes a record which has at least a `url` field, and possibly others
+- That `url` field has the type `Str`
+- It returns a record of exactly the same type as the one it was given
 
 So if we give this function a record with five fields, it will return a record with those same five fields. The only requirement is that one of those fields must be `url: Str`.
 
@@ -1809,9 +1860,9 @@ In practice, constrained records appear in type annotations much less often than
 
 Here's when you can typically expect to encounter these three flavors of type variables in records:
 
--   _Open records_ are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
--   _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
--   _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
+- _Open records_ are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
+- _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
+- _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
 
 Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record, but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
 
@@ -1991,10 +2042,10 @@ However, I could not pass an `[Ok Str]*` to a function with a _closed_ tag union
 
 In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
 
--   If you _have_ a closed union, that means it has all the tags it ever will, and can't accumulate more.
--   If you _have_ an open union, that means it can accumulate more tags through conditional branches.
--   If you _accept_ a closed union, that means you only have to handle the possibilities listed in the union.
--   If you _accept_ an open union, that means you have to handle the possibility that it has a tag you can't know about.
+- If you _have_ a closed union, that means it has all the tags it ever will, and can't accumulate more.
+- If you _have_ an open union, that means it can accumulate more tags through conditional branches.
+- If you _accept_ a closed union, that means you only have to handle the possibilities listed in the union.
+- If you _accept_ an open union, that means you have to handle the possibility that it has a tag you can't know about.
 
 ### [Type Variables in Tag Unions](#type-variables-in-tag-unions) {#type-variables-in-tag-unions}
 
@@ -2034,8 +2085,8 @@ So if we give this function a `[Foo Str, Bar Bool, Baz (List Str)]` argument, th
 
 If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway. This may be surprising if you look closely at the body of the function, because:
 
--   The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[Bar Bool]a` instead?
--   The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
+- The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[Bar Bool]a` instead?
+- The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
 
 The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question: "What is the type of `other`?" There has to be exactly one answer! It can't be the case that `other` has one type before the `->` and another type after it; whenever you see a named value in Roc, it is guaranteed to have the same type everywhere it appears in that scope.
 
