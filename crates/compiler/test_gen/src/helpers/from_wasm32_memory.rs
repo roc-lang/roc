@@ -91,15 +91,11 @@ impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
         let capacity =
             <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_CAPACITY);
 
-        let mut items = Vec::with_capacity(length as usize);
+        let step = <T as Wasm32Sized>::SIZE_OF_WASM;
 
-        for i in 0..length {
-            let item = <T as FromWasm32Memory>::decode(
-                memory,
-                elements + i * <T as Wasm32Sized>::SIZE_OF_WASM as u32,
-            );
-            items.push(item);
-        }
+        let items: Vec<_> = (0..length)
+            .map(|i| <T as FromWasm32Memory>::decode(memory, elements + i * step as u32))
+            .collect();
 
         let mut list = RocList::with_capacity(capacity as usize);
         list.extend_from_slice(&items);

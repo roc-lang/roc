@@ -154,7 +154,9 @@ fn fmt_comment(buf: &mut Buf, comment: &str) {
     }
 
     buf.push('#');
-    if !comment.starts_with(' ') {
+    // Add a space between the starting `#` and the rest of the comment,
+    // unless there already is a space or the comment is of the form `#### something`.
+    if !comment.starts_with(' ') && !comment.starts_with('#') {
         buf.spaces(1);
     }
     buf.push_str(comment.trim_end());
@@ -206,7 +208,7 @@ fn fmt_docs(buf: &mut Buf, docs: &str) {
 /// * Removing comments
 /// * Removing parens in Exprs
 ///
-/// Long term, we actuall want this transform to preserve comments (so we can assert they're maintained by formatting)
+/// Long term, we actually want this transform to preserve comments (so we can assert they're maintained by formatting)
 /// - but there are currently several bugs where they're _not_ preserved.
 /// TODO: ensure formatting retains comments
 pub trait RemoveSpaces<'a> {
@@ -759,6 +761,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
+            Expr::Suffixed(a) => a.remove_spaces(arena),
         }
     }
 }

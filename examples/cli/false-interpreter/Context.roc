@@ -8,8 +8,8 @@ Option a : [Some a, None]
 Data : [Lambda (List U8), Number I32, Var Variable]
 # While loops are special and have their own Scope specific state.
 WhileState : { cond : List U8, body : List U8, state : [InCond, InBody] }
-Scope : { data : Option File.Handle, index : Nat, buf : List U8, whileInfo : Option WhileState }
-State : [Executing, InComment, InLambda Nat (List U8), InString (List U8), InNumber I32, InSpecialChar, LoadChar]
+Scope : { data : Option File.Handle, index : U64, buf : List U8, whileInfo : Option WhileState }
+State : [Executing, InComment, InLambda U64 (List U8), InString (List U8), InNumber I32, InSpecialChar, LoadChar]
 Context : { scopes : List Scope, stack : List Data, vars : List Data, state : State }
 
 pushStack : Context, Data -> Context
@@ -55,7 +55,7 @@ toStr = \{ scopes, stack, state, vars } ->
     stackStr = Str.joinWith (List.map stack toStrData) " "
     varsStr = Str.joinWith (List.map vars toStrData) " "
 
-    "\n============\nDepth: \(depth)\nState: \(stateStr)\nStack: [\(stackStr)]\nVars: [\(varsStr)]\n============\n"
+    "\n============\nDepth: $(depth)\nState: $(stateStr)\nStack: [$(stackStr)]\nVars: [$(varsStr)]\n============\n"
 
 with : Str, (Context -> Task {} a) -> Task {} a
 with = \path, callback ->

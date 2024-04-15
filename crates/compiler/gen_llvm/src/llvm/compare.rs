@@ -1,5 +1,5 @@
 use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
-use crate::llvm::build_list::{list_len, load_list_ptr};
+use crate::llvm::build_list::{list_len_usize, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
@@ -510,8 +510,8 @@ fn build_list_eq_help<'a, 'ctx>(
 
     // first, check whether the length is equal
 
-    let len1 = list_len(env.builder, list1);
-    let len2 = list_len(env.builder, list2);
+    let len1 = list_len_usize(env.builder, list1);
+    let len2 = list_len_usize(env.builder, list2);
 
     let length_equal: IntValue =
         env.builder

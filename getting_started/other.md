@@ -15,3 +15,9 @@
     # This requires installing the `clang` C compiler, too.
     cargo run examples/platform-switching/rocLovesC.roc
     ```
+
+## Next Steps
+
+- [editor setup](https://www.roc-lang.org/install#editor-extensions)
+- [tutorial](https://www.roc-lang.org/tutorial)
+- [more examples](https://www.roc-lang.org/examples)

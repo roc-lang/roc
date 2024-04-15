@@ -3,13 +3,13 @@ procedure #Derived.0 (#Derived.1):
     ret #Derived_gen.0;
 
 procedure #Derived.3 (#Derived.2):
-    let #Derived_gen.7 : I64 = CallByName Inspect.54 #Derived.2;
+    let #Derived_gen.7 : I64 = CallByName Inspect.53 #Derived.2;
     ret #Derived_gen.7;
 
 procedure #Derived.4 (#Derived.5, #Derived.1):
     let #Derived_gen.5 : {} = Struct {};
     let #Derived_gen.6 : {} = Struct {};
-    let #Derived_gen.4 : {List I64, {}, {}} = CallByName Inspect.37 #Derived.1 #Derived_gen.5 #Derived_gen.6;
+    let #Derived_gen.4 : {List I64, {}, {}} = CallByName Inspect.36 #Derived.1 #Derived_gen.5 #Derived_gen.6;
     let #Derived_gen.3 : Str = CallByName Inspect.31 #Derived_gen.4 #Derived.5;
     ret #Derived_gen.3;
 
@@ -21,156 +21,156 @@ procedure Bool.2 ():
     let Bool.23 : Int1 = true;
     ret Bool.23;
 
-procedure Inspect.157 (Inspect.158, #Attr.12):
-    let Inspect.156 : {} = StructAtIndex 2 #Attr.12;
-    let Inspect.155 : {} = StructAtIndex 1 #Attr.12;
-    let Inspect.154 : List I64 = StructAtIndex 0 #Attr.12;
-    let Inspect.351 : Str = "[";
-    let Inspect.332 : Str = CallByName Inspect.61 Inspect.158 Inspect.351;
-    let Inspect.333 : {List I64, {}, {}} = Struct {Inspect.154, Inspect.155, Inspect.156};
-    let Inspect.328 : {Str, Int1} = CallByName Inspect.159 Inspect.332 Inspect.333;
-    let Inspect.329 : {} = Struct {};
-    let Inspect.324 : Str = CallByName Inspect.168 Inspect.328;
-    let Inspect.325 : Str = "]";
-    let Inspect.323 : Str = CallByName Inspect.61 Inspect.324 Inspect.325;
-    ret Inspect.323;
-
-procedure Inspect.159 (Inspect.160, #Attr.12):
-    let Inspect.156 : {} = StructAtIndex 2 #Attr.12;
-    let Inspect.155 : {} = StructAtIndex 1 #Attr.12;
-    let Inspect.154 : List I64 = StructAtIndex 0 #Attr.12;
-    let Inspect.350 : Int1 = CallByName Bool.1;
-    let Inspect.336 : {Str, Int1} = Struct {Inspect.160, Inspect.350};
-    let Inspect.335 : {Str, Int1} = CallByName List.18 Inspect.154 Inspect.336 Inspect.156;
-    ret Inspect.335;
-
-procedure Inspect.161 (Inspect.338, Inspect.164, Inspect.156):
-    let Inspect.162 : Str = StructAtIndex 0 Inspect.338;
-    let Inspect.163 : Int1 = StructAtIndex 1 Inspect.338;
-    joinpoint Inspect.348 Inspect.165:
-        let Inspect.345 : I64 = CallByName #Derived.3 Inspect.164;
-        let Inspect.341 : Str = CallByName Inspect.31 Inspect.345 Inspect.165;
-        let Inspect.342 : {} = Struct {};
-        let Inspect.340 : {Str, Int1} = CallByName Inspect.166 Inspect.341;
-        ret Inspect.340;
-    in
-    if Inspect.163 then
-        let Inspect.349 : Str = ", ";
-        let Inspect.347 : Str = CallByName Inspect.61 Inspect.162 Inspect.349;
-        jump Inspect.348 Inspect.347;
-    else
-        jump Inspect.348 Inspect.162;
-
-procedure Inspect.166 (Inspect.167):
-    let Inspect.344 : Int1 = CallByName Bool.2;
-    let Inspect.343 : {Str, Int1} = Struct {Inspect.167, Inspect.344};
-    ret Inspect.343;
-
-procedure Inspect.168 (Inspect.330):
-    let Inspect.331 : Str = StructAtIndex 0 Inspect.330;
-    ret Inspect.331;
-
-procedure Inspect.279 (Inspect.280, Inspect.278):
-    let Inspect.357 : Str = CallByName Num.96 Inspect.278;
-    let Inspect.356 : Str = CallByName Inspect.61 Inspect.280 Inspect.357;
-    ret Inspect.356;
-
-procedure Inspect.30 (Inspect.148):
-    ret Inspect.148;
-
-procedure Inspect.30 (Inspect.148):
-    ret Inspect.148;
-
-procedure Inspect.30 (Inspect.148):
-    ret Inspect.148;
-
-procedure Inspect.31 (Inspect.307, Inspect.150):
-    let Inspect.318 : Str = CallByName Inspect.157 Inspect.150 Inspect.307;
-    ret Inspect.318;
-
-procedure Inspect.31 (Inspect.307, Inspect.150):
-    let Inspect.346 : Str = CallByName Inspect.279 Inspect.150 Inspect.307;
-    ret Inspect.346;
-
-procedure Inspect.34 (Inspect.153):
-    let Inspect.309 : Str = CallByName Inspect.5 Inspect.153;
-    let Inspect.308 : Str = CallByName Inspect.62 Inspect.309;
-    ret Inspect.308;
-
-procedure Inspect.36 (Inspect.305):
-    let Inspect.315 : Str = "";
+procedure Inspect.152 (Inspect.153, #Attr.12):
+    let Inspect.151 : {} = StructAtIndex 2 #Attr.12;
+    let Inspect.150 : {} = StructAtIndex 1 #Attr.12;
+    let Inspect.149 : List I64 = StructAtIndex 0 #Attr.12;
+    let Inspect.343 : Str = "[";
+    let Inspect.324 : Str = CallByName Inspect.59 Inspect.153 Inspect.343;
+    let Inspect.325 : {List I64, {}, {}} = Struct {Inspect.149, Inspect.150, Inspect.151};
+    let Inspect.320 : {Str, Int1} = CallByName Inspect.154 Inspect.324 Inspect.325;
+    let Inspect.321 : {} = Struct {};
+    let Inspect.316 : Str = CallByName Inspect.163 Inspect.320;
+    let Inspect.317 : Str = "]";
+    let Inspect.315 : Str = CallByName Inspect.59 Inspect.316 Inspect.317;
     ret Inspect.315;
 
-procedure Inspect.37 (Inspect.154, Inspect.155, Inspect.156):
-    let Inspect.320 : {List I64, {}, {}} = Struct {Inspect.154, Inspect.155, Inspect.156};
-    let Inspect.319 : {List I64, {}, {}} = CallByName Inspect.30 Inspect.320;
-    ret Inspect.319;
-
-procedure Inspect.5 (Inspect.151):
-    let Inspect.316 : List I64 = CallByName #Derived.0 Inspect.151;
-    let Inspect.313 : {} = Struct {};
-    let Inspect.312 : Str = CallByName Inspect.36 Inspect.313;
-    let Inspect.311 : Str = CallByName #Derived.4 Inspect.312 Inspect.316;
-    ret Inspect.311;
-
-procedure Inspect.54 (Inspect.278):
-    let Inspect.352 : I64 = CallByName Inspect.30 Inspect.278;
-    ret Inspect.352;
-
-procedure Inspect.61 (Inspect.304, Inspect.300):
-    let Inspect.327 : Str = CallByName Str.3 Inspect.304 Inspect.300;
-    dec Inspect.300;
+procedure Inspect.154 (Inspect.155, #Attr.12):
+    let Inspect.151 : {} = StructAtIndex 2 #Attr.12;
+    let Inspect.150 : {} = StructAtIndex 1 #Attr.12;
+    let Inspect.149 : List I64 = StructAtIndex 0 #Attr.12;
+    let Inspect.342 : Int1 = CallByName Bool.1;
+    let Inspect.328 : {Str, Int1} = Struct {Inspect.155, Inspect.342};
+    let Inspect.327 : {Str, Int1} = CallByName List.18 Inspect.149 Inspect.328 Inspect.151;
     ret Inspect.327;
 
-procedure Inspect.62 (Inspect.306):
-    ret Inspect.306;
+procedure Inspect.156 (Inspect.330, Inspect.159, Inspect.151):
+    let Inspect.157 : Str = StructAtIndex 0 Inspect.330;
+    let Inspect.158 : Int1 = StructAtIndex 1 Inspect.330;
+    joinpoint Inspect.340 Inspect.160:
+        let Inspect.337 : I64 = CallByName #Derived.3 Inspect.159;
+        let Inspect.333 : Str = CallByName Inspect.31 Inspect.337 Inspect.160;
+        let Inspect.334 : {} = Struct {};
+        let Inspect.332 : {Str, Int1} = CallByName Inspect.161 Inspect.333;
+        ret Inspect.332;
+    in
+    if Inspect.158 then
+        let Inspect.341 : Str = ", ";
+        let Inspect.339 : Str = CallByName Inspect.59 Inspect.157 Inspect.341;
+        jump Inspect.340 Inspect.339;
+    else
+        jump Inspect.340 Inspect.157;
 
-procedure List.18 (List.156, List.157, List.158):
-    let List.570 : U64 = 0i64;
-    let List.571 : U64 = CallByName List.6 List.156;
-    let List.569 : {Str, Int1} = CallByName List.89 List.156 List.157 List.158 List.570 List.571;
-    ret List.569;
+procedure Inspect.161 (Inspect.162):
+    let Inspect.336 : Int1 = CallByName Bool.2;
+    let Inspect.335 : {Str, Int1} = Struct {Inspect.162, Inspect.336};
+    ret Inspect.335;
+
+procedure Inspect.163 (Inspect.322):
+    let Inspect.323 : Str = StructAtIndex 0 Inspect.322;
+    ret Inspect.323;
+
+procedure Inspect.274 (Inspect.275, Inspect.273):
+    let Inspect.349 : Str = CallByName Num.96 Inspect.273;
+    let Inspect.348 : Str = CallByName Inspect.59 Inspect.275 Inspect.349;
+    ret Inspect.348;
+
+procedure Inspect.30 (Inspect.143):
+    ret Inspect.143;
+
+procedure Inspect.30 (Inspect.143):
+    ret Inspect.143;
+
+procedure Inspect.30 (Inspect.143):
+    ret Inspect.143;
+
+procedure Inspect.31 (Inspect.299, Inspect.145):
+    let Inspect.310 : Str = CallByName Inspect.152 Inspect.145 Inspect.299;
+    ret Inspect.310;
+
+procedure Inspect.31 (Inspect.299, Inspect.145):
+    let Inspect.338 : Str = CallByName Inspect.274 Inspect.145 Inspect.299;
+    ret Inspect.338;
+
+procedure Inspect.33 (Inspect.148):
+    let Inspect.301 : Str = CallByName Inspect.5 Inspect.148;
+    let Inspect.300 : Str = CallByName Inspect.60 Inspect.301;
+    ret Inspect.300;
+
+procedure Inspect.35 (Inspect.297):
+    let Inspect.307 : Str = "";
+    ret Inspect.307;
+
+procedure Inspect.36 (Inspect.149, Inspect.150, Inspect.151):
+    let Inspect.312 : {List I64, {}, {}} = Struct {Inspect.149, Inspect.150, Inspect.151};
+    let Inspect.311 : {List I64, {}, {}} = CallByName Inspect.30 Inspect.312;
+    ret Inspect.311;
+
+procedure Inspect.5 (Inspect.146):
+    let Inspect.308 : List I64 = CallByName #Derived.0 Inspect.146;
+    let Inspect.305 : {} = Struct {};
+    let Inspect.304 : Str = CallByName Inspect.35 Inspect.305;
+    let Inspect.303 : Str = CallByName #Derived.4 Inspect.304 Inspect.308;
+    ret Inspect.303;
+
+procedure Inspect.53 (Inspect.273):
+    let Inspect.344 : I64 = CallByName Inspect.30 Inspect.273;
+    ret Inspect.344;
+
+procedure Inspect.59 (Inspect.296, Inspect.292):
+    let Inspect.319 : Str = CallByName Str.3 Inspect.296 Inspect.292;
+    dec Inspect.292;
+    ret Inspect.319;
+
+procedure Inspect.60 (Inspect.298):
+    ret Inspect.298;
+
+procedure List.18 (List.159, List.160, List.161):
+    let List.573 : U64 = 0i64;
+    let List.574 : U64 = CallByName List.6 List.159;
+    let List.572 : {Str, Int1} = CallByName List.91 List.159 List.160 List.161 List.573 List.574;
+    ret List.572;
 
 procedure List.6 (#Attr.2):
-    let List.580 : U64 = lowlevel ListLen #Attr.2;
-    ret List.580;
+    let List.583 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.583;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.579 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.579;
+    let List.582 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.582;
 
-procedure List.89 (#Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_gen.22, #Derived_gen.23):
-    joinpoint List.572 List.159 List.160 List.161 List.162 List.163:
-        let List.574 : Int1 = CallByName Num.22 List.162 List.163;
-        if List.574 then
-            let List.578 : I64 = CallByName List.66 List.159 List.162;
-            let List.164 : {Str, Int1} = CallByName Inspect.161 List.160 List.578 List.161;
-            let List.577 : U64 = 1i64;
-            let List.576 : U64 = CallByName Num.51 List.162 List.577;
-            jump List.572 List.159 List.164 List.161 List.576 List.163;
+procedure List.91 (#Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20, #Derived_gen.21):
+    joinpoint List.575 List.162 List.163 List.164 List.165 List.166:
+        let List.577 : Int1 = CallByName Num.22 List.165 List.166;
+        if List.577 then
+            let List.581 : I64 = CallByName List.66 List.162 List.165;
+            let List.167 : {Str, Int1} = CallByName Inspect.156 List.163 List.581 List.164;
+            let List.580 : U64 = 1i64;
+            let List.579 : U64 = CallByName Num.51 List.165 List.580;
+            jump List.575 List.162 List.167 List.164 List.579 List.166;
         else
-            dec List.159;
-            ret List.160;
+            dec List.162;
+            ret List.163;
     in
-    jump List.572 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23;
+    jump List.575 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.293 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.277 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.277;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.292 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.276 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.276;
 
 procedure Num.96 (#Attr.2):
-    let Num.291 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.291;
+    let Num.275 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.275;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.292 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.292;
+    let Str.232 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.232;
 
 procedure Test.0 ():
     let Test.2 : List I64 = Array [1i64, 2i64, 3i64];
-    let Test.1 : Str = CallByName Inspect.34 Test.2;
+    let Test.1 : Str = CallByName Inspect.33 Test.2;
     ret Test.1;

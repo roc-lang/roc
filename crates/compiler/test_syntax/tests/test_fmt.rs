@@ -11,7 +11,8 @@ mod test_fmt {
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
-    use roc_test_utils::{assert_multiline_str_eq, workspace_root};
+    use roc_test_utils::assert_multiline_str_eq;
+    use roc_test_utils_dir::workspace_root;
     use test_syntax::test_helpers::Input;
 
     fn check_formatting(expected: &'_ str) -> impl Fn(Input) + '_ {
@@ -2434,7 +2435,7 @@ mod test_fmt {
             r"
                 foo :
                     Str,
-                    Nat
+                    U64
                     -> Bool
 
                 foo
@@ -2444,7 +2445,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
                     foo :
-                        Str, Int, Nat -> Bool
+                        Str, Int, U64 -> Bool
 
                     foo
                 "
@@ -2455,7 +2456,7 @@ mod test_fmt {
                 r"
                     foo :
                         Str,
-                        Nat -> Bool
+                        U64 -> Bool
 
                     foo
                 "
@@ -2464,7 +2465,7 @@ mod test_fmt {
                 r"
                     foo :
                         Str,
-                        Nat
+                        U64
                         -> Bool
 
                     foo
@@ -2478,7 +2479,7 @@ mod test_fmt {
                     foo :
 
                         Str,
-                        Nat
+                        U64
 
                         -> Bool
 
@@ -2489,7 +2490,7 @@ mod test_fmt {
                 r"
                     foo :
                         Str,
-                        Nat
+                        U64
                         -> Bool
 
                     foo
@@ -2502,7 +2503,7 @@ mod test_fmt {
                 r"
                     foo :
 
-                        Str, Nat -> Bool
+                        Str, U64 -> Bool
 
                     foo
                 "
@@ -2510,7 +2511,7 @@ mod test_fmt {
             indoc!(
                 r"
                     foo :
-                        Str, Nat -> Bool
+                        Str, U64 -> Bool
 
                     foo
                 "
@@ -5618,9 +5619,9 @@ mod test_fmt {
             r"
                 Dict k v := {
                     metadata : List I8,
-                    dataIndices : List Nat,
+                    dataIndices : List U64,
                     data : List (T k v),
-                    size : Nat,
+                    size : U64,
                 } where k implements Hash & Eq
 
                 a
@@ -6010,11 +6011,11 @@ mod test_fmt {
                 r"
                 when l1 is
                     [
-                    .. 
+                    ..
                     as
                     rest
                     ]
-                    as 
+                    as
                     l2
                     ->
                         f rest

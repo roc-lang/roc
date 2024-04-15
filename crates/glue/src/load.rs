@@ -17,7 +17,7 @@ use roc_mono::ir::{generate_glue_procs, CrashTag, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use roc_target::{Architecture, TargetInfo};
+use roc_target::{Architecture, Target, TargetFromTripleError::TripleUnsupported};
 use roc_types::subs::{Subs, Variable};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
@@ -41,33 +41,35 @@ pub fn generate(
     spec_path: &Path,
     backend: CodeGenBackend,
 ) -> io::Result<i32> {
+    let target = Triple::host().into();
     // TODO: Add verification around the paths. Make sure they heav the correct file extension and what not.
     match load_types(
         input_path.to_path_buf(),
         Threading::AllAvailable,
         IgnoreErrors::NONE,
+        target,
     ) {
         Ok(types) => {
             // TODO: we should to modify the app file first before loading it.
             // Somehow it has to point to the correct platform file which may not exist on the target machine.
-            let triple = Triple::host();
 
             let code_gen_options = CodeGenOptions {
                 backend,
                 opt_level: OptLevel::Development,
                 emit_debug_info: false,
                 emit_llvm_ir: false,
+                fuzz: false,
             };
 
             let load_config = standard_load_config(
-                &triple,
+                target,
                 BuildOrdering::BuildIfChecks,
                 Threading::AllAvailable,
             );
 
             let arena = ManuallyDrop::new(Bump::new());
             let link_type = LinkType::Dylib;
-            let linking_strategy = if roc_linker::supported(link_type, &triple) {
+            let linking_strategy = if roc_linker::supported(link_type, target) {
                 LinkingStrategy::Surgical
             } else {
                 LinkingStrategy::Legacy
@@ -78,7 +80,7 @@ pub fn generate(
             let res_binary_path = match tempdir_res {
                 Ok(dylib_dir) => build_file(
                     &arena,
-                    &triple,
+                    target,
                     spec_path.to_path_buf(),
                     code_gen_options,
                     false,
@@ -104,14 +106,12 @@ pub fn generate(
                     expect_metadata: _,
                 }) => {
                     // TODO: Should binary_path be update to deal with extensions?
-                    use target_lexicon::OperatingSystem;
-                    let lib_path = match triple.operating_system {
+                    use roc_target::OperatingSystem;
+                    let lib_path = match target.operating_system() {
                         OperatingSystem::Windows => binary_path.with_extension("dll"),
-                        OperatingSystem::Darwin | OperatingSystem::MacOSX { .. } => {
-                            binary_path.with_extension("dylib")
-                        }
+                        OperatingSystem::Mac => binary_path.with_extension("dylib"),
 
-                        _ => binary_path.with_extension("so.1.0"),
+                        _ => binary_path.with_extension("so"),
                     };
 
                     // TODO: Should glue try and run with errors, especially type errors.
@@ -122,7 +122,7 @@ pub fn generate(
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
-                        problems.print_to_stdout(total_time);
+                        problems.print_error_warning_count(total_time);
                         println!(
                             ".\n\nRunning glue despite warnings…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -130,46 +130,19 @@ pub fn generate(
                     }
 
                     let lib = unsafe { Library::new(lib_path) }.unwrap();
-                    type MakeGlueReturnType =
-                        roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>;
-                    type MakeGlue = unsafe extern "C" fn(
-                        *mut RocCallResult<MakeGlueReturnType>,
-                        &roc_std::RocList<roc_type::Types>,
-                    );
-
-                    let make_glue: libloading::Symbol<MakeGlue> = unsafe {
-                        lib.get("roc__makeGlueForHost_1_exposed_generic".as_bytes())
-                            .unwrap_or_else(|_| panic!("Unable to load glue function"))
-                    };
                     let roc_types: roc_std::RocList<roc_type::Types> =
                         types.iter().map(|x| x.into()).collect();
-                    let mut files =
-                        RocCallResult::new(roc_std::RocResult::err(roc_std::RocStr::empty()));
-                    unsafe { make_glue(&mut files, &roc_types) };
 
-                    // Roc will free data passed into it. So forget that data.
-                    std::mem::forget(roc_types);
+                    // NOTE: DO NOT DROP LIB! the return value will include static roc strings that
+                    // are only kept alive when the dynamic library is not unloaded!
+                    let files = call_roc_make_glue(&lib, backend, roc_types);
 
-                    let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> =
-                        match Result::from(files) {
-                            Err((msg, tag)) => match tag {
-                                CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
-                                CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
-                            },
-                            Ok(x) => x.into(),
-                        };
-
-                    let files = files.unwrap_or_else(|err| {
-                        eprintln!("Glue generation failed: {err}");
-
-                        process::exit(1);
-                    });
                     for roc_type::File { name, content } in &files {
                         let valid_name = PathBuf::from(name.as_str())
                             .components()
                             .all(|comp| matches!(comp, Component::CurDir | Component::Normal(_)));
-                        if !valid_name {
-                            eprintln!("File name was invalid: {}", &name);
+                        if !valid_name || name.is_empty() {
+                            eprintln!("File name was invalid: {:?}", &name);
 
                             process::exit(1);
                         }
@@ -238,6 +211,69 @@ pub fn generate(
                 );
                 process::exit(1);
             }
+        },
+    }
+}
+
+fn call_roc_make_glue(
+    lib: &Library,
+    backend: CodeGenBackend,
+    roc_types: roc_std::RocList<roc_type::Types>,
+) -> roc_std::RocList<roc_type::File> {
+    let roc_call_result = match backend {
+        CodeGenBackend::Assembly(_) => {
+            type MakeGlueReturnType = RocCallResult<
+                roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
+            >;
+            type MakeGlue =
+                unsafe extern "C" fn(roc_std::RocList<roc_type::Types>) -> MakeGlueReturnType;
+
+            let name_of_main = "test_main";
+
+            let make_glue: libloading::Symbol<MakeGlue> = unsafe {
+                lib.get(name_of_main.as_bytes())
+                    .unwrap_or_else(|_| panic!("Unable to load glue function"))
+            };
+
+            unsafe { make_glue(roc_types) }
+        }
+        CodeGenBackend::Llvm(_) => {
+            type MakeGlueReturnType =
+                roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>;
+            type MakeGlue = unsafe extern "C" fn(
+                *mut RocCallResult<MakeGlueReturnType>,
+                &roc_std::RocList<roc_type::Types>,
+            );
+
+            let name_of_main = "roc__makeGlueForHost_1_exposed_generic";
+
+            let make_glue: libloading::Symbol<MakeGlue> = unsafe {
+                lib.get(name_of_main.as_bytes())
+                    .unwrap_or_else(|_| panic!("Unable to load glue function"))
+            };
+            let mut files = RocCallResult::new(roc_std::RocResult::err(roc_std::RocStr::empty()));
+            unsafe { make_glue(&mut files, &roc_types) };
+
+            // Roc will free data passed into it. So forget that data.
+            std::mem::forget(roc_types);
+
+            files
+        }
+
+        CodeGenBackend::Wasm => todo!(),
+    };
+
+    match Result::from(roc_call_result) {
+        Err((msg, tag)) => match tag {
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+            CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+        },
+        Ok(files_or_error) => match Result::from(files_or_error) {
+            Err(err) => {
+                eprintln!("Glue generation failed: {err}");
+                process::exit(1);
+            }
+            Ok(files) => files,
         },
     }
 }
@@ -361,8 +397,8 @@ pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
     ignore_errors: IgnoreErrors,
+    target: Target,
 ) -> Result<Vec<Types>, io::Error> {
-    let target_info = (&Triple::host()).into();
     // TODO the function kind may need to be parameterizable.
     let function_kind = FunctionKind::LambdaSet;
     let arena = &Bump::new();
@@ -380,7 +416,7 @@ pub fn load_types(
         full_file_path,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
-            target_info,
+            target,
             function_kind,
             render: RenderTarget::Generic,
             palette: DEFAULT_PALETTE,
@@ -419,18 +455,19 @@ pub fn load_types(
         exposed_to_host.get(&symbol).copied()
     });
 
-    let operating_system = target_info.operating_system;
+    let operating_system = target.operating_system();
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());
 
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
-        let target_info = TargetInfo {
-            architecture,
-            operating_system,
+        let target = match Target::try_from((architecture, operating_system)) {
+            Ok(t) => t,
+            Err(TripleUnsupported) => continue,
         };
-        let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
-        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+
+        let layout_interner = GlobalLayoutInterner::with_capacity(128, target);
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target);
         let mut glue_procs_by_layout = MutMap::default();
 
         let mut extern_names = MutMap::default();
@@ -491,7 +528,7 @@ pub fn load_types(
             arena.alloc(interns),
             glue_procs_by_layout,
             layout_cache,
-            target_info,
+            target,
             exposed_to_host.clone(),
         );
 

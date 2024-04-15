@@ -107,6 +107,7 @@ impl<'a> Formattable for Expr<'a> {
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
             RecordBuilder(fields) => is_collection_multiline(fields),
+            Suffixed(subexpr) => subexpr.is_multiline(),
         }
     }
 
@@ -512,6 +513,10 @@ impl<'a> Formattable for Expr<'a> {
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
             IngestedFile(_, _) => {}
+            Suffixed(sub_expr) => {
+                sub_expr.format_with_options(buf, parens, newlines, indent);
+                buf.push('!');
+            }
         }
     }
 }
@@ -612,18 +617,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             buf.push('\\');
             buf.push(escaped.to_parsed_char());
         }
-        DeprecatedInterpolated(loc_expr) => {
-            buf.push_str("\\(");
-            // e.g. (name) in "Hi, $(name)!"
-            loc_expr.value.format_with_options(
-                buf,
-                Parens::NotNeeded, // We already printed parens!
-                Newlines::No,      // Interpolations can never have newlines
-                indent,
-            );
-            buf.push(')');
-        }
-        Interpolated(loc_expr) => {
+        DeprecatedInterpolated(loc_expr) | Interpolated(loc_expr) => {
             buf.push_str("$(");
             // e.g. (name) in "Hi, $(name)!"
             loc_expr.value.format_with_options(

@@ -2,7 +2,7 @@ use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, loc, reset_min_indent, specialize_ref, then, word1, BadInputError, ESingleQuote,
+    allocated, byte, loc, reset_min_indent, specialize_err_ref, then, BadInputError, ESingleQuote,
     EString, Parser,
 };
 use crate::state::State;
@@ -173,11 +173,13 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
             };
         }
 
-        while let Some(&byte) = bytes.next() {
+        let mut preceded_by_dollar = false;
+
+        while let Some(&one_byte) = bytes.next() {
             // This is for the byte we just grabbed from the iterator.
             segment_parsed_bytes += 1;
 
-            match byte {
+            match one_byte {
                 b'"' if !is_single_quote => {
                     if segment_parsed_bytes == 1 && segments.is_empty() {
                         // special case of the empty string
@@ -349,68 +351,6 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         return Err((MadeProgress, EString::EndlessSingleLine(start_state.pos())));
                     }
                 }
-                b'$' if !is_single_quote => {
-                    // This is for the byte we're about to parse.
-                    segment_parsed_bytes += 1;
-
-                    // iff the '$' is followed by '(', this is string interpolation.
-                    if let Some(b'(') = bytes.next() {
-                        // We're about to begin string interpolation!
-                        //
-                        // End the previous segment so we can begin a new one.
-                        // Retroactively end it right before the `$` char we parsed.
-                        // (We can't use end_segment! here because it ends it right after
-                        // the just-parsed character, which here would be '(' rather than '$')
-                        // Don't push anything if the string would be empty.
-                        if segment_parsed_bytes > 2 {
-                            // exclude the 2 chars we just parsed, namely '$' and '('
-                            let string_bytes = &state.bytes()[0..(segment_parsed_bytes - 2)];
-
-                            match std::str::from_utf8(string_bytes) {
-                                Ok(string) => {
-                                    state.advance_mut(string.len());
-
-                                    segments.push(StrSegment::Plaintext(string));
-                                }
-                                Err(_) => {
-                                    return Err((
-                                        MadeProgress,
-                                        EString::Space(BadInputError::BadUtf8, state.pos()),
-                                    ));
-                                }
-                            }
-                        }
-
-                        // Advance past the `$(`
-                        state.advance_mut(2);
-
-                        let original_byte_count = state.bytes().len();
-
-                        // Parse an arbitrary expression, followed by ')'
-                        let (_progress, loc_expr, new_state) = skip_second!(
-                            specialize_ref(
-                                EString::Format,
-                                loc(allocated(reset_min_indent(expr::expr_help())))
-                            ),
-                            word1(b')', EString::FormatEnd)
-                        )
-                        .parse(arena, state, min_indent)?;
-
-                        // Advance the iterator past the expr we just parsed.
-                        for _ in 0..(original_byte_count - new_state.bytes().len()) {
-                            bytes.next();
-                        }
-
-                        segments.push(StrSegment::Interpolated(loc_expr));
-
-                        // Reset the segment
-                        segment_parsed_bytes = 0;
-                        state = new_state;
-                    }
-
-                    // If the '$' wasn't followed by '(', then this wasn't interpolation,
-                    // and we don't need to do anything special.
-                }
                 b'\\' => {
                     // We're about to begin an escaped segment of some sort!
                     //
@@ -435,11 +375,11 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                             // canonicalization error if that expression variant
                             // is not allowed inside a string interpolation.
                             let (_progress, loc_expr, new_state) = skip_second!(
-                                specialize_ref(
+                                specialize_err_ref(
                                     EString::Format,
                                     loc(allocated(reset_min_indent(expr::expr_help())))
                                 ),
-                                word1(b')', EString::FormatEnd)
+                                byte(b')', EString::FormatEnd)
                             )
                             .parse(arena, state, min_indent)?;
 
@@ -464,9 +404,9 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
                             let (_progress, loc_digits, new_state) = between!(
-                                word1(b'(', EString::CodePtOpen),
+                                byte(b'(', EString::CodePtOpen),
                                 loc(ascii_hex_digits()),
-                                word1(b')', EString::CodePtEnd)
+                                byte(b')', EString::CodePtEnd)
                             )
                             .parse(arena, state, min_indent)?;
 
@@ -510,10 +450,67 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         }
                     }
                 }
+                b'(' if preceded_by_dollar && !is_single_quote => {
+                    // We're about to begin string interpolation!
+                    //
+                    // End the previous segment so we can begin a new one.
+                    // Retroactively end it right before the `$` char we parsed.
+                    // (We can't use end_segment! here because it ends it right after
+                    // the just-parsed character, which here would be '(' rather than '$')
+                    // Don't push anything if the string would be empty.
+                    if segment_parsed_bytes > 2 {
+                        // exclude the 2 chars we just parsed, namely '$' and '('
+                        let string_bytes = &state.bytes()[0..(segment_parsed_bytes - 2)];
+
+                        match std::str::from_utf8(string_bytes) {
+                            Ok(string) => {
+                                state.advance_mut(string.len());
+
+                                segments.push(StrSegment::Plaintext(string));
+                            }
+                            Err(_) => {
+                                return Err((
+                                    MadeProgress,
+                                    EString::Space(BadInputError::BadUtf8, state.pos()),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Advance past the `$(`
+                    state.advance_mut(2);
+
+                    let original_byte_count = state.bytes().len();
+
+                    // Parse an arbitrary expression, followed by ')'
+                    let (_progress, loc_expr, new_state) = skip_second!(
+                        specialize_err_ref(
+                            EString::Format,
+                            loc(allocated(reset_min_indent(expr::expr_help())))
+                        ),
+                        byte(b')', EString::FormatEnd)
+                    )
+                    .parse(arena, state, min_indent)?;
+
+                    // Advance the iterator past the expr we just parsed.
+                    for _ in 0..(original_byte_count - new_state.bytes().len()) {
+                        bytes.next();
+                    }
+
+                    segments.push(StrSegment::Interpolated(loc_expr));
+
+                    // Reset the segment
+                    segment_parsed_bytes = 0;
+                    state = new_state;
+                }
                 _ => {
                     // All other characters need no special handling.
                 }
             }
+
+            // iff the '$' is followed by '(', this is string interpolation.
+            // We'll check for the '(' on the next iteration of the loop.
+            preceded_by_dollar = one_byte == b'$';
         }
 
         // We ran out of characters before finding a closed quote

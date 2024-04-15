@@ -131,7 +131,7 @@ initClientAppHelp = \json, app ->
 # In Roc, we maintain a matching List of virtual DOM nodes with the same indices.
 # They are both initialised separately, but use the same indexing algorithm.
 # (We *could* pass this data in as JSON from the HTML file, but it would roughly double the size of that HTML file!)
-indexNodes : { nodes : List RenderedNode, siblingIds : List Nat }, Html state -> { nodes : List RenderedNode, siblingIds : List Nat }
+indexNodes : { nodes : List RenderedNode, siblingIds : List U64 }, Html state -> { nodes : List RenderedNode, siblingIds : List U64 }
 indexNodes = \{ nodes, siblingIds }, unrendered ->
     when unrendered is
         Text content ->
@@ -667,11 +667,11 @@ expect
     html =
         Element "a" 43 [HtmlAttr "href" "https://www.roc-lang.org/"] [Text "Roc"]
 
-    actual : { nodes : List RenderedNode, siblingIds : List Nat }
+    actual : { nodes : List RenderedNode, siblingIds : List U64 }
     actual =
         indexNodes { nodes: [], siblingIds: [] } html
 
-    expected : { nodes : List RenderedNode, siblingIds : List Nat }
+    expected : { nodes : List RenderedNode, siblingIds : List U64 }
     expected = {
         nodes: [
             RenderedText "Roc",
@@ -762,7 +762,7 @@ expect
         # Sizes don't matter, use zero. We are not creating a HTML string so we don't care what size it would be.
         Element "body" 0 [] [
             Element "h1" 0 [] [Text "The app"],
-            Element "div" 0 [onClickAttr] [Text "The answer is \(num)"],
+            Element "div" 0 [onClickAttr] [Text "The answer is $(num)"],
         ]
 
     app : App State State

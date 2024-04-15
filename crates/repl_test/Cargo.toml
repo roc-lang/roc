@@ -23,6 +23,7 @@ bumpalo.workspace = true
 indoc.workspace = true
 strip-ansi-escapes.workspace = true
 target-lexicon.workspace = true
+regex.workspace = true
 rustyline.workspace = true
 
 [features]

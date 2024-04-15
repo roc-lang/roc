@@ -75,7 +75,7 @@ fn list_int_dealloc() {
                 List.len [list, list, list]
             "#
         ),
-        usize,
+        u64,
         &[
             Deallocated, // list
             Deallocated  // result
@@ -114,7 +114,7 @@ fn list_str_dealloc() {
                 List.len [list, list]
             "#
         ),
-        usize,
+        u64,
         &[
             Deallocated, // s
             Deallocated, // list

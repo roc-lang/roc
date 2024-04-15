@@ -110,3 +110,10 @@ www/examples-main.zip
 www/examples-main
 
 examples/static-site-gen/**/*.html
+
+# glue auto-generated fixture code
+crates/glue/tests/fixtures/*/Cargo.toml
+crates/glue/tests/fixtures/*/build.rs
+crates/glue/tests/fixtures/*/host.c
+crates/glue/tests/fixtures/*/src/main.rs
+crates/glue/tests/fixtures/*/test_glue/

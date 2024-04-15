@@ -687,6 +687,23 @@ fn to_expr_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+        EExpr::UnexpectedComma(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am trying to parse an expression, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("This comma in an invalid position.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNEXPECTED COMMA".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -974,7 +991,7 @@ fn to_str_report<'a>(
                         suggestion("An escaped quote: ", "\\\""),
                         suggestion("An escaped backslash: ", "\\\\"),
                         suggestion("A unicode code point: ", "\\u(00FF)"),
-                        suggestion("An interpolated string: ", "\\(myVariable)"),
+                        suggestion("An interpolated string: ", "$(myVariable)"),
                     ])
                     .indent(4),
             ]);
@@ -1021,7 +1038,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("\"The count is \\(count\\)\""),
+                    alloc.parser_suggestion("\"The count is $(count)\""),
                     alloc.reflow("."),
                 ]),
             ]);
@@ -1098,9 +1115,9 @@ fn to_str_report<'a>(
                 ESingleQuote::InterpolationNotAllowed => {
                     alloc.stack([
                         alloc.concat([
-                            alloc.reflow("I am part way through parsing this scalar literal (character literal), "),
-                            alloc.reflow("but I encountered a string interpolation like \"\\(this)\", which is not "),
-                            alloc.reflow("allowed in scalar literals."),
+                            alloc.reflow("I am part way through parsing this single-quote literal, "),
+                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region),
                         alloc.concat([
@@ -3910,6 +3927,28 @@ fn to_packages_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+        EPackages::ListEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a list of packages, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
+                alloc
+                    .parser_suggestion("packages { package_name: \"url-or-path\", }")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PACKAGES LIST".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
@@ -3933,7 +3972,9 @@ fn to_space_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow("I encountered a tab character:"),
                 alloc.region(region),
-                alloc.reflow("Tab characters are not allowed, use spaces instead."),
+                alloc.reflow(
+                    "Tab characters are not allowed in Roc code. Please use spaces instead!",
+                ),
             ]);
 
             Report {

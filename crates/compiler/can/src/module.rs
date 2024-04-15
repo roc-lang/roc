@@ -312,7 +312,7 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    crate::operator::desugar_defs(arena, loc_defs, src, &mut None, module_path);
+    crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path);
 
     let mut rigid_variables = RigidVariables::default();
 
@@ -1051,14 +1051,13 @@ fn fix_values_captured_in_closure_expr(
                     debug_assert!(!captures.is_empty());
                     captured_symbols.extend(captures);
                     captured_symbols.swap_remove(i);
-                    // Jump two, because the next element is now one of the newly-added captures,
-                    // which we don't need to check.
-                    i += 2;
 
                     added_captures = true;
-                } else {
-                    i += 1;
                 }
+
+                // Always jump one, because the current element either does not have captures or
+                // is now one of the newly-added captures, which we don't need to check.
+                i += 1;
             }
             if added_captures {
                 // Re-sort, since we've added new captures.

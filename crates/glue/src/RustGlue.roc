@@ -27,10 +27,10 @@ makeGlue = \typesByArch ->
             Str.concat
                 content
                 """
-                #[cfg(target_arch = "\(archStr)")]
-                mod \(archStr);
-                #[cfg(target_arch = "\(archStr)")]
-                pub use \(archStr)::*;
+                #[cfg(target_arch = "$(archStr)")]
+                mod $(archStr);
+                #[cfg(target_arch = "$(archStr)")]
+                pub use $(archStr)::*;
 
                 """
 
@@ -123,7 +123,7 @@ convertTypesToFile = \types ->
     archStr = archName arch
 
     {
-        name: "roc_app/src/\(archStr).rs",
+        name: "roc_app/src/$(archStr).rs",
         content: content |> generateEntryPoints types,
     }
 
@@ -141,15 +141,15 @@ generateEntryPoint = \buf, types, name, id ->
                         type = typeName types argId
                         indexStr = Num.toStr index
 
-                        "arg\(indexStr): \(type)"
+                        "arg$(indexStr): $(type)"
 
                 ret = typeName types rocFn.ret
 
-                "(\(arguments)) -> \(ret)"
+                "($(arguments)) -> $(ret)"
 
             _ ->
                 ret = typeName types id
-                "() -> \(ret)"
+                "() -> $(ret)"
 
     (externSignature, returnTypeName, returnsFn) =
         when Types.shape types id is
@@ -159,20 +159,20 @@ generateEntryPoint = \buf, types, name, id ->
                         type = typeName types argId
 
                         if canDeriveCopy types shape then
-                            "_: \(type)"
+                            "_: $(type)"
                         else
-                            "_: &mut core::mem::ManuallyDrop<\(type)>"
+                            "_: &mut core::mem::ManuallyDrop<$(type)>"
 
                 ret = typeName types rocFn.ret
                 when Types.shape types rocFn.ret is
                     Function _ ->
-                        ("(_: *mut u8, \(arguments))", ret, Bool.true)
-                    _ -> 
-                        ("(_: *mut \(ret), \(arguments))", ret, Bool.false)
+                        ("(_: *mut u8, $(arguments))", ret, Bool.true)
+                    _ ->
+                        ("(_: *mut $(ret), $(arguments))", ret, Bool.false)
 
             _ ->
                 ret = typeName types id
-                ("(_: *mut \(ret))", ret, Bool.false)
+                ("(_: *mut $(ret))", ret, Bool.false)
 
     externArguments =
         when Types.shape types id is
@@ -181,32 +181,32 @@ generateEntryPoint = \buf, types, name, id ->
                     indexStr = Num.toStr index
 
                     if canDeriveCopy types shape then
-                        "arg\(indexStr)"
+                        "arg$(indexStr)"
                     else
-                        "&mut core::mem::ManuallyDrop::new(arg\(indexStr))"
+                        "&mut core::mem::ManuallyDrop::new(arg$(indexStr))"
 
             _ ->
                 ""
 
     if returnsFn then
         """
-        \(buf)
+        $(buf)
 
-        pub fn \(name)\(publicSignature) {
+        pub fn $(name)$(publicSignature) {
             extern "C" {
-                fn roc__\(name)_1_exposed_generic\(externSignature);
-                fn roc__\(name)_1_exposed_size() -> i64;
+                fn roc__$(name)_1_exposed_generic$(externSignature);
+                fn roc__$(name)_1_exposed_size() -> i64;
             }
 
             unsafe {
-                let capacity = roc__\(name)_1_exposed_size() as usize;
+                let capacity = roc__$(name)_1_exposed_size() as usize;
 
-                let mut ret = \(returnTypeName) {
+                let mut ret = $(returnTypeName) {
                     closure_data: Vec::with_capacity(capacity),
                 };
                 ret.closure_data.resize(capacity, 0);
 
-                roc__\(name)_1_exposed_generic(ret.closure_data.as_mut_ptr(), \(externArguments));
+                roc__$(name)_1_exposed_generic(ret.closure_data.as_mut_ptr(), $(externArguments));
 
                 ret
             }
@@ -214,17 +214,17 @@ generateEntryPoint = \buf, types, name, id ->
         """
     else
         """
-        \(buf)
+        $(buf)
 
-        pub fn \(name)\(publicSignature) {
+        pub fn $(name)$(publicSignature) {
             extern "C" {
-                fn roc__\(name)_1_exposed_generic\(externSignature);
+                fn roc__$(name)_1_exposed_generic$(externSignature);
             }
 
             let mut ret = core::mem::MaybeUninit::uninit();
 
             unsafe {
-                roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
+                roc__$(name)_1_exposed_generic(ret.as_mut_ptr(), $(externArguments));
 
                 ret.assume_init()
             }
@@ -241,7 +241,7 @@ generateFunction = \buf, types, rocFn ->
             type = typeName types argId
             indexStr = Num.toStr index
 
-            "arg\(indexStr): \(type)"
+            "arg$(indexStr): $(type)"
 
     externDefArguments =
         withoutUnit =
@@ -249,7 +249,7 @@ generateFunction = \buf, types, rocFn ->
                 type = typeName types argId
                 indexStr = Num.toStr index
 
-                "arg\(indexStr): *const \(type)"
+                "arg$(indexStr): *const $(type)"
 
         if Str.isEmpty withoutUnit then
             # These always have a first argument that's a pointer, even if it's to nothing.
@@ -262,7 +262,7 @@ generateFunction = \buf, types, rocFn ->
             toArgStr rocFn.args types \_argId, _shape, index ->
                 indexStr = Num.toStr index
 
-                "&arg\(indexStr)"
+                "&arg$(indexStr)"
 
         if Str.isEmpty withoutUnit then
             # These always have a first argument that's a pointer, even if it's to nothing.
@@ -275,24 +275,24 @@ generateFunction = \buf, types, rocFn ->
     ret = typeName types rocFn.ret
 
     """
-    \(buf)
+    $(buf)
 
     #[repr(C)]
     #[derive(Debug)]
-    pub struct \(name) {
+    pub struct $(name) {
         closure_data: Vec<u8>,
     }
 
-    impl \(name) {
-        pub fn force_thunk(mut self\(publicComma)\(publicArguments)) -> \(ret) {
+    impl $(name) {
+        pub fn force_thunk(mut self$(publicComma)$(publicArguments)) -> $(ret) {
             extern "C" {
-                fn \(externName)(\(externDefArguments), closure_data: *mut u8, output: *mut \(ret));
+                fn $(externName)($(externDefArguments), closure_data: *mut u8, output: *mut $(ret));
             }
 
             let mut output = core::mem::MaybeUninit::uninit();
 
             unsafe {
-                \(externName)(\(externCallArguments), self.closure_data.as_mut_ptr(), output.as_mut_ptr());
+                $(externName)($(externCallArguments), self.closure_data.as_mut_ptr(), output.as_mut_ptr());
 
                 output.assume_init()
             }
@@ -322,7 +322,7 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
 
     buf
     |> generateDeriveStr types structType IncludeDebug
-    |> Str.concat "#[repr(\(repr))]\n\(pub)struct \(escapedName) {\n"
+    |> Str.concat "#[repr($(repr))]\n$(pub)struct $(escapedName) {\n"
     |> generateStructFields types Public structFields
     |> Str.concat "}\n\n"
 
@@ -344,18 +344,18 @@ generateStructFieldWithoutClosure = \types, visibility ->
                 Public -> "pub"
                 Private -> ""
 
-        Str.concat accum "\(indent)\(pub) \(escapedFieldName): \(typeStr),\n"
+        Str.concat accum "$(indent)$(pub) $(escapedFieldName): $(typeStr),\n"
 
 nameTagUnionPayloadFields = \payloadFields ->
     # Tag union payloads have numbered fields, so we prefix them
     # with an "f" because Rust doesn't allow struct fields to be numbers.
     when payloadFields is
         HasNoClosure fields ->
-            renamedFields = List.map fields \{ name, id } -> { name: "f\(name)", id }
+            renamedFields = List.map fields \{ name, id } -> { name: "f$(name)", id }
             HasNoClosure renamedFields
 
         HasClosure fields ->
-            renamedFields = List.map fields \{ name, id, accessors } -> { name: "f\(name)", id, accessors }
+            renamedFields = List.map fields \{ name, id, accessors } -> { name: "f$(name)", id, accessors }
             HasClosure renamedFields
 
 generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
@@ -365,7 +365,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
 
     buf
     |> generateDeriveStr types enumType ExcludeDebug
-    |> Str.concat "#[repr(u\(reprBits))]\npub enum \(escapedName) {\n"
+    |> Str.concat "#[repr(u$(reprBits))]\npub enum $(escapedName) {\n"
     |> \b -> List.walkWithIndex tags b generateEnumTags
     |>
     # Enums require a custom debug impl to ensure naming is identical on all platforms.
@@ -373,43 +373,43 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
         """
         }
 
-        impl core::fmt::Debug for \(escapedName) {
+        impl core::fmt::Debug for $(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
 
         """
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
-    |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
+    |> Str.concat "$(indent)$(indent)}\n$(indent)}\n}\n\n"
 
 generateEnumTags = \accum, name, index ->
     indexStr = Num.toStr index
 
-    Str.concat accum "\(indent)\(name) = \(indexStr),\n"
+    Str.concat accum "$(indent)$(name) = $(indexStr),\n"
 
 generateEnumTagsDebug = \name ->
     \accum, tagName ->
-        Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
+        Str.concat accum "$(indent)$(indent)$(indent)Self::$(tagName) => f.write_str(\"$(name)::$(tagName)\"),\n"
 
 deriveCloneTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 deriveCloneTagUnion = \buf, tagUnionType, tags ->
     clones =
         List.walk tags "" \accum, { name: tagName } ->
             """
-            \(accum)
-                            \(tagName) => union_\(tagUnionType) {
-                                \(tagName): self.payload.\(tagName).clone(),
+            $(accum)
+                            $(tagName) => union_$(tagUnionType) {
+                                $(tagName): self.payload.$(tagName).clone(),
                             },
             """
 
     """
-    \(buf)
+    $(buf)
 
-    impl Clone for \(tagUnionType) {
+    impl Clone for $(tagUnionType) {
         fn clone(&self) -> Self {
-            use discriminant_\(tagUnionType)::*;
+            use discriminant_$(tagUnionType)::*;
 
             let payload = unsafe {
-                match self.discriminant {\(clones)
+                match self.discriminant {$(clones)
                 }
             };
 
@@ -431,22 +431,22 @@ deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
                     None -> "()"
 
             """
-            \(accum)
-                            \(tagName) => {
-                                let field: &\(type) = &self.payload.\(tagName);
-                                f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
+            $(accum)
+                            $(tagName) => {
+                                let field: &$(type) = &self.payload.$(tagName);
+                                f.debug_tuple("$(tagUnionType)::$(tagName)").field(field).finish()
                             },
             """
 
     """
-    \(buf)
+    $(buf)
 
-    impl core::fmt::Debug for \(tagUnionType) {
+    impl core::fmt::Debug for $(tagUnionType) {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            use discriminant_\(tagUnionType)::*;
+            use discriminant_$(tagUnionType)::*;
 
             unsafe {
-                match self.discriminant {\(checks)
+                match self.discriminant {$(checks)
                 }
             }
         }
@@ -457,9 +457,9 @@ deriveEqTagUnion : Str, Types, Shape, Str -> Str
 deriveEqTagUnion = \buf, types, shape, tagUnionType ->
     if canSupportEqHashOrd types shape then
         """
-        \(buf)
+        $(buf)
 
-        impl Eq for \(tagUnionType) {}
+        impl Eq for $(tagUnionType) {}
         """
     else
         buf
@@ -470,23 +470,23 @@ derivePartialEqTagUnion = \buf, types, shape, tagUnionType, tags ->
         checks =
             List.walk tags "" \accum, { name: tagName } ->
                 """
-                \(accum)
-                                \(tagName) => self.payload.\(tagName) == other.payload.\(tagName),
+                $(accum)
+                                $(tagName) => self.payload.$(tagName) == other.payload.$(tagName),
                 """
 
         """
-        \(buf)
+        $(buf)
 
-        impl PartialEq for \(tagUnionType) {
+        impl PartialEq for $(tagUnionType) {
             fn eq(&self, other: &Self) -> bool {
-                use discriminant_\(tagUnionType)::*;
+                use discriminant_$(tagUnionType)::*;
 
                 if self.discriminant != other.discriminant {
                     return false;
                 }
 
                 unsafe {
-                    match self.discriminant {\(checks)
+                    match self.discriminant {$(checks)
                     }
                 }
             }
@@ -499,9 +499,9 @@ deriveOrdTagUnion : Str, Types, Shape, Str -> Str
 deriveOrdTagUnion = \buf, types, shape, tagUnionType ->
     if canSupportEqHashOrd types shape then
         """
-        \(buf)
+        $(buf)
 
-        impl Ord for \(tagUnionType) {
+        impl Ord for $(tagUnionType) {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 self.partial_cmp(other).unwrap()
             }
@@ -516,16 +516,16 @@ derivePartialOrdTagUnion = \buf, types, shape, tagUnionType, tags ->
         checks =
             List.walk tags "" \accum, { name: tagName } ->
                 """
-                \(accum)
-                                    \(tagName) => self.payload.\(tagName).partial_cmp(&other.payload.\(tagName)),
+                $(accum)
+                                    $(tagName) => self.payload.$(tagName).partial_cmp(&other.payload.$(tagName)),
                 """
 
         """
-        \(buf)
+        $(buf)
 
-        impl PartialOrd for \(tagUnionType) {
+        impl PartialOrd for $(tagUnionType) {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                use discriminant_\(tagUnionType)::*;
+                use discriminant_$(tagUnionType)::*;
 
                 use std::cmp::Ordering::*;
 
@@ -533,7 +533,7 @@ derivePartialOrdTagUnion = \buf, types, shape, tagUnionType, tags ->
                     Less => Option::Some(Less),
                     Greater => Option::Some(Greater),
                     Equal => unsafe {
-                        match self.discriminant {\(checks)
+                        match self.discriminant {$(checks)
                         }
                     },
                 }
@@ -549,19 +549,19 @@ deriveHashTagUnion = \buf, types, shape, tagUnionType, tags ->
         checks =
             List.walk tags "" \accum, { name: tagName } ->
                 """
-                \(accum)
-                                \(tagName) => self.payload.\(tagName).hash(state),
+                $(accum)
+                                $(tagName) => self.payload.$(tagName).hash(state),
                 """
 
         """
-        \(buf)
+        $(buf)
 
-        impl core::hash::Hash for \(tagUnionType) {
+        impl core::hash::Hash for $(tagUnionType) {
             fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-                use discriminant_\(tagUnionType)::*;
+                use discriminant_$(tagUnionType)::*;
 
                 unsafe {
-                    match self.discriminant {\(checks)
+                    match self.discriminant {$(checks)
                     }
                 }
             }
@@ -573,7 +573,7 @@ deriveHashTagUnion = \buf, types, shape, tagUnionType, tags ->
 generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateConstructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-    |> Str.concat "\n\nimpl \(tagUnionType) {"
+    |> Str.concat "\n\nimpl $(tagUnionType) {"
     |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
     |> Str.concat "\n}\n\n"
 
@@ -582,13 +582,13 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
     when optPayload is
         None ->
             """
-            \(buf)
+            $(buf)
 
-                pub fn \(name)() -> Self {
+                pub fn $(name)() -> Self {
                     Self {
-                        discriminant: discriminant_\(tagUnionType)::\(name),
-                        payload: union_\(tagUnionType) {
-                            \(name): (),
+                        discriminant: discriminant_$(tagUnionType)::$(name),
+                        payload: union_$(tagUnionType) {
+                            $(name): (),
                         }
                     }
                 }
@@ -605,13 +605,13 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                     "core::mem::ManuallyDrop::new(payload)"
 
             """
-            \(buf)
+            $(buf)
 
-                pub fn \(name)(payload: \(payloadType)) -> Self {
+                pub fn $(name)(payload: $(payloadType)) -> Self {
                     Self {
-                        discriminant: discriminant_\(tagUnionType)::\(name),
-                        payload: union_\(tagUnionType) {
-                            \(name): \(new),
+                        discriminant: discriminant_$(tagUnionType)::$(name),
+                        payload: union_$(tagUnionType) {
+                            $(name): $(new),
                         }
                     }
                 }
@@ -620,7 +620,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
 generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateDestructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-    |> Str.concat "\n\nimpl \(tagUnionType) {"
+    |> Str.concat "\n\nimpl $(tagUnionType) {"
     |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
     |> Str.concat "\n}\n\n"
 
@@ -629,10 +629,10 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
     when optPayload is
         None ->
             """
-            \(buf)
+            $(buf)
 
-                pub fn is_\(name)(&self) -> bool {
-                    matches!(self.discriminant, discriminant_\(tagUnionType)::\(name))
+                pub fn is_$(name)(&self) -> bool {
+                    matches!(self.discriminant, discriminant_$(tagUnionType)::$(name))
                 }
             """
 
@@ -642,28 +642,28 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
 
             take =
                 if canDeriveCopy types shape then
-                    "unsafe { self.payload.\(name) }"
+                    "unsafe { self.payload.$(name) }"
                 else
-                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }"
+                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.$(name)) }"
 
             """
-            \(buf)
+            $(buf)
 
-                pub fn unwrap_\(name)(mut self) -> \(payloadType) {
-                    debug_assert_eq!(self.discriminant, discriminant_\(tagUnionType)::\(name));
-                    \(take)
+                pub fn unwrap_$(name)(mut self) -> $(payloadType) {
+                    debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
+                    $(take)
                 }
 
-                pub fn is_\(name)(&self) -> bool {
-                    matches!(self.discriminant, discriminant_\(tagUnionType)::\(name))
+                pub fn is_$(name)(&self) -> bool {
+                    matches!(self.discriminant, discriminant_$(tagUnionType)::$(name))
                 }
             """
 
 generateNonRecursiveTagUnion : Str, Types, TypeId, Str, List { name : Str, payload : [Some TypeId, None] }, U32, U32 -> Str
 generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset ->
     escapedName = escapeKW name
-    discriminantName = "discriminant_\(escapedName)"
-    unionName = "union_\(escapedName)"
+    discriminantName = "discriminant_$(escapedName)"
+    unionName = "union_$(escapedName)"
     discriminantOffsetStr = Num.toStr discriminantOffset
     tagNames = List.map tags \{ name: n } -> n
     selfMut = "self"
@@ -700,34 +700,34 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
 
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
-    |> Str.concat "#[repr(C, align(\(align)))]\npub union \(unionName) {\n"
+    |> Str.concat "#[repr(C, align($(align)))]\npub union $(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
     |> Str.concat
         """
         }
 
-        const _SIZE_CHECK_\(unionName): () = assert!(core::mem::size_of::<\(unionName)>() == \(sizeOfUnionStr));
-        const _ALIGN_CHECK_\(unionName): () = assert!(core::mem::align_of::<\(unionName)>() == \(alignOfUnionStr));
+        const _SIZE_CHECK_$(unionName): () = assert!(core::mem::size_of::<$(unionName)>() == $(sizeOfUnionStr));
+        const _ALIGN_CHECK_$(unionName): () = assert!(core::mem::align_of::<$(unionName)>() == $(alignOfUnionStr));
 
-        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
-        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
+        const _SIZE_CHECK_$(escapedName): () = assert!(core::mem::size_of::<$(escapedName)>() == $(sizeOfSelf));
+        const _ALIGN_CHECK_$(escapedName): () = assert!(core::mem::align_of::<$(escapedName)>() == $(alignOfSelf));
 
-        impl \(escapedName) {
-            \(discriminantDocComment)
-            pub fn discriminant(&self) -> \(discriminantName) {
+        impl $(escapedName) {
+            $(discriminantDocComment)
+            pub fn discriminant(&self) -> $(discriminantName) {
                 unsafe {
                     let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-                    core::mem::transmute::<u8, \(discriminantName)>(*bytes.as_ptr().add(\(discriminantOffsetStr)))
+                    core::mem::transmute::<u8, $(discriminantName)>(*bytes.as_ptr().add($(discriminantOffsetStr)))
                 }
             }
 
             /// Internal helper
-            fn set_discriminant(&mut self, discriminant: \(discriminantName)) {
-                let discriminant_ptr: *mut \(discriminantName) = (self as *mut \(escapedName)).cast();
+            fn set_discriminant(&mut self, discriminant: $(discriminantName)) {
+                let discriminant_ptr: *mut $(discriminantName) = (self as *mut $(escapedName)).cast();
 
                 unsafe {
-                    *(discriminant_ptr.add(\(discriminantOffsetStr))) = discriminant;
+                    *(discriminant_ptr.add($(discriminantOffsetStr))) = discriminant;
                 }
             }
         }
@@ -737,9 +737,9 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     |> Str.concat
         """
         #[repr(C)]
-        pub struct \(escapedName) {
-            payload: union_\(escapedName),
-            discriminant: discriminant_\(escapedName),
+        pub struct $(escapedName) {
+            payload: union_$(escapedName),
+            discriminant: discriminant_$(escapedName),
         }
         """
     |> deriveCloneTagUnion escapedName tags
@@ -758,7 +758,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
             b
             |> Str.concat
                 """
-                impl Drop for \(escapedName) {
+                impl Drop for $(escapedName) {
                     fn drop(&mut self) {
                         // Drop the payloads
 
@@ -776,7 +776,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
 
 generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
-    discriminantName = "discriminant_\(escapedName)"
+    discriminantName = "discriminant_$(escapedName)"
 
     payloadFields =
         when Types.shape types payload is
@@ -791,65 +791,65 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
     payloadFieldNames =
         commaSeparated "" payloadFields \_, i ->
             n = Num.toStr i
-            "f\(n)"
+            "f$(n)"
 
     constructorArguments =
         commaSeparated "" payloadFields \id, i ->
             n = Num.toStr i
             type = typeName types id
-            "f\(n): \(type)"
+            "f$(n): $(type)"
 
     debugFields =
         payloadFields
         |> List.mapWithIndex \_, i ->
             n = Num.toStr i
-            ".field(&node.f\(n))"
+            ".field(&node.f$(n))"
         |> Str.joinWith ""
 
     buf1 = buf |> generateDiscriminant types discriminantName [tagName] discriminantSize
 
     """
-    \(buf1)
+    $(buf1)
 
     #[repr(transparent)]
     #[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-    pub struct \(escapedName)(roc_std::RocBox<\(name)_\(tagName)>);
+    pub struct $(escapedName)(roc_std::RocBox<$(name)_$(tagName)>);
 
-    impl \(escapedName) {
-        pub fn \(tagName)(\(constructorArguments)) -> Self {
-            let payload = \(name)_\(tagName) { \(payloadFieldNames) };
+    impl $(escapedName) {
+        pub fn $(tagName)($(constructorArguments)) -> Self {
+            let payload = $(name)_$(tagName) { $(payloadFieldNames) };
 
             Self(roc_std::RocBox::new(payload))
         }
     }
 
-    impl core::fmt::Debug for \(escapedName) {
+    impl core::fmt::Debug for $(escapedName) {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             let node = &self.0;
-            f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
+            f.debug_tuple("$(escapedName)::$(tagName)")$(debugFields).finish()
         }
     }
     """
 
 generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
     escapedName = escapeKW tagUnionName
-    discriminantName = "discriminant_\(escapedName)"
+    discriminantName = "discriminant_$(escapedName)"
     tagNames = List.map tags \{ name: n } -> n
     # self = "(&*self.union_pointer())"
     # selfMut = "(&mut *self.union_pointer())"
     # other = "(&*other.union_pointer())"
-    unionName = "union_\(escapedName)"
+    unionName = "union_$(escapedName)"
 
     discriminants =
         tagNames
         |> Str.joinWith ", "
-        |> \b -> "[ \(b) ]"
+        |> \b -> "[ $(b) ]"
 
     nullTagId =
         when nullTagIndex is
             Some index ->
                 n = Num.toStr index
-                "discriminants[\(n)]"
+                "discriminants[$(n)]"
 
             None ->
                 """
@@ -881,15 +881,15 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                     i: i + 1,
                     accum:
                     """
-                    \(accum)
-                        pub fn get_\(tagName)_f\(fieldIndex)(&self) -> &\(fieldTypeName) {
-                            debug_assert!(self.is_\(tagName)());
+                    $(accum)
+                        pub fn get_$(tagName)_f$(fieldIndex)(&self) -> &$(fieldTypeName) {
+                            debug_assert!(self.is_$(tagName)());
 
                             // extern "C" {
                             //     fn foobar(tag_id: u16, field_index: usize) -> usize;
                             // }
 
-                            // let offset = unsafe { foobar(\(fieldIndex)) };
+                            // let offset = unsafe { foobar($(fieldIndex)) };
                             let offset = 0;
                             unsafe { &*self.unmasked_pointer().add(offset).cast() }
                         }
@@ -901,13 +901,13 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         payloadFieldNames =
             commaSeparated "" payloadFields \_, i ->
                 n = Num.toStr i
-                "f\(n)"
+                "f$(n)"
 
         constructorArguments =
             commaSeparated "" payloadFields \payloadId, i ->
                 n = Num.toStr i
                 type = typeName types payloadId
-                "f\(n): \(type)"
+                "f$(n): $(type)"
 
         fixManuallyDrop =
             when optPayload is
@@ -924,37 +924,37 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
 
         if Some (Num.intCast index) == nullTagIndex then
             """
-                pub fn is_\(tagName)(&self) -> bool {
-                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                pub fn is_$(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_$(escapedName)::$(tagName))
                 }
 
-                pub fn \(tagName)(\(constructorArguments)) -> Self {
+                pub fn $(tagName)($(constructorArguments)) -> Self {
                     Self(std::ptr::null_mut())
                 }
             """
         else
             """
-                pub fn is_\(tagName)(&self) -> bool {
-                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                pub fn is_$(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_$(escapedName)::$(tagName))
                 }
 
-                pub fn \(tagName)(\(constructorArguments)) -> Self {
-                    let tag_id = discriminant_\(escapedName)::\(tagName);
+                pub fn $(tagName)($(constructorArguments)) -> Self {
+                    let tag_id = discriminant_$(escapedName)::$(tagName);
 
-                    let payload = \(escapedName)_\(tagName) { \(payloadFieldNames) } ;
+                    let payload = $(escapedName)_$(tagName) { $(payloadFieldNames) } ;
 
-                    let union_payload = union_\(escapedName) { \(tagName): \(fixManuallyDrop) };
+                    let union_payload = union_$(escapedName) { $(tagName): $(fixManuallyDrop) };
 
                     let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(union_payload)) };
 
                     Self((ptr as usize | tag_id as usize) as *mut _)
                 }
-            \(fieldGetters)
+            $(fieldGetters)
 
-                pub fn get_\(tagName)(mut self) -> \(escapedName)_\(tagName) {
-                    debug_assert!(self.is_\(tagName)());
+                pub fn get_$(tagName)(mut self) -> $(escapedName)_$(tagName) {
+                    debug_assert!(self.is_$(tagName)());
 
-                    unsafe { core::mem::ManuallyDrop::take(&mut self.ptr_read_union().\(tagName)) }
+                    unsafe { core::mem::ManuallyDrop::take(&mut self.ptr_read_union().$(tagName)) }
                 }
             """
 
@@ -966,16 +966,16 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     cloneCase = \{ name: tagName }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
-                        \(tagName) => Self::\(tagName)(),
+                        $(tagName) => Self::$(tagName)(),
             """
         else
             """
-                        \(tagName) => {
-                            let tag_id = discriminant_\(escapedName)::\(tagName);
+                        $(tagName) => {
+                            let tag_id = discriminant_$(escapedName)::$(tagName);
 
                             let payload_union = unsafe { self.ptr_read_union() };
-                            let payload = union_\(escapedName) {
-                                \(tagName): unsafe { payload_union.\(tagName).clone() },
+                            let payload = union_$(escapedName) {
+                                $(tagName): unsafe { payload_union.$(tagName).clone() },
                             };
 
                             let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
@@ -992,16 +992,16 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     partialEqCase = \{ name: tagName }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
-                        \(tagName) => true,
+                        $(tagName) => true,
             """
         else
             """
-                        \(tagName) => {
+                        $(tagName) => {
                             let payload_union1 = unsafe { self.ptr_read_union() };
                             let payload_union2 = unsafe { other.ptr_read_union() };
 
                             unsafe {
-                                payload_union1.\(tagName) == payload_union2.\(tagName)
+                                payload_union1.$(tagName) == payload_union2.$(tagName)
                             }
                         },
             """
@@ -1014,21 +1014,21 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     partialEqImpl =
         if canSupportPartialEqOrd types (Types.shape types id) then
             """
-            impl PartialEq for \(escapedName) {
+            impl PartialEq for $(escapedName) {
                 fn eq(&self, other: &Self) -> bool {
-                    use discriminant_\(escapedName)::*;
+                    use discriminant_$(escapedName)::*;
 
                     if self.discriminant() != other.discriminant() {
                         return false;
                     }
 
                     match self.discriminant() {
-                        \(partialEqCases)
+                        $(partialEqCases)
                     }
                 }
             }
 
-            impl Eq for \(escapedName) {}
+            impl Eq for $(escapedName) {}
             """
         else
             ""
@@ -1036,7 +1036,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     debugCase = \{ name: tagName, payload: optPayload }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
-                        \(tagName) => f.debug_tuple("\(escapedName)::\(tagName)").finish(),
+                        $(tagName) => f.debug_tuple("$(escapedName)::$(tagName)").finish(),
             """
         else
             payloadFields =
@@ -1058,15 +1058,15 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                 payloadFields
                 |> List.mapWithIndex \_, i ->
                     n = Num.toStr i
-                    ".field(&payload_union.\(tagName).f\(n))"
+                    ".field(&payload_union.$(tagName).f$(n))"
                 |> Str.joinWith ""
 
             """
-                        \(tagName) => {
+                        $(tagName) => {
                             let payload_union = unsafe { self.ptr_read_union() };
 
                             unsafe {
-                                f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
+                                f.debug_tuple("$(escapedName)::$(tagName)")$(debugFields).finish()
                             }
                         },
             """
@@ -1079,13 +1079,13 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     hashCase = \{ name: tagName }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
-                        \(tagName) => {}
+                        $(tagName) => {}
             """
         else
             """
-                        \(tagName) => {
+                        $(tagName) => {
                             let payload_union = unsafe { self.ptr_read_union() };
-                            unsafe { payload_union.\(tagName).hash(state) };
+                            unsafe { payload_union.$(tagName).hash(state) };
                         },
             """
 
@@ -1097,14 +1097,14 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     hashImpl =
         if canSupportPartialEqOrd types (Types.shape types id) then
             """
-            impl core::hash::Hash for \(escapedName) {
+            impl core::hash::Hash for $(escapedName) {
                 fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-                    use discriminant_\(escapedName)::*;
+                    use discriminant_$(escapedName)::*;
 
                     self.discriminant().hash(state);
 
                     match self.discriminant() {
-                        \(hashCases)
+                        $(hashCases)
                     }
                 }
             }
@@ -1115,16 +1115,16 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     partialOrdCase = \{ name: tagName }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
-                        \(tagName) => std::cmp::Ordering::Equal,
+                        $(tagName) => std::cmp::Ordering::Equal,
             """
         else
             """
-                        \(tagName) => {
+                        $(tagName) => {
                             let payload_union1 = unsafe { self.ptr_read_union() };
                             let payload_union2 = unsafe { other.ptr_read_union() };
 
                             unsafe {
-                                payload_union1.\(tagName).cmp(&payload_union2.\(tagName))
+                                payload_union1.$(tagName).cmp(&payload_union2.$(tagName))
                             }
                         },
             """
@@ -1137,15 +1137,15 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     partialOrdImpl =
         if canSupportPartialEqOrd types (Types.shape types id) then
             """
-            impl PartialOrd for \(escapedName) {
+            impl PartialOrd for $(escapedName) {
                 fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                     Some(<Self as Ord>::cmp(self, other))
                 }
             }
 
-            impl Ord for \(escapedName) {
+            impl Ord for $(escapedName) {
                 fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                    use discriminant_\(escapedName)::*;
+                    use discriminant_$(escapedName)::*;
 
                     use std::cmp::Ordering::*;
 
@@ -1154,7 +1154,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                         Greater => Greater,
                         Equal => unsafe {
                             match self.discriminant() {
-                                \(partialOrdCases)
+                                $(partialOrdCases)
                             }
                         },
                     }
@@ -1172,21 +1172,21 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     |> Str.concat
         """
         #[repr(transparent)]
-        pub struct \(escapedName)(*mut \(unionName));
+        pub struct $(escapedName)(*mut $(unionName));
 
-        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
-        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
+        const _SIZE_CHECK_$(escapedName): () = assert!(core::mem::size_of::<$(escapedName)>() == $(sizeOfSelf));
+        const _ALIGN_CHECK_$(escapedName): () = assert!(core::mem::align_of::<$(escapedName)>() == $(alignOfSelf));
 
-        impl \(escapedName) {
-            pub fn discriminant(&self) -> discriminant_\(escapedName) {
+        impl $(escapedName) {
+            pub fn discriminant(&self) -> discriminant_$(escapedName) {
                 let discriminants = {
-                    use \(discriminantName)::*;
+                    use $(discriminantName)::*;
 
-                    \(discriminants)
+                    $(discriminants)
                 };
 
                 if self.0.is_null() {
-                    \(nullTagId)
+                    $(nullTagId)
                 } else  {
                     match std::mem::size_of::<usize>() {
                         4 => discriminants[self.0 as usize & 0b011],
@@ -1196,7 +1196,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                 }
             }
 
-            fn unmasked_pointer(&self) -> *mut union_\(escapedName) {
+            fn unmasked_pointer(&self) -> *mut union_$(escapedName) {
                 debug_assert!(!self.0.is_null());
 
                 let mask = match std::mem::size_of::<usize>() {
@@ -1205,50 +1205,50 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                     _ => unreachable!(),
                 };
 
-                ((self.0 as usize) & mask) as *mut union_\(escapedName)
+                ((self.0 as usize) & mask) as *mut union_$(escapedName)
             }
 
-            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_\(escapedName)> {
+            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_$(escapedName)> {
                 let ptr = self.unmasked_pointer();
 
                 core::mem::ManuallyDrop::new(unsafe { std::ptr::read(ptr) })
             }
 
-            \(constructors)
+            $(constructors)
         }
 
-        impl Clone for \(escapedName) {
+        impl Clone for $(escapedName) {
             fn clone(&self) -> Self {
-                use discriminant_\(escapedName)::*;
+                use discriminant_$(escapedName)::*;
 
                 let discriminant = self.discriminant();
 
                 match discriminant {
-                \(cloneCases)
+                $(cloneCases)
                 }
             }
         }
 
-        \(partialEqImpl)
+        $(partialEqImpl)
 
-        \(hashImpl)
+        $(hashImpl)
 
-        \(partialOrdImpl)
+        $(partialOrdImpl)
 
 
-        impl core::fmt::Debug for \(escapedName) {
+        impl core::fmt::Debug for $(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                use discriminant_\(escapedName)::*;
+                use discriminant_$(escapedName)::*;
 
                 match self.discriminant() {
-                    \(debugCases)
+                    $(debugCases)
                 }
             }
         }
 
 
         #[repr(C)]
-        union \(unionName) {
+        union $(unionName) {
         """
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
@@ -1262,7 +1262,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
                 # just drop the pointer.
                 buf
                 |> writeIndents indents
-                |> Str.concat "unsafe { core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer).\(name)); }"
+                |> Str.concat "unsafe { core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer).$(name)); }"
 
             Err ListWasEmpty ->
                 crash "unreachable"
@@ -1271,7 +1271,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotSupportCopy types (Types.shape types id) ->
-                    "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) },"
+                    "unsafe { core::mem::ManuallyDrop::drop(&mut $(selfMut).payload.$(name)) },"
 
                 _ ->
                     # If it had no payload, or if the payload had no pointers,
@@ -1294,7 +1294,7 @@ writeTagImpls = \buf, tags, discriminantName, indents, f ->
             branchStr = f name payload
             accum
             |> writeIndents (indents + 1)
-            |> Str.concat "\(discriminantName)::\(name) => \(branchStr)\n"
+            |> Str.concat "$(discriminantName)::$(name) => $(branchStr)\n"
     |> writeIndents indents
     |> Str.concat "}\n"
 
@@ -1313,7 +1313,7 @@ generateTagUnionSizer = \buf, types, id, tags ->
         size = getSizeRoundedToAlignment types id
         sizeStr = Num.toStr size
 
-        Str.concat buf "\(indent)_sizer: [u8; \(sizeStr)],\n"
+        Str.concat buf "$(indent)_sizer: [u8; $(sizeStr)],\n"
     else
         buf
 
@@ -1348,24 +1348,30 @@ generateUnionField = \types ->
                         # types with pointers need ManuallyDrop
                         # because rust unions don't (and can't)
                         # know how to drop them automatically!
-                        "core::mem::ManuallyDrop<\(typeStr)>"
+                        "core::mem::ManuallyDrop<$(typeStr)>"
                     else
                         typeStr
 
-                Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
+                Str.concat accum "$(indent)$(escapedFieldName): $(fullTypeStr),\n"
 
             None ->
                 # use unit as the payload
-                Str.concat accum "\(indent)\(escapedFieldName): (),\n"
+                Str.concat accum "$(indent)$(escapedFieldName): (),\n"
 
-commaSeparated : Str, List a, (a, Nat -> Str) -> Str
+commaSeparated : Str, List a, (a, U64 -> Str) -> Str
 commaSeparated = \buf, items, step ->
-    length = List.len items
-    List.walk items { buf, count: 0 } \accum, item ->
+
+    length = List.len items |> Num.intCast
+
+    help : { buf : Str, count : U64 }, a -> { buf : Str, count : U64 }
+    help = \accum, item ->
         if accum.count + 1 == length then
             { buf: Str.concat accum.buf (step item accum.count), count: length }
         else
             { buf: Str.concat accum.buf (step item accum.count) |> Str.concat ", ", count: accum.count + 1 }
+
+    items
+    |> List.walk { buf, count: 0 } help
     |> .buf
 
 generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
@@ -1383,19 +1389,19 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
     payloadFieldNames =
         commaSeparated "" payloadFields \_, i ->
             n = Num.toStr i
-            "f\(n)"
+            "f$(n)"
 
     constructorArguments =
         commaSeparated "" payloadFields \id, i ->
             n = Num.toStr i
             type = typeName types id
-            "f\(n): \(type)"
+            "f$(n): $(type)"
 
     debugFields =
         payloadFields
         |> List.mapWithIndex \_, i ->
             n = Num.toStr i
-            ".field(&node.f\(n))"
+            ".field(&node.f$(n))"
         |> Str.joinWith ""
 
     discriminant =
@@ -1403,18 +1409,18 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             FirstTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                pub enum discriminant_\(name) {
-                    \(nullTag) = 0,
-                    \(nonNullTag) = 1,
+                pub enum discriminant_$(name) {
+                    $(nullTag) = 0,
+                    $(nonNullTag) = 1,
                 }
                 """
 
             SecondTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                pub enum discriminant_\(name) {
-                    \(nonNullTag) = 0,
-                    \(nullTag) = 1,
+                pub enum discriminant_$(name) {
+                    $(nonNullTag) = 0,
+                    $(nullTag) = 1,
                 }
                 """
 
@@ -1422,67 +1428,67 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
     alignOfSelf = Num.toStr (Types.alignment types tagUnionid)
 
     """
-    \(buf)
+    $(buf)
 
     #[derive(PartialOrd, Ord)]
     #[repr(C)]
-    pub struct \(name)(*mut \(name)_\(nonNullTag));
+    pub struct $(name)(*mut $(name)_$(nonNullTag));
 
-    \(discriminant)
+    $(discriminant)
 
-    const _SIZE_CHECK_\(name): () = assert!(core::mem::size_of::<\(name)>() == \(sizeOfSelf));
-    const _ALIGN_CHECK_\(name): () = assert!(core::mem::align_of::<\(name)>() == \(alignOfSelf));
+    const _SIZE_CHECK_$(name): () = assert!(core::mem::size_of::<$(name)>() == $(sizeOfSelf));
+    const _ALIGN_CHECK_$(name): () = assert!(core::mem::align_of::<$(name)>() == $(alignOfSelf));
 
-    impl \(name) {
-        pub fn \(nullTag)() -> Self {
+    impl $(name) {
+        pub fn $(nullTag)() -> Self {
             Self(core::ptr::null_mut())
         }
 
-        pub fn \(nonNullTag)(\(constructorArguments)) -> Self {
-            let payload = \(name)_\(nonNullTag) { \(payloadFieldNames) };
+        pub fn $(nonNullTag)($(constructorArguments)) -> Self {
+            let payload = $(name)_$(nonNullTag) { $(payloadFieldNames) };
 
             let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
 
             Self(ptr)
         }
 
-        pub fn discriminant(&self) -> discriminant_\(name) {
-            if self.is_\(nullTag)() {
-                discriminant_\(name)::\(nullTag)
+        pub fn discriminant(&self) -> discriminant_$(name) {
+            if self.is_$(nullTag)() {
+                discriminant_$(name)::$(nullTag)
             } else {
-                discriminant_\(name)::\(nonNullTag)
+                discriminant_$(name)::$(nonNullTag)
             }
         }
 
-        pub fn is_\(nullTag)(&self) -> bool {
+        pub fn is_$(nullTag)(&self) -> bool {
             self.0.is_null()
         }
 
-        pub fn is_\(nonNullTag)(&self) -> bool {
+        pub fn is_$(nonNullTag)(&self) -> bool {
             !self.0.is_null()
         }
     }
 
-    impl core::fmt::Debug for \(name) {
+    impl core::fmt::Debug for $(name) {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            if self.is_\(nullTag)() {
-                f.debug_tuple("\(name)::\(nullTag)").finish()
+            if self.is_$(nullTag)() {
+                f.debug_tuple("$(name)::$(nullTag)").finish()
             } else {
                 let node = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
-                f.debug_tuple("\(name)::\(nonNullTag)")\(debugFields).finish()
+                f.debug_tuple("$(name)::$(nonNullTag)")$(debugFields).finish()
             }
         }
     }
 
-    impl Clone for \(name) {
+    impl Clone for $(name) {
         fn clone(&self) -> Self {
-            if self.is_\(nullTag)() {
-                Self::\(nullTag)()
+            if self.is_$(nullTag)() {
+                Self::$(nullTag)()
             } else {
                 use std::ops::Deref;
 
                 let node_ref = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
-                let payload : \(name)_\(nonNullTag) = (node_ref.deref()).clone();
+                let payload : $(name)_$(nonNullTag) = (node_ref.deref()).clone();
 
                 let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
 
@@ -1491,13 +1497,13 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
         }
     }
 
-    impl PartialEq for \(name) {
+    impl PartialEq for $(name) {
         fn eq(&self, other: &Self) -> bool {
             if self.discriminant() != other.discriminant() {
                 return false;
             }
 
-            if self.is_\(nullTag)() {
+            if self.is_$(nullTag)() {
                 return true;
             }
 
@@ -1508,13 +1514,13 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
         }
     }
 
-    impl Eq for \(name) {}
+    impl Eq for $(name) {}
 
-    impl core::hash::Hash for \(name) {
+    impl core::hash::Hash for $(name) {
         fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
             self.discriminant().hash(state);
 
-            if self.is_\(nonNullTag)() {
+            if self.is_$(nonNullTag)() {
                 let payload = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
                 payload.hash(state);
             }
@@ -1543,7 +1549,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payload ->
                 List.mapWithIndex fields \{ id }, index ->
                     indexStr = Num.toStr index
 
-                    { name: "f\(indexStr)", id }
+                    { name: "f$(indexStr)", id }
                 |> HasNoClosure
             asStructType =
                 Struct {
@@ -1553,7 +1559,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payload ->
 
             buf
             |> generateDeriveStr types asStructType ExcludeDebug
-            |> Str.concat "#[repr(\(repr))]\npub struct \(escapedName) "
+            |> Str.concat "#[repr($(repr))]\npub struct $(escapedName) "
             |> \b ->
                 if List.isEmpty fields then
                     generateZeroElementSingleTagStruct b escapedName tagName
@@ -1570,7 +1576,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
     |> Str.concat "}\n\n"
     |> Str.concat
         """
-        impl \(name) {
+        impl $(name) {
 
         """
     |> \b ->
@@ -1583,18 +1589,18 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             |> List.mapWithIndex \fieldTypeName, index ->
                 indexStr = Num.toStr index
 
-                "f\(indexStr): \(fieldTypeName)"
+                "f$(indexStr): $(fieldTypeName)"
         fields =
             payloadFields
             |> List.mapWithIndex \_, index ->
                 indexStr = Num.toStr index
 
-                "f\(indexStr)"
+                "f$(indexStr)"
 
         fieldAccesses =
             fields
             |> List.map \field ->
-                "self.\(field)"
+                "self.$(field)"
 
         {
             b,
@@ -1605,18 +1611,18 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         }
     |> \{ b, args, fields, fieldTypes, fieldAccesses } ->
         argsStr = Str.joinWith args ", "
-        fieldsStr = Str.joinWith fields "\n\(indent)\(indent)\(indent)"
+        fieldsStr = Str.joinWith fields ",\n$(indent)$(indent)$(indent)"
 
         {
             b: Str.concat
                 b
                 """
-                \(indent)/// A tag named ``\(tagName)``, with the given payload.
-                \(indent)pub fn \(tagName)(\(argsStr)) -> Self {
-                \(indent)    Self {
-                \(indent)        \(fieldsStr)
-                \(indent)    }
-                \(indent)}
+                $(indent)/// A tag named ``$(tagName)``, with the given payload.
+                $(indent)pub fn $(tagName)($(argsStr)) -> Self {
+                $(indent)    Self {
+                $(indent)        $(fieldsStr)
+                $(indent)    }
+                $(indent)}
 
 
                 """,
@@ -1631,11 +1637,11 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             b: Str.concat
                 b
                 """
-                \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
-                \(indent)/// convert it to `\(tagName)`'s payload.
-                \(indent)pub fn into_\(tagName)(self) -> \(retType) {
-                \(indent)    \(retExpr)
-                \(indent)}
+                $(indent)/// Since `$(name)` only has one tag (namely, `$(tagName)`),
+                $(indent)/// convert it to `$(tagName)`'s payload.
+                $(indent)pub fn into_$(tagName)(self) -> $(retType) {
+                $(indent)    $(retExpr)
+                $(indent)}
 
 
                 """,
@@ -1645,21 +1651,21 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
     |> \{ b, fieldTypes, fieldAccesses } ->
         retType =
             fieldTypes
-            |> List.map \ft -> "&\(ft)"
+            |> List.map \ft -> "&$(ft)"
             |> asRustTuple
         retExpr =
             fieldAccesses
-            |> List.map \fa -> "&\(fa)"
+            |> List.map \fa -> "&$(fa)"
             |> asRustTuple
 
         Str.concat
             b
             """
-            \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
-            \(indent)/// convert it to `\(tagName)`'s payload.
-            \(indent)pub fn as_\(tagName)(&self) -> \(retType) {
-            \(indent)    \(retExpr)
-            \(indent)}
+            $(indent)/// Since `$(name)` only has one tag (namely, `$(tagName)`),
+            $(indent)/// convert it to `$(tagName)`'s payload.
+            $(indent)pub fn as_$(tagName)(&self) -> $(retType) {
+            $(indent)    $(retExpr)
+            $(indent)}
 
             """
     |> Str.concat
@@ -1667,9 +1673,9 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         }
 
 
-        impl core::fmt::Debug for \(name) {
+        impl core::fmt::Debug for $(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.debug_tuple("\(name)::\(tagName)")
+                f.debug_tuple("$(name)::$(tagName)")
 
         """
     |> \b ->
@@ -1677,7 +1683,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         |> List.mapWithIndex \_, index ->
             indexStr = Num.toStr index
 
-            "\(indent)\(indent)\(indent)\(indent).field(&self.f\(indexStr))\n"
+            "$(indent)$(indent)$(indent)$(indent).field(&self.f$(indexStr))\n"
         |> List.walk b Str.concat
     |> Str.concat
         """
@@ -1696,7 +1702,7 @@ asRustTuple = \list ->
     if List.len list == 1 then
         joined
     else
-        "(\(joined))"
+        "($(joined))"
 
 generateZeroElementSingleTagStruct = \buf, name, tagName ->
     # A single tag with no payload is a zero-sized unit type, so
@@ -1705,26 +1711,26 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
     |> Str.concat "();\n\n"
     |> Str.concat
         """
-        impl \(name) {
-            /// A tag named \(tagName), which has no payload.
-            pub const \(tagName): Self = Self();
+        impl $(name) {
+            /// A tag named $(tagName), which has no payload.
+            pub const $(tagName): Self = Self();
 
-            /// Other `into_` methods return a payload, but since \(tagName) tag
+            /// Other `into_` methods return a payload, but since $(tagName) tag
             /// has no payload, this does nothing and is only here for completeness.
-            pub fn into_\(tagName)(self) {
+            pub fn into_$(tagName)(self) {
                 ()
             }
 
-            /// Other `as_` methods return a payload, but since \(tagName) tag
+            /// Other `as_` methods return a payload, but since $(tagName) tag
             /// has no payload, this does nothing and is only here for completeness.
-            pub fn as_\(tagName)(&self) {
+            pub fn as_$(tagName)(&self) {
                 ()
             }
         }
 
-        impl core::fmt::Debug for \(name) {
+        impl core::fmt::Debug for $(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.write_str("\(name)::\(tagName)")
+                f.write_str("$(name)::$(tagName)")
             }
         }
 
@@ -1971,28 +1977,28 @@ typeName = \types, id ->
             keyName = typeName types key
             valueName = typeName types value
 
-            "roc_std::RocDict<\(keyName), \(valueName)>"
+            "roc_std::RocDict<$(keyName), $(valueName)>"
 
         RocSet elem ->
             elemName = typeName types elem
 
-            "roc_std::RocSet<\(elemName)>"
+            "roc_std::RocSet<$(elemName)>"
 
         RocList elem ->
             elemName = typeName types elem
 
-            "roc_std::RocList<\(elemName)>"
+            "roc_std::RocList<$(elemName)>"
 
         RocBox elem ->
             elemName = typeName types elem
 
-            "roc_std::RocBox<\(elemName)>"
+            "roc_std::RocBox<$(elemName)>"
 
         RocResult ok err ->
             okName = typeName types ok
             errName = typeName types err
 
-            "roc_std::RocResult<\(okName), \(errName)>"
+            "roc_std::RocResult<$(okName), $(errName)>"
 
         RecursivePointer content ->
             typeName types content
@@ -2057,9 +2063,9 @@ fileHeader =
     #![allow(clippy::missing_safety_doc)]
     #![allow(clippy::let_and_return)]
     #![allow(clippy::missing_safety_doc)]
-    #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::needless_borrow)]
     #![allow(clippy::clone_on_copy)]
+    #![allow(clippy::incorrect_partial_ord_impl_on_ord_type)]
 
 
 
@@ -2127,7 +2133,7 @@ escapeKW = \input ->
     # https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html
     # another design would be to add an underscore after it; this is an experiment!
     if Set.contains reservedKeywords input then
-        "r#\(input)"
+        "r#$(input)"
     else
         input
 
@@ -2142,7 +2148,7 @@ isUnit = \shape ->
         Unit -> Bool.true
         _ -> Bool.false
 
-toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
+toArgStr : List TypeId, Types, (TypeId, Shape, U64 -> Str) -> Str
 toArgStr = \args, types, fmt ->
     List.walkWithIndex args "" \state, argId, index ->
         shape = Types.shape types argId

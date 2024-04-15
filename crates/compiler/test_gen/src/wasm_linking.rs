@@ -2,7 +2,7 @@
 
 use bumpalo::Bump;
 use roc_gen_wasm::Env;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::fs;
 use std::process::Command;
 
@@ -259,7 +259,7 @@ fn test_help(
     dump_filename: &str,
 ) {
     let arena = Bump::new();
-    let mut layout_interner = STLayoutInterner::with_capacity(4, TargetInfo::default_wasm32());
+    let mut layout_interner = STLayoutInterner::with_capacity(4, Target::Wasm32);
 
     let BackendInputs {
         env,

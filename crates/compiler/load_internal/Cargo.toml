@@ -40,7 +40,7 @@ parking_lot.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
-roc_test_utils = { path = "../../test_utils" }
+roc_test_utils_dir = { path = "../../test_utils_dir" }
 
 indoc.workspace = true
 maplit.workspace = true

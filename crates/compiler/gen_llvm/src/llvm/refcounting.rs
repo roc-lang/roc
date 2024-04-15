@@ -80,7 +80,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = match env.target_info.ptr_width() {
+        let one = match env.target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => {
                 env.context.i32_type().const_int(i32::MIN as u64, false)
             }
@@ -128,7 +128,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     ) {
         let alignment = layout
             .allocation_alignment_bytes(layout_interner)
-            .max(env.target_info.ptr_width() as u32);
+            .max(env.target.ptr_width() as u32);
 
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
@@ -1034,7 +1034,7 @@ pub fn build_header_help<'ctx>(
 
     // this should be `Linkage::Private`, but that will remove all of the code for the inc/dec
     // functions on windows. LLVM just does not emit the assembly for them. Investigate why this is
-    let linkage = if let roc_target::OperatingSystem::Windows = env.target_info.operating_system {
+    let linkage = if let roc_target::OperatingSystem::Windows = env.target.operating_system() {
         Linkage::External
     } else {
         Linkage::Private
@@ -1162,7 +1162,7 @@ fn build_rec_union_help<'a, 'ctx>(
 
     debug_assert!(arg_val.is_pointer_value());
     let current_tag_id = get_tag_id(env, layout_interner, fn_val, &union_layout, arg_val);
-    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.target_info) {
+    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.target) {
         tag_pointer_clear_tag_id(env, arg_val.into_pointer_value())
     } else {
         arg_val.into_pointer_value()

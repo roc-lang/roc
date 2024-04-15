@@ -23,9 +23,5 @@ roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
 
 bumpalo.workspace = true
-peg.workspace = true
 pulldown-cmark.workspace = true
 snafu.workspace = true
-
-[dev-dependencies]
-pretty_assertions.workspace = true

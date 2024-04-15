@@ -31,7 +31,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::subs::{
     instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
     StorageSubs, Subs, Variable, VariableSubsSlice,
@@ -818,7 +818,7 @@ type NumberSpecializations<'a> = VecMap<InLayout<'a>, (Symbol, UseDepth)>;
 ///  n = 1
 ///  use1 : U8
 ///  use1 = 1
-///  use2 : Nat
+///  use2 : Dec
 ///  use2 = 2
 ///
 /// We keep track of the specializations of `myTag` and create fresh symbols when there is more
@@ -1032,9 +1032,7 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
-        let raw_layout = layout_cache
-            .raw_from_var(env.arena, annotation, env.subs)
-            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
+        let raw_layout = layout_cache.raw_from_var(env.arena, annotation, env.subs)?;
 
         let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
@@ -1356,7 +1354,7 @@ pub struct Env<'a, 'i> {
     pub expectation_subs: Option<&'i mut Subs>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub target_info: TargetInfo,
+    pub target: Target,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
     // TODO: WorldAbilities and exposed_by_module share things, think about how to combine them
@@ -3120,8 +3118,7 @@ fn specialize_host_specializations<'a>(
             let symbol = env.unique_symbol();
             let lambda_name = LambdaName::no_niche(symbol);
 
-            let mut layout_env =
-                layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+            let mut layout_env = layout::Env::from_components(layout_cache, env.subs, env.arena);
             let lambda_set = env.subs.get_lambda_set(var);
             let raw_function_layout =
                 RawFunctionLayout::from_var(&mut layout_env, lambda_set.ambient_function)
@@ -4542,12 +4539,8 @@ pub fn with_hole<'a>(
             tuple_var, elems, ..
         } => {
             let sorted_elems_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_tuple_elems(&mut layout_env, tuple_var)
             };
             let sorted_elems = match sorted_elems_result {
@@ -4577,12 +4570,8 @@ pub fn with_hole<'a>(
             ..
         } => {
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, record_var)
             };
             let sorted_fields = match sorted_fields_result {
@@ -4864,9 +4853,10 @@ pub fn with_hole<'a>(
 
             let mut symbol_exprs = Vec::with_capacity_in(loc_elems.len(), env.arena);
 
-            let elem_layout = layout_cache
-                .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
+            let elem_layout = match layout_cache.from_var(env.arena, elem_var, env.subs) {
+                Ok(elem_layout) => elem_layout,
+                Err(_) => return runtime_error(env, "invalid list element type"),
+            };
 
             for arg_expr in loc_elems.into_iter() {
                 if let Some(literal) =
@@ -4916,12 +4906,8 @@ pub fn with_hole<'a>(
             ..
         } => {
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, record_var)
             };
             let sorted_fields = match sorted_fields_result {
@@ -5029,12 +5015,8 @@ pub fn with_hole<'a>(
             ..
         } => {
             let sorted_elems_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_tuple_elems(&mut layout_env, tuple_var)
             };
             let sorted_elems = match sorted_elems_result {
@@ -5142,12 +5124,8 @@ pub fn with_hole<'a>(
             // This has the benefit that we don't need to do anything special for reference
             // counting
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, record_var)
             };
 
@@ -5155,6 +5133,21 @@ pub fn with_hole<'a>(
                 Ok(fields) => fields,
                 Err(_) => return runtime_error(env, "Can't update record with improper layout"),
             };
+
+            let sorted_fields_filtered =
+                sorted_fields
+                    .iter()
+                    .filter_map(|(label, _, opt_field_layout)| {
+                        match opt_field_layout {
+                            Ok(_) => Some(label),
+                            Err(_) => {
+                                debug_assert!(!updates.contains_key(label));
+                                // this was an optional field, and now does not exist!
+                                None
+                            }
+                        }
+                    });
+            let sorted_fields = Vec::from_iter_in(sorted_fields_filtered, env.arena);
 
             let single_field_struct = sorted_fields.len() == 1;
 
@@ -5164,44 +5157,38 @@ pub fn with_hole<'a>(
             let mut new_struct_symbols = Vec::with_capacity_in(sorted_fields.len(), env.arena);
             // Information about the fields that are being updated
             let mut fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
-            let mut index = 0;
-            for (label, _, opt_field_layout) in sorted_fields.iter() {
-                let record_index = (structure, index);
 
-                match opt_field_layout {
-                    Err(_) => {
-                        debug_assert!(!updates.contains_key(label));
-                        // this was an optional field, and now does not exist!
-                        // do not increment `index`!
-                    }
-                    Ok(_field_layout) => {
-                        current_struct_indexing.push(record_index);
+            // Create a symbol for each of the fields as they might be referenced later.
+            // The struct with a single field is optimized in such a way that replacing later indexing will cause an incorrect IR.
+            // Thus, only insert these struct_indices if there is more than one field in the struct.
+            if !single_field_struct {
+                for index in 0..sorted_fields.len() {
+                    let record_index = (structure, index as u64);
 
-                        // The struct with a single field is optimized in such a way that replacing later indexing will cause an incorrect IR.
-                        // Thus, only insert these struct_indices if there is more than one field in the struct.
-                        if !single_field_struct {
-                            let original_struct_symbol = env.unique_symbol();
-                            env.struct_indexing
-                                .insert(record_index, original_struct_symbol);
-                        }
-                        if let Some(field) = updates.get(label) {
-                            let new_struct_symbol = possible_reuse_symbol_or_specialize(
-                                env,
-                                procs,
-                                layout_cache,
-                                &field.loc_expr.value,
-                                field.var,
-                            );
-                            new_struct_symbols.push(new_struct_symbol);
-                            fields.push(UpdateExisting(field));
-                        } else {
-                            new_struct_symbols
-                                .push(*env.struct_indexing.get(record_index).unwrap());
-                            fields.push(CopyExisting);
-                        }
+                    current_struct_indexing.push(record_index);
 
-                        index += 1;
-                    }
+                    let original_struct_symbol = env.unique_symbol();
+                    env.struct_indexing
+                        .insert(record_index, original_struct_symbol);
+                }
+            }
+
+            for (index, label) in sorted_fields.iter().enumerate() {
+                let record_index = (structure, index as u64);
+
+                if let Some(field) = updates.get(label) {
+                    let new_struct_symbol = possible_reuse_symbol_or_specialize(
+                        env,
+                        procs,
+                        layout_cache,
+                        &field.loc_expr.value,
+                        field.var,
+                    );
+                    new_struct_symbols.push(new_struct_symbol);
+                    fields.push(UpdateExisting(field));
+                } else {
+                    new_struct_symbols.push(*env.struct_indexing.get(record_index).unwrap());
+                    fields.push(CopyExisting);
                 }
             }
 
@@ -6368,8 +6355,7 @@ fn convert_tag_union<'a>(
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
     let res_variant = {
-        let mut layout_env =
-            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+        let mut layout_env = layout::Env::from_components(layout_cache, env.subs, env.arena);
         crate::layout::union_sorted_tags(&mut layout_env, variant_var)
     };
     let variant = match res_variant {
@@ -6867,7 +6853,6 @@ fn register_capturing_closure<'a>(
                         args,
                         closure_var,
                         ret,
-                        env.target_info,
                     )
                 };
 
@@ -8046,12 +8031,8 @@ fn can_reuse_symbol<'a>(
             ..
         } => {
             let sorted_fields_result = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 layout::sort_record_fields(&mut layout_env, *record_var)
             };
 

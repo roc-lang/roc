@@ -1,5 +1,5 @@
 app "countdown"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop }]
     provides [main] to pf
 
@@ -13,6 +13,6 @@ tick = \n ->
         _ <- await (Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂")
         Task.ok (Done {})
     else
-        _ <- await (n |> Num.toStr |> \s -> "\(s)..." |> Stdout.line)
+        _ <- await (n |> Num.toStr |> \s -> "$(s)..." |> Stdout.line)
         _ <- await Stdin.line
         Task.ok (Step (n - 1))

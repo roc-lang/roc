@@ -14,11 +14,11 @@ fn build_host() {
         roc_command_utils::root_dir().join("crates/valgrind/zig-platform/main.roc");
 
     // tests always run on the host
-    let target = target_lexicon::Triple::host();
+    let target = target_lexicon::Triple::host().into();
 
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path =
-        platform_main_roc.with_file_name(preprocessed_host_filename(&target).unwrap());
+        platform_main_roc.with_file_name(preprocessed_host_filename(target));
 
     // valgrind does not support avx512 yet: https://bugs.kde.org/show_bug.cgi?id=383010
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -28,7 +28,7 @@ fn build_host() {
 
     build_and_preprocess_host(
         roc_mono::ir::OptLevel::Normal,
-        &target,
+        target,
         &platform_main_roc,
         &preprocessed_host_path,
         roc_linker::ExposedSymbols {
@@ -233,16 +233,6 @@ fn str_capacity_concat() {
 }
 
 #[test]
-fn append_scalar() {
-    valgrind_test(indoc!(
-        r#"
-        Str.appendScalar "abcd" 'A'
-            |> Result.withDefault ""
-        "#
-    ));
-}
-
-#[test]
 fn split_not_present() {
     valgrind_test(indoc!(
         r#"
@@ -355,7 +345,7 @@ fn joinpoint_with_closure() {
                 catSound = makeSound Cat
                 dogSound = makeSound Dog
                 gooseSound = makeSound Goose
-                "Cat: \(catSound), Dog: \(dogSound), Goose: \(gooseSound)"
+                "Cat: $(catSound), Dog: $(dogSound), Goose: $(gooseSound)"
 
             test
         )
@@ -384,7 +374,7 @@ fn joinpoint_with_reuse() {
                 Cons x xs ->
                     strX = f x
                     strXs = printLinkedList xs f
-                    "Cons \(strX) (\(strXs))"
+                    "Cons $(strX) ($(strXs))"
 
             test =
                 newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
@@ -471,7 +461,7 @@ fn tree_rebalance() {
                     sL = nodeInParens left showKey showValue
                     sR = nodeInParens right showKey showValue
 
-                    "Node \(sColor) \(sKey) \(sValue) \(sL) \(sR)"
+                    "Node $(sColor) $(sKey) $(sValue) $(sL) $(sR)"
 
         nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
         nodeInParens = \tree, showKey, showValue ->
@@ -482,7 +472,7 @@ fn tree_rebalance() {
                 Node _ _ _ _ _ ->
                     inner = showRBTree tree showKey showValue
 
-                    "(\(inner))"
+                    "($(inner))"
 
         showColor : NodeColor -> Str
         showColor = \color ->
@@ -531,7 +521,7 @@ fn joinpoint_nullpointer() {
                     Nil -> "Nil"
                     Cons x xs ->
                         strXs = printLinkedList xs
-                        "Cons \(x) (\(strXs))"
+                        "Cons $(x) ($(strXs))"
 
             linkedListHead : LinkedList Str -> LinkedList Str
             linkedListHead = \linkedList ->
@@ -543,7 +533,7 @@ fn joinpoint_nullpointer() {
             test =
                 cons = printLinkedList (linkedListHead (Cons "foo" Nil))
                 nil = printLinkedList (linkedListHead (Nil))
-                "\(cons) - \(nil)"
+                "$(cons) - $(nil)"
 
             test
         )
