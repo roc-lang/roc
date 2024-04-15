@@ -17,6 +17,7 @@ members = [
   "crates/repl_expect",
   "crates/roc_std",
   "crates/test_utils",
+  "crates/test_utils_dir",
   "crates/valgrind",
   "crates/tracing",
   "crates/utils/*",
