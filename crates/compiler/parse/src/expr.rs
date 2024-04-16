@@ -10,11 +10,11 @@ use crate::blankspace::{
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, and, backtrackable, between, byte, byte_indent, increment_min_indent, indented_seq,
-    line_min_indent, loc, map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e,
-    set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes,
-    zero_or_more, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord,
-    EString, EType, EWhen, Either, ParseResult, Parser,
+    self, and, backtrackable, between, byte, byte_indent, either, increment_min_indent,
+    indented_seq, line_min_indent, loc, map, map_with_arena, optional, reset_min_indent, sep_by1,
+    sep_by1_e, set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then,
+    two_bytes, zero_or_more, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern,
+    ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -622,7 +622,7 @@ pub fn parse_single_def<'a>(
 
     let parse_expect_vanilla = crate::parser::keyword(crate::keyword::EXPECT, EExpect::Expect);
     let parse_expect_fx = crate::parser::keyword(crate::keyword::EXPECT_FX, EExpect::Expect);
-    let parse_expect = either!(parse_expect_fx, parse_expect_vanilla);
+    let parse_expect = either(parse_expect_fx, parse_expect_vanilla);
 
     match space0_after_e(crate::pattern::loc_pattern_help(), EPattern::IndentEnd).parse(
         arena,
@@ -2983,12 +2983,12 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
             specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
             and(
                 spaces(),
-                optional(either!(
+                optional(either(
                     and(byte(b':', ERecord::Colon), record_field_expr()),
                     and(
                         byte(b'?', ERecord::QuestionMark),
-                        spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
-                    )
+                        spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
+                    ),
                 )),
             ),
         ),
@@ -3029,12 +3029,12 @@ fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> 
     map_with_arena(
         and(
             spaces(),
-            either!(
+            either(
                 and(
                     two_bytes(b'<', b'-', ERecord::Arrow),
-                    spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
+                    spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
                 ),
-                specialize_err_ref(ERecord::Expr, loc_expr(false))
+                specialize_err_ref(ERecord::Expr, loc_expr(false)),
             ),
         ),
         |arena: &'a bumpalo::Bump, (spaces, either)| match either {

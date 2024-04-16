@@ -2403,7 +2403,7 @@ macro_rules! debug {
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = either!(
+/// let parser = either(
 ///     word("hello", Problem::NotFound),
 ///     word("bye", Problem::NotFound)
 /// );
@@ -2426,27 +2426,25 @@ macro_rules! debug {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! either {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-            match $p1.parse(arena, state, min_indent) {
-                Ok((progress, output, state)) => {
-                    Ok((progress, $crate::parser::Either::First(output), state))
-                }
-                Err((NoProgress, _)) => {
-                    match $p2.parse(arena, original_state.clone(), min_indent) {
-                        Ok((progress, output, state)) => {
-                            Ok((progress, $crate::parser::Either::Second(output), state))
-                        }
-                        Err((progress, fail)) => Err((progress, fail)),
-                    }
-                }
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+pub fn either<'a, OutputLeft, OutputRight, E: 'a>(
+    p1: impl Parser<'a, OutputLeft, E>,
+    p2: impl Parser<'a, OutputRight, E>,
+) -> impl Parser<'a, Either<OutputLeft, OutputRight>, E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| {
+        let original_state = state.clone();
+        match p1.parse(arena, state, min_indent) {
+            Ok((progress, output, state)) => {
+                Ok((progress, crate::parser::Either::First(output), state))
             }
+            Err((NoProgress, _)) => match p2.parse(arena, original_state.clone(), min_indent) {
+                Ok((progress, output, state)) => {
+                    Ok((progress, crate::parser::Either::Second(output), state))
+                }
+                Err((progress, fail)) => Err((progress, fail)),
+            },
+            Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
         }
-    };
+    }
 }
 
 /// Given three parsers, parse them all but ignore the output of the first and last one.

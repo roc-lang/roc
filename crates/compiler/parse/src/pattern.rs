@@ -2,12 +2,12 @@ use crate::ast::{Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
-use crate::parser::Progress::*;
 use crate::parser::{
     self, backtrackable, byte, fail_when, loc, map, map_with_arena, optional, skip_first,
     specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more, EPattern,
     PInParens, PList, PRecord, Parser,
 };
+use crate::parser::{either, Progress::*};
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
 use bumpalo::collections::string::String;
@@ -547,9 +547,9 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
-        let (_, opt_loc_val, state) = optional(either!(
+        let (_, opt_loc_val, state) = optional(either(
             byte(b':', PRecord::Colon),
-            byte(b'?', PRecord::Optional)
+            byte(b'?', PRecord::Optional),
         ))
         .parse(arena, state, min_indent)?;
 

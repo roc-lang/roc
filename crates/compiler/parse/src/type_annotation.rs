@@ -9,8 +9,8 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, increment_min_indent, loc, map, map_with_arena, skip_first,
-    skip_second, succeed, then, zero_or_more, ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, and, either, increment_min_indent, loc, map, map_with_arena,
+    skip_first, skip_second, succeed, then, zero_or_more, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -332,9 +332,9 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
-        let (_, opt_loc_val, state) = optional(either!(
+        let (_, opt_loc_val, state) = optional(either(
             byte(b':', ETypeRecord::Colon),
-            byte(b'?', ETypeRecord::Optional)
+            byte(b'?', ETypeRecord::Optional),
         ))
         .parse(arena, state, min_indent)?;
 
