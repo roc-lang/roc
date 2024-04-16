@@ -2311,39 +2311,39 @@ pub fn zero_or_more<'a, Output, E: 'a>(
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! one_or_more {
-    ($parser:expr, $to_error:expr) => {
-        move |arena, state: State<'a>, min_indent: u32| {
-            use bumpalo::collections::Vec;
+pub fn one_or_more<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+    to_error: impl Fn(Position) -> E,
+) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
+    move |arena, state: State<'a>, min_indent: u32| match parser.parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
+        Ok((_, first_output, next_state)) => {
+            let mut state = next_state;
+            let mut buf = Vec::with_capacity_in(1, arena);
 
-            match $parser.parse(arena, state.clone(), min_indent) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
+            buf.push(first_output);
 
-                    buf.push(first_output);
-
-                    loop {
-                        let old_state = state.clone();
-                        match $parser.parse(arena, state, min_indent) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((NoProgress, _)) => {
-                                return Ok((MadeProgress, buf, old_state));
-                            }
-                            Err((MadeProgress, fail)) => {
-                                return Err((MadeProgress, fail));
-                            }
-                        }
+            loop {
+                let old_state = state.clone();
+                match parser.parse(arena, state, min_indent) {
+                    Ok((_, next_output, next_state)) => {
+                        state = next_state;
+                        buf.push(next_output);
+                    }
+                    Err((NoProgress, _)) => {
+                        return Ok((MadeProgress, buf, old_state));
+                    }
+                    Err((MadeProgress, fail)) => {
+                        return Err((MadeProgress, fail));
                     }
                 }
-                Err((progress, _)) => Err((progress, $to_error(state.pos()))),
             }
         }
-    };
+        Err((progress, _)) => Err((progress, to_error(state.pos()))),
+    }
 }
 
 /// Creates a parser that debug prints the result of parsing.
