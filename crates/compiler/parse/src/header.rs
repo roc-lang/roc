@@ -5,7 +5,8 @@ use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{
-    and, byte, loc, skip_second, specialize_err, EPackageEntry, EPackageName, Parser,
+    and, byte, loc, map_with_arena, skip_second, specialize_err, EPackageEntry, EPackageName,
+    Parser,
 };
 use crate::parser::{optional, then};
 use crate::string_literal;
@@ -339,7 +340,7 @@ pub struct PackageEntry<'a> {
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
-    map_with_arena!(
+    map_with_arena(
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
@@ -349,13 +350,13 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                 skip_second(
                     and(
                         specialize_err(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
-                        space0_e(EPackageEntry::IndentPackage)
+                        space0_e(EPackageEntry::IndentPackage),
                     ),
-                    byte(b':', EPackageEntry::Colon)
+                    byte(b':', EPackageEntry::Colon),
                 ),
-                space0_e(EPackageEntry::IndentPackage)
+                space0_e(EPackageEntry::IndentPackage),
             )),
-            loc(specialize_err(EPackageEntry::BadPackage, package_name()))
+            loc(specialize_err(EPackageEntry::BadPackage, package_name())),
         ),
         move |arena, (opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
@@ -376,7 +377,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
             };
 
             Spaced::Item(entry)
-        }
+        },
     )
 }
 

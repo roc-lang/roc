@@ -11,10 +11,10 @@ use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident}
 use crate::keyword;
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, increment_min_indent, indented_seq,
-    line_min_indent, loc, map, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent,
-    skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes, EClosure,
-    EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen,
-    Either, ParseResult, Parser,
+    line_min_indent, loc, map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e,
+    set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes,
+    EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType,
+    EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -131,10 +131,10 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
 }
 
 fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    map_with_arena!(
+    map_with_arena(
         loc(and(
             specialize_err(EExpr::InParens, loc_expr_in_parens_help()),
-            record_field_access_chain()
+            record_field_access_chain(),
         )),
         move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Accessor<'a>>)>| {
             let Loc {
@@ -153,7 +153,7 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
             }
 
             Loc::at(region, value)
-        }
+        },
     )
 }
 
@@ -189,7 +189,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
-        loc(map_with_arena!(
+        loc(map_with_arena(
             assign_or_destructure_identifier(),
             ident_to_expr
         )),
@@ -212,7 +212,7 @@ fn loc_term_or_underscore<'a>(
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
-        loc(map_with_arena!(
+        loc(map_with_arena(
             assign_or_destructure_identifier(),
             ident_to_expr
         )),
@@ -230,7 +230,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
-        loc(map_with_arena!(
+        loc(map_with_arena(
             assign_or_destructure_identifier(),
             ident_to_expr
         )),
@@ -281,7 +281,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
         },
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
         loc(specialize_err(EExpr::Number, number_literal_help())),
-        loc(map_with_arena!(
+        loc(map_with_arena(
             and(
                 loc(byte(b'!', EExpr::Start)),
                 space0_before_e(loc_term(options), EExpr::IndentStart)
@@ -2359,7 +2359,7 @@ pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
 
 fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     // closure_help_help(options)
-    map_with_arena!(
+    map_with_arena(
         // After the first token, all other tokens must be indented past the start of the line
         indented_seq(
             // All closures start with a '\' - e.g. (\x -> x + 1)
@@ -2384,16 +2384,16 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
                     // Parse the body
                     space0_before_e(
                         specialize_err_ref(EClosure::Body, expr_start(options)),
-                        EClosure::IndentBody
-                    )
-                )
-            )
+                        EClosure::IndentBody,
+                    ),
+                ),
+            ),
         ),
         |arena: &'a Bump, (params, body)| {
             let params: Vec<'a, Loc<Pattern<'a>>> = params;
             let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
             Expr::Closure(params, arena.alloc(body))
-        }
+        },
     )
 }
 
@@ -2403,7 +2403,7 @@ mod when {
 
     /// Parser for when expressions.
     pub fn expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
-        map_with_arena!(
+        map_with_arena(
             and(
                 indented_seq(
                     parser::keyword(keyword::WHEN, EWhen::When),
@@ -2847,7 +2847,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 }
 
 fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
-    map_with_arena!(
+    map_with_arena(
         collection_trailing_sep_e!(
             byte(b'[', EList::Open),
             specialize_err_ref(EList::Expr, loc_expr(false)),
@@ -2858,7 +2858,7 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
         |arena, elements: Collection<'a, _>| {
             let elements = elements.ptrify_items(arena);
             Expr::List(elements)
-        }
+        },
     )
     .trace("list_literal")
 }
@@ -2978,7 +2978,7 @@ impl<'a> Spaceable<'a> for RecordField<'a> {
 pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     use RecordField::*;
 
-    map_with_arena!(
+    map_with_arena(
         and(
             specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
             and(
@@ -2989,8 +2989,8 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                         byte(b'?', ERecord::QuestionMark),
                         spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
                     )
-                ))
-            )
+                )),
+            ),
         ),
         |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
             match opt_loc_val {
@@ -3016,7 +3016,7 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                     }
                 }
             }
-        }
+        },
     )
 }
 
@@ -3026,7 +3026,7 @@ enum RecordFieldExpr<'a> {
 }
 
 fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> {
-    map_with_arena!(
+    map_with_arena(
         and(
             spaces(),
             either!(
@@ -3035,29 +3035,27 @@ fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> 
                     spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
                 ),
                 specialize_err_ref(ERecord::Expr, loc_expr(false))
-            )
+            ),
         ),
-        |arena: &'a bumpalo::Bump, (spaces, either)| {
-            match either {
-                Either::First((_, loc_expr)) => RecordFieldExpr::Apply(spaces, loc_expr),
-                Either::Second(loc_expr) => RecordFieldExpr::Value({
-                    if spaces.is_empty() {
-                        loc_expr
-                    } else {
-                        arena
-                            .alloc(loc_expr.value)
-                            .with_spaces_before(spaces, loc_expr.region)
-                    }
-                }),
-            }
-        }
+        |arena: &'a bumpalo::Bump, (spaces, either)| match either {
+            Either::First((_, loc_expr)) => RecordFieldExpr::Apply(spaces, loc_expr),
+            Either::Second(loc_expr) => RecordFieldExpr::Value({
+                if spaces.is_empty() {
+                    loc_expr
+                } else {
+                    arena
+                        .alloc(loc_expr.value)
+                        .with_spaces_before(spaces, loc_expr.region)
+                }
+            }),
+        },
     )
 }
 
 fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
     specialize_err(
         |_, pos| ERecord::Updateable(pos),
-        map_with_arena!(parse_ident, ident_to_expr),
+        map_with_arena(parse_ident, ident_to_expr),
     )
 }
 
@@ -3184,7 +3182,7 @@ fn apply_expr_access_chain<'a>(
 }
 
 fn string_like_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
-    map_with_arena!(
+    map_with_arena(
         crate::string_literal::parse_str_like_literal(),
         |arena, lit| match lit {
             StrLikeLiteral::Str(s) => Expr::Str(s),
@@ -3192,7 +3190,7 @@ fn string_like_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
                 // TODO: preserve the original escaping
                 Expr::SingleQuote(s.to_str_in(arena))
             }
-        }
+        },
     )
 }
 

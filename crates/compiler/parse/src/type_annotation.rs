@@ -9,8 +9,8 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, increment_min_indent, loc, map, skip_first, skip_second,
-    succeed, then, ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, and, increment_min_indent, loc, map, map_with_arena, skip_first,
+    skip_second, succeed, then, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -116,7 +116,7 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
 }
 
 fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map_with_arena!(
+    map_with_arena(
         and(
             one_of!(
                 loc_wildcard(),
@@ -147,7 +147,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
                     Some
                 ),
                 succeed(None)
-            ]
+            ],
         ),
         |arena: &'a Bump,
          (loc_ann, opt_as): (Loc<TypeAnnotation<'a>>, Option<(&'a [_], TypeHeader<'a>)>)| {
@@ -163,7 +163,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
 
                 None => loc_ann,
             }
-        }
+        },
     )
     .trace("type_annotation:term")
 }
@@ -208,7 +208,7 @@ fn loc_inferred<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
 fn loc_applied_arg<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map_with_arena!(
+    map_with_arena(
         and(
             backtrackable(space0_e(EType::TIndentStart)),
             one_of!(
@@ -225,7 +225,7 @@ fn loc_applied_arg<'a>(
                 )),
                 loc(specialize_err(EType::TApply, concrete_type())),
                 loc(parse_type_variable(stop_at_surface_has))
-            )
+            ),
         ),
         |arena: &'a Bump, (spaces, argument): (&'a [_], Loc<TypeAnnotation<'a>>)| {
             if spaces.is_empty() {
@@ -234,7 +234,7 @@ fn loc_applied_arg<'a>(
                 let Loc { region, value } = argument;
                 arena.alloc(value).with_spaces_before(spaces, region)
             }
-        }
+        },
     )
 }
 

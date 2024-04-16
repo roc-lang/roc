@@ -1457,24 +1457,24 @@ where
 #[macro_export]
 macro_rules! collection_inner {
     ($elem:expr, $delimiter:expr, $space_before:expr) => {
-        map_with_arena!(
+        $crate::parser::map_with_arena(
             $crate::parser::and(
                 $crate::parser::and(
                     $crate::blankspace::spaces(),
                     $crate::parser::trailing_sep_by0(
                         $delimiter,
-                        $crate::blankspace::spaces_before_optional_after($elem,)
-                    )
+                        $crate::blankspace::spaces_before_optional_after($elem),
+                    ),
                 ),
-                $crate::blankspace::spaces()
+                $crate::blankspace::spaces(),
             ),
             |arena: &'a bumpalo::Bump,
              ((spaces, mut parsed_elems), mut final_comments): (
                 (
                     &'a [$crate::ast::CommentOrNewline<'a>],
-                    bumpalo::collections::vec::Vec<'a, Loc<_>>
+                    bumpalo::collections::vec::Vec<'a, Loc<_>>,
                 ),
-                &'a [$crate::ast::CommentOrNewline<'a>]
+                &'a [$crate::ast::CommentOrNewline<'a>],
             )| {
                 if !spaces.is_empty() {
                     if let Some(first) = parsed_elems.first_mut() {
@@ -1490,7 +1490,7 @@ macro_rules! collection_inner {
                     parsed_elems.into_bump_slice(),
                     final_comments,
                 )
-            }
+            },
         )
     };
 }
@@ -2214,53 +2214,6 @@ pub fn map<'a, Output, MappedOutput, E: 'a>(
     }
 }
 
-/// Maps/transforms the `Ok` result of parsing using the given function.
-/// Similar to [`map`], but the transform function also takes a bump allocator.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
-/// # use roc_region::all::Position;
-/// # use roc_parse::map_with_arena;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = map_with_arena!(
-///     word("hello", Problem::NotFound),
-///     |_arena, _output| "new output!"
-/// );
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, "new output!");
-/// assert_eq!(state.pos(), Position::new(5));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// ```
-#[macro_export]
-macro_rules! map_with_arena {
-    ($parser:expr, $transform:expr) => {
-        move |arena, state, min_indent| {
-            #[allow(clippy::redundant_closure_call)]
-            $parser
-                .parse(arena, state, min_indent)
-                .map(|(progress, output, next_state)| {
-                    (progress, $transform(arena, output), next_state)
-                })
-        }
-    };
-}
-
 /// Applies the parser as many times as possible.
 /// This parser will only fail if the given parser makes partial progress.
 #[macro_export]
@@ -2538,9 +2491,6 @@ pub fn between<'a, Before, Inner, After, Err: 'a>(
 /// Maps/transforms the `Ok` result of parsing using the given function.
 /// Similar to [`map`], but the transform function also takes a bump allocator.
 ///
-/// For some reason, some usages won't compile unless they use this instead of the macro version.
-/// This is likely because the lifetime `'a` is not defined at the call site.
-///
 /// # Example
 ///
 /// ```
@@ -2577,14 +2527,14 @@ pub fn map_with_arena<'a, P, F, Before, After, E>(
 ) -> impl Parser<'a, After, E>
 where
     P: Parser<'a, Before, E>,
-    P: 'a,
     F: Fn(&'a Bump, Before) -> After,
-    F: 'a,
-    Before: 'a,
-    After: 'a,
     E: 'a,
 {
-    map_with_arena!(parser, transform)
+    move |arena, state, min_indent| {
+        parser
+            .parse(arena, state, min_indent)
+            .map(|(progress, output, next_state)| (progress, transform(arena, output), next_state))
+    }
 }
 
 /// Creates a new parser that does not progress but still forwards the output of

@@ -4,8 +4,9 @@ use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, backtrackable, byte, fail_when, loc, map, optional, skip_first, specialize_err,
-    specialize_err_ref, then, three_bytes, two_bytes, EPattern, PInParens, PList, PRecord, Parser,
+    self, backtrackable, byte, fail_when, loc, map, map_with_arena, optional, skip_first,
+    specialize_err, specialize_err_ref, then, three_bytes, two_bytes, EPattern, PInParens, PList,
+    PRecord, Parser,
 };
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
@@ -255,7 +256,7 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize_err(
         |_, pos| EPattern::Start(pos),
-        map_with_arena!(
+        map_with_arena(
             crate::string_literal::parse_str_like_literal(),
             |arena, lit| match lit {
                 StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
@@ -263,7 +264,7 @@ fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> 
                     // TODO: preserve the original escaping
                     Pattern::SingleQuote(s.to_str_in(arena))
                 }
-            }
+            },
         ),
     )
 }
