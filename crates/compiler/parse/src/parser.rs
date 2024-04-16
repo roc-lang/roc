@@ -1684,9 +1684,9 @@ macro_rules! record {
     };
 }
 
-/// Similar to [`and`], but we modify the `min_indent` of the second parser
-/// (`parser`) to be 1 greater than the `line_indent()` at the start of the
-/// first parser (`before`).
+/// Similar to [`skip_first`], but we modify the `min_indent` of the second
+/// parser (`parser`) to be 1 greater than the `line_indent()` at the start of
+/// the first parser (`before`).
 pub fn indented_seq<'a, O, E: 'a>(
     before: impl Parser<'a, (), E>,
     parser: impl Parser<'a, O, E>,
