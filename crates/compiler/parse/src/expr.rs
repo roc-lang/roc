@@ -2696,19 +2696,18 @@ impl<'a> Spaceable<'a> for RecordField<'a> {
 }
 
 pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
-    use crate::both;
     use RecordField::*;
 
     map_with_arena!(
         and!(
             specialize_err(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
             and!(
-                optional(both!(
-                    both!(spaces(), byte(b':', ERecord::Colon)),
+                optional(and!(
+                    and!(backtrackable(spaces()), byte(b':', ERecord::Colon)),
                     record_field_expr()
                 )),
-                optional(both!(
-                    both!(spaces(), byte(b'?', ERecord::QuestionMark)),
+                optional(and!(
+                    and!(backtrackable(spaces()), byte(b'?', ERecord::QuestionMark)),
                     spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false)))
                 ))
             )
@@ -2743,21 +2742,6 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
         }
     )
     .trace("record_field")
-}
-
-#[macro_export]
-macro_rules! both {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                Err((p2, fail)) => Err((p1.and(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
 }
 
 #[cfg(test)]

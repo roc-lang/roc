@@ -4,6 +4,6 @@ app "helloWorld"
     provides [main] to pf
 
 main =
-    { foobar ? 12340.0 } = {}
+    { foobar: k2 } = { foobar: 1234 }
 
     Stdout.line "Hello, World!"
