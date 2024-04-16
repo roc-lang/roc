@@ -9,8 +9,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral, StrSegment, ValueDef,
-    WhenBranch,
+    wrap_in_task_ok, AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral,
+    StrSegment, ValueDef, WhenBranch,
 };
 use roc_region::all::{LineInfo, Loc, Region};
 
@@ -189,33 +189,16 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_arg,
                     sub_pat,
                     sub_new,
-                }) => {
-                    let ok_wrapped_return = arena.alloc(Loc::at(
+                }) => Body(
+                    loc_pattern,
+                    apply_task_await(
+                        arena,
                         loc_expr.region,
-                        Expr::Apply(
-                            arena.alloc(Loc::at(
-                                loc_expr.region,
-                                Expr::Var {
-                                    module_name: ModuleName::TASK,
-                                    ident: "ok",
-                                    suffixed: 0,
-                                },
-                            )),
-                            arena.alloc([sub_new]),
-                            CalledVia::BangSuffix,
-                        ),
-                    ));
-                    Body(
-                        loc_pattern,
-                        apply_task_await(
-                            arena,
-                            loc_expr.region,
-                            sub_arg,
-                            sub_pat,
-                            ok_wrapped_return,
-                        ),
-                    )
-                }
+                        sub_arg,
+                        sub_pat,
+                        wrap_in_task_ok(arena, sub_new),
+                    ),
+                ),
                 Err(..) => Body(
                     loc_pattern,
                     arena.alloc(Loc::at(loc_expr.region, MalformedSuffixed(loc_expr))),
@@ -248,7 +231,13 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     ann_type,
                     comment,
                     body_pattern,
-                    body_expr: apply_task_await(arena, body_expr.region, sub_arg, sub_pat, sub_new),
+                    body_expr: apply_task_await(
+                        arena,
+                        body_expr.region,
+                        sub_arg,
+                        sub_pat,
+                        wrap_in_task_ok(arena, sub_new),
+                    ),
                 },
                 Err(..) => AnnotatedBody {
                     ann_pattern,
