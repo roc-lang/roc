@@ -192,7 +192,9 @@ pub fn unwrap_suffixed_expression<'a>(
     // KEEP THIS HERE FOR DEBUGGING
     // USEFUL TO SEE THE UNWRAPPING
     // OF AST NODES AS THEY DESCEND
-    // dbg!(&loc_expr, &unwrapped_expression);
+    // if is_loc_expr_suffixed(loc_expr) {
+    //     dbg!(&loc_expr, &unwrapped_expression);
+    // }
 
     unwrapped_expression
 }
@@ -768,6 +770,10 @@ pub fn apply_task_await<'a>(
         return loc_arg;
     }
 
+    if is_intermediate_answer_with_same_ident(loc_pat, loc_new) {
+        return loc_arg;
+    }
+
     let mut task_await_apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
 
     // apply the unwrapped suffixed expression
@@ -825,6 +831,28 @@ fn is_expr_task_ok<'a>(loc_expr: &'a Loc<Expr<'a>>) -> bool {
 
             is_task_ok && is_arg_empty_record
         }
+        _ => false,
+    }
+}
+
+/// Detect when we are applying an identical Pattern and Ident
+/// e.g. `Task.await foo \#a!0 -> #a!0` is the same as `foo`
+fn is_intermediate_answer_with_same_ident<'a>(
+    loc_pat: &'a Loc<Pattern<'a>>,
+    loc_expr: &'a Loc<Expr<'a>>,
+) -> bool {
+    let pat_ident = match loc_pat.value {
+        Pattern::Identifier { ident, .. } => Some(ident),
+        _ => None,
+    };
+    let exp_ident = match loc_expr.value {
+        Expr::Var {
+            module_name, ident, ..
+        } if module_name == "" => Some(ident),
+        _ => None,
+    };
+    match (pat_ident, exp_ident) {
+        (Some(a), Some(b)) => a.starts_with("#") && a == b,
         _ => false,
     }
 }
