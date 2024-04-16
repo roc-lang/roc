@@ -138,7 +138,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(spaces(), parser),
+        and(spaces(), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -161,7 +161,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(space0_e(indent_problem), parser),
+        and(space0_e(indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -184,7 +184,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(parser, space0_e(indent_problem)),
+        and(parser, space0_e(indent_problem)),
         |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
             if space_list.is_empty() {
                 loc_expr

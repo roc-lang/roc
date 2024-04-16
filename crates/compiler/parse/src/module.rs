@@ -9,9 +9,10 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, byte, increment_min_indent, optional, reset_min_indent, skip_first, skip_second,
-    specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages,
-    EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
+    and, backtrackable, byte, increment_min_indent, optional, reset_min_indent, skip_first,
+    skip_second, specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader,
+    EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
+    SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
@@ -413,7 +414,7 @@ where
     E: 'a + SpaceProblem,
 {
     map!(
-        and!(
+        and(
             skip_second(
                 // parse any leading space before the keyword
                 backtrackable(space0_e(indent_problem1)),
@@ -560,8 +561,8 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
     //
     // printLine : Str -> Effect {}
     map!(
-        and!(
-            and!(
+        and(
+            and(
                 loc!(specialize_err(
                     |_, pos| ETypedIdent::Identifier(pos),
                     lowercase_ident()
@@ -611,8 +612,8 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
 
     one_of!(
         map!(
-            and!(
-                and!(
+            and(
+                and(
                     // e.g. `pf.`
                     optional(backtrackable(skip_second(
                         shortname(),
@@ -649,14 +650,14 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
         )
         .trace("normal_import"),
         map!(
-            and!(
-                and!(
+            and(
+                and(
                     // e.g. "filename"
                     // TODO: str literal allows for multiline strings. We probably don't want that for file names.
                     specialize_err(|_, pos| EImports::StrLiteral(pos), parse_str_literal()),
                     // e.g. as
-                    and!(
-                        and!(
+                    and(
+                        and(
                             space0_e(EImports::AsKeyword),
                             two_bytes(b'a', b's', EImports::AsKeyword)
                         ),

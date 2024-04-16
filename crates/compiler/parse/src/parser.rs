@@ -1462,8 +1462,8 @@ where
 macro_rules! collection_inner {
     ($elem:expr, $delimiter:expr, $space_before:expr) => {
         map_with_arena!(
-            and!(
-                and!(
+            $crate::parser::and(
+                $crate::parser::and(
                     $crate::blankspace::spaces(),
                     $crate::parser::trailing_sep_by0(
                         $delimiter,
@@ -1622,49 +1622,47 @@ where
 /// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
 /// Both parsers must have the same error type.
 ///
-/// # Examples
+/// # Example
+///
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
 /// # use roc_region::all::Position;
-/// # use roc_parse::and;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
 /// # }
 /// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = and!(
-///     word("hello", Problem::NotFound),
-///     byte(b',', Problem::NotFound)
-/// );
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser2 = word(", ", Problem::NotFound);
+/// let parser = and(parser1, parser2);
 ///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ((), ()));
-/// assert_eq!(state.pos().offset, 6);
+/// assert_eq!(output, ((),()));
+/// assert_eq!(state.pos(), Position::new(7));
 ///
-/// let (progress, err) = parser.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap_err();
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(err, Problem::NotFound(Position::new(5)));
-/// # }
-/// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! and {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+pub fn and<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
 /// Take as input something that looks like a struct literal where values are parsers
@@ -1715,7 +1713,7 @@ pub fn indented_seq<'a, O, E: 'a>(
     }
 }
 
-/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
+/// Similar to [`and`], but we modify the `min_indent` of the second parser to be
 /// 1 greater than the `column()` at the start of the first parser.
 pub fn absolute_indented_seq<'a, Output1, Output2, E: 'a>(
     p1: impl Parser<'a, Output1, E>,
@@ -2173,9 +2171,9 @@ where
 #[macro_export]
 macro_rules! byte_check_indent {
     ($byte_to_match:expr, $problem:expr, $min_indent:expr, $indent_problem:expr) => {
-        and!(
+        $crate::parser::and(
             byte($byte_to_match, $problem),
-            $crate::parser::check_indent($min_indent, $indent_problem)
+            $crate::parser::check_indent($min_indent, $indent_problem),
         )
     };
 }
@@ -2543,54 +2541,6 @@ pub fn between<'a, Before, Inner, After, Err: 'a>(
     closing_brace: impl Parser<'a, After, Err>,
 ) -> impl Parser<'a, Inner, Err> {
     skip_first(opening_brace, skip_second(inner, closing_brace))
-}
-
-/// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
-/// Both parsers must have the same error type.
-///
-/// This is a function version of the [`and!`] macro.
-/// For some reason, some usages won't compile unless they use this instead of the macro version.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser1 = word("hello", Problem::NotFound);
-/// let parser2 = word(", ", Problem::NotFound);
-/// let parser = and(parser1, parser2);
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ((),()));
-/// assert_eq!(state.pos(), Position::new(7));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(err, Problem::NotFound(Position::new(5)));
-/// ```
-#[inline(always)]
-pub fn and<'a, P1, P2, A, B, E>(p1: P1, p2: P2) -> impl Parser<'a, (A, B), E>
-where
-    P1: Parser<'a, A, E>,
-    P2: Parser<'a, B, E>,
-    P1: 'a,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-    E: 'a,
-{
-    and!(p1, p2)
 }
 
 /// Adds location info. This is a function version the [`loc!`] macro.

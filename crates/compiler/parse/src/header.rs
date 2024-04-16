@@ -4,7 +4,7 @@ use crate::ast::{
 use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
-use crate::parser::{byte, skip_second, specialize_err, EPackageEntry, EPackageName, Parser};
+use crate::parser::{and, byte, skip_second, specialize_err, EPackageEntry, EPackageName, Parser};
 use crate::parser::{optional, then};
 use crate::string_literal;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -342,10 +342,10 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
         // (Indirect dependencies don't have a shorthand.)
-        and!(
-            optional(and!(
+        and(
+            optional(and(
                 skip_second(
-                    and!(
+                    and(
                         specialize_err(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
                         space0_e(EPackageEntry::IndentPackage)
                     ),

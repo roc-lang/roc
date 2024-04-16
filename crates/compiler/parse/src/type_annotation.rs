@@ -9,7 +9,7 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, increment_min_indent, skip_first, skip_second, then, ERecord,
+    absolute_column_min_indent, and, increment_min_indent, skip_first, skip_second, then, ERecord,
     ETypeAbilityImpl,
 };
 use crate::parser::{
@@ -117,7 +117,7 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
 
 fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     map_with_arena!(
-        and!(
+        and(
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
@@ -137,7 +137,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
             // Inline alias notation, e.g. [Nil, Cons a (List a)] as List a
             one_of![
                 map!(
-                    and!(
+                    and(
                         skip_second(
                             backtrackable(space0_e(EType::TIndentEnd)),
                             crate::parser::keyword(keyword::AS, EType::TEnd)
@@ -209,7 +209,7 @@ fn loc_applied_arg<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     map_with_arena!(
-        and!(
+        and(
             backtrackable(space0_e(EType::TIndentStart)),
             one_of!(
                 loc_wildcard(),
@@ -242,7 +242,7 @@ fn loc_type_in_parens<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     then(
-        loc!(and!(
+        loc!(and(
             collection_trailing_sep_e!(
                 byte(b'(', ETypeInParens::Open),
                 specialize_err_ref(ETypeInParens::Type, expression(true, false)),
@@ -399,7 +399,7 @@ fn record_type<'a>(
 
 fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map!(
-        and!(
+        and(
             specialize_err(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
@@ -432,7 +432,7 @@ fn loc_applied_args_e<'a>(
 // Hash & Eq & ...
 fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
     map!(
-        and!(
+        and(
             space0_before_optional_after(
                 specialize_err(EType::TApply, loc!(concrete_type())),
                 EType::TIndentStart,
@@ -460,7 +460,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
 fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'a>> {
     map!(
         // Suppose we are trying to parse "a implements Hash"
-        and!(
+        and(
             space0_around_ee(
                 // Parse "a", with appropriate spaces
                 specialize_err(
@@ -497,9 +497,9 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
 fn implements_clause_chain<'a>(
 ) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<ImplementsClause<'a>>]), EType<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
-        let (_, (spaces_before, ()), state) = and!(
+        let (_, (spaces_before, ()), state) = and(
             space0_e(EType::TIndentStart),
-            word(crate::keyword::WHERE, EType::TWhereBar)
+            word(crate::keyword::WHERE, EType::TWhereBar),
         )
         .parse(arena, state, min_indent)?;
 
@@ -584,7 +584,7 @@ fn expression<'a>(
         let (p1, first, state) = space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
             .parse(arena, state, min_indent)?;
 
-        let result = and![
+        let result = and(
             zero_or_more!(skip_first(
                 byte(b',', EType::TFunctionArgument),
                 one_of![
@@ -599,10 +599,10 @@ fn expression<'a>(
             .trace("type_annotation:expression:rest_args"),
             skip_second(
                 space0_e(EType::TIndentStart),
-                two_bytes(b'-', b'>', EType::TStart)
+                two_bytes(b'-', b'>', EType::TStart),
             )
-            .trace("type_annotation:expression:arrow")
-        ]
+            .trace("type_annotation:expression:arrow"),
+        )
         .parse(arena, state.clone(), min_indent);
 
         let (progress, annot, state) = match result {
