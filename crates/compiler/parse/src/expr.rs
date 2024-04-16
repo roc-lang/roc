@@ -13,8 +13,8 @@ use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, increment_min_indent, indented_seq,
     line_min_indent, loc, map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e,
     set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes,
-    EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType,
-    EWhen, Either, ParseResult, Parser,
+    zero_or_more, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord,
+    EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -158,15 +158,15 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
 }
 
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Accessor<'a>>, EExpr<'a>> {
-    zero_or_more!(skip_first(
+    zero_or_more(skip_first(
         byte(b'.', EExpr::Access),
         specialize_err(
             |_, pos| EExpr::Access(pos),
             one_of!(
                 map(lowercase_ident(), Accessor::RecordField),
                 map(integer_ident(), Accessor::TupleIndex),
-            )
-        )
+            ),
+        ),
     ))
 }
 

@@ -10,12 +10,12 @@ use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
     absolute_column_min_indent, and, increment_min_indent, loc, map, map_with_arena, skip_first,
-    skip_second, succeed, then, ERecord, ETypeAbilityImpl,
+    skip_second, succeed, then, zero_or_more, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
     word, EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
-    Progress::{self, *},
+    Progress::*,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -426,7 +426,7 @@ fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation
 fn loc_applied_args_e<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
-    zero_or_more!(loc_applied_arg(stop_at_surface_has))
+    zero_or_more(loc_applied_arg(stop_at_surface_has))
 }
 
 // Hash & Eq & ...
@@ -438,13 +438,13 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
                 EType::TIndentStart,
                 EType::TIndentEnd,
             ),
-            zero_or_more!(skip_first(
+            zero_or_more(skip_first(
                 byte(b'&', EType::TImplementsClause),
                 space0_before_optional_after(
                     specialize_err(EType::TApply, loc(concrete_type())),
                     EType::TIndentStart,
                     EType::TIndentEnd,
-                )
+                ),
             )),
         ),
         |(first_ability, mut other_abilities): (
@@ -506,9 +506,9 @@ fn implements_clause_chain<'a>(
         // Parse the first clause (there must be one), then the rest
         let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
 
-        let (_, mut clauses, state) = zero_or_more!(skip_first(
+        let (_, mut clauses, state) = zero_or_more(skip_first(
             byte(b',', EType::TImplementsClause),
-            implements_clause()
+            implements_clause(),
         ))
         .parse(arena, state, min_indent)?;
 
@@ -585,7 +585,7 @@ fn expression<'a>(
             .parse(arena, state, min_indent)?;
 
         let result = and(
-            zero_or_more!(skip_first(
+            zero_or_more(skip_first(
                 byte(b',', EType::TFunctionArgument),
                 one_of![
                     space0_around_ee(
@@ -594,7 +594,7 @@ fn expression<'a>(
                         EType::TIndentEnd
                     ),
                     fail(EType::TFunctionArgument)
-                ]
+                ],
             ))
             .trace("type_annotation:expression:rest_args"),
             skip_second(

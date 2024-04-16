@@ -10,9 +10,9 @@ use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, Uppercas
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     and, backtrackable, byte, increment_min_indent, loc, map, optional, reset_min_indent,
-    skip_first, skip_second, specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith,
-    EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError,
-    SpaceProblem, SyntaxError,
+    skip_first, skip_second, specialize_err, two_bytes, zero_or_more, EExposes, EGenerates,
+    EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser,
+    SourceError, SpaceProblem, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
@@ -284,12 +284,12 @@ fn provides_types<'a>(
         // to be the design forever. Someday it will hopefully work like Elm,
         // where platform authors can provide functions like Browser.sandbox which
         // present an API based on ordinary-looking type variables.
-        zero_or_more!(byte(
+        zero_or_more(byte(
             b' ',
             // HACK: If this errors, EProvides::Provides is not an accurate reflection
             // of what went wrong. However, this is both skipped and zero_or_more,
             // so this error should never be visible to anyone in practice!
-            EProvides::Provides
+            EProvides::Provides,
         )),
         collection_trailing_sep_e!(
             byte(b'{', EProvides::ListStart),

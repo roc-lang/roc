@@ -2216,63 +2216,63 @@ pub fn map<'a, Output, MappedOutput, E: 'a>(
 
 /// Applies the parser as many times as possible.
 /// This parser will only fail if the given parser makes partial progress.
-#[macro_export]
-macro_rules! zero_or_more {
-    ($parser:expr) => {
-        move |arena, state: State<'a>, min_indent: u32| {
-            use bumpalo::collections::Vec;
+pub fn zero_or_more<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
+    move |arena, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
 
-            let original_state = state.clone();
+        let start_bytes_len = state.bytes().len();
 
-            let start_bytes_len = state.bytes().len();
+        match parser.parse(arena, state, min_indent) {
+            Ok((_, first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
 
-            match $parser.parse(arena, state, min_indent) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
+                buf.push(first_output);
 
-                    buf.push(first_output);
-
-                    loop {
-                        let old_state = state.clone();
-                        match $parser.parse(arena, state, min_indent) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((fail_progress, fail)) => {
-                                match fail_progress {
-                                    MadeProgress => {
-                                        // made progress on an element and then failed; that's an error
-                                        return Err((MadeProgress, fail));
-                                    }
-                                    NoProgress => {
-                                        // the next element failed with no progress
-                                        // report whether we made progress before
-                                        let progress = Progress::from_lengths(start_bytes_len, old_state.bytes().len());
-                                        return Ok((progress, buf, old_state));
-                                    }
+                loop {
+                    let old_state = state.clone();
+                    match parser.parse(arena, state, min_indent) {
+                        Ok((_, next_output, next_state)) => {
+                            state = next_state;
+                            buf.push(next_output);
+                        }
+                        Err((fail_progress, fail)) => {
+                            match fail_progress {
+                                MadeProgress => {
+                                    // made progress on an element and then failed; that's an error
+                                    return Err((MadeProgress, fail));
+                                }
+                                NoProgress => {
+                                    // the next element failed with no progress
+                                    // report whether we made progress before
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes().len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
                                 }
                             }
                         }
                     }
                 }
-                Err((fail_progress, fail)) => {
-                    match fail_progress {
-                        MadeProgress => {
-                            // made progress on an element and then failed; that's an error
-                            Err((MadeProgress, fail))
-                        }
-                        NoProgress => {
-                            // the first element failed (with no progress), but that's OK
-                            // because we only need to parse 0 elements
-                            Ok((NoProgress, Vec::new_in(arena), original_state))
-                        }
+            }
+            Err((fail_progress, fail)) => {
+                match fail_progress {
+                    MadeProgress => {
+                        // made progress on an element and then failed; that's an error
+                        Err((MadeProgress, fail))
+                    }
+                    NoProgress => {
+                        // the first element failed (with no progress), but that's OK
+                        // because we only need to parse 0 elements
+                        Ok((NoProgress, Vec::new_in(arena), original_state))
                     }
                 }
             }
         }
-    };
+    }
 }
 
 /// Creates a parser that matches one or more times.
@@ -2285,7 +2285,7 @@ macro_rules! zero_or_more {
 /// # use roc_parse::state::State;
 /// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
 /// # use roc_region::all::Position;
-/// # use roc_parse::one_or_more;
+/// # use roc_parse::one_or_more!;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2293,7 +2293,7 @@ macro_rules! zero_or_more {
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = one_or_more!(
+/// let parser = one_or_more(
 ///     word("hello, ", Problem::NotFound),
 ///     Problem::NotFound
 /// );

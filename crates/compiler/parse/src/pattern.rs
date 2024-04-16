@@ -2,11 +2,11 @@ use crate::ast::{Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
-use crate::parser::Progress::{self, *};
+use crate::parser::Progress::*;
 use crate::parser::{
     self, backtrackable, byte, fail_when, loc, map, map_with_arena, optional, skip_first,
-    specialize_err, specialize_err_ref, then, three_bytes, two_bytes, EPattern, PInParens, PList,
-    PRecord, Parser,
+    specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more, EPattern,
+    PInParens, PList, PRecord, Parser,
 };
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
@@ -125,13 +125,13 @@ fn pattern_as<'a>() -> impl Parser<'a, PatternAs<'a>, EPattern<'a>> {
 }
 
 fn loc_tag_pattern_args_help<'a>() -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
-    zero_or_more!(loc_tag_pattern_arg(false))
+    zero_or_more(loc_tag_pattern_arg(false))
 }
 
 /// Like `loc_tag_pattern_args_help`, but stops if a "implements" keyword is seen (indicating an ability).
 fn loc_type_def_tag_pattern_args_help<'a>(
 ) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
-    zero_or_more!(loc_tag_pattern_arg(true))
+    zero_or_more(loc_tag_pattern_arg(true))
 }
 
 fn loc_tag_pattern_arg<'a>(
