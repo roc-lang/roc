@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-4 Identifier(
-                    "main",
-                ),
+                @0-4 Identifier {
+                    ident: "main",
+                    suffixed: 0,
+                },
                 @11-71 SpaceBefore(
                     Defs(
                         Defs {
@@ -38,19 +39,22 @@ Defs(
                             type_defs: [],
                             value_defs: [
                                 Body(
-                                    @11-15 Identifier(
-                                        "task",
-                                    ),
+                                    @11-15 Identifier {
+                                        ident: "task",
+                                        suffixed: 0,
+                                    },
                                     @18-62 Backpassing(
                                         [
-                                            @18-22 Identifier(
-                                                "file",
-                                            ),
+                                            @18-22 Identifier {
+                                                ident: "file",
+                                                suffixed: 0,
+                                            },
                                         ],
                                         @43-46 SpaceBefore(
                                             Var {
                                                 module_name: "",
                                                 ident: "foo",
+                                                suffixed: 0,
                                             },
                                             [
                                                 Newline,
@@ -60,6 +64,7 @@ Defs(
                                             Var {
                                                 module_name: "",
                                                 ident: "bar",
+                                                suffixed: 0,
                                             },
                                             [
                                                 Newline,
@@ -73,6 +78,7 @@ Defs(
                             Var {
                                 module_name: "",
                                 ident: "task",
+                                suffixed: 0,
                             },
                             [
                                 Newline,

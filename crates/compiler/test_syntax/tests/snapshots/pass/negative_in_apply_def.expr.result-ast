@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                    suffixed: 0,
+                },
                 @2-9 Apply(
                     @2-3 SpaceAfter(
                         Tag(
@@ -33,12 +34,14 @@ Defs(
                             @6-7 Var {
                                 module_name: "",
                                 ident: "g",
+                                suffixed: 0,
                             },
                             @5-6 Negate,
                         ),
                         @8-9 Var {
                             module_name: "",
                             ident: "a",
+                            suffixed: 0,
                         },
                     ],
                     Space,
@@ -50,6 +53,7 @@ Defs(
         Var {
             module_name: "",
             ident: "a",
+            suffixed: 0,
         },
         [
             Newline,

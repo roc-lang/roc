@@ -18,9 +18,10 @@ When(
                             @17-18 NumLiteral(
                                 "1",
                             ),
-                            @20-21 Identifier(
-                                "x",
-                            ),
+                            @20-21 Identifier {
+                                ident: "x",
+                                suffixed: 0,
+                            },
                         ],
                     ),
                     [
@@ -31,6 +32,7 @@ When(
             value: @26-27 Var {
                 module_name: "",
                 ident: "x",
+                suffixed: 0,
             },
             guard: None,
         },
@@ -42,9 +44,10 @@ When(
                             @30-31 Underscore(
                                 "",
                             ),
-                            @33-34 Identifier(
-                                "b",
-                            ),
+                            @33-34 Identifier {
+                                ident: "b",
+                                suffixed: 0,
+                            },
                         ],
                     ),
                     [
@@ -64,6 +67,7 @@ When(
                 @43-44 Var {
                     module_name: "",
                     ident: "b",
+                    suffixed: 0,
                 },
             ),
             guard: None,

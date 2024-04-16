@@ -16,13 +16,15 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                    suffixed: 0,
+                },
                 @4-25 When(
                     @9-10 Var {
                         module_name: "",
                         ident: "n",
+                        suffixed: 0,
                     },
                     [
                         WhenBranch {

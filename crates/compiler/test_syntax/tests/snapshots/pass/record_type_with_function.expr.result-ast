@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                    suffixed: 0,
+                },
                 @4-77 Record {
                     fields: [
                         @6-24 RequiredValue(

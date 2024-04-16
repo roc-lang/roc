@@ -1,4 +1,5 @@
 Var {
     module_name: "",
     ident: "elsewhere",
+    suffixed: 0,
 }

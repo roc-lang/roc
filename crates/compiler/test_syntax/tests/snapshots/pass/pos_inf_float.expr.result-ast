@@ -1,4 +1,5 @@
 Var {
     module_name: "",
     ident: "inf",
+    suffixed: 0,
 }

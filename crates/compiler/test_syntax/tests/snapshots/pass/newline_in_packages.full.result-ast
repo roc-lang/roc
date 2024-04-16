@@ -100,14 +100,16 @@ Full {
         type_defs: [],
         value_defs: [
             Body(
-                @199-203 Identifier(
-                    "main",
-                ),
+                @199-203 Identifier {
+                    ident: "main",
+                    suffixed: 0,
+                },
                 @210-246 SpaceBefore(
                     Apply(
                         @210-221 Var {
                             module_name: "Stdout",
                             ident: "line",
+                            suffixed: 0,
                         },
                         [
                             @222-246 Str(

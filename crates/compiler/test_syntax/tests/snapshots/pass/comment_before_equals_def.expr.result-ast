@@ -17,9 +17,10 @@ Defs(
         value_defs: [
             Body(
                 @0-1 SpaceAfter(
-                    Identifier(
-                        "t",
-                    ),
+                    Identifier {
+                        ident: "t",
+                        suffixed: 0,
+                    },
                     [
                         LineComment(
                             "",
@@ -36,6 +37,7 @@ Defs(
         Var {
             module_name: "",
             ident: "e",
+            suffixed: 0,
         },
         [
             Newline,

@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-5 Identifier(
-                    "where",
-                ),
+                @0-5 Identifier {
+                    ident: "where",
+                    suffixed: 0,
+                },
                 @8-20 Record {
                     fields: [
                         @9-19 RequiredValue(
@@ -35,9 +36,10 @@ Defs(
                 },
             ),
             AnnotatedBody {
-                ann_pattern: @0-5 Identifier(
-                    "where",
-                ),
+                ann_pattern: @0-5 Identifier {
+                    ident: "where",
+                    suffixed: 0,
+                },
                 ann_type: @8-20 Record {
                     fields: [
                         @9-19 RequiredValue(
@@ -53,9 +55,10 @@ Defs(
                     ext: None,
                 },
                 comment: None,
-                body_pattern: @21-26 Identifier(
-                    "where",
-                ),
+                body_pattern: @21-26 Identifier {
+                    ident: "where",
+                    suffixed: 0,
+                },
                 body_expr: @29-39 Record(
                     [
                         @30-38 RequiredValue(
@@ -75,6 +78,7 @@ Defs(
             Var {
                 module_name: "",
                 ident: "where",
+                suffixed: 0,
             },
             "where",
         ),

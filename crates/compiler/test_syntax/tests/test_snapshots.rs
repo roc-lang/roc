@@ -442,7 +442,10 @@ mod test_snapshots {
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
         pass/suffixed.expr,
+        pass/suffixed_multiple_defs.moduledefs,
         pass/suffixed_nested.expr,
+        pass/suffixed_one_def.full,
+        pass/suffixed_optional_last.full,
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
@@ -737,6 +740,7 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -753,6 +757,7 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -768,6 +773,7 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -783,11 +789,13 @@ mod test_snapshots {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             let expr2 = arena.alloc(Var {
                 module_name: "",
                 ident: "project",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;

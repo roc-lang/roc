@@ -12,6 +12,7 @@ use crate::string_literal::StrLikeLiteral;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_region::all::{Loc, Region};
 
 /// Different patterns are supported in different circumstances.
@@ -48,6 +49,14 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
         let (_, pattern, state) = loc_pattern_help_help().parse(arena, state, min_indent)?;
 
         let pattern_state = state.clone();
+
+        // Return early with the suffixed statement
+        match pattern.value {
+            Pattern::Identifier { suffixed, .. } if suffixed > 0 => {
+                return Ok((MadeProgress, pattern, pattern_state))
+            }
+            _ => {}
+        }
 
         let (pattern_spaces, state) =
             match space0_e(EPattern::AsKeyword).parse(arena, state, min_indent) {
@@ -138,7 +147,15 @@ fn loc_tag_pattern_arg<'a>(
 
         let Loc { region, value } = loc_pat;
 
-        if stop_on_has_kw && matches!(value, Pattern::Identifier(crate::keyword::IMPLEMENTS)) {
+        if stop_on_has_kw
+            && matches!(
+                value,
+                Pattern::Identifier {
+                    ident: crate::keyword::IMPLEMENTS,
+                    ..
+                }
+            )
+        {
             Err((NoProgress, EPattern::End(original_state.pos())))
         } else {
             Ok((
@@ -160,7 +177,10 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
         |_arena, state, progress, pattern| {
             if matches!(
                 pattern.value,
-                Pattern::Identifier(crate::keyword::IMPLEMENTS)
+                Pattern::Identifier {
+                    ident: crate::keyword::IMPLEMENTS,
+                    ..
+                }
             ) {
                 Ok((
                     progress,
@@ -385,6 +405,46 @@ fn loc_ident_pattern_help<'a>(
                     Ok((MadeProgress, loc_pat, state))
                 }
             }
+            // Parse a statement that begins with a suffixed identifier, e.g. `Stdout.line! "Hello"`
+            Ident::Access {
+                module_name,
+                parts,
+                suffixed,
+                ..
+            } if suffixed > 0 => {
+                if module_name.is_empty() && parts.len() == 1 {
+                    if let Accessor::RecordField(var) = &parts[0] {
+                        Ok((
+                            MadeProgress,
+                            Loc {
+                                region: loc_ident.region,
+                                value: Pattern::Identifier {
+                                    ident: var,
+                                    suffixed,
+                                },
+                            },
+                            state,
+                        ))
+                    } else {
+                        internal_error!("unexpected suffixed TupleIndex");
+                    }
+                } else if let Accessor::RecordField(var) = &parts[0] {
+                    return Ok((
+                        MadeProgress,
+                        Loc {
+                            region: loc_ident.region,
+                            value: Pattern::QualifiedIdentifier {
+                                module_name,
+                                ident: var,
+                                suffixed,
+                            },
+                        },
+                        state,
+                    ));
+                } else {
+                    internal_error!("unexpected suffixed TupleIndex");
+                }
+            }
             Ident::Access {
                 module_name, parts, ..
             } => {
@@ -403,7 +463,10 @@ fn loc_ident_pattern_help<'a>(
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Identifier(var),
+                                value: Pattern::Identifier {
+                                    ident: var,
+                                    suffixed: 0,
+                                },
                             },
                             state,
                         ));
@@ -564,9 +627,18 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             None => {
                 let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(value)), spaces)
+                    Pattern::SpaceAfter(
+                        arena.alloc(Pattern::Identifier {
+                            ident: value,
+                            suffixed: 0,
+                        }),
+                        spaces,
+                    )
                 } else {
-                    Pattern::Identifier(value)
+                    Pattern::Identifier {
+                        ident: value,
+                        suffixed: 0,
+                    }
                 };
 
                 Ok((MadeProgress, Loc::at(region, value), state))
