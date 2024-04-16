@@ -9,10 +9,10 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, backtrackable, byte, increment_min_indent, loc, map, optional, reset_min_indent,
-    skip_first, skip_second, specialize_err, two_bytes, zero_or_more, EExposes, EGenerates,
-    EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser,
-    SourceError, SpaceProblem, SyntaxError,
+    and, backtrackable, byte, collection_trailing_sep_e, increment_min_indent, loc, map, optional,
+    reset_min_indent, skip_first, skip_second, specialize_err, two_bytes, zero_or_more, EExposes,
+    EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent,
+    Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
@@ -235,7 +235,7 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
             EProvides::IndentProvides,
             EProvides::IndentListStart
         ),
-        entries: collection_trailing_sep_e!(
+        entries: collection_trailing_sep_e(
             byte(b'[', EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
             byte(b',', EProvides::ListEnd),
@@ -266,7 +266,7 @@ fn provides_exposed<'a>() -> impl Parser<
             EProvides::IndentProvides,
             EProvides::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
+        item: collection_trailing_sep_e(
             byte(b'[', EProvides::ListStart),
             exposes_entry(EProvides::Identifier),
             byte(b',', EProvides::ListEnd),
@@ -291,12 +291,12 @@ fn provides_types<'a>(
             // so this error should never be visible to anyone in practice!
             EProvides::Provides,
         )),
-        collection_trailing_sep_e!(
+        collection_trailing_sep_e(
             byte(b'{', EProvides::ListStart),
             provides_type_entry(EProvides::Identifier),
             byte(b',', EProvides::ListEnd),
             byte(b'}', EProvides::ListEnd),
-            Spaced::SpaceBefore
+            Spaced::SpaceBefore,
         ),
     )
 }
@@ -354,15 +354,15 @@ fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a
 #[inline(always)]
 fn requires_rigids<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, ERequires<'a>> {
-    collection_trailing_sep_e!(
+    collection_trailing_sep_e(
         byte(b'{', ERequires::ListStart),
         specialize_err(
             |_, pos| ERequires::Rigid(pos),
-            loc(map(ident::uppercase(), Spaced::Item))
+            loc(map(ident::uppercase(), Spaced::Item)),
         ),
         byte(b',', ERequires::ListEnd),
         byte(b'}', ERequires::ListEnd),
-        Spaced::SpaceBefore
+        Spaced::SpaceBefore,
     )
 }
 
@@ -394,7 +394,7 @@ fn exposes_values<'a>() -> impl Parser<
             EExposes::IndentExposes,
             EExposes::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
+        item: collection_trailing_sep_e(
             byte(b'[', EExposes::ListStart),
             exposes_entry(EExposes::Identifier),
             byte(b',', EExposes::ListEnd),
@@ -445,7 +445,7 @@ fn exposes_modules<'a>() -> impl Parser<
             EExposes::IndentExposes,
             EExposes::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
+        item: collection_trailing_sep_e(
             byte(b'[', EExposes::ListStart),
             exposes_module(EExposes::Identifier),
             byte(b',', EExposes::ListEnd),
@@ -482,7 +482,7 @@ fn packages<'a>() -> impl Parser<
             EPackages::IndentPackages,
             EPackages::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
+        item: collection_trailing_sep_e(
             byte(b'{', EPackages::ListStart),
             specialize_err(EPackages::PackageEntry, loc(package_entry())),
             byte(b',', EPackages::ListEnd),
@@ -519,7 +519,7 @@ fn generates_with<'a>() -> impl Parser<
             EGeneratesWith::IndentWith,
             EGeneratesWith::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
+        item: collection_trailing_sep_e(
             byte(b'[', EGeneratesWith::ListStart),
             exposes_entry(EGeneratesWith::Identifier),
             byte(b',', EGeneratesWith::ListEnd),
@@ -542,7 +542,7 @@ fn imports<'a>() -> impl Parser<
             EImports::IndentImports,
             EImports::IndentListStart
         ),
-        item: collection_trailing_sep_e!(
+        item: collection_trailing_sep_e(
             byte(b'[', EImports::ListStart),
             loc(imports_entry()),
             byte(b',', EImports::ListEnd),
@@ -623,7 +623,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                 // e.g. `.{ Task, after}`
                 optional(skip_first(
                     byte(b'.', EImports::ExposingDot),
-                    collection_trailing_sep_e!(
+                    collection_trailing_sep_e(
                         byte(b'{', EImports::SetStart),
                         exposes_entry(EImports::Identifier),
                         byte(b',', EImports::SetEnd),

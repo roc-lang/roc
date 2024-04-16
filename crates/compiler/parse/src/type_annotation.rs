@@ -9,8 +9,9 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, either, increment_min_indent, loc, map, map_with_arena,
-    skip_first, skip_second, succeed, then, zero_or_more, ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, and, collection_trailing_sep_e, either, increment_min_indent, loc,
+    map, map_with_arena, skip_first, skip_second, succeed, then, zero_or_more, ERecord,
+    ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -39,12 +40,12 @@ fn tag_union_type<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
     move |arena, state, min_indent| {
-        let (_, tags, state) = collection_trailing_sep_e!(
+        let (_, tags, state) = collection_trailing_sep_e(
             byte(b'[', ETypeTagUnion::Open),
             loc(tag_type(false)),
             byte(b',', ETypeTagUnion::End),
             byte(b']', ETypeTagUnion::End),
-            Tag::SpaceBefore
+            Tag::SpaceBefore,
         )
         .parse(arena, state, min_indent)?;
 
@@ -243,12 +244,12 @@ fn loc_type_in_parens<'a>(
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     then(
         loc(and(
-            collection_trailing_sep_e!(
+            collection_trailing_sep_e(
                 byte(b'(', ETypeInParens::Open),
                 specialize_err_ref(ETypeInParens::Type, expression(true, false)),
                 byte(b',', ETypeInParens::End),
                 byte(b')', ETypeInParens::End),
-                TypeAnnotation::SpaceBefore
+                TypeAnnotation::SpaceBefore,
             ),
             optional(allocated(specialize_err_ref(
                 ETypeInParens::Type,
@@ -382,7 +383,7 @@ fn record_type<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
     record!(TypeAnnotation::Record {
-        fields: collection_trailing_sep_e!(
+        fields: collection_trailing_sep_e(
             byte(b'{', ETypeRecord::Open),
             loc(record_type_field()),
             byte(b',', ETypeRecord::End),
@@ -531,12 +532,12 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc(map(
-                collection_trailing_sep_e!(
+                collection_trailing_sep_e(
                     byte(b'[', EType::TStart),
                     loc(parse_implements_ability()),
                     byte(b',', EType::TEnd),
                     byte(b']', EType::TEnd),
-                    ImplementsAbility::SpaceBefore
+                    ImplementsAbility::SpaceBefore,
                 ),
                 ImplementsAbilities::Implements,
             )),
@@ -552,7 +553,7 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, ETyp
             loc(map(
                 specialize_err(
                     EType::TAbilityImpl,
-                    collection_trailing_sep_e!(
+                    collection_trailing_sep_e(
                         byte(b'{', ETypeAbilityImpl::Open),
                         specialize_err(|e: ERecord<'_>, _| e.into(), loc(ability_impl_field())),
                         byte(b',', ETypeAbilityImpl::End),

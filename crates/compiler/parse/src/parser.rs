@@ -1499,19 +1499,22 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     )
 }
 
-#[macro_export]
-macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
-        $crate::parser::between(
-            $opening_brace,
-            $crate::parser::reset_min_indent($crate::parser::collection_inner(
-                $elem,
-                $delimiter,
-                $space_before,
-            )),
-            $closing_brace,
-        )
-    };
+pub fn collection_trailing_sep_e<
+    'a,
+    Elem: 'a + crate::ast::Spaceable<'a> + Clone,
+    E: 'a + SpaceProblem,
+>(
+    opening_brace: impl Parser<'a, (), E>,
+    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    delimiter: impl Parser<'a, (), E>,
+    closing_brace: impl Parser<'a, (), E>,
+    space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
+) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
+    between(
+        opening_brace,
+        reset_min_indent(collection_inner(elem, delimiter, space_before)),
+        closing_brace,
+    )
 }
 
 /// Creates a parser that always succeeds with the given argument as output.

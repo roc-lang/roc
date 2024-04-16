@@ -3,9 +3,9 @@ use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, byte, fail_when, loc, map, map_with_arena, optional, skip_first,
-    specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more, EPattern,
-    PInParens, PList, PRecord, Parser,
+    self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
+    optional, skip_first, specialize_err, specialize_err_ref, then, three_bytes, two_bytes,
+    zero_or_more, EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::parser::{either, Progress::*};
 use crate::state::State;
@@ -200,12 +200,12 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
 
 fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
     then(
-        loc(collection_trailing_sep_e!(
+        loc(collection_trailing_sep_e(
             byte(b'(', PInParens::Open),
             specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
             byte(b',', PInParens::End),
             byte(b')', PInParens::End),
-            Pattern::SpaceBefore
+            Pattern::SpaceBefore,
         )),
         move |_arena, state, _, loc_elements| {
             let elements = loc_elements.value;
@@ -271,12 +271,12 @@ fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> 
 
 fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
     map(
-        collection_trailing_sep_e!(
+        collection_trailing_sep_e(
             byte(b'[', PList::Open),
             list_element_pattern(),
             byte(b',', PList::End),
             byte(b']', PList::End),
-            Pattern::SpaceBefore
+            Pattern::SpaceBefore,
         ),
         Pattern::List,
     )
@@ -518,12 +518,12 @@ fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
 #[inline(always)]
 fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
     map(
-        collection_trailing_sep_e!(
+        collection_trailing_sep_e(
             byte(b'{', PRecord::Open),
             record_pattern_field(),
             byte(b',', PRecord::End),
             byte(b'}', PRecord::End),
-            Pattern::SpaceBefore
+            Pattern::SpaceBefore,
         ),
         Pattern::RecordDestructure,
     )

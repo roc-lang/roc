@@ -10,11 +10,12 @@ use crate::blankspace::{
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, and, backtrackable, between, byte, byte_indent, collection_inner, either,
-    increment_min_indent, indented_seq, line_min_indent, loc, map, map_with_arena, optional,
-    reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second, specialize_err,
-    specialize_err_ref, then, two_bytes, zero_or_more, EClosure, EExpect, EExpr, EIf, EInParens,
-    EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    self, and, backtrackable, between, byte, byte_indent, collection_inner,
+    collection_trailing_sep_e, either, increment_min_indent, indented_seq, line_min_indent, loc,
+    map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent,
+    skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more,
+    EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType,
+    EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -94,12 +95,12 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
     then(
-        loc(collection_trailing_sep_e!(
+        loc(collection_trailing_sep_e(
             byte(b'(', EInParens::Open),
             specialize_err_ref(EInParens::Expr, loc_expr(false)),
             byte(b',', EInParens::End),
             byte(b')', EInParens::End),
-            Expr::SpaceBefore
+            Expr::SpaceBefore,
         )),
         move |arena, state, _, loc_elements| {
             let elements = loc_elements.value;
@@ -2848,12 +2849,12 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 
 fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
     map_with_arena(
-        collection_trailing_sep_e!(
+        collection_trailing_sep_e(
             byte(b'[', EList::Open),
             specialize_err_ref(EList::Expr, loc_expr(false)),
             byte(b',', EList::End),
             byte(b']', EList::End),
-            Expr::SpaceBefore
+            Expr::SpaceBefore,
         ),
         |arena, elements: Collection<'a, _>| {
             let elements = elements.ptrify_items(arena);
