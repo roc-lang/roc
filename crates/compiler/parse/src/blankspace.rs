@@ -1,5 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::parser::succeed;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
@@ -70,7 +71,7 @@ where
                 parser,
                 one_of![
                     backtrackable(space0_e(indent_after_problem)),
-                    succeed!(&[] as &[_]),
+                    succeed(&[] as &[_]),
                 ],
             ),
         ),
@@ -89,7 +90,7 @@ where
             spaces(),
             and(
                 parser,
-                one_of![backtrackable(spaces()), succeed!(&[] as &[_]),],
+                one_of![backtrackable(spaces()), succeed(&[] as &[_]),],
             ),
         ),
         spaces_around_help,

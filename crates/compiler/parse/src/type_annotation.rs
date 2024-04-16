@@ -9,8 +9,8 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, increment_min_indent, loc, map, skip_first, skip_second, then,
-    ERecord, ETypeAbilityImpl,
+    absolute_column_min_indent, and, increment_min_indent, loc, map, skip_first, skip_second,
+    succeed, then, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -146,7 +146,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
                     ),
                     Some
                 ),
-                succeed!(None)
+                succeed(None)
             ]
         ),
         |arena: &'a Bump,

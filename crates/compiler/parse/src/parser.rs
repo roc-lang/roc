@@ -1521,7 +1521,7 @@ macro_rules! collection_trailing_sep_e {
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = succeed!("different");
+/// let parser = succeed("different");
 ///
 /// let (progress, output, state) = Parser::<&'a str,()>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::NoProgress);
@@ -1530,13 +1530,10 @@ macro_rules! collection_trailing_sep_e {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! succeed {
-    ($value:expr) => {
-        move |_arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            Ok((NoProgress, $value, state))
-        }
-    };
+pub fn succeed<'a, T: Clone, E: 'a>(value: T) -> impl Parser<'a, T, E> {
+    move |_arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        Ok((NoProgress, value.clone(), state))
+    }
 }
 
 /// Creates a parser that always fails.
