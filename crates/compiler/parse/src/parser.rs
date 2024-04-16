@@ -1454,45 +1454,49 @@ where
     }
 }
 
-#[macro_export]
-macro_rules! collection_inner {
-    ($elem:expr, $delimiter:expr, $space_before:expr) => {
-        $crate::parser::map_with_arena(
-            $crate::parser::and(
-                $crate::parser::and(
-                    $crate::blankspace::spaces(),
-                    $crate::parser::trailing_sep_by0(
-                        $delimiter,
-                        $crate::blankspace::spaces_before_optional_after($elem),
-                    ),
+pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a + SpaceProblem>(
+    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    delimiter: impl Parser<'a, (), E>,
+    space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
+) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
+    map_with_arena(
+        and(
+            and(
+                crate::blankspace::spaces(),
+                trailing_sep_by0(
+                    delimiter,
+                    crate::blankspace::spaces_before_optional_after(elem),
                 ),
-                $crate::blankspace::spaces(),
             ),
-            |arena: &'a bumpalo::Bump,
-             ((spaces, mut parsed_elems), mut final_comments): (
-                (
-                    &'a [$crate::ast::CommentOrNewline<'a>],
-                    bumpalo::collections::vec::Vec<'a, Loc<_>>,
-                ),
-                &'a [$crate::ast::CommentOrNewline<'a>],
-            )| {
-                if !spaces.is_empty() {
-                    if let Some(first) = parsed_elems.first_mut() {
-                        first.value = $space_before(arena.alloc(first.value), spaces)
-                    } else {
-                        debug_assert!(final_comments.is_empty());
-                        final_comments = spaces;
-                    }
-                }
+            crate::blankspace::spaces(),
+        ),
+        #[allow(clippy::type_complexity)]
+        move |arena: &'a bumpalo::Bump,
+              out: (
+            (
+                &'a [crate::ast::CommentOrNewline<'a>],
+                bumpalo::collections::Vec<'a, Loc<Elem>>,
+            ),
+            &'a [crate::ast::CommentOrNewline<'a>],
+        )| {
+            let ((spaces, mut parsed_elems), mut final_comments) = out;
 
-                $crate::ast::Collection::with_items_and_comments(
-                    arena,
-                    parsed_elems.into_bump_slice(),
-                    final_comments,
-                )
-            },
-        )
-    };
+            if !spaces.is_empty() {
+                if let Some(first) = parsed_elems.first_mut() {
+                    first.value = space_before(arena.alloc(first.value.clone()), spaces);
+                } else {
+                    debug_assert!(final_comments.is_empty());
+                    final_comments = spaces;
+                }
+            }
+
+            crate::ast::Collection::with_items_and_comments(
+                arena,
+                parsed_elems.into_bump_slice(),
+                final_comments,
+            )
+        },
+    )
 }
 
 #[macro_export]
@@ -1500,10 +1504,10 @@ macro_rules! collection_trailing_sep_e {
     ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
         $crate::parser::between(
             $opening_brace,
-            $crate::parser::reset_min_indent($crate::collection_inner!(
+            $crate::parser::reset_min_indent($crate::parser::collection_inner(
                 $elem,
                 $delimiter,
-                $space_before
+                $space_before,
             )),
             $closing_brace,
         )
