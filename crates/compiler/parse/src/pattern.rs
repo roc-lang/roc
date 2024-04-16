@@ -4,8 +4,8 @@ use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, backtrackable, byte, fail_when, optional, skip_first, specialize_err, specialize_err_ref,
-    then, three_bytes, two_bytes, EPattern, PInParens, PList, PRecord, Parser,
+    self, backtrackable, byte, fail_when, map, optional, skip_first, specialize_err,
+    specialize_err_ref, then, three_bytes, two_bytes, EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
@@ -232,7 +232,7 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInPare
 fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize_err(
         EPattern::NumLiteral,
-        map!(crate::number_literal::number_literal(), |literal| {
+        map(crate::number_literal::number_literal(), |literal| {
             use crate::number_literal::NumLiteral::*;
 
             match literal {
@@ -269,7 +269,7 @@ fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> 
 }
 
 fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
-    map!(
+    map(
         collection_trailing_sep_e!(
             byte(b'[', PList::Open),
             list_element_pattern(),
@@ -277,7 +277,7 @@ fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
             byte(b']', PList::End),
             Pattern::SpaceBefore
         ),
-        Pattern::List
+        Pattern::List,
     )
 }
 
@@ -502,15 +502,15 @@ fn loc_ident_pattern_help<'a>(
 }
 
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    map!(
+    map(
         skip_first(
             byte(b'_', EPattern::Underscore),
-            optional(lowercase_ident_pattern())
+            optional(lowercase_ident_pattern()),
         ),
         |output| match output {
             Some(name) => Pattern::Underscore(name),
             None => Pattern::Underscore(""),
-        }
+        },
     )
 }
 
@@ -520,7 +520,7 @@ fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
 
 #[inline(always)]
 fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
-    map!(
+    map(
         collection_trailing_sep_e!(
             byte(b'{', PRecord::Open),
             record_pattern_field(),
@@ -528,7 +528,7 @@ fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
             byte(b'}', PRecord::End),
             Pattern::SpaceBefore
         ),
-        Pattern::RecordDestructure
+        Pattern::RecordDestructure,
     )
 }
 

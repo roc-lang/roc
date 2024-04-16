@@ -9,7 +9,7 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, backtrackable, byte, increment_min_indent, optional, reset_min_indent, skip_first,
+    and, backtrackable, byte, increment_min_indent, map, optional, reset_min_indent, skip_first,
     skip_second, specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader,
     EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
     SyntaxError,
@@ -54,35 +54,35 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
     record!(Module {
         comments: space0_e(EHeader::IndentStart),
         header: one_of![
-            map!(
+            map(
                 skip_first(
                     keyword("interface", EHeader::Start),
                     increment_min_indent(interface_header())
                 ),
                 Header::Interface
             ),
-            map!(
+            map(
                 skip_first(
                     keyword("app", EHeader::Start),
                     increment_min_indent(app_header())
                 ),
                 Header::App
             ),
-            map!(
+            map(
                 skip_first(
                     keyword("package", EHeader::Start),
                     increment_min_indent(package_header())
                 ),
                 Header::Package
             ),
-            map!(
+            map(
                 skip_first(
                     keyword("platform", EHeader::Start),
                     increment_min_indent(platform_header())
                 ),
                 Header::Platform
             ),
-            map!(
+            map(
                 skip_first(
                     keyword("hosted", EHeader::Start),
                     increment_min_indent(hosted_header())
@@ -220,9 +220,9 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
     one_of![
         specialize_err(
             |_, pos| EProvides::Identifier(pos),
-            map!(lowercase_ident(), To::ExistingPackage)
+            map(lowercase_ident(), To::ExistingPackage)
         ),
-        specialize_err(EProvides::Package, map!(package_name(), To::NewPackage))
+        specialize_err(EProvides::Package, map(package_name(), To::NewPackage))
     ]
 }
 
@@ -309,7 +309,7 @@ where
     F: Copy,
     E: 'a,
 {
-    loc!(map!(
+    loc!(map(
         specialize_err(|_, pos| to_expectation(pos), ident::uppercase()),
         Spaced::Item
     ))
@@ -323,7 +323,7 @@ where
     F: Copy,
     E: 'a,
 {
-    loc!(map!(
+    loc!(map(
         specialize_err(|_, pos| to_expectation(pos), unqualified_ident()),
         |n| Spaced::Item(ExposedName::new(n))
     ))
@@ -358,7 +358,7 @@ fn requires_rigids<'a>(
         byte(b'{', ERequires::ListStart),
         specialize_err(
             |_, pos| ERequires::Rigid(pos),
-            loc!(map!(ident::uppercase(), Spaced::Item))
+            loc!(map(ident::uppercase(), Spaced::Item))
         ),
         byte(b',', ERequires::ListEnd),
         byte(b'}', ERequires::ListEnd),
@@ -413,24 +413,22 @@ fn spaces_around_keyword<'a, K: Keyword, E>(
 where
     E: 'a + SpaceProblem,
 {
-    map!(
+    map(
         and(
             skip_second(
                 // parse any leading space before the keyword
                 backtrackable(space0_e(indent_problem1)),
                 // parse the keyword
-                crate::parser::keyword(K::KEYWORD, expectation)
+                crate::parser::keyword(K::KEYWORD, expectation),
             ),
             // parse the trailing space
-            space0_e(indent_problem2)
+            space0_e(indent_problem2),
         ),
-        |(before, after)| {
-            Spaces {
-                before,
-                item: keyword_item,
-                after,
-            }
-        }
+        move |(before, after)| Spaces {
+            before,
+            item: keyword_item,
+            after,
+        },
     )
 }
 
@@ -465,7 +463,7 @@ where
     F: Copy,
     E: 'a,
 {
-    loc!(map!(
+    loc!(map(
         specialize_err(|_, pos| to_expectation(pos), module_name()),
         Spaced::Item
     ))
@@ -560,25 +558,25 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
     // e.g.
     //
     // printLine : Str -> Effect {}
-    map!(
+    map(
         and(
             and(
                 loc!(specialize_err(
                     |_, pos| ETypedIdent::Identifier(pos),
                     lowercase_ident()
                 )),
-                space0_e(ETypedIdent::IndentHasType)
+                space0_e(ETypedIdent::IndentHasType),
             ),
             skip_first(
                 byte(b':', ETypedIdent::HasType),
                 space0_before_e(
                     specialize_err(
                         ETypedIdent::Type,
-                        reset_min_indent(type_annotation::located(true))
+                        reset_min_indent(type_annotation::located(true)),
                     ),
                     ETypedIdent::IndentType,
-                )
-            )
+                ),
+            ),
         ),
         |((ident, spaces_before_colon), ann)| {
             Spaced::Item(TypedIdent {
@@ -586,7 +584,7 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
                 spaces_before_colon,
                 ann,
             })
-        }
+        },
     )
 }
 
@@ -611,7 +609,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
     );
 
     one_of!(
-        map!(
+        map(
             and(
                 and(
                     // e.g. `pf.`
@@ -649,7 +647,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
             }
         )
         .trace("normal_import"),
-        map!(
+        map(
             and(
                 and(
                     // e.g. "filename"

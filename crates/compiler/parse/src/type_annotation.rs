@@ -9,8 +9,8 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, increment_min_indent, skip_first, skip_second, then, ERecord,
-    ETypeAbilityImpl,
+    absolute_column_min_indent, and, increment_min_indent, map, skip_first, skip_second, then,
+    ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -136,7 +136,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
             ),
             // Inline alias notation, e.g. [Nil, Cons a (List a)] as List a
             one_of![
-                map!(
+                map(
                     and(
                         skip_second(
                             backtrackable(space0_e(EType::TIndentEnd)),
@@ -170,7 +170,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(byte(b'*', EType::TWildcard)), |loc_val: Loc<()>| {
+    map(loc!(byte(b'*', EType::TWildcard)), |loc_val: Loc<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
@@ -398,12 +398,12 @@ fn record_type<'a>(
 }
 
 fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
-    map!(
+    map(
         and(
             specialize_err(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
-            loc_applied_args_e(stop_at_surface_has)
+            loc_applied_args_e(stop_at_surface_has),
         ),
         |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
             match &ctor {
@@ -418,7 +418,7 @@ fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation
                 TypeAnnotation::Malformed(_) => ctor,
                 _ => unreachable!(),
             }
-        }
+        },
     )
     .trace("type_annotation:applied_type")
 }
@@ -431,7 +431,7 @@ fn loc_applied_args_e<'a>(
 
 // Hash & Eq & ...
 fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
-    map!(
+    map(
         and(
             space0_before_optional_after(
                 specialize_err(EType::TApply, loc!(concrete_type())),
@@ -445,37 +445,37 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
                     EType::TIndentStart,
                     EType::TIndentEnd,
                 )
-            ))
+            )),
         ),
         |(first_ability, mut other_abilities): (
             Loc<TypeAnnotation<'a>>,
-            Vec<'a, Loc<TypeAnnotation<'a>>>
+            Vec<'a, Loc<TypeAnnotation<'a>>>,
         )| {
             other_abilities.insert(0, first_ability);
             other_abilities
-        }
+        },
     )
 }
 
 fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'a>> {
-    map!(
+    map(
         // Suppose we are trying to parse "a implements Hash"
         and(
             space0_around_ee(
                 // Parse "a", with appropriate spaces
                 specialize_err(
                     |_, pos| EType::TBadTypeVariable(pos),
-                    loc!(map!(lowercase_ident(), Spaced::Item)),
+                    loc!(map(lowercase_ident(), Spaced::Item)),
                 ),
                 EType::TIndentStart,
-                EType::TIndentEnd
+                EType::TIndentEnd,
             ),
             skip_first(
                 // Parse "implements"; we don't care about this keyword
                 word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
-                absolute_column_min_indent(ability_chain())
-            )
+                absolute_column_min_indent(ability_chain()),
+            ),
         ),
         |(var, abilities): (Loc<Spaced<'a, &'a str>>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
             let abilities_region = Region::span_across(
@@ -488,7 +488,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                 abilities: abilities.into_bump_slice(),
             };
             Loc::at(region, implements_clause)
-        }
+        },
     )
 }
 
@@ -530,7 +530,7 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
         word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
-            loc!(map!(
+            loc!(map(
                 collection_trailing_sep_e!(
                     byte(b'[', EType::TStart),
                     loc!(parse_implements_ability()),
@@ -549,7 +549,7 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, ETyp
     increment_min_indent(record!(ImplementsAbility::ImplementsAbility {
         ability: loc!(specialize_err(EType::TApply, concrete_type())),
         impls: optional(backtrackable(space0_before_e(
-            loc!(map!(
+            loc!(map(
                 specialize_err(
                     EType::TAbilityImpl,
                     collection_trailing_sep_e!(

@@ -11,10 +11,10 @@ use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident}
 use crate::keyword;
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, increment_min_indent, indented_seq,
-    line_min_indent, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
-    skip_second, specialize_err, specialize_err_ref, then, two_bytes, EClosure, EExpect, EExpr,
-    EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult,
-    Parser,
+    line_min_indent, map, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent,
+    skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes, EClosure,
+    EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen,
+    Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -163,8 +163,8 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Accessor<'a>>, EEx
         specialize_err(
             |_, pos| EExpr::Access(pos),
             one_of!(
-                map!(lowercase_ident(), Accessor::RecordField),
-                map!(integer_ident(), Accessor::TupleIndex),
+                map(lowercase_ident(), Accessor::RecordField),
+                map(integer_ident(), Accessor::TupleIndex),
             )
         )
     ))
@@ -1483,7 +1483,7 @@ mod ability {
 
     /// Parses a single ability demand line; see `parse_demand`.
     fn parse_demand_help<'a>() -> impl Parser<'a, AbilityMember<'a>, EAbility<'a>> {
-        map!(
+        map(
             // Require the type to be more indented than the name
             absolute_indented_seq(
                 specialize_err(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
@@ -1491,17 +1491,15 @@ mod ability {
                     and(
                         // TODO: do we get anything from picking up spaces here?
                         space0_e(EAbility::DemandName),
-                        byte(b':', EAbility::DemandColon)
+                        byte(b':', EAbility::DemandColon),
                     ),
-                    specialize_err(EAbility::Type, type_annotation::located(true))
-                )
+                    specialize_err(EAbility::Type, type_annotation::located(true)),
+                ),
             ),
-            |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| {
-                AbilityMember {
-                    name: name.map_owned(Spaced::Item),
-                    typ,
-                }
-            }
+            |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| AbilityMember {
+                name: name.map_owned(Spaced::Item),
+                typ,
+            },
         )
     }
 
@@ -2457,7 +2455,7 @@ mod when {
                 guard: loc_first_guard,
             }));
 
-            let branch_parser = map!(
+            let branch_parser = map(
                 and(
                     then(
                         branch_alternatives(options, Some(pattern_indent_level)),
@@ -2470,7 +2468,7 @@ mod when {
                             }
                         },
                     ),
-                    branch_result(original_indent + 1)
+                    branch_result(original_indent + 1),
                 ),
                 |((patterns, guard), expr)| {
                     let patterns: Vec<'a, _> = patterns;
@@ -2479,7 +2477,7 @@ mod when {
                         value: expr,
                         guard,
                     }
-                }
+                },
             );
 
             while !state.bytes().is_empty() {
@@ -2514,7 +2512,7 @@ mod when {
         and(
             branch_alternatives_help(pattern_indent_level),
             one_of![
-                map!(
+                map(
                     skip_first(
                         parser::keyword(keyword::IF, EWhen::IfToken),
                         // TODO we should require space before the expression but not after
@@ -3199,7 +3197,7 @@ fn string_like_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
 }
 
 fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
-    map!(
+    map(
         crate::number_literal::positive_number_literal(),
         |literal| {
             use crate::number_literal::NumLiteral::*;
@@ -3217,12 +3215,12 @@ fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
                     is_negative,
                 },
             }
-        }
+        },
     )
 }
 
 fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
-    map!(crate::number_literal::number_literal(), |literal| {
+    map(crate::number_literal::number_literal(), |literal| {
         use crate::number_literal::NumLiteral::*;
 
         match literal {

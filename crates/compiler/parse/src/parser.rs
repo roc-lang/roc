@@ -2194,7 +2194,7 @@ macro_rules! byte_check_indent {
 /// #     NotFound(Position),
 /// # }
 /// # let arena = Bump::new();
-/// let parser = map!(
+/// let parser = map(
 ///     word("hello", Problem::NotFound),
 ///     |_output| "new output!"
 /// );
@@ -2210,20 +2210,19 @@ macro_rules! byte_check_indent {
 /// assert_eq!(progress, Progress::NoProgress);
 /// assert_eq!(err, Problem::NotFound(Position::zero()));
 /// ```
-#[macro_export]
-macro_rules! map {
-    ($parser:expr, $transform:expr) => {
-        move |arena, state, min_indent| {
-            #[allow(clippy::redundant_closure_call)]
-            $parser
-                .parse(arena, state, min_indent)
-                .map(|(progress, output, next_state)| (progress, $transform(output), next_state))
-        }
-    };
+pub fn map<'a, Output, MappedOutput, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+    transform: impl Fn(Output) -> MappedOutput,
+) -> impl Parser<'a, MappedOutput, E> {
+    move |arena, state, min_indent| {
+        parser
+            .parse(arena, state, min_indent)
+            .map(|(progress, output, next_state)| (progress, transform(output), next_state))
+    }
 }
 
 /// Maps/transforms the `Ok` result of parsing using the given function.
-/// Similar to [`map!`], but the transform function also takes a bump allocator.
+/// Similar to [`map`], but the transform function also takes a bump allocator.
 ///
 /// # Example
 ///
@@ -2580,9 +2579,7 @@ where
 }
 
 /// Maps/transforms the `Ok` result of parsing using the given function.
-/// Similar to [`map!`], but the transform function also takes a bump allocator.
-///
-/// Function version of the [`map_with_arena!`] macro.
+/// Similar to [`map`], but the transform function also takes a bump allocator.
 ///
 /// For some reason, some usages won't compile unless they use this instead of the macro version.
 /// This is likely because the lifetime `'a` is not defined at the call site.
