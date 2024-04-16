@@ -356,6 +356,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::MalformedIdentifier(_, _, region))
             | Problem::RuntimeError(RuntimeError::MalformedTypeName(_, region))
             | Problem::RuntimeError(RuntimeError::MalformedClosure(region))
+            | Problem::RuntimeError(RuntimeError::MalformedSuffixed(region))
             | Problem::RuntimeError(RuntimeError::InvalidRecordUpdate { region })
             | Problem::RuntimeError(RuntimeError::InvalidFloat(_, region, _))
             | Problem::RuntimeError(RuntimeError::InvalidInt(_, _, region, _))
@@ -612,6 +613,8 @@ pub enum RuntimeError {
 
     MultipleRecordBuilders(Region),
     UnappliedRecordBuilder(Region),
+
+    MalformedSuffixed(Region),
 }
 
 impl RuntimeError {
@@ -645,6 +648,7 @@ impl RuntimeError {
             | RuntimeError::MalformedIdentifier(_, _, region)
             | RuntimeError::MalformedTypeName(_, region)
             | RuntimeError::MalformedClosure(region)
+            | RuntimeError::MalformedSuffixed(region)
             | RuntimeError::InvalidRecordUpdate { region }
             | RuntimeError::InvalidFloat(_, region, _)
             | RuntimeError::InvalidInt(_, _, region, _)

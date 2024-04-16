@@ -1,0 +1,13 @@
+[package]
+name = "roc_test_utils_dir"
+description = "Utility functions used all over the code base."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+remove_dir_all.workspace = true
+
+[dev-dependencies]

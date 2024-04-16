@@ -2,6 +2,7 @@ RecordUpdate {
     update: @1-2 Var {
         module_name: "",
         ident: "e",
+        suffixed: 0,
     },
     fields: [],
 }

@@ -38,9 +38,10 @@ Defs(
         ],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                    suffixed: 0,
+                },
                 @2-3 BoundVariable(
                     "e",
                 ),
@@ -50,5 +51,6 @@ Defs(
     @12-14 Var {
         module_name: "",
         ident: "e0",
+        suffixed: 0,
     },
 )

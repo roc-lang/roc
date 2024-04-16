@@ -567,6 +567,7 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.remove_spaces(arena)),
                 preceding_comment: Region::zero(),
             },
+            Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.remove_spaces(arena))),
         }
     }
 }
@@ -668,6 +669,7 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
 impl<'a> RemoveSpaces<'a> for Expr<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
+            Expr::EmptyDefsFinal => Expr::EmptyDefsFinal,
             Expr::Float(a) => Expr::Float(a),
             Expr::Num(a) => Expr::Num(a),
             Expr::NonBase10Int {
@@ -692,7 +694,15 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
             Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
-            Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
+            Expr::Var {
+                module_name,
+                ident,
+                suffixed,
+            } => Expr::Var {
+                module_name,
+                ident,
+                suffixed,
+            },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
@@ -755,13 +765,13 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
+            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
             Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
-            Expr::Suffixed(a) => a.remove_spaces(arena),
         }
     }
 }
@@ -792,7 +802,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
 impl<'a> RemoveSpaces<'a> for Pattern<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Pattern::Identifier(a) => Pattern::Identifier(a),
+            Pattern::Identifier { ident, suffixed } => Pattern::Identifier { ident, suffixed },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
@@ -825,9 +835,15 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Pattern::QualifiedIdentifier { module_name, ident } => {
-                Pattern::QualifiedIdentifier { module_name, ident }
-            }
+            Pattern::QualifiedIdentifier {
+                module_name,
+                ident,
+                suffixed,
+            } => Pattern::QualifiedIdentifier {
+                module_name,
+                ident,
+                suffixed,
+            },
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),

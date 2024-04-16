@@ -16,13 +16,15 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                    suffixed: 0,
+                },
                 @4-22 Apply(
                     @4-7 Var {
                         module_name: "",
                         ident: "foo",
+                        suffixed: 0,
                     },
                     [
                         @8-22 Record(
@@ -38,6 +40,7 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "blah",
+                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,
@@ -64,6 +67,7 @@ Defs(
         Var {
             module_name: "",
             ident: "x",
+            suffixed: 0,
         },
         [
             Newline,

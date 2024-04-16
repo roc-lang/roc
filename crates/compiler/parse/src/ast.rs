@@ -7,6 +7,7 @@ use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -267,9 +268,6 @@ pub enum Expr<'a> {
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
 
-    /// An expression followed by `!``
-    Suffixed(&'a Expr<'a>),
-
     RecordUpdate {
         update: &'a Loc<Expr<'a>>,
         fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
@@ -289,6 +287,7 @@ pub enum Expr<'a> {
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
+        suffixed: u8, // how many `!` suffixes, for example `doTheThing!!` executes a Task that returns a Task
     },
 
     Underscore(&'a str),
@@ -306,6 +305,11 @@ pub enum Expr<'a> {
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
+
+    /// Used in place of an expression when the final expression is empty
+    /// This may happen if the final expression is actually a suffixed statement
+    EmptyDefsFinal,
+
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -341,11 +345,116 @@ pub enum Expr<'a> {
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
     MalformedClosure,
+    MalformedSuffixed(&'a Loc<Expr<'a>>),
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
     MultipleRecordBuilders(&'a Loc<Expr<'a>>),
     UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
+}
+
+impl Expr<'_> {
+    pub fn increment_var_suffix(&mut self, count: u8) {
+        match self {
+            Expr::Var { suffixed, .. } => {
+                *suffixed += count;
+            }
+            _ => {
+                internal_error!("increment_var_suffix called on non-Var expression");
+            }
+        }
+    }
+
+    pub fn get_region_spanning_binops(&self) -> Region {
+        match self {
+            Expr::BinOps(firsts, last) => {
+                let mut region = last.region;
+
+                for (loc_expr, _) in firsts.iter() {
+                    region = Region::span_across(&loc_expr.region, &region);
+                }
+
+                region
+            }
+            _ => internal_error!("other expr types not supported"),
+        }
+    }
+}
+
+pub fn split_loc_exprs_around<'a>(
+    items: &'a [&Loc<Expr<'a>>],
+    index: usize,
+) -> (&'a [&'a Loc<Expr<'a>>], &'a [&'a Loc<Expr<'a>>]) {
+    let (before, rest) = items.split_at(index);
+    let after = &rest[1..]; // Skip the index element
+
+    (before, after)
+}
+
+pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
+    match loc_expr.value.extract_spaces().item {
+        // expression without arguments, `read!`
+        Expr::Var { suffixed, .. } => suffixed > 0,
+
+        // expression with arguments, `line! "Foo"`
+        Expr::Apply(sub_loc_expr, apply_args, _) => {
+            let is_function_suffixed = is_loc_expr_suffixed(sub_loc_expr);
+            let any_args_suffixed = apply_args.iter().any(|arg| is_loc_expr_suffixed(arg));
+
+            any_args_suffixed || is_function_suffixed
+        }
+
+        // expression in a pipeline, `"hi" |> say!`
+        Expr::BinOps(firsts, last) => {
+            let is_expr_suffixed = is_loc_expr_suffixed(last);
+            let any_chain_suffixed = firsts
+                .iter()
+                .any(|(chain_loc_expr, _)| is_loc_expr_suffixed(chain_loc_expr));
+
+            is_expr_suffixed || any_chain_suffixed
+        }
+
+        // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
+        Expr::If(if_thens, final_else) => {
+            let any_if_thens_suffixed = if_thens.iter().any(|(if_then, else_expr)| {
+                is_loc_expr_suffixed(if_then) || is_loc_expr_suffixed(else_expr)
+            });
+
+            is_loc_expr_suffixed(final_else) || any_if_thens_suffixed
+        }
+
+        // expression in parens `(read!)`
+        Expr::ParensAround(sub_loc_expr) => {
+            is_loc_expr_suffixed(&Loc::at(loc_expr.region, *sub_loc_expr))
+        }
+
+        // expression in a closure
+        Expr::Closure(_, sub_loc_expr) => is_loc_expr_suffixed(sub_loc_expr),
+
+        // expressions inside a Defs
+        // note we ignore the final expression as it should not be suffixed
+        Expr::Defs(defs, _) => {
+            let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
+                Ok(_) => false,
+                Err(value_index) => match defs.value_defs[value_index.index()] {
+                    ValueDef::Body(_, loc_expr) => is_loc_expr_suffixed(loc_expr),
+                    ValueDef::AnnotatedBody { body_expr, .. } => is_loc_expr_suffixed(body_expr),
+                    _ => false,
+                },
+            });
+
+            any_defs_suffixed
+        }
+
+        _ => false,
+    }
+}
+
+pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
+    let (before, rest) = items.split_at(target);
+    let after = &rest[1..];
+
+    (before, after)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -458,6 +567,18 @@ pub enum ValueDef<'a> {
         condition: &'a Loc<Expr<'a>>,
         preceding_comment: Region,
     },
+
+    Stmt(&'a Loc<Expr<'a>>),
+}
+
+impl<'a> ValueDef<'a> {
+    pub fn replace_expr(&mut self, new_expr: &'a Loc<Expr<'a>>) {
+        match self {
+            ValueDef::Body(_, expr) => *expr = new_expr,
+            ValueDef::AnnotatedBody { body_expr, .. } => *body_expr = new_expr,
+            _ => internal_error!("replacing expr in unsupported ValueDef"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -487,11 +608,62 @@ impl<'a> Defs<'a> {
         })
     }
 
+    pub fn list_value_defs(&self) -> impl Iterator<Item = (usize, &ValueDef<'a>)> {
+        self.tags
+            .iter()
+            .enumerate()
+            .filter_map(|(tag_index, tag)| match tag.split() {
+                Ok(_) => None,
+                Err(value_index) => Some((tag_index, &self.value_defs[value_index.index()])),
+            })
+    }
+
     pub fn last(&self) -> Option<Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.last().map(|tag| match tag.split() {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    // We could have a type annotation as the last tag,
+    // this helper ensures we refer to the last value_def
+    // and that we remove the correct tag
+    pub fn last_value_suffixed(&self) -> Option<(Self, &'a Loc<Expr<'a>>)> {
+        let value_indexes =
+            self.tags
+                .clone()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(tag_index, tag)| match tag.split() {
+                    Ok(_) => None,
+                    Err(value_index) => Some((tag_index, value_index.index())),
+                });
+
+        if let Some((tag_index, value_index)) = value_indexes.last() {
+            match self.value_defs[value_index] {
+                ValueDef::Body(
+                    Loc {
+                        value: Pattern::RecordDestructure(collection),
+                        ..
+                    },
+                    loc_expr,
+                ) if collection.is_empty() && is_loc_expr_suffixed(loc_expr) => {
+                    let mut new_defs = self.clone();
+                    new_defs.remove_value_def(tag_index);
+
+                    return Some((new_defs, loc_expr));
+                }
+                ValueDef::Stmt(loc_expr) if is_loc_expr_suffixed(loc_expr) => {
+                    let mut new_defs = self.clone();
+                    new_defs.remove_value_def(tag_index);
+
+                    return Some((new_defs, loc_expr));
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
     pub fn remove_value_def(&mut self, index: usize) {
@@ -567,6 +739,7 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
+    /// Replace the `value_def` at the given index
     pub fn replace_with_value_def(
         &mut self,
         index: usize,
@@ -592,51 +765,81 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
-    // Find the first definition that is a Apply Suffixed
-    // We need the tag_index so we can use it to remove the value
-    // We need the value index to know if it is the first
-    pub fn search_suffixed_defs(&self) -> Option<(usize, usize)> {
-        for (tag_index, tag) in self.tags.iter().enumerate() {
-            if let Err(value_index) = tag.split() {
-                let index = value_index.index();
+    /// Split the defs around a given target index
+    ///
+    /// This is useful for unwrapping suffixed `!`
+    pub fn split_defs_around(&self, target: usize) -> SplitDefsAround<'a> {
+        let mut before = Defs::default();
+        let mut after = Defs::default();
 
-                if let ValueDef::Body(_, expr) = &self.value_defs[index] {
-                    // The Suffixed has arguments applied e.g. `Stdout.line! "Hello World"`
-                    if let Expr::Apply(sub_expr, _, _) = expr.value {
-                        if let Expr::Suffixed(_) = sub_expr.value {
-                            return Some((tag_index, index));
+        for (tag_index, tag) in self.tags.iter().enumerate() {
+            let region = self.regions[tag_index];
+            let space_before = {
+                let start = self.space_before[tag_index].start();
+                let len = self.space_before[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+            let space_after = {
+                let start = self.space_after[tag_index].start();
+                let len = self.space_after[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+
+            match tag.split() {
+                Ok(type_def_index) => {
+                    let type_def = self.type_defs[type_def_index.index()];
+
+                    match tag_index.cmp(&target) {
+                        std::cmp::Ordering::Less => {
+                            // before
+                            let type_def_index = Index::push_new(&mut before.type_defs, type_def);
+                            let tag = EitherIndex::from_left(type_def_index);
+                            before.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // after
+                            let type_def_index = Index::push_new(&mut after.type_defs, type_def);
+                            let tag = EitherIndex::from_left(type_def_index);
+                            after.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // target, do nothing
                         }
                     }
+                }
+                Err(value_def_index) => {
+                    let value_def = self.value_defs[value_def_index.index()];
 
-                    // The Suffixed has NO arguments applied e.g. `Stdin.line!`
-                    if let Expr::Suffixed(_) = expr.value {
-                        return Some((tag_index, index));
+                    match tag_index.cmp(&target) {
+                        std::cmp::Ordering::Less => {
+                            // before
+                            let new_value_def_index =
+                                Index::push_new(&mut before.value_defs, value_def);
+                            let tag = EitherIndex::from_right(new_value_def_index);
+                            before.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // after
+                            let new_value_def_index =
+                                Index::push_new(&mut after.value_defs, value_def);
+                            let tag = EitherIndex::from_right(new_value_def_index);
+                            after.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // target, do nothing
+                        }
                     }
                 }
             }
-        }
-
-        None
-    }
-
-    // For desugaring Suffixed Defs we need to split the defs around the Suffixed value
-    pub fn split_values_either_side_of(&self, index: usize) -> SplitDefsAround {
-        let mut before = self.clone();
-        let mut after = self.clone();
-
-        before.tags = self.tags[0..index].to_vec();
-
-        if index >= self.tags.len() {
-            after.tags = self.tags.clone();
-            after.tags.clear();
-        } else {
-            after.tags = self.tags[(index + 1)..].to_vec();
         }
 
         SplitDefsAround { before, after }
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct SplitDefsAround<'a> {
     pub before: Defs<'a>,
     pub after: Defs<'a>,
@@ -871,7 +1074,15 @@ impl<'a> PatternAs<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
-    Identifier(&'a str),
+    Identifier {
+        ident: &'a str,
+        suffixed: u8,
+    },
+    QualifiedIdentifier {
+        module_name: &'a str,
+        ident: &'a str,
+        suffixed: u8,
+    },
 
     Tag(&'a str),
 
@@ -923,10 +1134,6 @@ pub enum Pattern<'a> {
     // Malformed
     Malformed(&'a str),
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    QualifiedIdentifier {
-        module_name: &'a str,
-        ident: &'a str,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -992,11 +1199,22 @@ impl<'a> Pattern<'a> {
             //      { x, y } : { x : Int, y ? Bool }
             //      { x, y ? False } = rec
             OptionalField(x, _) => match other {
-                Identifier(y) | OptionalField(y, _) => x == y,
+                Identifier {
+                    ident: y,
+                    suffixed: 0,
+                }
+                | OptionalField(y, _) => x == y,
                 _ => false,
             },
-            Identifier(x) => match other {
-                Identifier(y) | OptionalField(y, _) => x == y,
+            Identifier {
+                ident: x,
+                suffixed: a,
+            } => match other {
+                Identifier {
+                    ident: y,
+                    suffixed: b,
+                } => x == y && a == b,
+                OptionalField(y, _) => x == y,
                 _ => false,
             },
             NumLiteral(x) => {
@@ -1057,13 +1275,15 @@ impl<'a> Pattern<'a> {
             QualifiedIdentifier {
                 module_name: a,
                 ident: x,
+                suffixed: i,
             } => {
                 if let QualifiedIdentifier {
                     module_name: b,
                     ident: y,
+                    suffixed: j,
                 } = other
                 {
-                    a == b && x == y
+                    a == b && x == y && i == j
                 } else {
                     false
                 }
@@ -1126,6 +1346,15 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
+        }
+    }
+
+    // used to check if a pattern is suffixed to report as an error
+    pub fn is_suffixed(&self) -> bool {
+        match self {
+            Pattern::Identifier { suffixed, .. } => *suffixed > 0,
+            Pattern::QualifiedIdentifier { suffixed, .. } => *suffixed > 0,
+            _ => false,
         }
     }
 }
@@ -1384,11 +1613,13 @@ impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
         ident: "<function>",
+        suffixed: 0,
     };
 
     pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
         module_name: "",
         ident: "*",
+        suffixed: 0,
     };
 
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
@@ -1617,6 +1848,7 @@ impl<'a> Malformed for Expr<'a> {
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
             IngestedFile(_, _) |
+            EmptyDefsFinal |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
@@ -1650,10 +1882,10 @@ impl<'a> Malformed for Expr<'a> {
 
             MalformedIdent(_, _) |
             MalformedClosure |
+            MalformedSuffixed(..) |
             PrecedenceConflict(_) |
             MultipleRecordBuilders(_) |
             UnappliedRecordBuilder(_) => true,
-            Suffixed(expr) => expr.is_malformed(),
         }
     }
 }
@@ -1748,7 +1980,7 @@ impl<'a> Malformed for Pattern<'a> {
         use Pattern::*;
 
         match self {
-            Identifier(_) |
+            Identifier{ .. } |
             Tag(_) |
             OpaqueRef(_) => false,
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
@@ -1888,6 +2120,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
+            ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
         }
     }
 }

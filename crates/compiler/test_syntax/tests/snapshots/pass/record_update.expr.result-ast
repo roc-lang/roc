@@ -2,6 +2,7 @@ RecordUpdate {
     update: @2-13 Var {
         module_name: "Foo.Bar",
         ident: "baz",
+        suffixed: 0,
     },
     fields: [
         @16-20 RequiredValue(

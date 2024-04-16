@@ -19,9 +19,10 @@ Defs {
     type_defs: [],
     value_defs: [
         Body(
-            @0-3 Identifier(
-                "foo",
-            ),
+            @0-3 Identifier {
+                ident: "foo",
+                suffixed: 0,
+            },
             @6-7 Num(
                 "1",
             ),

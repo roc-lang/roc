@@ -197,12 +197,17 @@ where
     )
 }
 
-pub fn check_indent<'a, E>(indent_problem: fn(Position) -> E) -> impl Parser<'a, (), E>
+pub fn check_indent<'a, E>(
+    indent_problem: fn(Position) -> E,
+    inside_suffixed_statement: bool,
+) -> impl Parser<'a, (), E>
 where
     E: 'a,
 {
+    let extra_spaces = if inside_suffixed_statement { 1 } else { 0 };
+
     move |_, state: State<'a>, min_indent: u32| {
-        if state.column() >= min_indent {
+        if state.column() >= (min_indent + extra_spaces) {
             Ok((NoProgress, (), state))
         } else {
             Err((NoProgress, indent_problem(state.pos())))

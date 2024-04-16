@@ -415,7 +415,7 @@ fn eq_tag_union_help<'a>(
     };
 
     //
-    // combine all the statments
+    // combine all the statements
     //
     let compare_values = tag_id_a_stmt(root.arena.alloc(
         //

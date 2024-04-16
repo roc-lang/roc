@@ -1,4 +1,5 @@
 Var {
     module_name: "One.Two",
     ident: "whee",
+    suffixed: 0,
 }

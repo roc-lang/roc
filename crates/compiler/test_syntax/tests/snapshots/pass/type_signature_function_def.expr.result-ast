@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
+                @0-3 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 @6-24 Function(
                     [
                         @6-9 Apply(
@@ -40,9 +41,10 @@ Defs(
                 ),
             ),
             AnnotatedBody {
-                ann_pattern: @0-3 Identifier(
-                    "foo",
-                ),
+                ann_pattern: @0-3 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 ann_type: @6-24 Function(
                     [
                         @6-9 Apply(
@@ -63,14 +65,16 @@ Defs(
                     ),
                 ),
                 comment: None,
-                body_pattern: @25-28 Identifier(
-                    "foo",
-                ),
+                body_pattern: @25-28 Identifier {
+                    ident: "foo",
+                    suffixed: 0,
+                },
                 body_expr: @31-42 Closure(
                     [
-                        @32-33 Identifier(
-                            "x",
-                        ),
+                        @32-33 Identifier {
+                            ident: "x",
+                            suffixed: 0,
+                        },
                         @35-36 Underscore(
                             "",
                         ),
