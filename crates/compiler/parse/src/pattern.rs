@@ -4,7 +4,7 @@ use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    self, backtrackable, byte, fail_when, map, optional, skip_first, specialize_err,
+    self, backtrackable, byte, fail_when, loc, map, optional, skip_first, specialize_err,
     specialize_err_ref, then, three_bytes, two_bytes, EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::state::State;
@@ -32,9 +32,9 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
         // An ident is the most common param, e.g. \foo -> ...
         loc_ident_pattern_help(true),
         // Underscore is also common, e.g. \_ -> ...
-        loc!(underscore_pattern_help()),
+        loc(underscore_pattern_help()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
-        loc!(specialize_err(
+        loc(specialize_err(
             EPattern::Record,
             crate::pattern::record_pattern_help()
         )),
@@ -87,15 +87,15 @@ fn loc_pattern_help_help<'a>(
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
-        loc!(underscore_pattern_help()),
+        loc(underscore_pattern_help()),
         loc_ident_pattern_help(can_have_arguments),
-        loc!(specialize_err(
+        loc(specialize_err(
             EPattern::Record,
             crate::pattern::record_pattern_help()
         )),
-        loc!(specialize_err(EPattern::List, list_pattern_help())),
-        loc!(number_pattern_help()),
-        loc!(string_like_pattern_help()),
+        loc(specialize_err(EPattern::List, list_pattern_help())),
+        loc(number_pattern_help()),
+        loc(string_like_pattern_help()),
     )
 }
 
@@ -109,7 +109,7 @@ fn pattern_as<'a>() -> impl Parser<'a, PatternAs<'a>, EPattern<'a>> {
 
         let position = state.pos();
 
-        match loc!(lowercase_ident()).parse(arena, state, min_indent) {
+        match loc(lowercase_ident()).parse(arena, state, min_indent) {
             Ok((_, identifier, state)) => Ok((
                 MadeProgress,
                 PatternAs {
@@ -199,7 +199,7 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
 
 fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
     then(
-        loc!(collection_trailing_sep_e!(
+        loc(collection_trailing_sep_e!(
             byte(b'(', PInParens::Open),
             specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
             byte(b',', PInParens::End),
@@ -290,16 +290,13 @@ fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
 }
 
 fn three_list_rest_pattern_error<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
-    fail_when(
-        PList::Rest,
-        loc!(three_bytes(b'.', b'.', b'.', PList::Rest)),
-    )
+    fail_when(PList::Rest, loc(three_bytes(b'.', b'.', b'.', PList::Rest)))
 }
 
 fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let (_, loc_word, state) =
-            loc!(two_bytes(b'.', b'.', PList::Open)).parse(arena, state, min_indent)?;
+            loc(two_bytes(b'.', b'.', PList::Open)).parse(arena, state, min_indent)?;
 
         let no_as = Loc::at(loc_word.region, Pattern::ListRest(None));
 
@@ -334,9 +331,8 @@ fn loc_ident_pattern_help<'a>(
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let original_state = state.clone();
 
-        let (_, loc_ident, state) =
-            specialize_err(|_, pos| EPattern::Start(pos), loc!(parse_ident))
-                .parse(arena, state, min_indent)?;
+        let (_, loc_ident, state) = specialize_err(|_, pos| EPattern::Start(pos), loc(parse_ident))
+            .parse(arena, state, min_indent)?;
 
         match loc_ident.value {
             Ident::Tag(tag) => {
@@ -539,9 +535,9 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         // You must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
         let pos = state.pos();
-        let (progress, loc_label, state) = loc!(specialize_err(
+        let (progress, loc_label, state) = loc(specialize_err(
             move |_, _| PRecord::Field(pos),
-            lowercase_ident()
+            lowercase_ident(),
         ))
         .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);

@@ -11,7 +11,7 @@ use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident}
 use crate::keyword;
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, increment_min_indent, indented_seq,
-    line_min_indent, map, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent,
+    line_min_indent, loc, map, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent,
     skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes, EClosure,
     EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen,
     Either, ParseResult, Parser,
@@ -94,7 +94,7 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
     then(
-        loc!(collection_trailing_sep_e!(
+        loc(collection_trailing_sep_e!(
             byte(b'(', EInParens::Open),
             specialize_err_ref(EInParens::Expr, loc_expr(false)),
             byte(b',', EInParens::End),
@@ -132,7 +132,7 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
 
 fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     map_with_arena!(
-        loc!(and(
+        loc(and(
             specialize_err(EExpr::InParens, loc_expr_in_parens_help()),
             record_field_access_chain()
         )),
@@ -177,19 +177,19 @@ fn loc_term_or_underscore_or_conditional<'a>(
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize_err(EExpr::If, if_expr_help(options))),
-        loc!(specialize_err(EExpr::When, when::expr_help(options))),
-        loc!(specialize_err(EExpr::Str, string_like_literal_help())),
-        loc!(specialize_err(
+        loc(specialize_err(EExpr::If, if_expr_help(options))),
+        loc(specialize_err(EExpr::When, when::expr_help(options))),
+        loc(specialize_err(EExpr::Str, string_like_literal_help())),
+        loc(specialize_err(
             EExpr::Number,
             positive_number_literal_help()
         )),
-        loc!(specialize_err(EExpr::Closure, closure_help(options))),
-        loc!(crash_kw()),
-        loc!(underscore_expression()),
-        loc!(record_literal_help()),
-        loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
+        loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(crash_kw()),
+        loc(underscore_expression()),
+        loc(record_literal_help()),
+        loc(specialize_err(EExpr::List, list_literal_help())),
+        loc(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
         )),
@@ -203,16 +203,16 @@ fn loc_term_or_underscore<'a>(
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize_err(EExpr::Str, string_like_literal_help())),
-        loc!(specialize_err(
+        loc(specialize_err(EExpr::Str, string_like_literal_help())),
+        loc(specialize_err(
             EExpr::Number,
             positive_number_literal_help()
         )),
-        loc!(specialize_err(EExpr::Closure, closure_help(options))),
-        loc!(underscore_expression()),
-        loc!(record_literal_help()),
-        loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
+        loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(underscore_expression()),
+        loc(record_literal_help()),
+        loc(specialize_err(EExpr::List, list_literal_help())),
+        loc(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
         )),
@@ -222,15 +222,15 @@ fn loc_term_or_underscore<'a>(
 fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize_err(EExpr::Str, string_like_literal_help())),
-        loc!(specialize_err(
+        loc(specialize_err(EExpr::Str, string_like_literal_help())),
+        loc(specialize_err(
             EExpr::Number,
             positive_number_literal_help()
         )),
-        loc!(specialize_err(EExpr::Closure, closure_help(options))),
-        loc!(record_literal_help()),
-        loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
+        loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(record_literal_help()),
+        loc(specialize_err(EExpr::List, list_literal_help())),
+        loc(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
         )),
@@ -273,17 +273,17 @@ fn loc_possibly_negative_or_negated_term<'a>(
             let initial = state.clone();
 
             let (_, (loc_op, loc_expr), state) =
-                and(loc!(unary_negate()), loc_term(options)).parse(arena, state, min_indent)?;
+                and(loc(unary_negate()), loc_term(options)).parse(arena, state, min_indent)?;
 
             let loc_expr = numeric_negate_expression(arena, initial, loc_op, loc_expr, &[]);
 
             Ok((MadeProgress, loc_expr, state))
         },
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
-        loc!(specialize_err(EExpr::Number, number_literal_help())),
-        loc!(map_with_arena!(
+        loc(specialize_err(EExpr::Number, number_literal_help())),
+        loc(map_with_arena!(
             and(
-                loc!(byte(b'!', EExpr::Start)),
+                loc(byte(b'!', EExpr::Start)),
                 space0_before_e(loc_term(options), EExpr::IndentStart)
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
@@ -323,12 +323,12 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
 fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of![
-        loc!(specialize_err(EExpr::If, if_expr_help(options))),
-        loc!(specialize_err(EExpr::When, when::expr_help(options))),
-        loc!(specialize_err(EExpr::Expect, expect_help(options))),
-        loc!(specialize_err(EExpr::Dbg, dbg_help(options))),
-        loc!(specialize_err(EExpr::Closure, closure_help(options))),
-        loc!(expr_operator_chain(options)),
+        loc(specialize_err(EExpr::If, if_expr_help(options))),
+        loc(specialize_err(EExpr::When, when::expr_help(options))),
+        loc(specialize_err(EExpr::Expect, expect_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_help(options))),
+        loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(expr_operator_chain(options)),
         fail_expr_start_e()
     ]
     .trace("expr_start")
@@ -1486,7 +1486,7 @@ mod ability {
         map(
             // Require the type to be more indented than the name
             absolute_indented_seq(
-                specialize_err(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
+                specialize_err(|_, pos| EAbility::DemandName(pos), loc(lowercase_ident())),
                 skip_first(
                     and(
                         // TODO: do we get anything from picking up spaces here?
@@ -2010,7 +2010,7 @@ fn parse_expr_end<'a>(
             let before_op = state.clone();
             // try an operator
             let line_indent = state.line_indent();
-            match loc!(operator()).parse(arena, state.clone(), min_indent) {
+            match loc(operator()).parse(arena, state.clone(), min_indent) {
                 Err((MadeProgress, f)) => Err((MadeProgress, f)),
                 Ok((_, loc_op, state)) => {
                     expr_state.consume_spaces(arena);
@@ -2980,7 +2980,7 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
 
     map_with_arena!(
         and(
-            specialize_err(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
+            specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
             and(
                 spaces(),
                 optional(either!(
@@ -3078,12 +3078,12 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                     // so that we have a Spaceable value to work with,
                     // and then in canonicalization verify that it's an Expr::Var
                     // (and not e.g. an `Expr::Access`) and extract its string.
-                    loc!(record_updateable_identifier()),
+                    loc(record_updateable_identifier()),
                 ),
                 byte(b'&', ERecord::Ampersand)
             ))),
             fields: collection_inner!(
-                loc!(record_field()),
+                loc(record_field()),
                 byte(b',', ERecord::End),
                 RecordField::SpaceBefore
             ),

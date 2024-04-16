@@ -4,7 +4,9 @@ use crate::ast::{
 use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
-use crate::parser::{and, byte, skip_second, specialize_err, EPackageEntry, EPackageName, Parser};
+use crate::parser::{
+    and, byte, loc, skip_second, specialize_err, EPackageEntry, EPackageName, Parser,
+};
 use crate::parser::{optional, then};
 use crate::string_literal;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -353,7 +355,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                 ),
                 space0_e(EPackageEntry::IndentPackage)
             )),
-            loc!(specialize_err(EPackageEntry::BadPackage, package_name()))
+            loc(specialize_err(EPackageEntry::BadPackage, package_name()))
         ),
         move |arena, (opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
@@ -380,9 +382,9 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
     then(
-        loc!(specialize_err(
+        loc(specialize_err(
             EPackageName::BadPath,
-            string_literal::parse_str_literal()
+            string_literal::parse_str_literal(),
         )),
         move |_arena, state, progress, text| match text.value {
             StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),

@@ -73,7 +73,7 @@ pub enum StrLikeLiteral<'a> {
 
 pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     then(
-        loc!(parse_str_like_literal()),
+        loc(parse_str_like_literal()),
         |_arena, state, progress, str_like| match str_like.value {
             StrLikeLiteral::SingleQuote(_) => Err((
                 progress,

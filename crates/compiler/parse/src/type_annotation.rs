@@ -9,7 +9,7 @@ use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
-    absolute_column_min_indent, and, increment_min_indent, map, skip_first, skip_second, then,
+    absolute_column_min_indent, and, increment_min_indent, loc, map, skip_first, skip_second, then,
     ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
@@ -41,7 +41,7 @@ fn tag_union_type<'a>(
     move |arena, state, min_indent| {
         let (_, tags, state) = collection_trailing_sep_e!(
             byte(b'[', ETypeTagUnion::Open),
-            loc!(tag_type(false)),
+            loc(tag_type(false)),
             byte(b',', ETypeTagUnion::End),
             byte(b']', ETypeTagUnion::End),
             Tag::SpaceBefore
@@ -122,16 +122,16 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
                 loc_wildcard(),
                 loc_inferred(),
                 specialize_err(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
-                loc!(specialize_err(
+                loc(specialize_err(
                     EType::TRecord,
                     record_type(stop_at_surface_has)
                 )),
-                loc!(specialize_err(
+                loc(specialize_err(
                     EType::TTagUnion,
                     tag_union_type(stop_at_surface_has)
                 )),
-                loc!(applied_type(stop_at_surface_has)),
-                loc!(parse_type_variable(stop_at_surface_has)),
+                loc(applied_type(stop_at_surface_has)),
+                loc(parse_type_variable(stop_at_surface_has)),
                 fail(EType::TStart),
             ),
             // Inline alias notation, e.g. [Nil, Cons a (List a)] as List a
@@ -170,7 +170,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map(loc!(byte(b'*', EType::TWildcard)), |loc_val: Loc<()>| {
+    map(loc(byte(b'*', EType::TWildcard)), |loc_val: Loc<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
@@ -215,16 +215,16 @@ fn loc_applied_arg<'a>(
                 loc_wildcard(),
                 loc_inferred(),
                 specialize_err(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
-                loc!(specialize_err(
+                loc(specialize_err(
                     EType::TRecord,
                     record_type(stop_at_surface_has)
                 )),
-                loc!(specialize_err(
+                loc(specialize_err(
                     EType::TTagUnion,
                     tag_union_type(stop_at_surface_has)
                 )),
-                loc!(specialize_err(EType::TApply, concrete_type())),
-                loc!(parse_type_variable(stop_at_surface_has))
+                loc(specialize_err(EType::TApply, concrete_type())),
+                loc(parse_type_variable(stop_at_surface_has))
             )
         ),
         |arena: &'a Bump, (spaces, argument): (&'a [_], Loc<TypeAnnotation<'a>>)| {
@@ -242,7 +242,7 @@ fn loc_type_in_parens<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
     then(
-        loc!(and(
+        loc(and(
             collection_trailing_sep_e!(
                 byte(b'(', ETypeInParens::Open),
                 specialize_err_ref(ETypeInParens::Type, expression(true, false)),
@@ -252,8 +252,8 @@ fn loc_type_in_parens<'a>(
             ),
             optional(allocated(specialize_err_ref(
                 ETypeInParens::Type,
-                term(stop_at_surface_has)
-            )))
+                term(stop_at_surface_has),
+            ))),
         )),
         |_arena, state, progress, item| {
             let Loc {
@@ -281,7 +281,7 @@ fn loc_type_in_parens<'a>(
 fn tag_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         let (_, name, state) =
-            loc!(parse_tag_name(ETypeTagUnion::End)).parse(arena, state, min_indent)?;
+            loc(parse_tag_name(ETypeTagUnion::End)).parse(arena, state, min_indent)?;
 
         let (_, args, state) =
             specialize_err_ref(ETypeTagUnion::Type, loc_applied_args_e(stop_at_surface_has))
@@ -320,9 +320,9 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         // You must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
         let pos = state.pos();
-        let (progress, loc_label, state) = loc!(specialize_err(
+        let (progress, loc_label, state) = loc(specialize_err(
             move |_, _| ETypeRecord::Field(pos),
-            lowercase_ident_keyword_e()
+            lowercase_ident_keyword_e(),
         ))
         .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);
@@ -384,7 +384,7 @@ fn record_type<'a>(
     record!(TypeAnnotation::Record {
         fields: collection_trailing_sep_e!(
             byte(b'{', ETypeRecord::Open),
-            loc!(record_type_field()),
+            loc(record_type_field()),
             byte(b',', ETypeRecord::End),
             byte(b'}', ETypeRecord::End),
             AssignedField::SpaceBefore
@@ -434,14 +434,14 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
     map(
         and(
             space0_before_optional_after(
-                specialize_err(EType::TApply, loc!(concrete_type())),
+                specialize_err(EType::TApply, loc(concrete_type())),
                 EType::TIndentStart,
                 EType::TIndentEnd,
             ),
             zero_or_more!(skip_first(
                 byte(b'&', EType::TImplementsClause),
                 space0_before_optional_after(
-                    specialize_err(EType::TApply, loc!(concrete_type())),
+                    specialize_err(EType::TApply, loc(concrete_type())),
                     EType::TIndentStart,
                     EType::TIndentEnd,
                 )
@@ -465,7 +465,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
                 // Parse "a", with appropriate spaces
                 specialize_err(
                     |_, pos| EType::TBadTypeVariable(pos),
-                    loc!(map(lowercase_ident(), Spaced::Item)),
+                    loc(map(lowercase_ident(), Spaced::Item)),
                 ),
                 EType::TIndentStart,
                 EType::TIndentEnd,
@@ -530,15 +530,15 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
         word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
-            loc!(map(
+            loc(map(
                 collection_trailing_sep_e!(
                     byte(b'[', EType::TStart),
-                    loc!(parse_implements_ability()),
+                    loc(parse_implements_ability()),
                     byte(b',', EType::TEnd),
                     byte(b']', EType::TEnd),
                     ImplementsAbility::SpaceBefore
                 ),
-                ImplementsAbilities::Implements
+                ImplementsAbilities::Implements,
             )),
             EType::TIndentEnd,
         ),
@@ -547,14 +547,14 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
 
 fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, EType<'a>> {
     increment_min_indent(record!(ImplementsAbility::ImplementsAbility {
-        ability: loc!(specialize_err(EType::TApply, concrete_type())),
+        ability: loc(specialize_err(EType::TApply, concrete_type())),
         impls: optional(backtrackable(space0_before_e(
-            loc!(map(
+            loc(map(
                 specialize_err(
                     EType::TAbilityImpl,
                     collection_trailing_sep_e!(
                         byte(b'{', ETypeAbilityImpl::Open),
-                        specialize_err(|e: ERecord<'_>, _| e.into(), loc!(ability_impl_field())),
+                        specialize_err(|e: ERecord<'_>, _| e.into(), loc(ability_impl_field())),
                         byte(b',', ETypeAbilityImpl::End),
                         byte(b'}', ETypeAbilityImpl::End),
                         AssignedField::SpaceBefore

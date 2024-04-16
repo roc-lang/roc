@@ -1335,8 +1335,7 @@ where
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
-/// # use roc_parse::loc;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
 /// # use roc_region::all::{Loc, Position};
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
@@ -1345,7 +1344,7 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = loc!(word("hello", Problem::NotFound));
+/// let parser = loc(word("hello", Problem::NotFound));
 ///
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
@@ -1354,25 +1353,22 @@ where
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! loc {
-    ($parser:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| {
-            use roc_region::all::{Loc, Region};
+pub fn loc<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+) -> impl Parser<'a, Loc<Output>, E> {
+    move |arena, state: crate::state::State<'a>, min_indent: u32| {
+        let start = state.pos();
 
-            let start = state.pos();
+        match parser.parse(arena, state, min_indent) {
+            Ok((progress, value, state)) => {
+                let end = state.pos();
+                let region = Region::new(start, end);
 
-            match $parser.parse(arena, state, min_indent) {
-                Ok((progress, value, state)) => {
-                    let end = state.pos();
-                    let region = Region::new(start, end);
-
-                    Ok((progress, Loc { region, value }, state))
-                }
-                Err(err) => Err(err),
+                Ok((progress, Loc { region, value }, state))
             }
+            Err(err) => Err(err),
         }
-    };
+    }
 }
 
 /// If the first one parses, ignore its output and move on to parse with the second one.
@@ -2540,42 +2536,6 @@ pub fn between<'a, Before, Inner, After, Err: 'a>(
     closing_brace: impl Parser<'a, After, Err>,
 ) -> impl Parser<'a, Inner, Err> {
     skip_first(opening_brace, skip_second(inner, closing_brace))
-}
-
-/// Adds location info. This is a function version the [`loc!`] macro.
-///
-/// For some reason, some usages won't compile unless they use this instead of the macro version.
-/// This is likely because the lifetime `'a` is not defined at the call site.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
-/// # use roc_region::all::{Loc, Position};
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = loc(word("hello", Problem::NotFound));
-///
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, Loc::new(0, 5, ()));
-/// assert_eq!(state.pos().offset, 5);
-/// # }
-/// # foo(&arena);
-/// ```
-#[inline(always)]
-pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
-where
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    loc!(parser)
 }
 
 /// Maps/transforms the `Ok` result of parsing using the given function.

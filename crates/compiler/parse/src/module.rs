@@ -9,10 +9,10 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, backtrackable, byte, increment_min_indent, map, optional, reset_min_indent, skip_first,
-    skip_second, specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader,
-    EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
-    SyntaxError,
+    and, backtrackable, byte, increment_min_indent, loc, map, optional, reset_min_indent,
+    skip_first, skip_second, specialize_err, two_bytes, EExposes, EGenerates, EGeneratesWith,
+    EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent, Parser, SourceError,
+    SpaceProblem, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
@@ -97,7 +97,7 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
 fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
     record!(InterfaceHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(module_name_help(EHeader::ModuleName)),
+        name: loc(module_name_help(EHeader::ModuleName)),
         exposes: specialize_err(EHeader::Exposes, exposes_values()),
         imports: specialize_err(EHeader::Imports, imports()),
     })
@@ -108,7 +108,7 @@ fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
 fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
     record!(HostedHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(module_name_help(EHeader::ModuleName)),
+        name: loc(module_name_help(EHeader::ModuleName)),
         exposes: specialize_err(EHeader::Exposes, exposes_values()),
         imports: specialize_err(EHeader::Imports, imports()),
         generates: specialize_err(EHeader::Generates, generates()),
@@ -180,7 +180,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
 fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
     record!(AppHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(crate::parser::specialize_err(
+        name: loc(crate::parser::specialize_err(
             EHeader::AppName,
             string_literal::parse_str_literal()
         )),
@@ -195,7 +195,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
     record!(PackageHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(specialize_err(EHeader::PackageName, package_name())),
+        name: loc(specialize_err(EHeader::PackageName, package_name())),
         exposes: specialize_err(EHeader::Exposes, exposes_modules()),
         packages: specialize_err(EHeader::Packages, packages()),
     })
@@ -206,7 +206,7 @@ fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
 fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     record!(PlatformHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(specialize_err(EHeader::PlatformName, package_name())),
+        name: loc(specialize_err(EHeader::PlatformName, package_name())),
         requires: specialize_err(EHeader::Requires, requires()),
         exposes: specialize_err(EHeader::Exposes, exposes_modules()),
         packages: specialize_err(EHeader::Packages, packages()),
@@ -249,7 +249,7 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
             EProvides::IndentTo,
             EProvides::IndentListStart
         ),
-        to: loc!(provides_to_package()),
+        to: loc(provides_to_package()),
     })
     .trace("provides_to")
 }
@@ -309,9 +309,9 @@ where
     F: Copy,
     E: 'a,
 {
-    loc!(map(
-        specialize_err(|_, pos| to_expectation(pos), ident::uppercase()),
-        Spaced::Item
+    loc(map(
+        specialize_err(move |_, pos| to_expectation(pos), ident::uppercase()),
+        Spaced::Item,
     ))
 }
 
@@ -323,9 +323,9 @@ where
     F: Copy,
     E: 'a,
 {
-    loc!(map(
-        specialize_err(|_, pos| to_expectation(pos), unqualified_ident()),
-        |n| Spaced::Item(ExposedName::new(n))
+    loc(map(
+        specialize_err(move |_, pos| to_expectation(pos), unqualified_ident()),
+        |n| Spaced::Item(ExposedName::new(n)),
     ))
 }
 
@@ -358,7 +358,7 @@ fn requires_rigids<'a>(
         byte(b'{', ERequires::ListStart),
         specialize_err(
             |_, pos| ERequires::Rigid(pos),
-            loc!(map(ident::uppercase(), Spaced::Item))
+            loc(map(ident::uppercase(), Spaced::Item))
         ),
         byte(b',', ERequires::ListEnd),
         byte(b'}', ERequires::ListEnd),
@@ -372,7 +372,7 @@ fn requires_typed_ident<'a>() -> impl Parser<'a, Loc<Spaced<'a, TypedIdent<'a>>>
         byte(b'{', ERequires::ListStart),
         skip_second(
             reset_min_indent(space0_around_ee(
-                specialize_err(ERequires::TypedIdent, loc!(typed_ident())),
+                specialize_err(ERequires::TypedIdent, loc(typed_ident())),
                 ERequires::ListStart,
                 ERequires::ListEnd,
             )),
@@ -463,9 +463,9 @@ where
     F: Copy,
     E: 'a,
 {
-    loc!(map(
-        specialize_err(|_, pos| to_expectation(pos), module_name()),
-        Spaced::Item
+    loc(map(
+        specialize_err(move |_, pos| to_expectation(pos), module_name()),
+        Spaced::Item,
     ))
 }
 
@@ -484,7 +484,7 @@ fn packages<'a>() -> impl Parser<
         ),
         item: collection_trailing_sep_e!(
             byte(b'{', EPackages::ListStart),
-            specialize_err(EPackages::PackageEntry, loc!(package_entry())),
+            specialize_err(EPackages::PackageEntry, loc(package_entry())),
             byte(b',', EPackages::ListEnd),
             byte(b'}', EPackages::ListEnd),
             Spaced::SpaceBefore
@@ -544,7 +544,7 @@ fn imports<'a>() -> impl Parser<
         ),
         item: collection_trailing_sep_e!(
             byte(b'[', EImports::ListStart),
-            loc!(imports_entry()),
+            loc(imports_entry()),
             byte(b',', EImports::ListEnd),
             byte(b']', EImports::ListEnd),
             Spaced::SpaceBefore
@@ -561,9 +561,9 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
     map(
         and(
             and(
-                loc!(specialize_err(
+                loc(specialize_err(
                     |_, pos| ETypedIdent::Identifier(pos),
-                    lowercase_ident()
+                    lowercase_ident(),
                 )),
                 space0_e(ETypedIdent::IndentHasType),
             ),
