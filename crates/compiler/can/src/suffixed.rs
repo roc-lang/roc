@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{is_loc_expr_suffixed, Pattern, ValueDef};
+use roc_parse::ast::{is_loc_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
@@ -192,7 +192,9 @@ pub fn unwrap_suffixed_expression<'a>(
     // KEEP THIS HERE FOR DEBUGGING
     // USEFUL TO SEE THE UNWRAPPING
     // OF AST NODES AS THEY DESCEND
-    // dbg!(&loc_expr, &unwrapped_expression);
+    // if is_loc_expr_suffixed(loc_expr) {
+    //     dbg!(&loc_expr, &unwrapped_expression);
+    // }
 
     unwrapped_expression
 }
@@ -396,28 +398,12 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                             sub_pat,
                             sub_new,
                         }) => {
-                            let ok_wrapped_return = arena.alloc(Loc::at(
-                                loc_expr.region,
-                                Expr::Apply(
-                                    arena.alloc(Loc::at(
-                                        loc_expr.region,
-                                        Expr::Var {
-                                            module_name: ModuleName::TASK,
-                                            ident: "ok",
-                                            suffixed: 0,
-                                        },
-                                    )),
-                                    arena.alloc([sub_new]),
-                                    CalledVia::BangSuffix,
-                                ),
-                            ));
-
                             let unwrapped_expression = apply_task_await(
                                 arena,
                                 sub_arg.region,
                                 sub_arg,
                                 sub_pat,
-                                ok_wrapped_return,
+                                wrap_in_task_ok(arena, sub_new),
                             );
 
                             let mut new_if_thens = Vec::new_in(arena);
@@ -555,28 +541,12 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                     sub_pat,
                     sub_new,
                 }) => {
-                    let ok_wrapped_return = arena.alloc(Loc::at(
-                        loc_expr.region,
-                        Expr::Apply(
-                            arena.alloc(Loc::at(
-                                loc_expr.region,
-                                Expr::Var {
-                                    module_name: ModuleName::TASK,
-                                    ident: "ok",
-                                    suffixed: 0,
-                                },
-                            )),
-                            arena.alloc([sub_new]),
-                            CalledVia::BangSuffix,
-                        ),
-                    ));
-
                     let unwrapped_final_else = apply_task_await(
                         arena,
                         sub_arg.region,
                         sub_arg,
                         sub_pat,
-                        ok_wrapped_return,
+                        wrap_in_task_ok(arena, sub_new),
                     );
 
                     let new_if = arena.alloc(Loc::at(
@@ -649,7 +619,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                     let next_expr = match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat) {
                                         Ok(next_expr) => next_expr,
                                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
-                                            apply_task_await(arena,def_expr.region,sub_arg,sub_pat,sub_new)
+                                            // We need to apply Task.ok here as the defs final expression was unwrapped
+                                            apply_task_await(arena,def_expr.region,sub_arg,sub_pat,wrap_in_task_ok(arena, sub_new))
                                         }
                                         Err(EUnwrapped::UnwrappedDefExpr(..)) | Err(EUnwrapped::Malformed) => {
                                             // TODO handle case when we have maybe_def_pat so can return an unwrapped up
@@ -764,7 +735,13 @@ pub fn apply_task_await<'a>(
 ) -> &'a Loc<Expr<'a>> {
     // If the pattern and the new are the same then we don't need to unwrap anything
     // e.g. `Task.await foo \{} -> Task.ok {}` is the same as `foo`
-    if is_pattern_empty_record(loc_pat) && is_expr_task_ok(loc_new) {
+    if is_matching_empty_record(loc_pat, loc_new) {
+        return loc_arg;
+    }
+
+    // If the pattern and the new are matching answers then we don't need to unwrap anything
+    // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
+    if is_matching_intermediate_answer(loc_pat, loc_new) {
         return loc_arg;
     }
 
@@ -798,33 +775,57 @@ pub fn apply_task_await<'a>(
     ))
 }
 
-fn is_pattern_empty_record<'a>(loc_pat: &'a Loc<Pattern<'a>>) -> bool {
-    match loc_pat.value {
-        Pattern::RecordDestructure(collection) => collection.is_empty(),
-        _ => false,
+fn extract_wrapped_task_ok_value<'a>(loc_expr: &'a Loc<Expr<'a>>) -> Option<&'a Loc<Expr<'a>>> {
+    match loc_expr.value {
+        Expr::Apply(function, arguments, _) => match function.value {
+            Var {
+                module_name, ident, ..
+            } if module_name == ModuleName::TASK && ident == "ok" => arguments.first().copied(),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
-fn is_expr_task_ok<'a>(loc_expr: &'a Loc<Expr<'a>>) -> bool {
-    match loc_expr.value {
-        Expr::Apply(function, arguments, _) => {
-            let is_task_ok = match function.value {
-                Var {
-                    module_name, ident, ..
-                } => module_name == ModuleName::TASK && ident == "ok",
-                _ => false,
-            };
+fn is_matching_empty_record<'a>(
+    loc_pat: &'a Loc<Pattern<'a>>,
+    loc_expr: &'a Loc<Expr<'a>>,
+) -> bool {
+    let is_empty_record = match extract_wrapped_task_ok_value(loc_expr) {
+        Some(task_expr) => match task_expr.value {
+            Expr::Record(collection) => collection.is_empty(),
+            _ => false,
+        },
+        None => false,
+    };
 
-            let is_arg_empty_record = arguments
-                .first()
-                .map(|arg_loc_expr| match arg_loc_expr.value {
-                    Expr::Record(collection) => collection.is_empty(),
-                    _ => false,
-                })
-                .unwrap_or(false);
+    let is_pattern_empty_record = match loc_pat.value {
+        Pattern::RecordDestructure(collection) => collection.is_empty(),
+        _ => false,
+    };
 
-            is_task_ok && is_arg_empty_record
-        }
+    is_empty_record && is_pattern_empty_record
+}
+
+fn is_matching_intermediate_answer<'a>(
+    loc_pat: &'a Loc<Pattern<'a>>,
+    loc_expr: &'a Loc<Expr<'a>>,
+) -> bool {
+    let pat_ident = match loc_pat.value {
+        Pattern::Identifier { ident, .. } => Some(ident),
+        _ => None,
+    };
+    let exp_ident = match extract_wrapped_task_ok_value(loc_expr) {
+        Some(task_expr) => match task_expr.value {
+            Expr::Var {
+                module_name, ident, ..
+            } if module_name.is_empty() && ident.starts_with('#') => Some(ident),
+            _ => None,
+        },
+        None => None,
+    };
+    match (pat_ident, exp_ident) {
+        (Some(a), Some(b)) => a == b,
         _ => false,
     }
 }

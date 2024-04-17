@@ -9,6 +9,7 @@ use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
+use roc_module::ident::ModuleName;
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -448,6 +449,24 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
 
         _ => false,
     }
+}
+
+pub fn wrap_in_task_ok<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
+    arena.alloc(Loc::at(
+        loc_expr.region,
+        Expr::Apply(
+            arena.alloc(Loc::at(
+                loc_expr.region,
+                Expr::Var {
+                    module_name: ModuleName::TASK,
+                    ident: "ok",
+                    suffixed: 0,
+                },
+            )),
+            arena.alloc([loc_expr]),
+            CalledVia::BangSuffix,
+        ),
+    ))
 }
 
 pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
