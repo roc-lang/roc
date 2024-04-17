@@ -428,7 +428,7 @@ fn union_linked_list_long_dec() {
     assert_refcounts!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -533,7 +533,7 @@ fn reset_reuse_alignment_8() {
     assert_refcounts!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Expr : [ZAdd Expr Expr, Val I64, Var I64]
 

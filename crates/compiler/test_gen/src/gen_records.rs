@@ -419,7 +419,7 @@ fn optional_field_when_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 f = \r ->
                     when r is
@@ -471,7 +471,7 @@ fn optional_field_destructure_module() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -510,7 +510,7 @@ fn optional_field_let_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -531,7 +531,7 @@ fn optional_field_let_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -587,7 +587,7 @@ fn optional_field_function_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 f = \{ x ? 10, y } -> x + y
 
@@ -1012,7 +1012,7 @@ fn different_proc_types_specialized_to_same_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [nums] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             # Top-level values compile to procedure calls with no args
             # alpha has the generic type { a: Num *, b: Num * }
@@ -1022,8 +1022,8 @@ fn different_proc_types_specialized_to_same_layout() {
             # The wider number always comes first in the layout,
             # which makes the two specializations look very similar.
             # Test that the compiler doesn't get them mixed up!
-            nums : List U8
-            nums =
+            main : List U8
+            main =
                 [
                     alpha.a,   # alpha specialized to layout { b: I64, a: U8 }
                     alpha.b,   # alpha specialized to layout { a: I64, b: U8 }
@@ -1042,7 +1042,7 @@ fn call_with_bad_record_runtime_error() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 get : {a: Bool} -> Bool
@@ -1079,7 +1079,7 @@ fn update_record_that_is_a_thunk() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main = Num.toStr fromOriginal.birds
 
@@ -1099,7 +1099,7 @@ fn update_record_that_is_a_thunk_single_field() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main = Num.toStr fromOriginal.birds
 
@@ -1119,7 +1119,7 @@ fn toplevel_accessor_fn_thunk() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ra = .field
 
@@ -1138,7 +1138,7 @@ fn pass_record_of_u8s() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ra = \_ -> 1u8
 

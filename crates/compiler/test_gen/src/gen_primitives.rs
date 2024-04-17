@@ -562,7 +562,7 @@ fn top_level_constant() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             float = 1.2315f64
 
@@ -582,7 +582,7 @@ fn top_level_destructure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             {a, b} = { a: 1, b: 2 }
 
@@ -602,7 +602,7 @@ fn linked_list_len_0() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -630,7 +630,7 @@ fn linked_list_len_twice_0() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -658,7 +658,7 @@ fn linked_list_len_1() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -686,7 +686,7 @@ fn linked_list_len_twice_1() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -714,7 +714,7 @@ fn linked_list_len_3() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -743,7 +743,7 @@ fn linked_list_sum_num_a() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -772,7 +772,7 @@ fn linked_list_sum_int() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -800,7 +800,7 @@ fn linked_list_map() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -1034,7 +1034,7 @@ fn simple_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             x = 42
 
@@ -1056,7 +1056,7 @@ fn nested_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             foo = \{} ->
                 x = 41
@@ -1082,7 +1082,7 @@ fn closure_in_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             foo = \{} ->
                 x = 41
@@ -1110,7 +1110,7 @@ fn specialize_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             foo = \{} ->
                 x = 41
@@ -1140,7 +1140,7 @@ fn io_poc_effect() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := {} -> a
 
@@ -1171,7 +1171,7 @@ fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             # succeed : a -> ({} -> a)
             succeed = \x -> \_ -> x
@@ -1199,7 +1199,7 @@ fn return_wrapped_function_a() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := {} -> a
 
@@ -1221,7 +1221,7 @@ fn return_wrapped_function_b() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
 
             foo : { x: (I64 -> Str) }
@@ -1242,7 +1242,7 @@ fn return_wrapped_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := {} -> a
 
@@ -1267,7 +1267,7 @@ fn linked_list_is_singleton() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1302,7 +1302,7 @@ fn linked_list_is_empty_1() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1337,7 +1337,7 @@ fn linked_list_is_empty_2() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1371,7 +1371,7 @@ fn linked_list_singleton() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1391,7 +1391,7 @@ fn recursive_function_with_rigid() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             State a : { count : I64, x : a }
 
@@ -1418,7 +1418,7 @@ fn rbtree_insert() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             NodeColor : [Red, Black]
 
@@ -1509,7 +1509,7 @@ fn rbtree_balance_3() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             RedBlackTree k : [Node k (RedBlackTree k) (RedBlackTree k), Empty]
 
@@ -1536,7 +1536,7 @@ fn rbtree_layout_issue() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             NodeColor : [Red, Black]
 
@@ -1583,7 +1583,7 @@ fn rbtree_balance_mono_problem() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             NodeColor : [Red, Black]
 
@@ -1630,7 +1630,7 @@ fn rbtree_balance_full() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             NodeColor : [Red, Black]
 
@@ -1683,7 +1683,7 @@ fn nested_pattern_match_two_ways() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1709,7 +1709,7 @@ fn nested_pattern_match_two_ways() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1738,7 +1738,7 @@ fn linked_list_guarded_double_pattern_match() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1768,7 +1768,7 @@ fn linked_list_double_pattern_match() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -1795,7 +1795,7 @@ fn binary_tree_double_pattern_match() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             BTree : [Node BTree BTree, Leaf I64]
 
@@ -1823,7 +1823,7 @@ fn unified_empty_closure_bool() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             foo = \{} ->
                 when A is
@@ -1848,7 +1848,7 @@ fn unified_empty_closure_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             foo = \{} ->
                 when A is
@@ -1872,7 +1872,7 @@ fn task_always_twice() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := {} -> a
 
@@ -1917,7 +1917,7 @@ fn wildcard_rigid() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := {} -> a
 
@@ -1946,7 +1946,7 @@ fn alias_of_alias_with_type_arguments() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := a
 
@@ -1976,7 +1976,7 @@ fn todo_bad_error_message() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect a := {} -> a
 
@@ -2037,7 +2037,7 @@ fn hof_conditional() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: @55-56, shadow: @88-89 Ident"
+    expected = "Roc failed with message: \"Shadowing { original_region: @69-70, shadow: @102-103 Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -2079,7 +2079,7 @@ fn fingertree_basic() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Some a : [One a, Two a a, Three a a a]
 
@@ -2142,7 +2142,7 @@ fn rosetree_basic() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Tree a : [Tree a (List (Tree a))]
 
@@ -2170,7 +2170,7 @@ fn case_jump() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ConsList a : [Cons a (ConsList a), Nil]
 
@@ -2197,7 +2197,7 @@ fn nullable_eval_cfold() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Expr : [Var, Val I64, Add Expr Expr, Mul Expr Expr]
 
@@ -2236,7 +2236,7 @@ fn nested_switch() {
         assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Expr : [ZAdd Expr Expr, Val I64, Var I64]
 
@@ -2278,7 +2278,7 @@ fn count_deriv_x() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Expr : [Ln Expr, Pow Expr Expr, Var Str]
 
@@ -2305,7 +2305,7 @@ fn deriv_pow() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Expr : [Ln Expr, Pow Expr Expr, Var Str, Val I64]
 
@@ -2342,7 +2342,7 @@ fn multiple_increment() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
 
             Color : [Red, Black]
@@ -2375,7 +2375,7 @@ fn switch_fuse_rc_non_exhaustive() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Foo : [A I64 Foo, B I64 Foo, C I64 Foo, Empty]
 
@@ -2405,7 +2405,7 @@ fn switch_fuse_rc_exhaustive() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Foo : [A I64 Foo, B I64 Foo, C I64 Foo, Empty]
 
@@ -2434,7 +2434,7 @@ fn build_then_apply_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main : Str
             main =
@@ -2454,7 +2454,7 @@ fn expanded_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             a : Result I64 Str
             a = Ok 4
@@ -2485,7 +2485,7 @@ fn backpassing_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             a : Result I64 Str
             a = Ok 1
@@ -2514,7 +2514,7 @@ fn backpassing_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = "Shadowing { original_region: @55-56, shadow: @72-73 Ident")]
+#[should_panic(expected = "Shadowing { original_region: @69-70, shadow: @86-87 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
@@ -2555,7 +2555,7 @@ fn increment_or_double_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
 
                 apply : (a -> a), a -> a
@@ -2593,7 +2593,7 @@ fn module_thunk_is_function() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main = helper "foo" "bar"
                 helper = Str.concat
@@ -2610,7 +2610,7 @@ fn pass_through_unresolved_type_variable() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main : Str
                 main =
@@ -2633,7 +2633,7 @@ fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main : I64
                 main =
@@ -2653,7 +2653,7 @@ fn pattern_match_unit_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 unit : [Unit]
                 unit = Unit
@@ -2679,7 +2679,7 @@ fn mirror_llvm_alignment_padding() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main : Str
                 main =
@@ -2701,7 +2701,7 @@ fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 p1 = (\u -> u == 97)
                 p2 = (\u -> u == 98)
@@ -2726,7 +2726,7 @@ fn lambda_set_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 p1 = (\u -> u == 97)
                 p2 = (\u -> u == 98)
@@ -2752,7 +2752,7 @@ fn lambda_set_struct_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
 
                 main : I64
@@ -2780,7 +2780,7 @@ fn lambda_set_enum_byte_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
 
                 main : I64
@@ -2812,7 +2812,7 @@ fn list_walk_until() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
 
             satisfyA : {} -> List {}
@@ -2838,7 +2838,7 @@ fn int_literal_not_specialized_with_annotation() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 satisfy : (U8 -> Str) -> Str
@@ -2866,7 +2866,7 @@ fn int_literal_not_specialized_no_annotation() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 satisfy : (U8 -> Str) -> Str
@@ -2893,7 +2893,7 @@ fn unresolved_tvar_when_capture_is_unused() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main : I64
                 main =
@@ -2920,7 +2920,7 @@ fn value_not_exposed_hits_panic() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main : I64
                 main =
@@ -2939,7 +2939,7 @@ fn mix_function_and_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 # foo does not capture any variables
                 # but through unification will get a lambda set that does store information
@@ -2965,7 +2965,7 @@ fn mix_function_and_closure_level_of_indirection() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 foo = \x -> x
 
@@ -2993,7 +2993,7 @@ fn do_pass_bool_byte_closure_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             ## PARSER
 
@@ -3066,7 +3066,7 @@ fn nested_rigid_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 foo : List a -> List a
                 foo = \list ->
@@ -3091,7 +3091,7 @@ fn nested_rigid_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 Identity a := a
 
@@ -3118,7 +3118,7 @@ fn nested_rigid_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 foo : [Identity a] -> [Identity a]
                 foo = \list ->
@@ -3171,7 +3171,7 @@ fn alias_defined_out_of_order() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main : Foo
             main = "foo"
@@ -3192,7 +3192,7 @@ fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             greeting =
                 hi = "Hello"
@@ -3239,7 +3239,7 @@ fn polymophic_expression_captured_inside_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             asU8 : U8 -> U8
             asU8 = \_ -> 30
@@ -3484,7 +3484,7 @@ fn closure_called_in_its_defining_scope() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main : Str
             main =
@@ -3509,7 +3509,7 @@ fn issue_2894() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main : U32
             main =
@@ -3616,7 +3616,7 @@ fn mutual_recursion_top_level_defs() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app [ main ] { pf: platform "./src/helpers/platform.roc" }
 
             isEven = \n ->
                 when n is
@@ -3905,7 +3905,7 @@ fn recursive_lambda_set_toplevel_issue_3444() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             combine = \f, g -> \x -> g (f x)
             const = \x -> (\_y -> x)
@@ -3949,7 +3949,7 @@ fn compose_recursive_lambda_set_productive_toplevel() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             compose = \f, g -> \x -> g (f x)
 
@@ -4017,7 +4017,7 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
     assert_evals_to!(
         indoc!(
             r#"
-             app "test" provides [main] to "./platform"
+             app [main] { pf: platform "./src/helpers/platform.roc" }
 
              compose = \forward -> \f, g ->
                 if forward
@@ -4045,7 +4045,7 @@ fn local_binding_aliases_function() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app [ main ] { pf: platform "./src/helpers/platform.roc" }
 
             f : {} -> List a
             f = \_ -> []
@@ -4068,7 +4068,7 @@ fn local_binding_aliases_function_inferred() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app [ main ] { pf: platform "./src/helpers/platform.roc" }
 
             f = \_ -> []
 
@@ -4303,7 +4303,7 @@ fn issue_4712() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Parser a : {} -> a
 
@@ -4341,7 +4341,7 @@ fn pattern_as_toplevel() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             record = { a: 42i64, b: "foo" }
 
@@ -4362,7 +4362,7 @@ fn pattern_as_nested() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             record = { a: 42i64, b: "foo" }
 
@@ -4383,7 +4383,7 @@ fn pattern_as_of_symbol() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 when "foo" is
@@ -4401,7 +4401,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             andThen = \{} ->
                 x = 10u8
@@ -4423,7 +4423,7 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             andThen = \{} ->
                 x = 10u8
@@ -4447,7 +4447,7 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             go : U8 -> U8
             go = \byte ->
@@ -4470,7 +4470,7 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             factCPS = \n, cont ->
                 if n == 0 then
@@ -4493,7 +4493,7 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Chain : [
                 End,
@@ -4528,7 +4528,7 @@ fn reset_recursive_type_wraps_in_named_type() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main : Str
             main =
@@ -4567,7 +4567,7 @@ fn pass_lambda_set_to_function() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             instr = if Bool.true then Num.mul else Num.add
 
@@ -4587,7 +4587,7 @@ fn linked_list_trmc() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 

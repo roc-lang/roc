@@ -243,7 +243,7 @@ fn small_str_zeroed_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 createStr = \isForRealThisTime ->
                     if isForRealThisTime then

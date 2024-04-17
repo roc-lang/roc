@@ -10,7 +10,7 @@ fn capture_multiple() {
     assert_evals_to_erased!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             f = \n, m ->
               \{} -> n + m + 15u8
@@ -29,7 +29,7 @@ fn multi_branch_capturing() {
     assert_evals_to_erased!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             f = \t, s ->
               if t

@@ -25,7 +25,8 @@ macro_rules! host_bytes_path {
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
+    let mut buffer =
+        String::from("app [main] { pf: platform \"./src/helpers/platform.roc\" }\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!

@@ -52,7 +52,7 @@ fn i64_signed_int_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 main =
                     i : I64
@@ -2601,7 +2601,7 @@ fn when_on_i32() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 x : I32
                 x = 0
@@ -2624,7 +2624,7 @@ fn when_on_i16() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 x : I16
                 x = 0
@@ -3135,7 +3135,7 @@ fn monomorphized_ints_aliased() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 y = \{} -> 100
@@ -3547,7 +3547,7 @@ fn bool_in_switch() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             loop : [ Continue {}, Break {} ]
             loop = Continue {}

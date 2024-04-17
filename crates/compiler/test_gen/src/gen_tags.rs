@@ -345,7 +345,7 @@ fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 Maybe a : [Just a, Nothing]
 
@@ -701,7 +701,7 @@ fn nested_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 Maybe a : [Nothing, Just a]
 
@@ -968,7 +968,7 @@ fn phantom_polymorphic_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 Point coordinate : { coordinate : coordinate, x : I64, y : I64 }
 
@@ -1030,7 +1030,7 @@ fn newtype_wrapper() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 ConsList a : [Nil, Cons a (ConsList a)]
 
@@ -1189,7 +1189,7 @@ fn monomorphized_applied_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 a = A "abc"
@@ -1211,7 +1211,7 @@ fn monomorphized_tag_with_polymorphic_arg() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 a = \{} -> A
@@ -1243,7 +1243,7 @@ fn monomorphized_tag_with_polymorphic_and_monomorphic_arg() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 mono : U8
@@ -1277,7 +1277,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Single a : [A, B, C]a
             Compound a : Single [D, E, F]a
@@ -1302,7 +1302,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Single a : [A, B, C]a
             Compound a : Single [D, E, F]a
@@ -1334,7 +1334,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Single a : [A, B, C]a
             Compound a : Single [D, E, F]a
@@ -1367,7 +1367,7 @@ fn issue_2445() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             none : [None, Update _]
             none = None
@@ -1436,7 +1436,7 @@ fn issue_1162() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
@@ -1504,7 +1504,7 @@ fn opaque_assign_to_symbol() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [out] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Variable := U8
 
@@ -1512,7 +1512,7 @@ fn opaque_assign_to_symbol() {
             fromUtf8 = \char ->
                 Ok (@Variable char)
 
-            out =
+            main =
                 when fromUtf8 98 is
                     Ok (@Variable n) -> n
                     _ -> 1
@@ -1632,7 +1632,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Value : [Nil, Array (List Value)]
 
@@ -1659,7 +1659,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 Value : [Nil, Array (List Value)]
@@ -1686,7 +1686,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             main =
                 Value : [Nil, Array (List Value)]
@@ -1815,7 +1815,7 @@ fn issue_3653_recursion_pointer_in_naked_opaque() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Peano := [ Zero, Succ Peano ]
 
@@ -1840,7 +1840,7 @@ fn issue_3653_recursion_pointer_in_naked_opaque_localized() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Peano := [ Zero, Succ Peano ]
 
@@ -1970,7 +1970,7 @@ fn issue_4077_fixed_fixpoint() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Input : [FromProjectSource, FromJob Job]
 
@@ -1995,7 +1995,7 @@ fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Input := [
                 FromJob Job (List Str),
@@ -2031,7 +2031,7 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             fn = \s ->
                 instr = if s == "*" then (Op Num.mul) else (Op Num.add)
@@ -2054,7 +2054,7 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             fn = \s ->
                 instr =
@@ -2081,7 +2081,7 @@ fn nullable_wrapped_with_non_nullable_singleton_tags() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             F : [
                 A F,
@@ -2112,7 +2112,7 @@ fn nullable_wrapped_with_nullable_not_last_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Parser : [
                 CharLiteral,
@@ -2144,7 +2144,7 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Effect : {} -> Str
 
@@ -2184,7 +2184,7 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { pf: platform "./src/helpers/platform.roc" }
 
                 Concept : [
                     AtomicConcept,
@@ -2211,7 +2211,7 @@ fn nullable_wrapped_eq_issue_5434() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Value : [
                 A,
@@ -2242,7 +2242,7 @@ fn recursive_tag_id_in_allocation_basic() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Value : [
                 A Value,
@@ -2283,7 +2283,7 @@ fn recursive_tag_id_in_allocation_eq() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { pf: platform "./src/helpers/platform.roc" }
 
             Value : [
                 A Value,

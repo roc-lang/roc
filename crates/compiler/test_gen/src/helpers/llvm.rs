@@ -35,7 +35,8 @@ pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
 };
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
+    let mut buffer =
+        String::from("app [main] { pf: platform \"./src/helpers/platform.roc\" }\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -68,6 +69,8 @@ fn create_llvm_module<'a>(
         temp = promote_expr_to_module(src);
         module_src = &temp;
     }
+
+    println!("{}", module_src);
 
     let load_config = LoadConfig {
         target,
