@@ -564,11 +564,33 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 }
 
 pub fn unwrap_suffixed_expression_when_help<'a>(
-    _arena: &'a Bump,
+    arena: &'a Bump,
     loc_expr: &'a Loc<Expr<'a>>,
     _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
-    Ok(loc_expr)
+    match loc_expr.value {
+        Expr::When(condition, branches) => {
+
+            // TODO first unwrap any when branches values
+
+            // then unwrap the when condition
+            match unwrap_suffixed_expression(arena, condition, None) {
+                Ok(unwrapped_condition) => {
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(unwrapped_condition, branches)));
+                    Ok(new_when)
+                }
+                Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(sub_new, branches)));
+                    let applied_task_await = apply_task_await(arena,loc_expr.region,sub_arg,sub_pat,new_when);
+                    Ok(applied_task_await)
+                }
+                Err(EUnwrapped::UnwrappedDefExpr(..))
+                | Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed)
+            }
+
+        }
+        _ => internal_error!("unreachable, expected a When node to be passed into unwrap_suffixed_expression_defs_help"),
+    }
 }
 
 pub fn unwrap_suffixed_expression_defs_help<'a>(

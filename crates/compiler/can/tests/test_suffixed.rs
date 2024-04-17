@@ -665,4 +665,32 @@ mod suffixed_tests {
             r#"Defs { tags: [Index(2147483648)], regions: [@0-103], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "copy", suffixed: 0 }, @7-103 Closure([@8-9 Identifier { ident: "a", suffixed: 0 }, @10-11 Identifier { ident: "b", suffixed: 0 }], @36-42 Apply(@36-42 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@36-42 Apply(@36-42 Var { module_name: "", ident: "line", suffixed: 0 }, [@37-42 Str(PlainLine("FOO"))], Space), @36-42 Closure([@36-42 RecordDestructure([])], @60-103 Apply(@60-103 Var { module_name: "", ident: "mapErr", suffixed: 0 }, [@60-72 Apply(@60-67 Var { module_name: "CMD", ident: "new", suffixed: 0 }, [@68-72 Str(PlainLine("cp"))], Space), @100-103 Tag("ERR")], BinOp(Pizza)))], BangSuffix)))] }"#,
         );
     }
+
+    /**
+     * Unwrap a when expression
+     ```roc
+     list =
+        when getList! is
+            [] -> "empty"
+            _ -> "non-empty"
+
+    list =
+        Task.await getList \#!a0 ->
+            when #!a0 is
+                [] -> "empty"
+                _ -> "non-empty"
+     ```
+     */
+    #[test]
+    fn when_simple() {
+        run_test(
+            r#"
+            list = 
+                when getList! is
+                    [] -> "empty"
+                    _ -> "non-empty"
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-111], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list", suffixed: 0 }, @24-111 Apply(@24-111 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-37 Var { module_name: "", ident: "getList", suffixed: 0 }, @24-111 Closure([@29-37 Identifier { ident: "#!a0", suffixed: 0 }], @24-111 When(@29-37 Var { module_name: "", ident: "#!a0", suffixed: 0 }, [WhenBranch { patterns: [@61-63 List([])], value: @67-74 Str(PlainLine("empty")), guard: None }, WhenBranch { patterns: [@95-96 Underscore("")], value: @100-111 Str(PlainLine("non-empty")), guard: None }]))], BangSuffix))] }"##,
+        );
+    }
 }
