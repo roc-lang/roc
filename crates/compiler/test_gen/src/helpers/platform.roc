@@ -5,4 +5,4 @@ platform "test-platform"
     packages {}
     provides [mainForHost]
 
-mainForHost = \{} -> main
+mainForHost = main
