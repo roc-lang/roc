@@ -37,8 +37,8 @@ WebAssembly functions can have any number of local variables. They are declared 
 In this backend, each symbol in the Mono IR gets one WebAssembly local. To illustrate, let's translate a simple Roc example to WebAssembly text format.
 The WebAssembly code below is completely unoptimised and uses far more locals than necessary. But that does help to illustrate the concept of locals.
 
-```coffee
-app "test" provides [main] to "./platform"
+```roc
+app [main] { pf: platform "./platform.roc" }
 
 main =
     1 + 2 + 4
