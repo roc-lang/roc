@@ -693,4 +693,49 @@ mod suffixed_tests {
             r##"Defs { tags: [Index(2147483648)], regions: [@0-111], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list", suffixed: 0 }, @24-111 Apply(@24-111 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-37 Var { module_name: "", ident: "getList", suffixed: 0 }, @24-111 Closure([@29-37 Identifier { ident: "#!a0", suffixed: 0 }], @24-111 When(@29-37 Var { module_name: "", ident: "#!a0", suffixed: 0 }, [WhenBranch { patterns: [@61-63 List([])], value: @67-74 Str(PlainLine("empty")), guard: None }, WhenBranch { patterns: [@95-96 Underscore("")], value: @100-111 Str(PlainLine("non-empty")), guard: None }]))], BangSuffix))] }"##,
         );
     }
+
+    /**
+     * Unwrap a when expression
+     ```roc
+    list =
+        when getList! is
+            [] ->
+                line! "foo"
+                line! "bar"
+            _ ->
+                ok {}
+
+    list =
+        Task.await getList \#!a0 ->
+            when getList is
+                [] ->
+                    line! "foo"
+                    line! "bar"
+                _ ->
+                    ok {}
+
+    list =
+        Task.await getList \#!a0 ->
+            when getList is
+                [] ->
+                    Task.await line "foo" \{} -> line! "bar"
+                _ ->
+                    ok {}
+     ```
+     */
+    #[test]
+    fn when_branches() {
+        run_test(
+            r#"
+            list = 
+                when getList! is
+                    [] -> 
+                        line! "foo"
+                        line! "bar"
+                    _ -> 
+                        ok {}
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-195], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list", suffixed: 0 }, @24-195 Apply(@24-195 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-37 Var { module_name: "", ident: "getList", suffixed: 0 }, @24-195 Closure([@29-37 Identifier { ident: "#!a0", suffixed: 0 }], @24-195 When(@29-37 Var { module_name: "", ident: "#!a0", suffixed: 0 }, [WhenBranch { patterns: [@61-63 List([])], value: @97-103 Apply(@97-103 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@97-103 Apply(@97-103 Var { module_name: "", ident: "line", suffixed: 0 }, [@98-103 Str(PlainLine("foo"))], Space), @97-103 Closure([@97-103 RecordDestructure([])], @128-139 Apply(@128-139 Var { module_name: "", ident: "line", suffixed: 0 }, [@134-139 Str(PlainLine("bar"))], Space))], BangSuffix), guard: None }, WhenBranch { patterns: [@160-161 Underscore("")], value: @190-195 Apply(@190-192 Var { module_name: "", ident: "ok", suffixed: 0 }, [@193-195 Record([])], Space), guard: None }]))], BangSuffix))] }"##,
+        );
+    }
 }
