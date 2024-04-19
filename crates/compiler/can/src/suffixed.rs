@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{is_loc_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef};
+use roc_parse::ast::{is_loc_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
@@ -564,11 +564,61 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
 }
 
 pub fn unwrap_suffixed_expression_when_help<'a>(
-    _arena: &'a Bump,
+    arena: &'a Bump,
     loc_expr: &'a Loc<Expr<'a>>,
-    _maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
+    maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
-    Ok(loc_expr)
+    match loc_expr.value {
+        Expr::When(condition, branches) => {
+
+            // first unwrap any when branches values
+            // e.g. 
+            // when foo is 
+            //     [] -> line! "bar"
+            //      _ -> line! "baz"
+            for (branch_index, WhenBranch{value: branch_loc_expr,patterns, guard}) in branches.iter().enumerate() {
+
+                // if the branch isn't suffixed we can leave it alone
+                if is_loc_expr_suffixed(branch_loc_expr) {
+                    let unwrapped_branch_value = match unwrap_suffixed_expression(arena, branch_loc_expr, None) {
+                        Ok(unwrapped_branch_value) => unwrapped_branch_value,
+                        Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => apply_task_await(arena, branch_loc_expr.region, sub_arg, sub_pat, sub_new),
+                        Err(..) => return Err(EUnwrapped::Malformed),
+                    };
+
+                    let new_branch = WhenBranch{value: *unwrapped_branch_value, patterns, guard: *guard};
+                    let mut new_branches = Vec::new_in(arena);
+                    let (before, rest) = branches.split_at(branch_index);
+                    let after = &rest[1..];
+
+                    new_branches.extend_from_slice(before);
+                    new_branches.push(arena.alloc(new_branch));
+                    new_branches.extend_from_slice(after);
+
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(condition, arena.alloc_slice_copy(new_branches.as_slice()))));
+
+                    return unwrap_suffixed_expression(arena, new_when, maybe_def_pat);
+                }
+            }
+
+            // then unwrap the when condition
+            match unwrap_suffixed_expression(arena, condition, None) {
+                Ok(unwrapped_condition) => {
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(unwrapped_condition, branches)));
+                    Ok(new_when)
+                }
+                Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
+                    let new_when = arena.alloc(Loc::at(loc_expr.region, Expr::When(sub_new, branches)));
+                    let applied_task_await = apply_task_await(arena,loc_expr.region,sub_arg,sub_pat,new_when);
+                    Ok(applied_task_await)
+                }
+                Err(EUnwrapped::UnwrappedDefExpr(..))
+                | Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed)
+            }
+
+        }
+        _ => internal_error!("unreachable, expected a When node to be passed into unwrap_suffixed_expression_defs_help"),
+    }
 }
 
 pub fn unwrap_suffixed_expression_defs_help<'a>(
