@@ -423,6 +423,26 @@ mod suffixed_tests {
     /**
      * Nested suffixed expressions
     ```roc
+    run = line! (nextMsg!)
+
+    run = Task.await nextMsg \#!a0 -> line! (#!a0)
+
+    run = Task.await nextMsg \#!a0 -> line (#!a0)
+    ```
+    */
+    #[test]
+    fn nested_simple() {
+        run_test(
+            r#"
+            run = line! (nextMsg!)
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-22], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-3 Identifier { ident: "run", suffixed: 0 }, @0-22 Apply(@0-22 Var { module_name: "Task", ident: "await", suffixed: 0 }, [Var { module_name: "", ident: "nextMsg", suffixed: 0 }, @0-22 Closure([Identifier { ident: "#!a0", suffixed: 0 }], @0-22 Apply(@0-22 Var { module_name: "", ident: "line", suffixed: 0 }, [@13-21 ParensAround(Var { module_name: "", ident: "#!a0", suffixed: 0 })], Space))], BangSuffix))] }"##,
+        );
+    }
+
+    /**
+     * Nested suffixed expressions
+    ```roc
     main =
         z = foo! (bar! baz) (blah stuff)
         doSomething z
@@ -437,9 +457,8 @@ mod suffixed_tests {
             Task.await [foo (#!a0) (blah stuff)] \z -> doSomething z
     ```
     */
-
     #[test]
-    fn nested_suffixed() {
+    fn nested_complex() {
         run_test(
             r#"
             main = 
