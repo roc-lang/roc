@@ -1377,9 +1377,8 @@ pub fn loc<'a, Output, E: 'a>(
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_first};
 /// # use roc_parse::ident::lowercase_ident;
-/// # use roc_parse::skip_first;
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
@@ -1419,9 +1418,8 @@ where
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_second};
 /// # use roc_parse::ident::lowercase_ident;
-/// # use roc_parse::skip_second;
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
@@ -1523,8 +1521,7 @@ pub fn collection_trailing_sep_e<
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress};
-/// # use roc_parse::succeed;
+/// # use crate::roc_parse::parser::{Parser, Progress, succeed};
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
@@ -2185,9 +2182,8 @@ macro_rules! byte_check_indent {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map};
 /// # use roc_region::all::Position;
-/// # use roc_parse::map;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2290,9 +2286,8 @@ pub fn zero_or_more<'a, Output, E: 'a>(
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, one_or_more};
 /// # use roc_region::all::Position;
-/// # use roc_parse::one_or_more!;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2400,9 +2395,8 @@ macro_rules! debug {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, either, Either};
 /// # use roc_region::all::Position;
-/// # use roc_parse::either;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2463,9 +2457,8 @@ pub fn either<'a, OutputLeft, OutputRight, E: 'a>(
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte, between};
 /// # use roc_region::all::Position;
-/// # use roc_parse::{between, skip_first, skip_second};
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
