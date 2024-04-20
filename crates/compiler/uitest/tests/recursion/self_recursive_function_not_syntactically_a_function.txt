@@ -1,4 +1,4 @@
-app "test" provides [fx] to "./platform"
+app [fx] { }
 
 after : ({} -> a), ({} -> b) -> ({} -> b)
 

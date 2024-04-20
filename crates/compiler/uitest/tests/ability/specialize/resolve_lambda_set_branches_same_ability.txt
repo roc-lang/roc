@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 Id implements id : a -> a where a implements Id
 

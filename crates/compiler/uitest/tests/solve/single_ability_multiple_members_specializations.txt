@@ -1,4 +1,4 @@
-app "test" provides [hash, hash32] to "./platform"
+app [hash, hash32] { }
 
 MHash implements
     hash : a -> U64 where a implements MHash

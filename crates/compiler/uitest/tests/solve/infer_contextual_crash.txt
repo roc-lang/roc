@@ -1,4 +1,4 @@
-app "test" provides [getInfallible] to "./platform"
+app [getInfallible] { }
 
 getInfallible = \result -> when result is
 #^^^^^^^^^^^^^{-1} [Ok a]* -[[getInfallible(0)]]-> a

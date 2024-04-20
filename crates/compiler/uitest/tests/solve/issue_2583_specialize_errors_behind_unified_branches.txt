@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 entry =
     if Bool.true then List.first [] else Str.toI64 ""

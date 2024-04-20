@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 Bounce implements
     ping : a -> a where a implements Bounce

@@ -1,6 +1,6 @@
 # +opt can:allow_errors
 # +opt infer:print_only_under_alias
-app "test" provides [single] to "./platform"
+app [single] { }
 
 LL a : [Nil, Cons a (LL a)]
 

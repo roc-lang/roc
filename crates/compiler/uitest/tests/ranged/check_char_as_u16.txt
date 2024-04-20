@@ -1,4 +1,4 @@
-app "test" provides [x] to "./platform"
+app [x] { }
 
 x : U16
 x = '.'

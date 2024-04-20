@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 g = if Bool.true then A else B
 

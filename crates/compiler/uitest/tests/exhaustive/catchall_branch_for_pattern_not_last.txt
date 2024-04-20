@@ -1,5 +1,5 @@
 # +opt infer:allow_errors
-app "test" provides [main] to "./platform"
+app [main] { }
 
 main =
     \x -> when x is

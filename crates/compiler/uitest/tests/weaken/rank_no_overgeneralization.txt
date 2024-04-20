@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 main =
 #^^^^{-1} (a -[[]]-> b) -[[main(0)]]-> (a -[[y(2) (a -[[]]-> b)]]-> b)

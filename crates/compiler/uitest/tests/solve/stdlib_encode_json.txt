@@ -1,6 +1,6 @@
-app "test"
-    imports [TotallyNotJson]
-    provides [main] to "./platform"
+app [main] { }
+
+import TotallyNotJson
 
 HelloWorld := {} implements [Encoding {toEncoder}]
 

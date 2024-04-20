@@ -1,4 +1,4 @@
-app "test" provides [zeroEncoder] to "./platform"
+app [zeroEncoder] { }
 
 MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 

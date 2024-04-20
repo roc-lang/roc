@@ -1,5 +1,5 @@
 # +emit:mono
-app "test" provides [main] to "./platform"
+app [main] { }
 
 Op := {}
 

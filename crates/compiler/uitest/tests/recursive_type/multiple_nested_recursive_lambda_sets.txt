@@ -1,6 +1,6 @@
 # +opt infer:print_only_under_alias
 
-app "test" provides [main] to "./platform"
+app [main] { }
 
 Effect : {} -> Str
 

@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 f : x -> x where x implements Hash
 g : x -> x where x implements Decoding & Encoding

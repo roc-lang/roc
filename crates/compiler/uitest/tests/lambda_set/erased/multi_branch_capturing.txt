@@ -1,6 +1,6 @@
 # +set function_kind=erased
 # +emit:mono
-app "test" provides [main] to "./platform"
+app [main] { }
 
 f = \s ->
   if Bool.true

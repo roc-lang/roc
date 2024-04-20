@@ -1,4 +1,4 @@
-app "test" provides [x] to "./platform"
+app [x] { }
 
 x : U32
 x = '.'

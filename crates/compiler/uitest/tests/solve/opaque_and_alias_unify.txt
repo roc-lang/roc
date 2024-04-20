@@ -1,4 +1,4 @@
-app "test" provides [always] to "./platform"
+app [always] { }
 
 Effect a := {} -> a
 

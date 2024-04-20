@@ -2,7 +2,7 @@
 # +opt mono:no_check
 
 ## module Dep
-interface Dep exposes [defaultRequest] imports []
+module [defaultRequest]
 
 defaultRequest = {
     url: "",
@@ -10,7 +10,9 @@ defaultRequest = {
 }
 
 ## module Test
-app "test" imports [Dep.{ defaultRequest }] provides [main] to "./platform"
+app [main] { }
+
+import Dep exposing [defaultRequest]
 
 main =
     { defaultRequest & url: "http://www.example.com" }

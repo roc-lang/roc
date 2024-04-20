@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 Diverge implements diverge : a -> a where a implements Diverge
 

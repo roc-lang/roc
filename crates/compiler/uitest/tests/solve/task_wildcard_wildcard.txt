@@ -1,4 +1,4 @@
-app "test" provides [tforever] to "./platform"
+app [tforever] { }
 
 Effect a := {} -> a
 

@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 F implements f : a, b -> ({} -> ({} -> {})) where a implements F, b implements G
 G implements g : b -> ({} -> {}) where b implements G

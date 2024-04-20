@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 polyDbg = \x ->
 #^^^^^^^{-1} val -[[polyDbg(1)]]-> val where val implements Inspect

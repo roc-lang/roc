@@ -1,4 +1,4 @@
-app "test" provides [effectAlways] to "./platform"
+app [effectAlways] { }
 
 Effect a := {} -> a
 

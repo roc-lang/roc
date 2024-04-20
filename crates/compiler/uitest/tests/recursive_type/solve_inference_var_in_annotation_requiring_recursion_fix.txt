@@ -1,4 +1,4 @@
-app "test" provides [translateStatic] to "./platform"
+app [translateStatic] { }
 
 translateStatic : _ -> _
 translateStatic = \Element c ->

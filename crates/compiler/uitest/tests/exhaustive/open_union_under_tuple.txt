@@ -1,6 +1,6 @@
 # +opt infer:print_only_under_alias
 
-app "test" provides [limitedKind] to "./platform"
+app [limitedKind] { }
 
 Kind : [ A, B, C ]
 Data : ({}, Kind)

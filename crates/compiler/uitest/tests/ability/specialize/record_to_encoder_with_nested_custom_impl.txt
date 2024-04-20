@@ -1,6 +1,6 @@
-app "test"
-    imports [Encode.{ toEncoder, custom }]
-    provides [main] to "./platform"
+app [main] { }
+
+import Encode exposing [toEncoder, custom]
 
 A := {} implements [Encoding {toEncoder}]
 toEncoder = \@A _ -> custom \b, _ -> b

@@ -1,5 +1,5 @@
 # +opt infer:print_only_under_alias
-app "test" provides [job] to "./platform"
+app [job] { }
 
 F : [Bar, FromG G]
 G : [G {lst : List F}]

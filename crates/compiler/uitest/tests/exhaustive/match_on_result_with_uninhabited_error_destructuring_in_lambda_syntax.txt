@@ -1,4 +1,4 @@
-app "test" provides [x] to "./platform"
+app [x] { }
 
 x : Result Str [] -> Str
 x = \Ok s -> s

@@ -29,7 +29,7 @@ pub(crate) fn write_compiled_ir<'a>(
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
-    let exec_mode = ExecutionMode::Executable;
+    let exec_mode = ExecutionMode::ExecutableEval;
 
     let arena = &Bump::new();
 

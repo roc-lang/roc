@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 main : Decoder Bool _
 main = Decode.custom \bytes, fmt ->

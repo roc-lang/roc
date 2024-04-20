@@ -1,4 +1,4 @@
-interface Test exposes [x] imports []
+module [x]
 
 x : (I64, Str)
 x = (1, "")

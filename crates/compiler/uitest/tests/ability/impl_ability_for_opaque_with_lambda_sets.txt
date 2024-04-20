@@ -1,4 +1,4 @@
-app "test" provides [isEqQ] to "./platform"
+app [isEqQ] { }
 
 Q := [ F (Str -> Str), G ] implements [Eq { isEq: isEqQ }]
 

@@ -1,4 +1,4 @@
-app "test" provides [top] to "./platform"
+app [top] { }
 
 MDict u := (List u) where u implements Hash & Eq
 

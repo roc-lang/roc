@@ -1,4 +1,4 @@
-app "test" provides [a] to "./platform"
+app [a] { }
 
 a : {a: _}
 a = {a: ""}

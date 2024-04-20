@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 main = isCorrectOrder (IsList [IsStr ""])
 #      ^^^^^^^^^^^^^^ [IsList (List a), IsStr Str] as a -[[isCorrectOrder(1)]]-> Bool

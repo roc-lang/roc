@@ -1,4 +1,4 @@
-app "test" provides [f] to "./platform"
+app [f] { }
 
 thenDo = \x, callback ->
     callback x

@@ -1,4 +1,4 @@
-app "test" provides [b] to "./platform"
+app [b] { }
 
 O := {} -> {}
 

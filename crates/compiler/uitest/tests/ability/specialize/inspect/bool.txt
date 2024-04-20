@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 main = Inspect.toInspector Bool.true |> Inspect.apply (Inspect.init {})
 #      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): Bool -[[] + f:Inspect.bool(13):1]-> Inspector f where f implements InspectFormatter

@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 entry =
     Foo a : [Blah (Result (Bar a) { val: a })]

@@ -1,4 +1,4 @@
-app "test" provides [foo] to "./platform"
+app [foo] { }
 
 foo : [True, False] -> Str
 foo = \ob ->

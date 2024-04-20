@@ -1,4 +1,4 @@
-app "test" provides [hashEq] to "./platform"
+app [hashEq] { }
 
 MHash implements
     hash : a -> U64 where a implements MHash

@@ -1,6 +1,6 @@
 # +opt infer:print_variables
 
-app "test" provides [main] to "./platform"
+app [main] { }
 
 f = \{} ->
 #^{-1} <2897><113>{} -<116>[[f(1)]]-> <112>[Ok <2905>{}]<76>*

@@ -1,4 +1,4 @@
-app "test" provides [main] to "./platform"
+app [main] { }
 
 Trivial := {} implements [Eq {isEq}]
 

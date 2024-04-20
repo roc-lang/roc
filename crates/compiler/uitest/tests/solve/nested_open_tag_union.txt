@@ -1,4 +1,4 @@
-app "test" provides [go] to "./platform"
+app [go] { }
 
 Expr : [
     Wrap Expr,

@@ -1,4 +1,4 @@
-app "test" provides [myU8] to "./platform"
+app [myU8] { }
 
 MDecodeError : [TooShort, Leftover (List U8)]
 

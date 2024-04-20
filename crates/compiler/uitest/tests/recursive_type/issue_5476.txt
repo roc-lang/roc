@@ -1,4 +1,4 @@
-interface Test exposes [main] imports []
+module [main]
 
 Term : [
     Bar Term,
