@@ -210,7 +210,7 @@ mod test {
     fn equals_pass() {
         run_expect_test(
             r#"
-            app "test" provides [main] to "./platform"
+            app [main] { }
 
             main = 0
 
@@ -225,7 +225,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -248,7 +248,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -286,7 +286,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -324,7 +324,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -362,7 +362,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -402,7 +402,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -446,7 +446,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -490,7 +490,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -523,7 +523,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -561,7 +561,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -603,7 +603,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -641,7 +641,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -685,7 +685,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -737,7 +737,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -785,7 +785,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -831,7 +831,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                app "test" provides [main] to "./platform"
+                app [main] { }
 
                 main = 0
 
@@ -877,7 +877,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface Test exposes [] imports []
+                module []
 
                 NonEmpty := [
                     First Str U8,
@@ -923,7 +923,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface Test exposes [] imports []
+                module []
 
                 makeForcer : {} -> (Str -> U8)
                 makeForcer = \{} -> \_ -> 2u8
@@ -961,7 +961,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r"
-                interface Test exposes [] imports []
+                module []
 
                 expect
                     totalCount = \{} -> 1u8
@@ -985,7 +985,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r"
-                interface Test exposes [] imports []
+                module []
 
                 expect
                     actual : { headers: List U8, body: List U8, x: List U8 }
@@ -1049,7 +1049,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface Test exposes [] imports []
+                module []
 
                 Request : {
                     fieldA : [Get, Post],
@@ -1109,7 +1109,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r"
-                interface Test exposes [] imports []
+                module []
 
                 actual : [Leftover (List U8), TooShort]
                 actual = Leftover [49, 93]
@@ -1148,7 +1148,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface Test exposes [] imports []
+                module []
 
                 actual : Result Str U64
                 actual = Err 1
@@ -1184,7 +1184,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r#"
-                interface Test exposes [] imports []
+                module []
 
                 expect
                     t = ("One", "Two")
@@ -1216,7 +1216,7 @@ mod test {
         run_expect_test(
             indoc!(
                 r"
-                interface Test exposes [] imports []
+                module []
 
                 hexToByte : U8, U8 -> U8
                 hexToByte = \upper, lower ->
