@@ -1412,12 +1412,12 @@ fn alias_using_builtin_name() {
         (
             "BoolExtra.roc",
             indoc!(
-                r#"
+                r"
                 interface BoolExtra exposes [toNum] imports []
 
                 toNum = \value ->
                     if value then 1 else 0
-                "#
+                "
             ),
         ),
         (

@@ -4561,7 +4561,7 @@ mod test_reporting {
     test_report!(
         comment_with_control_character,
         "# comment with a \x07\n",
-        @r"
+        @r###"
     ── ASCII CONTROL CHARACTER in tmp/comment_with_control_character/Test.roc ──────
 
     I encountered an ASCII control character:
@@ -4570,7 +4570,7 @@ mod test_reporting {
                              ^
 
     ASCII control characters are not allowed.
-    "
+    "###
     );
 
     test_report!(
@@ -4919,9 +4919,9 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
+            app "dict" imports [] provides [main] to "./platform"
 
-            myDict : Dict.Dict Num.I64 Str
+            myDict : Dict Num.I64 Str
             myDict = Dict.insert (Dict.empty {}) "foo" 42
 
             main = myDict
@@ -4932,7 +4932,7 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    3│  myDict : Dict.Dict Num.I64 Str
+    3│  myDict : Dict Num.I64 Str
     4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -9310,7 +9310,7 @@ In roc, functions are always written as a lambda, like{}
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" imports [Set] provides [go] to "./platform"
+            app "test" imports [] provides [go] to "./platform"
 
             S a : { set : Set.Set a }
 

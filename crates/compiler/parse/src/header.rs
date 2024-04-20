@@ -211,7 +211,6 @@ keywords! {
     RequiresKeyword => "requires",
     ProvidesKeyword => "provides",
     ToKeyword => "to",
-    // [modules-revamp] TODO: Remove
     ImportsKeyword => "imports",
 }
 
@@ -229,6 +228,9 @@ pub struct InterfaceHeader<'a> {
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
     pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
 }
+
+pub type ImportsKeywordItem<'a> = KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>;
+pub type ImportsCollection<'a> = Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostedHeader<'a> {

@@ -92,6 +92,7 @@ pub(crate) struct ModuleHeader<'a> {
     pub(crate) parse_state: roc_parse::state::State<'a>,
     pub(crate) header_type: HeaderType<'a>,
     pub(crate) header_comments: &'a [CommentOrNewline<'a>],
+    pub(crate) header_imports: Option<roc_parse::header::ImportsKeywordItem<'a>>,
     pub(crate) module_timing: ModuleTiming,
     pub(crate) opt_shorthand: Option<&'a str>,
 }

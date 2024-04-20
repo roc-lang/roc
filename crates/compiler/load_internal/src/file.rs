@@ -49,10 +49,11 @@ use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::{
-    ExposedName, HeaderType, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
+    ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader, PlatformHeader, To,
+    TypedIdent,
 };
-use roc_parse::module::module_defs;
-use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
+use roc_parse::module::parse_module_defs;
+use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
 #[cfg(not(target_family = "wasm"))]
@@ -3520,6 +3521,7 @@ fn load_builtin_module_help<'a>(
                     generates_with: &[],
                 },
                 module_comments: comments,
+                header_imports: Some(header.imports),
             };
 
             (info, parse_state)
@@ -3842,6 +3844,7 @@ fn parse_header<'a>(
                     exposes: unspace(arena, header.exposes.item.items),
                 },
                 module_comments: comments,
+                header_imports: Some(header.imports),
             };
 
             let (module_id, module_name, header) =
@@ -3890,6 +3893,7 @@ fn parse_header<'a>(
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
                 module_comments: comments,
+                header_imports: Some(header.imports),
             };
 
             let (module_id, _, header) =
@@ -3941,6 +3945,7 @@ fn parse_header<'a>(
                     to_platform: header.provides.to.value,
                 },
                 module_comments: comments,
+                header_imports: header.imports,
             };
 
             let (module_id, _, resolved_header) =
@@ -4209,6 +4214,7 @@ struct HeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     header_type: HeaderType<'a>,
     module_comments: &'a [CommentOrNewline<'a>],
+    header_imports: Option<ImportsKeywordItem<'a>>,
 }
 
 fn build_header<'a>(
@@ -4224,6 +4230,7 @@ fn build_header<'a>(
         packages,
         header_type,
         module_comments: header_comments,
+        header_imports,
     } = info;
 
     let declared_name: ModuleName = match &header_type {
@@ -4293,6 +4300,7 @@ fn build_header<'a>(
             header_comments,
             module_timing,
             opt_shorthand,
+            header_imports,
         },
     ))
 }
@@ -4906,6 +4914,7 @@ fn build_package_header<'a>(
         packages,
         header_type,
         module_comments: comments,
+        header_imports: None,
     };
 
     build_header(info, parse_state, module_ids, module_timing)
@@ -4962,6 +4971,7 @@ fn build_platform_header<'a>(
         packages: &[],
         header_type,
         module_comments: comments,
+        header_imports: Some(header.imports),
     };
 
     build_header(info, parse_state, module_ids, module_timing)
@@ -5163,9 +5173,13 @@ fn parse<'a>(
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
-        Ok((_, success, _state)) => success,
-        Err((_, fail)) => {
+
+    let header_import_defs =
+        roc_parse::ast::Module::header_imports_to_defs(arena, header.header_imports);
+
+    let parsed_defs = match parse_module_defs(arena, parse_state.clone(), header_import_defs) {
+        Ok(success) => success,
+        Err(fail) => {
             return Err(LoadingProblem::ParsingFailed(
                 fail.into_file_error(header.module_path, &parse_state),
             ));

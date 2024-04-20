@@ -28,12 +28,19 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     }
 }
 
-#[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
-    skip_second!(
-        specialize_err(SyntaxError::Expr, crate::expr::toplevel_defs(),),
-        end_of_file()
-    )
+pub fn parse_module_defs<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    defs: Defs<'a>,
+) -> Result<Defs<'a>, SyntaxError<'a>> {
+    let min_indent = 0;
+    match crate::expr::parse_top_level_defs(arena, state.clone(), defs) {
+        Ok((_, defs, state)) => match end_of_file().parse(arena, state, min_indent) {
+            Ok(_) => Ok(defs),
+            Err((_, fail)) => Err(fail),
+        },
+        Err((_, fail)) => Err(SyntaxError::Expr(fail, state.pos())),
+    }
 }
 
 pub fn parse_header<'a>(

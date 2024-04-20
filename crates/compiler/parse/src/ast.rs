@@ -98,6 +98,115 @@ pub struct Module<'a> {
     pub header: Header<'a>,
 }
 
+impl<'a> Module<'a> {
+    pub fn header_imports_to_defs(
+        arena: &'a Bump,
+        imports: Option<
+            header::KeywordItem<'a, header::ImportsKeyword, header::ImportsCollection<'a>>,
+        >,
+    ) -> Defs<'a> {
+        let mut defs = Defs::default();
+
+        if let Some(imports) = imports {
+            let len = imports.item.len();
+
+            for (index, import) in imports.item.iter().enumerate() {
+                let spaced = import.extract_spaces();
+
+                let value_def = match spaced.item {
+                    header::ImportsEntry::Package(pkg_name, name, exposed) => {
+                        Self::header_import_to_value_def(
+                            Some(pkg_name),
+                            name,
+                            exposed,
+                            import.region,
+                        )
+                    }
+                    header::ImportsEntry::Module(name, exposed) => {
+                        Self::header_import_to_value_def(None, name, exposed, import.region)
+                    }
+                    header::ImportsEntry::IngestedFile(path, typed_ident) => {
+                        ValueDef::IngestedFileImport(IngestedFileImport {
+                            before_path: &[],
+                            path: Loc {
+                                value: path,
+                                region: import.region,
+                            },
+                            name: header::KeywordItem {
+                                keyword: Spaces {
+                                    before: &[],
+                                    item: ImportAsKeyword,
+                                    after: &[],
+                                },
+                                item: Loc {
+                                    value: typed_ident,
+                                    region: import.region,
+                                },
+                            },
+                        })
+                    }
+                };
+
+                defs.push_value_def(
+                    value_def,
+                    import.region,
+                    if index == 0 {
+                        let mut before = vec![CommentOrNewline::Newline, CommentOrNewline::Newline];
+                        before.extend(spaced.before);
+                        arena.alloc(before)
+                    } else {
+                        spaced.before
+                    },
+                    if index == len - 1 {
+                        let mut after = spaced.after.to_vec();
+                        after.push(CommentOrNewline::Newline);
+                        after.push(CommentOrNewline::Newline);
+                        arena.alloc(after)
+                    } else {
+                        spaced.after
+                    },
+                );
+            }
+        }
+        defs
+    }
+
+    fn header_import_to_value_def(
+        pkg_name: Option<&'a str>,
+        name: header::ModuleName<'a>,
+        exposed: Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        region: Region,
+    ) -> ValueDef<'a> {
+        use crate::header::KeywordItem;
+
+        let new_exposed = if exposed.is_empty() {
+            None
+        } else {
+            Some(KeywordItem {
+                keyword: Spaces {
+                    before: &[],
+                    item: ImportExposingKeyword,
+                    after: &[],
+                },
+                item: exposed,
+            })
+        };
+
+        ValueDef::ModuleImport(ModuleImport {
+            before_name: &[],
+            name: Loc {
+                region,
+                value: ImportedModuleName {
+                    package: pkg_name,
+                    name,
+                },
+            },
+            alias: None,
+            exposed: new_exposed,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Header<'a> {
     Interface(InterfaceHeader<'a>),
