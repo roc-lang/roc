@@ -65,7 +65,7 @@ where
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
+    let mut buffer = String::from("app [main] { }\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -82,7 +82,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
     use std::path::PathBuf;
 
     let exec_mode = match mode {
-        "exec" => ExecutionMode::Executable,
+        "exec" => ExecutionMode::ExecutableEval,
         "test" => ExecutionMode::Test,
         _ => panic!("Invalid test_mono exec mode {mode}"),
     };
@@ -94,7 +94,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
 
     let module_src;
     let temp;
-    if src.starts_with("app") || src.starts_with("interface") {
+    if src.starts_with("app") || src.starts_with("module") {
         // this is already a module
         module_src = src;
     } else {
@@ -632,7 +632,7 @@ fn quicksort_help() {
 fn quicksort_swap() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         swap = \list ->
             when Pair (List.get list 0) (List.get list 0) is
@@ -655,7 +655,7 @@ fn quicksort_swap() {
 // fn quicksort_partition_help() {
 //     indoc!(
 //         r#"
-//         app "test" provides [main] to "./platform"
+//         app [main] { }
 
 //         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
 //         partitionHelp = \i, j, list, high, pivot ->
@@ -683,7 +683,7 @@ fn quicksort_swap() {
 // fn quicksort_full() {
 //     indoc!(
 //         r#"
-//         app "test" provides [main] to "./platform"
+//         app [main] { }
 
 //         quicksortHelp : List (Num a), I64, I64 -> List (Num a)
 //         quicksortHelp = \list, low, high ->
@@ -795,7 +795,7 @@ fn has_none() {
 fn mk_pair_of() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         mkPairOf = \x -> Pair x x
 
@@ -809,7 +809,7 @@ fn mk_pair_of() {
 fn fst() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         fst = \x, _ -> x
 
@@ -823,7 +823,7 @@ fn fst() {
 fn list_cannot_update_inplace() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         x : List I64
         x = [1,2,3]
@@ -973,7 +973,7 @@ fn linked_list_length_twice() {
 fn rigids() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         swap : U64, U64, List a -> List a
         swap = \i, j, list ->
@@ -1033,7 +1033,7 @@ fn let_x_in_x_indirect() {
 fn nested_closure() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         foo = \{} ->
             x = 42
@@ -1051,7 +1051,7 @@ fn nested_closure() {
 fn closure_in_list() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         foo = \{} ->
             x = 41
@@ -1073,7 +1073,7 @@ fn closure_in_list() {
 fn somehow_drops_definitions() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         one : I64
         one = 1
@@ -1100,7 +1100,7 @@ fn somehow_drops_definitions() {
 fn specialize_closures() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
 
         apply : (a -> a), a -> a
@@ -1131,7 +1131,7 @@ fn specialize_closures() {
 fn specialize_lowlevel() {
     indoc!(
         r#"
-         app "test" provides [main] to "./platform"
+         app [main] { }
 
          apply : (a -> a), a -> a
          apply = \f, x -> f x
@@ -1159,7 +1159,7 @@ fn empty_list_of_function_type() {
     // see https://github.com/roc-lang/roc/issues/1732
     indoc!(
         r#"
-         app "test" provides [main] to "./platform"
+         app [main] { }
 
          main =
             myList : List (Str -> Str)
@@ -1185,7 +1185,7 @@ fn empty_list_of_function_type() {
 fn monomorphized_ints() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             x = 100
@@ -1202,7 +1202,7 @@ fn monomorphized_ints() {
 fn monomorphized_floats() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             x = 100.0
@@ -1220,7 +1220,7 @@ fn monomorphized_floats() {
 fn monomorphized_ints_aliased() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             y = 100
@@ -1244,7 +1244,7 @@ fn monomorphized_ints_aliased() {
 fn monomorphized_tag() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             b = \{} -> Bar
@@ -1259,7 +1259,7 @@ fn monomorphized_tag() {
 fn monomorphized_tag_with_aliased_args() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             b = Bool.false
@@ -1276,7 +1276,7 @@ fn monomorphized_tag_with_aliased_args() {
 fn monomorphized_list() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             l = \{} -> [1, 2, 3]
@@ -1293,7 +1293,7 @@ fn monomorphized_list() {
 fn monomorphized_applied_tag() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             a = A "A"
@@ -1324,7 +1324,7 @@ fn aliased_polymorphic_closure() {
 fn issue_2535_let_weakened_fields_referenced_in_list() {
     indoc!(
         r#"
-        app "test" provides [nums] to "./platform"
+        app [nums] { }
 
         alpha = { a: 1, b: 2 }
 
@@ -1390,7 +1390,7 @@ fn issue_2811() {
 fn specialize_ability_call() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         MHash implements
             hash : a -> U64 where a implements MHash
@@ -1409,7 +1409,7 @@ fn specialize_ability_call() {
 fn opaque_assign_to_symbol() {
     indoc!(
         r#"
-        app "test" provides [out] to "./platform"
+        app [out] { }
 
         Variable := U8
 
@@ -1426,7 +1426,7 @@ fn opaque_assign_to_symbol() {
 fn encode() {
     indoc!(
         r#"
-        app "test" provides [myU8Bytes] to "./platform"
+        app [myU8Bytes] { }
 
         MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
@@ -1457,7 +1457,7 @@ fn encode() {
 // fn static_str_closure() {
 //     indoc!(
 //         r#"
-//         app "test" provides [main] to "./platform"
+//         app [main] { }
 
 //         main : Str
 //         main =
@@ -1475,7 +1475,7 @@ fn encode() {
 fn list_map_closure_borrows() {
     indoc!(
         r#"
-        app "test" provides [out] to "./platform"
+        app [out] { }
 
         list = [Str.concat "lllllllllllllllllllllooooooooooong" "g"]
 
@@ -1493,7 +1493,7 @@ fn list_map_closure_borrows() {
 fn list_map_closure_owns() {
     indoc!(
         r#"
-        app "test" provides [out] to "./platform"
+        app [out] { }
 
         list = [Str.concat "lllllllllllllllllllllooooooooooong" "g"]
 
@@ -1511,7 +1511,7 @@ fn list_map_closure_owns() {
 fn list_sort_asc() {
     indoc!(
         r#"
-        app "test" provides [out] to "./platform"
+        app [out] { }
 
         out = List.sortAsc [4, 3, 2, 1]
         "#
@@ -1523,9 +1523,10 @@ fn list_sort_asc() {
 fn encode_custom_type() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         HelloWorld := {}
         toEncoder = \@HelloWorld {} ->
@@ -1546,9 +1547,10 @@ fn encode_custom_type() {
 fn encode_derived_string() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             result = Str.fromUtf8 (Encode.toBytes "abc" TotallyNotJson.json)
@@ -1564,9 +1566,10 @@ fn encode_derived_string() {
 fn encode_derived_record() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             result = Str.fromUtf8 (Encode.toBytes {a: "a"} TotallyNotJson.json)
@@ -1844,7 +1847,7 @@ fn call_function_in_empty_list_unbound() {
 fn instantiate_annotated_as_recursive_alias_toplevel() {
     indoc!(
         r#"
-        app "test" provides [it] to "./platform"
+        app [it] { }
 
         Value : [Nil, Array (List Value)]
 
@@ -1861,7 +1864,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             Value : [Nil, Array (List Value)]
@@ -1881,7 +1884,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
 fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             Value : [Nil, Array (List Value)]
@@ -1906,9 +1909,10 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 fn encode_derived_record_one_field_string() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
@@ -1923,9 +1927,10 @@ fn encode_derived_record_one_field_string() {
 fn encode_derived_record_two_field_strings() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} TotallyNotJson.json)
@@ -1940,9 +1945,10 @@ fn encode_derived_record_two_field_strings() {
 fn encode_derived_nested_record_string() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} TotallyNotJson.json)
@@ -1957,9 +1963,10 @@ fn encode_derived_nested_record_string() {
 fn encode_derived_tag_one_field_string() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             x : [A Str]
@@ -1976,7 +1983,7 @@ fn encode_derived_tag_one_field_string() {
 fn polymorphic_expression_unification() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         RenderTree : [
             Text Str,
@@ -1998,9 +2005,10 @@ fn polymorphic_expression_unification() {
 fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
-        app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
-            provides [main] to "./platform"
+        app [main] { }
+
+        import Encode exposing [toEncoder]
+        import TotallyNotJson
 
         main =
             x : [A Str Str]
@@ -2071,7 +2079,7 @@ fn match_on_result_with_uninhabited_error_branch() {
 fn unreachable_void_constructor() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         x : []
 
@@ -2084,7 +2092,7 @@ fn unreachable_void_constructor() {
 fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         provideThunk = \x ->
             when x is
@@ -2138,7 +2146,7 @@ fn match_list() {
 fn recursive_function_and_union_with_inference_hole() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Html state : [
             Element (List (Html state)),
@@ -2162,7 +2170,7 @@ fn recursive_function_and_union_with_inference_hole() {
 fn crash() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         getInfallible = \result -> when result is
             Ok x -> x
@@ -2180,7 +2188,7 @@ fn crash() {
 fn function_pointer_lambda_set() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         number = \{} -> 1u64
 
@@ -2197,7 +2205,7 @@ fn function_pointer_lambda_set() {
 fn anonymous_closure_lifted_to_named_issue_2403() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             f =
@@ -2213,7 +2221,7 @@ fn anonymous_closure_lifted_to_named_issue_2403() {
 fn toplevel_accessor_fn_thunk() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         ra = .field
 
@@ -2227,7 +2235,7 @@ fn toplevel_accessor_fn_thunk() {
 fn list_one_vs_one_spread_issue_4685() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main = when [""] is
             [] -> "A"
@@ -2241,7 +2249,7 @@ fn list_one_vs_one_spread_issue_4685() {
 fn tuple_pattern_match() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main = when (1, 2) is
             (1, _) -> "A"
@@ -2255,7 +2263,7 @@ fn tuple_pattern_match() {
 fn issue_4705() {
     indoc!(
         r"
-        interface Test exposes [] imports []
+        module []
 
         go : {} -> Bool
         go = \{} -> Bool.true
@@ -2272,7 +2280,9 @@ fn issue_4705() {
 fn issue_4749() {
     indoc!(
         r#"
-        interface Test exposes [] imports [TotallyNotJson]
+        module []
+
+        import TotallyNotJson
 
         expect
             input = [82, 111, 99]
@@ -2286,7 +2296,7 @@ fn issue_4749() {
 fn lambda_set_with_imported_toplevels_issue_4733() {
     indoc!(
         r"
-        interface Test exposes [] imports []
+        module []
 
         fn = \{} ->
             instr : [ Op (U64, U64 -> U64) ]
@@ -2319,7 +2329,7 @@ fn order_list_size_tests_issue_4732() {
 fn anonymous_closure_in_polymorphic_expression_issue_4717() {
     indoc!(
         r#"
-        app "test" provides [main] to "platform"
+        app [main] { }
 
         chompWhile : (List U8) -> (List U8)
         chompWhile = \input ->
@@ -2339,7 +2349,7 @@ fn anonymous_closure_in_polymorphic_expression_issue_4717() {
 fn list_map_take_capturing_or_noncapturing() {
     indoc!(
         r#"
-        app "test" provides [main] to "platform"
+       app [main] { }
 
         main =
             x = 1u8
@@ -2363,7 +2373,7 @@ fn list_map_take_capturing_or_noncapturing() {
 fn issue_4557() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         isEqQ = \q1, q2 -> when T q1 q2 is
             T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
@@ -2377,7 +2387,7 @@ fn issue_4557() {
 fn nullable_wrapped_with_nullable_not_last_index() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Parser : [
             OneOrMore Parser,
@@ -2401,7 +2411,7 @@ fn nullable_wrapped_with_nullable_not_last_index() {
 fn pattern_as_toplevel() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         record = { a: 42i64, b: "foo" }
 
@@ -2417,7 +2427,7 @@ fn pattern_as_toplevel() {
 fn pattern_as_nested() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         record = { a: 42i64, b: "foo" }
 
@@ -2433,7 +2443,7 @@ fn pattern_as_nested() {
 fn pattern_as_of_symbol() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             when "foo" is
@@ -2448,7 +2458,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
     // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         andThen = \{} ->
             x = 10
@@ -2467,7 +2477,7 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         andThen = \{} ->
             x = 10u8
@@ -2486,7 +2496,9 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
         r#"
-        interface Test exposes [] imports [TotallyNotJson]
+        module []
+
+        import TotallyNotJson
 
         getNumber =
             { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") TotallyNotJson.json
@@ -2516,7 +2528,7 @@ fn weakening_avoids_overspecialization() {
     // specialization, that of `U64`, exists.
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main : (List U8) -> (List U8)
         main = \input ->
@@ -2534,7 +2546,7 @@ fn weakening_avoids_overspecialization() {
 fn recursively_build_effect() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         greeting =
             hi = "Hello"
@@ -2575,7 +2587,7 @@ fn recursively_build_effect() {
 fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
     indoc!(
         r#"
-        app "test" provides [looper] to "./platform"
+        app [looper] { }
 
         Effect : {} -> Str
 
@@ -2620,7 +2632,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     //                  ]] -> Bytes)
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
@@ -2683,7 +2695,9 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
     indoc!(
         r#"
-        app "test" imports [TotallyNotJson] provides [main] to "./platform"
+        app [main] { }
+
+        import TotallyNotJson
 
         Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
@@ -2721,7 +2735,9 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
     // `t.a` and `t.b` are filled in.
     indoc!(
         r#"
-        app "test" imports [TotallyNotJson] provides [main] to "./platform"
+        app [main] { }
+
+        import TotallyNotJson
 
         Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
@@ -2747,7 +2763,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
 fn inline_return_joinpoints_in_bool_lambda_set() {
     indoc!(
         r#"
-        app "test" provides [f] to "./platform"
+        app [f] { }
 
         f = \x ->
             caller = if Bool.false then f else \n -> n
@@ -2760,7 +2776,7 @@ fn inline_return_joinpoints_in_bool_lambda_set() {
 fn inline_return_joinpoints_in_enum_lambda_set() {
     indoc!(
         r#"
-        app "test" provides [f] to "./platform"
+        app [f] { }
 
         f = \x ->
             caller = \t -> when t is
@@ -2777,7 +2793,7 @@ fn inline_return_joinpoints_in_enum_lambda_set() {
 fn inline_return_joinpoints_in_union_lambda_set() {
     indoc!(
         r#"
-        app "test" provides [f] to "./platform"
+        app [f] { }
 
         f = \x ->
             caller = \t -> when t is
@@ -2792,7 +2808,7 @@ fn inline_return_joinpoints_in_union_lambda_set() {
 fn recursive_closure_with_transiently_used_capture() {
     indoc!(
         r#"
-        app "test" provides [f] to "./platform"
+        app [f] { }
 
         thenDo = \x, callback ->
             callback x
@@ -2812,7 +2828,7 @@ fn recursive_closure_with_transiently_used_capture() {
 fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         go : U8 -> U8
         go = \byte ->
@@ -2830,7 +2846,7 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
 fn recursive_lambda_set_resolved_only_upon_specialization() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         factCPS = \n, cont ->
             if n == 0u8 then
@@ -2848,7 +2864,7 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
 fn compose_recursive_lambda_set_productive_nullable_wrapped() {
     indoc!(
         r#"
-         app "test" provides [main] to "./platform"
+         app [main] { }
 
          compose = \forward -> \f, g ->
             if forward
@@ -2871,7 +2887,7 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
 fn issue_4759() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             update { a : { x : "x", y: "y" } }
@@ -2885,7 +2901,7 @@ fn issue_4759() {
 fn layout_cache_structure_with_multiple_recursive_structures() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Chain : [
             End,
@@ -2915,7 +2931,7 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
 fn issue_4770() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             isCorrectOrder { left: IsList [IsInteger 10], right: IsList [IsInteger 20] }
@@ -2939,7 +2955,7 @@ fn issue_4770() {
 fn error_on_erroneous_condition() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main = if True then 1 else 2
         "#
@@ -2950,7 +2966,7 @@ fn error_on_erroneous_condition() {
 fn binary_tree_fbip() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             tree = Node (Node (Node (Node Tip Tip) Tip) (Node Tip Tip)) (Node Tip Tip)
@@ -2982,7 +2998,7 @@ fn binary_tree_fbip() {
 fn rb_tree_fbip() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main = Leaf
             |> ins 0 0
@@ -3037,7 +3053,7 @@ fn rb_tree_fbip() {
 fn specialize_after_match() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             listA : LinkedList Str
@@ -3074,7 +3090,7 @@ fn specialize_after_match() {
 fn drop_specialize_after_struct() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Tuple a b : { left : a, right : b }
 
@@ -3090,7 +3106,7 @@ fn drop_specialize_after_struct() {
 fn record_update() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
         main = f {a: [], b: [], c:[]}
         f : {a: List U64, b: List U64, c: List U64} -> {a: List U64, b: List U64, c: List U64}
         f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
@@ -3102,7 +3118,7 @@ fn record_update() {
 fn drop_specialize_after_jump() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Tuple a b : { left : a, right : b }
 
@@ -3125,7 +3141,7 @@ fn drop_specialize_after_jump() {
 fn dbg_in_expect() {
     indoc!(
         r#"
-        interface Test exposes [] imports []
+        module []
 
         expect
             dbg ""
@@ -3138,7 +3154,7 @@ fn dbg_in_expect() {
 fn drop_specialize_before_jump() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Tuple a b : { left : a, right : b }
 
@@ -3160,7 +3176,7 @@ fn drop_specialize_before_jump() {
 fn dbg_str_followed_by_number() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         main =
             dbg ""
@@ -3173,7 +3189,7 @@ fn dbg_str_followed_by_number() {
 fn linked_list_reverse() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -3196,7 +3212,7 @@ fn linked_list_reverse() {
 fn linked_list_map() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -3216,7 +3232,7 @@ fn linked_list_map() {
 fn linked_list_filter() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         LinkedList a : [Nil, Cons a (LinkedList a)]
 
@@ -3241,7 +3257,7 @@ fn linked_list_filter() {
 fn capture_void_layout_task() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Fx a : {} -> a
 
@@ -3285,7 +3301,7 @@ fn capture_void_layout_task() {
 fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
     indoc!(
         r#"
-        app "test" provides [main] to "./platform"
+        app [main] { }
 
         Ast : [ A, B, C Str Ast ]
 
@@ -3307,9 +3323,7 @@ fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
 fn inspect_custom_type() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         HelloWorld := {} implements [Inspect { toInspector: myToInspector }]
 
@@ -3328,9 +3342,7 @@ fn inspect_custom_type() {
 fn inspect_derived_string() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main = Inspect.toStr "abc"
         "#
@@ -3341,9 +3353,7 @@ fn inspect_derived_string() {
 fn inspect_derived_record() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main = Inspect.toStr {a: 7, b: 3dec}
         "#
@@ -3353,9 +3363,7 @@ fn inspect_derived_record() {
 fn inspect_derived_record_one_field_string() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main = Inspect.toStr {a: "foo"}
         "#
@@ -3366,9 +3374,7 @@ fn inspect_derived_record_one_field_string() {
 fn inspect_derived_record_two_field_strings() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main = Inspect.toStr {a: "foo", b: "bar"}
         "#
@@ -3379,9 +3385,7 @@ fn inspect_derived_record_two_field_strings() {
 fn inspect_derived_nested_record_string() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main = Inspect.toStr {a: {b: "bar"}}
         "#
@@ -3392,9 +3396,7 @@ fn inspect_derived_nested_record_string() {
 fn inspect_derived_tag_one_field_string() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main =
             x : [A Str]
@@ -3408,9 +3410,7 @@ fn inspect_derived_tag_one_field_string() {
 fn inspect_derived_tag_two_payloads_string() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main =
             x : [A Str Str]
@@ -3424,9 +3424,7 @@ fn inspect_derived_tag_two_payloads_string() {
 fn inspect_derived_list() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main = Inspect.toStr [1, 2, 3]
         "#
@@ -3437,9 +3435,7 @@ fn inspect_derived_list() {
 fn inspect_derived_dict() {
     indoc!(
         r#"
-        app "test"
-            imports []
-            provides [main] to "./platform"
+        app [main] { }
 
         main =
             Dict.fromList [("a", 1), ("b", 2)]
