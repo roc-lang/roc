@@ -74,6 +74,7 @@ Defs(
             @52-61 Var {
                 module_name: "JE",
                 ident: "encode",
+                suffixed: 0,
             },
             [
                 @63-69 ParensAround(
@@ -81,6 +82,7 @@ Defs(
                         @63-66 Var {
                             module_name: "",
                             ident: "int",
+                            suffixed: 0,
                         },
                         [
                             @67-69 Num(

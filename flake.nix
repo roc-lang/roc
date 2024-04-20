@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=886c9aee6ca9324e127f9c2c4e6f68c2641c8256";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=fd281bd6b7d3e32ddfa399853946f782553163b5";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -19,7 +19,7 @@
       inputs.flake-utils.follows = "flake-utils";
     };
 
-    # for non flake backwards compatibility 
+    # for non flake backwards compatibility
     flake-compat = {
       url = "github:edolstra/flake-compat";
       flake = false;
@@ -45,7 +45,7 @@
         inherit (compile-deps) zigPkg llvmPkgs llvmVersion
           llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
-        # DevInputs are not necessary to build roc as a user 
+        # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
           lib.optionals stdenv.isLinux [
             valgrind # used in cli tests, see cli/tests/cli_run.rs
@@ -60,7 +60,7 @@
             xorg.libxcb
           ];
 
-        # DevInputs are not necessary to build roc as a user 
+        # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
           lib.optionals stdenv.isDarwin
             (with pkgs.darwin.apple_sdk.frameworks; [
@@ -98,6 +98,7 @@
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
           zls # zig language server
+          # cargo-udeps # to find unused dependencies
         ]);
 
         aliases = ''

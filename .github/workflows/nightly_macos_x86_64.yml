@@ -1,5 +1,5 @@
 on:
-    #  pull_request:
+    #pull_request:
     workflow_dispatch:
     schedule:
         - cron: "0 9 * * *" # 9=9am utc+0
@@ -15,7 +15,7 @@ jobs:
         runs-on: [self-hosted, macOS, X64]
         timeout-minutes: 120
         steps:
-            - uses: actions/checkout@v3
+            - uses: actions/checkout@v4
 
             - name: Update PATH to use zig 11
               run: |
@@ -32,7 +32,7 @@ jobs:
               # this issue may be caused by using older versions of XCode
 
             - name: build release
-              run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc --bin roc_ls
+              run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc --bin roc_language_server
               # target-cpu=x86-64 -> For maximal compatibility for all CPU's.
 
             - name: get commit SHA
@@ -55,7 +55,7 @@ jobs:
               run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
             - name: Upload artifact. Actually uploading to github releases has to be done manually.
-              uses: actions/upload-artifact@v3
+              uses: actions/upload-artifact@v4
               with:
                   name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
                   path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz

@@ -310,10 +310,9 @@ impl RocDec {
             }
         };
 
-        let opt_after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES => Some(answer),
-            _ => None,
-        };
+        let opt_after_point = parts
+            .next()
+            .map(|answer| &answer[..Ord::min(answer.len(), Self::DECIMAL_PLACES)]);
 
         // There should have only been one "." in the string!
         if parts.next().is_some() {

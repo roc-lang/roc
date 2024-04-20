@@ -46,11 +46,13 @@ Defs(
             @35-44 Var {
                 module_name: "",
                 ident: "parseJson",
+                suffixed: 0,
             },
             [
                 @45-49 Var {
                     module_name: "",
                     ident: "data",
+                    suffixed: 0,
                 },
             ],
             Space,

@@ -9,6 +9,7 @@ Record(
                         @8-17 Var {
                             module_name: "Bool",
                             ident: "true",
+                            suffixed: 0,
                         },
                         @23-24 Num(
                             "1",

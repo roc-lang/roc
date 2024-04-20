@@ -17,7 +17,6 @@ roc_derive_key = { path = "../derive_key" }
 roc_error_macros = { path = "../../error_macros" }
 roc_exhaustive = { path = "../exhaustive" }
 roc_module = { path = "../module" }
-roc_packaging = { path = "../../packaging" }
 roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_solve_problem = { path = "../solve_problem" }
@@ -40,9 +39,7 @@ test_solve_helpers = { path = "../test_solve_helpers" }
 
 bumpalo.workspace = true
 indoc.workspace = true
-insta.workspace = true
 lazy_static.workspace = true
 pretty_assertions.workspace = true
 regex.workspace = true
 tempfile.workspace = true
-libtest-mimic.workspace = true

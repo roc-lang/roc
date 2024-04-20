@@ -36,6 +36,7 @@ comptime {
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.logC, "log");
+    exportDecFn(dec.powC, "pow");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
@@ -48,10 +49,15 @@ comptime {
     exportDecFn(dec.tanC, "tan");
     exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.fromI128, "from_i128");
     exportDecFn(dec.toStr, "to_str");
 
     inline for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
+
+        dec.exportRound(T, ROC_BUILTINS ++ ".dec.round.");
+        dec.exportFloor(T, ROC_BUILTINS ++ ".dec.floor.");
+        dec.exportCeiling(T, ROC_BUILTINS ++ ".dec.ceiling.");
     }
 }
 
@@ -90,11 +96,6 @@ const FLOATS = [_]type{ f32, f64 };
 const NUMBERS = INTEGERS ++ FLOATS;
 
 comptime {
-    exportNumFn(num.bytesToU16C, "bytes_to_u16");
-    exportNumFn(num.bytesToU32C, "bytes_to_u32");
-    exportNumFn(num.bytesToU64C, "bytes_to_u64");
-    exportNumFn(num.bytesToU128C, "bytes_to_u128");
-
     exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
     exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
 
@@ -110,6 +111,10 @@ comptime {
     exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
     exportNumFn(num.greaterThanU128, "greater_than.u128");
     exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
+    exportNumFn(num.f32ToParts, "f32_to_parts");
+    exportNumFn(num.f64ToParts, "f64_to_parts");
+    exportNumFn(num.f32FromParts, "f32_from_parts");
+    exportNumFn(num.f64FromParts, "f64_from_parts");
 
     inline for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
@@ -121,6 +126,9 @@ comptime {
         num.exportFloor(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f64.");
         num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
         num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
+
+        num.exportNumToFloatCast(T, f32, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f32.");
+        num.exportNumToFloatCast(T, f64, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
@@ -189,17 +197,17 @@ comptime {
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strEqual, "equal");
-    exportStrFn(str.substringUnsafe, "substring_unsafe");
-    exportStrFn(str.getUnsafe, "get_unsafe");
-    exportStrFn(str.reserve, "reserve");
+    exportStrFn(str.substringUnsafeC, "substring_unsafe");
+    exportStrFn(str.getUnsafeC, "get_unsafe");
+    exportStrFn(str.reserveC, "reserve");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
-    exportStrFn(str.repeat, "repeat");
+    exportStrFn(str.fromUtf8C, "from_utf8");
+    exportStrFn(str.repeatC, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimStart, "trim_start");
     exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
-    exportStrFn(str.withCapacity, "with_capacity");
+    exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 

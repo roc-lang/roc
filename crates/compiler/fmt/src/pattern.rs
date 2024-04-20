@@ -41,8 +41,12 @@ impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
         // Theory: a pattern should only be multiline when it contains a comment
         match self {
-            Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
-                debug_assert!(!spaces.is_empty());
+            Pattern::SpaceBefore(pattern, spaces) | Pattern::SpaceAfter(pattern, spaces) => {
+                debug_assert!(
+                    !spaces.is_empty(),
+                    "spaces is empty in pattern {:#?}",
+                    pattern
+                );
 
                 spaces.iter().any(|s| s.is_comment())
             }
@@ -60,7 +64,7 @@ impl<'a> Formattable for Pattern<'a> {
                 }
             },
 
-            Pattern::Identifier(_)
+            Pattern::Identifier { .. }
             | Pattern::Tag(_)
             | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
@@ -84,9 +88,16 @@ impl<'a> Formattable for Pattern<'a> {
         use self::Pattern::*;
 
         match self {
-            Identifier(string) => {
+            Identifier {
+                ident: string,
+                suffixed,
+            } => {
                 buf.indent(indent);
-                buf.push_str(string)
+                buf.push_str(string);
+
+                for _ in 0..*suffixed {
+                    buf.push('!');
+                }
             }
             Tag(name) | OpaqueRef(name) => {
                 buf.indent(indent);
@@ -266,11 +277,19 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            QualifiedIdentifier { module_name, ident } => {
+            QualifiedIdentifier {
+                module_name,
+                ident,
+                suffixed,
+            } => {
                 buf.indent(indent);
                 if !module_name.is_empty() {
                     buf.push_str(module_name);
                     buf.push('.');
+                }
+
+                for _ in 0..*suffixed {
+                    buf.push('!');
                 }
 
                 buf.push_str(ident);

@@ -376,10 +376,11 @@ impl<'a> Formattable for ValueDef<'a> {
             Dbg { condition, .. } => condition.is_multiline(),
             ModuleImport(module_import) => module_import.is_multiline(),
             IngestedFileImport(ingested_file_import) => ingested_file_import.is_multiline(),
+            Stmt(loc_expr) => loc_expr.is_multiline(),
         }
     }
 
-    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         use roc_parse::ast::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
@@ -420,6 +421,7 @@ impl<'a> Formattable for ValueDef<'a> {
             }
             ModuleImport(module_import) => module_import.format(buf, indent),
             IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
+            Stmt(loc_expr) => loc_expr.format_with_options(buf, parens, newlines, indent),
         }
     }
 }
@@ -539,9 +541,19 @@ pub fn fmt_defs(buf: &mut Buf, defs: &Defs, indent: u16) {
 }
 
 pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
-    pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
-    buf.indent(indent);
-    buf.push_str(" =");
+    // Check if this is an assignment into the unit value
+    let is_unit_assignment = if let Pattern::RecordDestructure(collection) = pattern {
+        collection.is_empty()
+    } else {
+        false
+    };
+
+    // Don't format the `{} =` for defs with this pattern
+    if !is_unit_assignment {
+        pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
+        buf.indent(indent);
+        buf.push_str(" =");
+    }
 
     if body.is_multiline() {
         match body {

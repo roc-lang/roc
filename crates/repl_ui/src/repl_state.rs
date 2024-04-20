@@ -11,7 +11,7 @@ use roc_parse::{join_alias_to_body, join_ann_to_body};
 use roc_region::all::Loc;
 use roc_repl_eval::gen::{compile_to_mono, Problems};
 use roc_reporting::report::Palette;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 #[derive(Debug, Clone, PartialEq)]
 struct PastDef {
@@ -54,7 +54,7 @@ impl ReplState {
         &mut self,
         arena: &'a Bump,
         line: &str,
-        target_info: TargetInfo,
+        target: Target,
         palette: Palette,
     ) -> ReplAction<'a> {
         let pending_past_def;
@@ -73,7 +73,8 @@ impl ReplState {
                 match value_def {
                     ValueDef::Annotation(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident, suffixed: _ },
                             ..
                         },
                         _,
@@ -87,7 +88,8 @@ impl ReplState {
                     }
                     ValueDef::Body(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident, suffixed: _ },
                             ..
                         },
                         _,
@@ -95,7 +97,8 @@ impl ReplState {
                     | ValueDef::AnnotatedBody {
                         body_pattern:
                             Loc {
-                                value: Pattern::Identifier(ident),
+                                // TODO is this right for suffixed
+                                value: Pattern::Identifier { ident, suffixed: _ },
                                 ..
                             },
                         ..
@@ -137,6 +140,7 @@ impl ReplState {
                     ValueDef::IngestedFileImport(_) => {
                         todo!("handle ingesting a file from the REPL")
                     }
+                    ValueDef::Stmt(_) => todo!(),
                 }
             }
             ParseOutcome::TypeDef(TypeDef::Alias {
@@ -176,7 +180,7 @@ impl ReplState {
             arena,
             self.past_defs.iter().map(|def| def.src.as_str()),
             src,
-            target_info,
+            target,
             palette,
         );
 
@@ -235,6 +239,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                         ExprParseOptions {
                             accept_multi_backpassing: true,
                             check_for_arrow: true,
+                            suffixed_found: false,
                         },
                         0,
                         arena,
@@ -259,6 +264,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
+                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,
@@ -307,6 +313,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
+                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,

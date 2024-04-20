@@ -17,7 +17,6 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-use target_lexicon::Triple;
 
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
@@ -322,8 +321,7 @@ impl<'a> Surgeries<'a> {
 }
 
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
-pub(crate) fn preprocess_macho(
-    target: &Triple,
+pub(crate) fn preprocess_macho_le(
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -544,59 +542,41 @@ pub(crate) fn preprocess_macho(
 
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
-    let scanning_dynamic_deps_duration;
-    let platform_gen_start;
+    let scanning_dynamic_deps_start = Instant::now();
 
-    let out_mmap = {
-        match target
-            .endianness()
-            .unwrap_or(target_lexicon::Endianness::Little)
-        {
-            target_lexicon::Endianness::Little => {
-                let scanning_dynamic_deps_start = Instant::now();
+    // let ElfDynamicDeps {
+    //     got_app_syms,
+    //     got_sections,
+    //     dynamic_lib_count,
+    //     shared_lib_index,
+    // } = scan_elf_dynamic_deps(
+    //     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
+    // );
 
-                // let ElfDynamicDeps {
-                //     got_app_syms,
-                //     got_sections,
-                //     dynamic_lib_count,
-                //     shared_lib_index,
-                // } = scan_elf_dynamic_deps(
-                //     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
-                // );
+    let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
-                scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
+    let platform_gen_start = Instant::now();
 
-                platform_gen_start = Instant::now();
-
-                // TODO little endian
-                let macho_load_so_offset = match macho_load_so_offset {
-                    Some(offset) => offset,
-                    None => {
-                        internal_error!("Host does not link library `{}`!", shared_lib.display());
-                    }
-                };
-
-                // TODO this is correct on modern Macs (they align to the page size)
-                // but maybe someone can override the alignment somehow? Maybe in the
-                // future this could change? Is there some way to make this more future-proof?
-                md.load_align_constraint = 4096;
-
-                gen_macho_le(
-                    exec_data,
-                    &mut md,
-                    preprocessed_path,
-                    macho_load_so_offset,
-                    target,
-                    verbose,
-                )
-            }
-            target_lexicon::Endianness::Big => {
-                // TODO Is big-endian macOS even a thing that exists anymore?
-                // Just ancient PowerPC machines maybe?
-                todo!("Roc does not yet support big-endian macOS hosts!");
-            }
+    // TODO little endian
+    let macho_load_so_offset = match macho_load_so_offset {
+        Some(offset) => offset,
+        None => {
+            internal_error!("Host does not link library `{}`!", shared_lib.display());
         }
     };
+
+    // TODO this is correct on modern Macs (they align to the page size)
+    // but maybe someone can override the alignment somehow? Maybe in the
+    // future this could change? Is there some way to make this more future-proof?
+    md.load_align_constraint = 4096;
+
+    let out_mmap = gen_macho_le(
+        exec_data,
+        &mut md,
+        preprocessed_path,
+        macho_load_so_offset,
+        verbose,
+    );
 
     let platform_gen_duration = platform_gen_start.elapsed();
 
@@ -652,7 +632,6 @@ fn gen_macho_le(
     md: &mut Metadata,
     out_filename: &Path,
     macho_load_so_offset: usize,
-    _target: &Triple,
     _verbose: bool,
 ) -> MmapMut {
     // Just adding some extra context/useful info here.

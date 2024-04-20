@@ -1,3 +1,6 @@
+#![allow(clippy::redundant_closure_call)]
+//|> clippy false positive: https://github.com/rust-lang/rust-clippy/issues/1553
+
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::{
     pointer_layouts, single_register_floats, single_register_int_builtins,
@@ -2431,6 +2434,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+
+    #[inline(always)]
+    fn mov_freg32_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
+        movss_freg32_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
 
     #[inline(always)]

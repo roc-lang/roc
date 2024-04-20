@@ -1,5 +1,5 @@
 app "form"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, Task }]
     provides [main] to pf
 
@@ -11,7 +11,7 @@ main =
     _ <- await (Stdout.line "What's your last name?")
     lastName <- await Stdin.line
 
-    Stdout.line "Hi, \(unwrap firstName) \(unwrap lastName)! 👋"
+    Stdout.line "Hi, $(unwrap firstName) $(unwrap lastName)! 👋"
 
 unwrap : [Input Str, End] -> Str
 unwrap = \input ->

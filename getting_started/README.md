@@ -26,7 +26,7 @@ cd examples
 roc dev helloWorld.roc
 ```
 
-[crates/cli_testing_examples/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli_testing_examples/benchmarks) contains more examples.
+[crates/cli/tests/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli/tests/benchmarks) contains more examples.
 
 
 ## Getting Involved

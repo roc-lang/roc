@@ -14,7 +14,7 @@ jobs:
     env:
       RUSTC_WRAPPER: /home/big-ci-user/.cargo/bin/sccache
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Check for duplicate AUTHORS
         run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
@@ -22,7 +22,7 @@ jobs:
       - name: Update PATH to use zig 11
         run: |
           echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
-      
+
       - run: zig version
 
       - name: zig fmt check, zig tests
@@ -31,6 +31,9 @@ jobs:
       - name: roc format check on builtins
         run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
+      - name: ensure there are no unused dependencies
+        run: cargo +nightly-2023-08-20 udeps --all-targets
+
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
@@ -38,9 +41,12 @@ jobs:
         # see #5904 for skipped test
         run: cargo test --locked --release -- --skip cli_run::expects_dev_and_test && sccache --show-stats
 
+      - name: tests examples in docs
+        run:  cargo test --doc --release
+        
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
-        
+
       - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
 

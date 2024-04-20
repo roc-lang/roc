@@ -4,8 +4,8 @@ use crate::ast::{
 use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
+use crate::parser::{byte, specialize_err, EPackageEntry, EPackageName, Parser};
 use crate::parser::{optional, then};
-use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::string_literal;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
@@ -77,6 +77,32 @@ pub enum HeaderType<'a> {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
     },
+}
+
+impl<'a> HeaderType<'a> {
+    pub fn get_name(self) -> Option<&'a str> {
+        match self {
+            Self::Interface { name, .. }
+            | Self::Builtin { name, .. }
+            | Self::Hosted { name, .. } => Some(name.into()),
+            Self::App {
+                output_name: StrLiteral::PlainLine(name),
+                ..
+            }
+            | Self::Platform {
+                config_shorthand: name,
+                ..
+            }
+            | Self::Package {
+                config_shorthand: name,
+                ..
+            } => Some(name),
+            Self::App { .. } => {
+                //TODO:Eli This can be removed once module params is implemented and app names are no longer strings
+                None
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -321,14 +347,14 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
             optional(and!(
                 skip_second!(
                     and!(
-                        specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
+                        specialize_err(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
                         space0_e(EPackageEntry::IndentPackage)
                     ),
-                    word1(b':', EPackageEntry::Colon)
+                    byte(b':', EPackageEntry::Colon)
                 ),
                 space0_e(EPackageEntry::IndentPackage)
             )),
-            loc!(specialize(EPackageEntry::BadPackage, package_name()))
+            loc!(specialize_err(EPackageEntry::BadPackage, package_name()))
         ),
         move |arena, (opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
@@ -355,7 +381,7 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
     then(
-        loc!(specialize(
+        loc!(specialize_err(
             EPackageName::BadPath,
             string_literal::parse_str_literal()
         )),

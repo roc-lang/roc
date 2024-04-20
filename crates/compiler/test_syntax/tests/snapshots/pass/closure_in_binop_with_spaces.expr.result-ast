@@ -4,6 +4,7 @@ BinOps(
             @0-1 Var {
                 module_name: "",
                 ident: "i",
+                suffixed: 0,
             },
             @1-2 GreaterThan,
         ),
@@ -12,13 +13,15 @@ BinOps(
         @2-7 SpaceAfter(
             Closure(
                 [
-                    @3-4 Identifier(
-                        "s",
-                    ),
+                    @3-4 Identifier {
+                        ident: "s",
+                        suffixed: 0,
+                    },
                 ],
                 @6-7 Var {
                     module_name: "",
                     ident: "s",
+                    suffixed: 0,
                 },
             ),
             [
@@ -30,6 +33,7 @@ BinOps(
                 @9-10 Var {
                     module_name: "",
                     ident: "a",
+                    suffixed: 0,
                 },
                 @8-9 Negate,
             ),

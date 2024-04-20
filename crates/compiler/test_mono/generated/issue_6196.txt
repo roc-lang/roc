@@ -1,12 +1,12 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.297 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.297;
+    let Num.275 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.275;
 
 procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
     joinpoint Test.12 Test.2 Test.3:
         let Test.13 : {List Str, U64} = Struct {Test.2, Test.3};
         let Test.31 : List Str = StructAtIndex 0 Test.13;
-        let Test.32 : U64 = lowlevel ListLen Test.31;
+        let Test.32 : U64 = lowlevel ListLenUsize Test.31;
         let Test.33 : U64 = 1i64;
         let Test.34 : Int1 = lowlevel NumGte Test.32 Test.33;
         if Test.34 then
@@ -24,7 +24,7 @@ procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
             else
                 let Test.23 : List Str = StructAtIndex 0 Test.13;
                 let Test.24 : U64 = 1i64;
-                let Test.25 : U64 = lowlevel ListLen Test.23;
+                let Test.25 : U64 = lowlevel ListLenU64 Test.23;
                 let Test.26 : U64 = lowlevel NumSub Test.25 Test.24;
                 let Test.27 : U64 = 1i64;
                 let Test.8 : List Str = lowlevel ListSublist Test.23 Test.27 Test.26;

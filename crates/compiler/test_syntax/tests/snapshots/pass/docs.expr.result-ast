@@ -1,0 +1,57 @@
+SpaceBefore(
+    Defs(
+        Defs {
+            tags: [
+                Index(2147483648),
+            ],
+            regions: [
+                @48-53,
+            ],
+            space_before: [
+                Slice(start = 0, length = 0),
+            ],
+            space_after: [
+                Slice(start = 0, length = 0),
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @48-49 Identifier {
+                        ident: "x",
+                        suffixed: 0,
+                    },
+                    @52-53 Num(
+                        "5",
+                    ),
+                ),
+            ],
+        },
+        @55-57 SpaceBefore(
+            Num(
+                "42",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "######",
+        ),
+        LineComment(
+            "## not docs!",
+        ),
+        DocComment(
+            "actually docs",
+        ),
+        DocComment(
+            "",
+        ),
+        LineComment(
+            "#####",
+        ),
+    ],
+)

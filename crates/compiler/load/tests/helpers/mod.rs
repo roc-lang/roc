@@ -3,10 +3,10 @@ extern crate bumpalo;
 use self::bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
+use roc_can::desugar;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output, PendingDerives};
-use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
@@ -166,7 +166,7 @@ pub fn can_expr_with<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar_expr(
+    let loc_expr = desugar::desugar_expr(
         arena,
         &loc_expr,
         expr_str,

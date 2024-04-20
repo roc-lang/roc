@@ -9,7 +9,9 @@ use roc_module::ident::ModuleName;
 use roc_module::symbol::{ModuleId, PQModuleName, Symbol};
 use roc_mono::ir::ExternalSpecializations;
 use roc_problem::Severity;
+use roc_region::all::Region;
 use roc_solve_problem::TypeError;
+use roc_types::subs::Variable;
 use roc_types::types::Alias;
 use std::path::PathBuf;
 
@@ -33,6 +35,8 @@ pub(crate) struct ModuleCache<'a> {
 
     /// Various information
     pub(crate) imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    pub(crate) exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
+    pub(crate) exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
     pub(crate) top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     pub(crate) documentation: VecMap<ModuleId, ModuleDocumentation>,
     pub(crate) can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -103,6 +107,8 @@ impl Default for ModuleCache<'_> {
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
             imports: Default::default(),
+            exposed_imports: Default::default(),
+            exposes: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
             can_problems: Default::default(),

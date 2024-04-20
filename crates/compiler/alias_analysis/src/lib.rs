@@ -1121,7 +1121,7 @@ fn lowlevel_spec<'a>(
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
-        ListLen => {
+        ListLenUsize | ListLenU64 => {
             // TODO should this touch the heap cell?
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
@@ -1230,7 +1230,7 @@ fn lowlevel_spec<'a>(
 
             builder.add_make_tuple(block, &[cell, bag])
         }
-        StrFromUtf8Range => {
+        StrFromUtf8 => {
             let list = env.symbols[&arguments[0]];
 
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;

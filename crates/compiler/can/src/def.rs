@@ -549,7 +549,11 @@ fn canonicalize_claimed_ability_impl<'a>(
         }
         AssignedField::RequiredValue(label, _spaces, value) => {
             let impl_ident = match value.value {
-                ast::Expr::Var { module_name, ident } => {
+                ast::Expr::Var {
+                    module_name,
+                    ident,
+                    suffixed: _,
+                } => {
                     if module_name.is_empty() {
                         ident
                     } else {
@@ -2644,9 +2648,10 @@ fn to_pending_alias_or_opaque<'a>(
 
             for loc_var in vars.iter() {
                 match loc_var.value {
-                    ast::Pattern::Identifier(name)
-                        if name.chars().next().unwrap().is_lowercase() =>
-                    {
+                    ast::Pattern::Identifier {
+                        ident: name,
+                        suffixed: _,
+                    } if name.chars().next().unwrap().is_lowercase() => {
                         let lowercase = Lowercase::from(name);
                         can_rigids.push(Loc {
                             value: lowercase,
@@ -3069,7 +3074,13 @@ fn to_pending_value_def<'a>(
             let typed_ident = ingested_file.name.item.extract_spaces().item;
             let body_pattern = env
                 .arena
-                .alloc(typed_ident.ident.map_owned(ast::Pattern::Identifier));
+                .alloc(typed_ident.ident.map_owned(|ident| 
+                        ast::Pattern::Identifier {
+                            ident, 
+                            // Agus TODO: check this
+                            suffixed: 0
+                        }
+                    ));
             let ann_type = env.arena.alloc(typed_ident.ann);
             let body_expr = Loc {
                 value: ast::Expr::IngestedFile(env.arena.alloc(file_path), ann_type),
@@ -3095,6 +3106,7 @@ fn to_pending_value_def<'a>(
                 env.arena.alloc(body_expr),
             ))
         }
+        Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
     }
 }
 

@@ -13,7 +13,7 @@ jobs:
         runs-on: [self-hosted, macOS, ARM64]
         timeout-minutes: 120
         steps:
-            - uses: actions/checkout@v3
+            - uses: actions/checkout@v4
 
             - name: Only run all steps if a nix file changed
               run: |
@@ -47,6 +47,3 @@ jobs:
                 echo "locally deleting devtools/flake.lock and following the"
                 echo "instructions in devtools/README.md. This will create a"
                 echo "new flake.lock you should use to replace the old devtools/flake.lock"
-
-
-  

@@ -75,12 +75,12 @@ interface List
 
 import Bool exposing [Bool, Eq]
 import Result exposing [Result]
-import Num exposing [Nat, Num]
+import Num exposing [U64, Num]
 
 ## ## Types
 ##
 ## A sequential list of values.
-## ```
+## ```roc
 ## [1, 2, 3] # a list of numbers
 ## ["a", "b", "c"] # a list of strings
 ## [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
@@ -91,14 +91,14 @@ import Num exposing [Nat, Num]
 ## is normally enabled, not having enough memory could result in the list appearing
 ## to be created just fine, but then crashing later.)
 ##
-## > The theoretical maximum length for a list created in Roc is half of
-## > `Num.maxNat`. Attempting to create a list bigger than that
+## > The theoretical maximum length for a list created in Roc is `Num.maxI32` on 32-bit systems
+## > and `Num.maxI64` on 64-bit systems. Attempting to create a list bigger than that
 ## > in Roc code will always fail, although in practice it is likely to fail
 ## > at much smaller lengths due to insufficient memory being available.
 ##
 ## ## Performance Details
 ##
-## Under the hood, a list is a record containing a `len : Nat` field, a `capacity : Nat`
+## Under the hood, a list is a record containing a `len : U64` field, a `capacity : U64`
 ## field, and a pointer to a reference count and a flat array of bytes.
 ##
 ## ## Shared Lists
@@ -112,7 +112,7 @@ import Num exposing [Nat, Num]
 ## will be immediately freed.
 ##
 ## Let's look at an example.
-## ```
+## ```roc
 ## ratings = [5, 4, 3]
 ##
 ## { foo: ratings, bar: ratings }
@@ -125,7 +125,7 @@ import Num exposing [Nat, Num]
 ## refcount getting incremented from 1 to 3.
 ##
 ## Let's turn this example into a function.
-## ```
+## ```roc
 ## getRatings = \first ->
 ##     ratings = [first, 4, 3]
 ##
@@ -147,7 +147,7 @@ import Num exposing [Nat, Num]
 ## list, and that list has a refcount of 2.
 ##
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
-## ```
+## ```roc
 ## getRatings = \first ->
 ##     ratings = [first, 4, 3]
 ##
@@ -161,7 +161,7 @@ import Num exposing [Nat, Num]
 ## where it started: there is only 1 reference to it.
 ##
 ## Finally let's suppose the final line were changed to this:
-## ```
+## ```roc
 ## List.first (getRatings 5).bar
 ## ```
 ## This call to [List.first] means that even the list in the `bar` field has become
@@ -174,7 +174,7 @@ import Num exposing [Nat, Num]
 ## and then with a list of lists, to see how they differ.
 ##
 ## Here's the example using a list of numbers.
-## ```
+## ```roc
 ## nums = [1, 2, 3, 4, 5, 6, 7]
 ##
 ## first = List.first nums
@@ -185,7 +185,7 @@ import Num exposing [Nat, Num]
 ## It makes a list, calls [List.first] and [List.last] on it, and then returns `first`.
 ##
 ## Here's the equivalent code with a list of lists:
-## ```
+## ```roc
 ## lists = [[1], [2, 3], [], [4, 5, 6, 7]]
 ##
 ## first = List.first lists
@@ -216,7 +216,7 @@ import Num exposing [Nat, Num]
 # separator so List.isEmpty doesn't absorb the above into its doc comment
 
 ##  Check if the list is empty.
-## ```
+## ```roc
 ## List.isEmpty [1, 2, 3]
 ##
 ## List.isEmpty []
@@ -227,16 +227,16 @@ isEmpty = \list ->
 
 # unsafe primitive that does not perform a bounds check
 # but will cause a reference count increment on the value it got out of the list
-getUnsafe : List a, Nat -> a
+getUnsafe : List a, U64 -> a
 
 ## Returns an element from a list at the given index.
 ##
 ## Returns `Err OutOfBounds` if the given index exceeds the List's length
-## ```
+## ```roc
 ## expect List.get [100, 200, 300] 1 == Ok 200
 ## expect List.get [100, 200, 300] 5 == Err OutOfBounds
 ## ```
-get : List a, Nat -> Result a [OutOfBounds]
+get : List a, U64 -> Result a [OutOfBounds]
 get = \list, index ->
     if index < List.len list then
         Ok (List.getUnsafe list index)
@@ -245,9 +245,9 @@ get = \list, index ->
 
 # unsafe primitive that does not perform a bounds check
 # but will cause a reference count increment on the value it got out of the list
-replaceUnsafe : List a, Nat, a -> { list : List a, value : a }
+replaceUnsafe : List a, U64, a -> { list : List a, value : a }
 
-replace : List a, Nat, a -> { list : List a, value : a }
+replace : List a, U64, a -> { list : List a, value : a }
 replace = \list, index, newValue ->
     if index < List.len list then
         List.replaceUnsafe list index newValue
@@ -255,19 +255,19 @@ replace = \list, index, newValue ->
         { list, value: newValue }
 
 ## Replaces the element at the given index with a replacement.
-## ```
+## ```roc
 ## List.set ["a", "b", "c"] 1 "B"
 ## ```
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
 ##
 ## To drop the element at a given index, instead of replacing it, see [List.dropAt].
-set : List a, Nat, a -> List a
+set : List a, U64, a -> List a
 set = \list, index, value ->
     (List.replace list index value).list
 
 ## Updates the element at the given index with the given function.
-## ```
+## ```roc
 ## List.update [1, 2, 3] 1 (\x -> x + 1)
 ## ```
 ## If the given index is outside the bounds of the list, returns the original
@@ -275,7 +275,7 @@ set = \list, index, value ->
 ##
 ## To replace the element at a given index, instead of updating based on the current value,
 ## see [List.set] and [List.replace]
-update : List a, Nat, (a -> a) -> List a
+update : List a, U64, (a -> a) -> List a
 update = \list, index, func ->
     when List.get list index is
         Err OutOfBounds -> list
@@ -285,7 +285,7 @@ update = \list, index, func ->
 
 # Update one element in bounds
 expect
-    list : List Nat
+    list : List U64
     list = [1, 2, 3]
     got = update list 1 (\x -> x + 42)
     want = [1, 44, 3]
@@ -293,14 +293,14 @@ expect
 
 # Update out of bounds
 expect
-    list : List Nat
+    list : List U64
     list = [1, 2, 3]
     got = update list 5 (\x -> x + 42)
     got == list
 
 # Update chain
 expect
-    list : List Nat
+    list : List U64
     list = [1, 2, 3]
     got =
         list
@@ -311,7 +311,7 @@ expect
     got == want
 
 ## Add a single element to the end of a list.
-## ```
+## ```roc
 ## List.append [1, 2, 3] 4
 ##
 ## [0, 1, 2]
@@ -326,7 +326,7 @@ append = \list, element ->
 ## If the given [Result] is `Ok`, add it to the end of a list.
 ## Otherwise, return the list unmodified.
 ##
-## ```
+## ```roc
 ## List.appendIfOk [1, 2, 3] (Ok 4)
 ##
 ## [0, 1, 2]
@@ -346,7 +346,7 @@ appendIfOk = \list, result ->
 appendUnsafe : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
-## ```
+## ```roc
 ## List.prepend [1, 2, 3] 0
 ##
 ## [2, 3, 4]
@@ -357,7 +357,7 @@ prepend : List a, a -> List a
 ## If the given [Result] is `Ok`, add it to the beginning of a list.
 ## Otherwise, return the list unmodified.
 ##
-## ```
+## ```roc
 ## List.prepend [1, 2, 3] (Ok 0)
 ##
 ## [2, 3, 4]
@@ -371,23 +371,22 @@ prependIfOk = \list, result ->
 
 ## Returns the length of the list - the number of elements it contains.
 ##
-## One [List] can store up to 2,147,483,648 elements (just over 2 billion), which
-## is exactly equal to the highest valid #I32 value. This means the #U32 this function
-## returns can always be safely converted to an #I32 without losing any data.
-len : List * -> Nat
+## One [List] can store up to `Num.maxI64` elements on 64-bit targets and `Num.maxI32` on 32-bit targets like wasm.
+## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
+len : List * -> U64
 
 ## Create a list with space for at least capacity elements
-withCapacity : Nat -> List *
+withCapacity : U64 -> List *
 
 ## Enlarge the list for at least capacity additional elements
-reserve : List a, Nat -> List a
+reserve : List a, U64 -> List a
 
 ## Shrink the memory footprint of a list such that it's capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
 releaseExcessCapacity : List a -> List a
 
 ## Put two lists together.
-## ```
+## ```roc
 ## List.concat [1, 2, 3] [4, 5]
 ##
 ## [0, 1, 2]
@@ -396,7 +395,7 @@ releaseExcessCapacity : List a -> List a
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
-## ```
+## ```roc
 ## expect List.last [1, 2, 3] == Ok 3
 ## expect List.last [] == Err ListWasEmpty
 ## ```
@@ -409,7 +408,7 @@ last = \list ->
 ## A list with a single element in it.
 ##
 ## This is useful in pipelines, like so:
-## ```
+## ```roc
 ## websites =
 ##     Str.concat domain ".com"
 ##         |> List.single
@@ -418,11 +417,11 @@ single : a -> List a
 single = \x -> [x]
 
 ## Returns a list with the given length, where every element is the given value.
-repeat : a, Nat -> List a
+repeat : a, U64 -> List a
 repeat = \value, count ->
     repeatHelp value count (List.withCapacity count)
 
-repeatHelp : a, Nat, List a -> List a
+repeatHelp : a, U64, List a -> List a
 repeatHelp = \value, count, accum ->
     if count > 0 then
         repeatHelp value (Num.subWrap count 1) (List.appendUnsafe accum value)
@@ -430,7 +429,7 @@ repeatHelp = \value, count, accum ->
         accum
 
 ## Returns the list with its elements reversed.
-## ```
+## ```roc
 ## expect List.reverse [1, 2, 3] == [3, 2, 1]
 ## ```
 reverse : List a -> List a
@@ -448,7 +447,7 @@ reverseHelp = \list, left, right ->
 clone : List a -> List a
 
 ## Join the given lists together into one list.
-## ```
+## ```roc
 ## expect List.join [[1], [2, 3], [], [4, 5]] == [1, 2, 3, 4, 5]
 ## expect List.join [[], []] == []
 ## expect List.join [] == []
@@ -471,7 +470,7 @@ contains = \list, needle ->
 ## which updates the `state`. It returns the final `state` at the end.
 ##
 ## You can use it in a pipeline:
-## ```
+## ```roc
 ## [2, 4, 8]
 ##     |> List.walk 0 Num.add
 ## ```
@@ -490,7 +489,7 @@ contains = \list, needle ->
 ## 6     | 8     | 14
 ##
 ## The following returns -6:
-## ```
+## ```roc
 ## [1, 2, 3]
 ##     |> List.walk 0 Num.sub
 ## ```
@@ -501,7 +500,7 @@ walk = \list, init, func ->
     walkHelp list init func 0 (List.len list)
 
 ## internal helper
-walkHelp : List elem, s, (s, elem -> s), Nat, Nat -> s
+walkHelp : List elem, s, (s, elem -> s), U64, U64 -> s
 walkHelp = \list, state, f, index, length ->
     if index < length then
         nextState = f state (List.getUnsafe list index)
@@ -511,12 +510,12 @@ walkHelp = \list, state, f, index, length ->
         state
 
 ## Like [walk], but at each step the function also receives the index of the current element.
-walkWithIndex : List elem, state, (state, elem, Nat -> state) -> state
+walkWithIndex : List elem, state, (state, elem, U64 -> state) -> state
 walkWithIndex = \list, init, func ->
     walkWithIndexHelp list init func 0 (List.len list)
 
 ## internal helper
-walkWithIndexHelp : List elem, s, (s, elem, Nat -> s), Nat, Nat -> s
+walkWithIndexHelp : List elem, s, (s, elem, U64 -> s), U64, U64 -> s
 walkWithIndexHelp = \list, state, f, index, length ->
     if index < length then
         nextState = f state (List.getUnsafe list index) index
@@ -526,14 +525,14 @@ walkWithIndexHelp = \list, state, f, index, length ->
         state
 
 ## Like [walkUntil], but at each step the function also receives the index of the current element.
-walkWithIndexUntil : List elem, state, (state, elem, Nat -> [Continue state, Break state]) -> state
+walkWithIndexUntil : List elem, state, (state, elem, U64 -> [Continue state, Break state]) -> state
 walkWithIndexUntil = \list, state, f ->
     when walkWithIndexUntilHelp list state f 0 (List.len list) is
         Continue new -> new
         Break new -> new
 
 ## internal helper
-walkWithIndexUntilHelp : List elem, s, (s, elem, Nat -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+walkWithIndexUntilHelp : List elem, s, (s, elem, U64 -> [Continue s, Break b]), U64, U64 -> [Continue s, Break b]
 walkWithIndexUntilHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) index is
@@ -551,7 +550,7 @@ walkBackwards = \list, state, func ->
     walkBackwardsHelp list state func (len list)
 
 ## internal helper
-walkBackwardsHelp : List elem, state, (state, elem -> state), Nat -> state
+walkBackwardsHelp : List elem, state, (state, elem -> state), U64 -> state
 walkBackwardsHelp = \list, state, f, indexPlusOne ->
     if indexPlusOne == 0 then
         state
@@ -586,7 +585,7 @@ walkBackwardsUntil = \list, initial, func ->
         Break new -> new
 
 ## Walks to the end of the list from a specified starting index
-walkFrom : List elem, Nat, state, (state, elem -> state) -> state
+walkFrom : List elem, U64, state, (state, elem -> state) -> state
 walkFrom = \list, index, state, func ->
     step : _, _ -> [Continue _, Break []]
     step = \currentState, element -> Continue (func currentState element)
@@ -595,7 +594,7 @@ walkFrom = \list, index, state, func ->
         Continue new -> new
 
 ## A combination of [List.walkFrom] and [List.walkUntil]
-walkFromUntil : List elem, Nat, state, (state, elem -> [Continue state, Break state]) -> state
+walkFromUntil : List elem, U64, state, (state, elem -> [Continue state, Break state]) -> state
 walkFromUntil = \list, index, state, func ->
     when List.iterHelp list state func index (List.len list) is
         Continue new -> new
@@ -639,7 +638,7 @@ all = \list, predicate ->
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ## ```
 ## ## Performance Details
@@ -664,7 +663,7 @@ keepIf = \list, predicate ->
 
     keepIfHelp list predicate 0 0 length
 
-keepIfHelp : List a, (a -> Bool), Nat, Nat, Nat -> List a
+keepIfHelp : List a, (a -> Bool), U64, U64, U64 -> List a
 keepIfHelp = \list, predicate, kept, index, length ->
     if index < length then
         if predicate (List.getUnsafe list index) then
@@ -676,7 +675,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.false`.
-## ```
+## ```roc
 ## List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ## ```
 ## ## Performance Details
@@ -689,11 +688,11 @@ dropIf = \list, predicate ->
 
 ## Run the given function on each element of a list, and return the
 ## number of elements for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## expect List.countIf [1, -2, -3] Num.isNegative == 2
 ## expect List.countIf [1, 2, 3] (\num -> num > 1 ) == 2
 ## ```
-countIf : List a, (a -> Bool) -> Nat
+countIf : List a, (a -> Bool) -> U64
 countIf = \list, predicate ->
     walkState = \state, elem ->
         if predicate elem then
@@ -705,7 +704,7 @@ countIf = \list, predicate ->
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
-## ```
+## ```roc
 ## expect List.keepOks ["1", "Two", "23", "Bird"] Str.toI32 == [1, 23]
 ##
 ## expect List.keepOks [["a", "b"], [], ["c", "d", "e"], [] ] List.first == ["a", "c"]
@@ -724,7 +723,7 @@ keepOks = \list, toResult ->
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
-## ```
+## ```roc
 ## List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
 ## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
@@ -742,7 +741,7 @@ keepErrs = \list, toResult ->
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
-## ```
+## ```roc
 ## expect List.map [1, 2, 3] (\num -> num + 1) == [2, 3, 4]
 ##
 ## expect List.map ["", "a", "bc"] Str.isEmpty == [Bool.true, Bool.false, Bool.false]
@@ -755,7 +754,7 @@ map : List a, (a -> b) -> List b
 ##
 ## Some languages have a function named `zip`, which does something similar to
 ## calling [List.map2] passing two lists and `Pair`:
-## ```
+## ```roc
 ## zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
 ## ```
 map2 : List a, List b, (a, b -> c) -> List c
@@ -772,10 +771,10 @@ map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
-## ```
+## ```roc
 ## expect List.mapWithIndex [10, 20, 30] (\num, index -> num + index) == [10, 21, 32]
 ## ```
-mapWithIndex : List a, (a, Nat -> b) -> List b
+mapWithIndex : List a, (a, U64 -> b) -> List b
 mapWithIndex = \src, func ->
     length = len src
     dest = withCapacity length
@@ -783,7 +782,7 @@ mapWithIndex = \src, func ->
     mapWithIndexHelp src dest func 0 length
 
 # Internal helper
-mapWithIndexHelp : List a, List b, (a, Nat -> b), Nat, Nat -> List b
+mapWithIndexHelp : List a, List b, (a, U64 -> b), U64, U64 -> List b
 mapWithIndexHelp = \src, dest, func, index, length ->
     if index < length then
         elem = getUnsafe src index
@@ -797,23 +796,23 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ## Returns a list of all the integers between `start` and `end`.
 ##
 ## To include the `start` and `end` integers themselves, use `At` like so:
-## ```
+## ```roc
 ## List.range { start: At 2, end: At 5 } # returns [2, 3, 4, 5]
 ## ```
 ## To exclude them, use `After` and `Before`, like so:
-## ```
+## ```roc
 ## List.range { start: After 2, end: Before 5 } # returns [3, 4]
 ## ```
 ## You can have the list end at a certain length rather than a certain integer:
-## ```
+## ```roc
 ## List.range { start: At 6, end: Length 4 } # returns [6, 7, 8, 9]
 ## ```
 ## If `step` is specified, each integer increases by that much. (`step: 1` is the default.)
-## ```
+## ```roc
 ## List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
 ## ```
 ## List.range will also generate a reversed list if step is negative or end comes before start:
-## ```
+## ```roc
 ## List.range { start: At 5, end: At 2 } # returns [5, 4, 3, 2]
 ## ```
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
@@ -944,21 +943,19 @@ expect
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
 
-## Sorts a list in ascending order (lowest to highest), using a function which
-## specifies a way to represent each element as a number.
+## Sorts a list of numbers in ascending order (lowest to highest).
 ##
 ## To sort in descending order (highest to lowest), use [List.sortDesc] instead.
 sortAsc : List (Num a) -> List (Num a)
 sortAsc = \list -> List.sortWith list Num.compare
 
-## Sorts a list in descending order (highest to lowest), using a function which
-## specifies a way to represent each element as a number.
+## Sorts a list of numbers in descending order (highest to lowest).
 ##
 ## To sort in ascending order (lowest to highest), use [List.sortAsc] instead.
 sortDesc : List (Num a) -> List (Num a)
 sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
 
-swap : List a, Nat, Nat -> List a
+swap : List a, U64, U64 -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 first : List a -> Result a [ListWasEmpty]
@@ -968,12 +965,12 @@ first = \list ->
         Err _ -> Err ListWasEmpty
 
 ## Returns the given number of elements from the beginning of the list.
-## ```
+## ```roc
 ## List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
 ## ```
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
-## ```
+## ```roc
 ## List.takeFirst [1, 2] 5
 ## ```
 ## To *remove* elements from the beginning of the list, use `List.takeLast`.
@@ -983,17 +980,17 @@ first = \list ->
 ##
 ## To split the list into two lists, use `List.split`.
 ##
-takeFirst : List elem, Nat -> List elem
+takeFirst : List elem, U64 -> List elem
 takeFirst = \list, outputLength ->
     List.sublist list { start: 0, len: outputLength }
 
 ## Returns the given number of elements from the end of the list.
-## ```
+## ```roc
 ## List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
 ## ```
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
-## ```
+## ```roc
 ## List.takeLast [1, 2] 5
 ## ```
 ## To *remove* elements from the end of the list, use `List.takeFirst`.
@@ -1003,19 +1000,19 @@ takeFirst = \list, outputLength ->
 ##
 ## To split the list into two lists, use `List.split`.
 ##
-takeLast : List elem, Nat -> List elem
+takeLast : List elem, U64 -> List elem
 takeLast = \list, outputLength ->
     List.sublist list { start: Num.subSaturated (List.len list) outputLength, len: outputLength }
 
 ## Drops n elements from the beginning of the list.
-dropFirst : List elem, Nat -> List elem
+dropFirst : List elem, U64 -> List elem
 dropFirst = \list, n ->
     remaining = Num.subSaturated (List.len list) n
 
     List.takeLast list remaining
 
 ## Drops n elements from the end of the list.
-dropLast : List elem, Nat -> List elem
+dropLast : List elem, U64 -> List elem
 dropLast = \list, n ->
     remaining = Num.subSaturated (List.len list) n
 
@@ -1026,7 +1023,7 @@ dropLast = \list, n ->
 ## This has no effect if the given index is outside the bounds of the list.
 ##
 ## To replace the element at a given index, instead of dropping it, see [List.set].
-dropAt : List elem, Nat -> List elem
+dropAt : List elem, U64 -> List elem
 
 min : List (Num a) -> Result (Num a) [ListWasEmpty]
 min = \list ->
@@ -1101,7 +1098,7 @@ findLast = \list, pred ->
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
+findFirstIndex : List elem, (elem -> Bool) -> Result U64 [NotFound]
 findFirstIndex = \list, matcher ->
     foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
@@ -1116,7 +1113,7 @@ findFirstIndex = \list, matcher ->
 ## Returns the last index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
+findLastIndex : List elem, (elem -> Bool) -> Result U64 [NotFound]
 findLastIndex = \list, matches ->
     foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
         answer = Num.subWrap prevIndex 1
@@ -1134,26 +1131,26 @@ findLastIndex = \list, matches ->
 ## including a total of `len` elements.
 ##
 ## If `start` is outside the bounds of the given list, returns the empty list.
-## ```
+## ```roc
 ## List.sublist [1, 2, 3] { start: 4, len: 0 }
 ## ```
 ## If more elements are requested than exist in the list, returns as many as it can.
-## ```
+## ```roc
 ## List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
 ## ```
 ## > If you want a sublist which goes all the way to the end of the list, no
 ## > matter how long the list is, `List.takeLast` can do that more efficiently.
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
-sublist : List elem, { start : Nat, len : Nat } -> List elem
+sublist : List elem, { start : U64, len : U64 } -> List elem
 sublist = \list, config ->
     sublistLowlevel list config.start config.len
 
 ## low-level slicing operation that does no bounds checking
-sublistLowlevel : List elem, Nat, Nat -> List elem
+sublistLowlevel : List elem, U64, U64 -> List elem
 
 ## Intersperses `sep` between the elements of `list`
-## ```
+## ```roc
 ## List.intersperse [1, 2, 3] 9     # [1, 9, 2, 9, 3]
 ## ```
 intersperse : List elem, elem -> List elem
@@ -1202,7 +1199,7 @@ endsWith = \list, suffix ->
 ## than the given index, # and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
-split : List elem, Nat -> { before : List elem, others : List elem }
+split : List elem, U64 -> { before : List elem, others : List elem }
 split = \elements, userSplitIndex ->
     length = List.len elements
     splitIndex = if length > userSplitIndex then userSplitIndex else length
@@ -1213,7 +1210,7 @@ split = \elements, userSplitIndex ->
 
 ## Returns the elements before the first occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
-## ```
+## ```roc
 ## List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Z, Baz] }
 ## ```
 splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
@@ -1229,7 +1226,7 @@ splitFirst = \list, delimiter ->
 
 ## Returns the elements before the last occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
-## ```
+## ```roc
 ## List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Z, Bar], after: [Baz] }
 ## ```
 splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
@@ -1247,7 +1244,7 @@ splitLast = \list, delimiter ->
 ## size. The last chunk will be shorter if the list does not evenly divide by the
 ## chunk size. If the provided list is empty or if the chunk size is 0 then the
 ## result is an empty list.
-chunksOf : List a, Nat -> List (List a)
+chunksOf : List a, U64 -> List (List a)
 chunksOf = \list, chunkSize ->
     if chunkSize == 0 || List.isEmpty list then
         []
@@ -1255,7 +1252,7 @@ chunksOf = \list, chunkSize ->
         chunkCapacity = Num.divCeil (List.len list) chunkSize
         chunksOfHelp list chunkSize (List.withCapacity chunkCapacity)
 
-chunksOfHelp : List a, Nat, List (List a) -> List (List a)
+chunksOfHelp : List a, U64, List (List a) -> List (List a)
 chunksOfHelp = \listRest, chunkSize, chunks ->
     if List.isEmpty listRest then
         chunks
@@ -1288,7 +1285,7 @@ walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)
 
 ## internal helper
-walkTryHelp : List elem, state, (state, elem -> Result state err), Nat, Nat -> Result state err
+walkTryHelp : List elem, state, (state, elem -> Result state err), U64, U64 -> Result state err
 walkTryHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) is
@@ -1303,7 +1300,7 @@ iterate = \list, init, func ->
     iterHelp list init func 0 (List.len list)
 
 ## internal helper
-iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), U64, U64 -> [Continue s, Break b]
 iterHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) is
@@ -1319,7 +1316,7 @@ iterateBackwards = \list, init, func ->
     iterBackwardsHelp list init func (List.len list)
 
 ## internal helper
-iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat -> [Continue s, Break b]
+iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), U64 -> [Continue s, Break b]
 iterBackwardsHelp = \list, state, f, prevIndex ->
     if prevIndex > 0 then
         index = Num.subWrap prevIndex 1

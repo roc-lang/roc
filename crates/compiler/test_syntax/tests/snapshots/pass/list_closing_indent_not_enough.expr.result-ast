@@ -16,9 +16,10 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-6 Identifier(
-                    "myList",
-                ),
+                @0-6 Identifier {
+                    ident: "myList",
+                    suffixed: 0,
+                },
                 @9-57 List(
                     Collection {
                         items: [
@@ -38,6 +39,7 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "a",
+                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,
@@ -47,6 +49,7 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "b",
+                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,

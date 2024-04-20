@@ -4,6 +4,7 @@ BinOps(
             @0-1 Var {
                 module_name: "",
                 ident: "a",
+                suffixed: 0,
             },
             @2-4 And,
         ),
@@ -11,13 +12,15 @@ BinOps(
     @5-12 Apply(
         @5-10 Closure(
             [
-                @6-7 Identifier(
-                    "x",
-                ),
+                @6-7 Identifier {
+                    ident: "x",
+                    suffixed: 0,
+                },
             ],
             @9-10 Var {
                 module_name: "",
                 ident: "x",
+                suffixed: 0,
             },
         ),
         [

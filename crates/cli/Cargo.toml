@@ -71,6 +71,7 @@ inkwell.workspace = true
 libc.workspace = true
 libloading.workspace = true
 mimalloc.workspace = true
+regex.workspace = true
 signal-hook.workspace = true
 strum.workspace = true
 target-lexicon.workspace = true

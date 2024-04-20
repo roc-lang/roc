@@ -16,13 +16,15 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                    suffixed: 0,
+                },
                 @4-29 Apply(
                     @4-7 Var {
                         module_name: "",
                         ident: "foo",
+                        suffixed: 0,
                     },
                     [
                         @9-28 ParensAround(
@@ -30,6 +32,7 @@ Defs(
                                 @9-12 Var {
                                     module_name: "",
                                     ident: "baz",
+                                    suffixed: 0,
                                 },
                                 [
                                     @13-28 Record(
@@ -42,6 +45,7 @@ Defs(
                                                         @22-26 Var {
                                                             module_name: "",
                                                             ident: "blah",
+                                                            suffixed: 0,
                                                         },
                                                     ),
                                                     [
@@ -68,6 +72,7 @@ Defs(
         Var {
             module_name: "",
             ident: "x",
+            suffixed: 0,
         },
         [
             Newline,

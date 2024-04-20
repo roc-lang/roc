@@ -175,6 +175,7 @@ mod test_parse {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -191,6 +192,7 @@ mod test_parse {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -201,11 +203,42 @@ mod test_parse {
     }
 
     #[test]
+    fn string_of_just_dollar_sign() {
+        let arena = Bump::new();
+
+        assert_eq!(
+            Ok(Expr::Str(PlainLine("$"))),
+            parse_expr_with(&arena, arena.alloc(r#""$""#))
+        );
+    }
+
+    #[test]
+    fn string_beginning_with_dollar() {
+        let arena = Bump::new();
+
+        assert_eq!(
+            Ok(Expr::Str(PlainLine("$foo"))),
+            parse_expr_with(&arena, arena.alloc(r#""$foo""#))
+        );
+    }
+
+    #[test]
+    fn string_ending_with_dollar() {
+        let arena = Bump::new();
+
+        assert_eq!(
+            Ok(Expr::Str(PlainLine("foo$"))),
+            parse_expr_with(&arena, arena.alloc(r#""foo$""#))
+        );
+    }
+
+    #[test]
     fn string_with_interpolation_in_back() {
         assert_segments(r#""Hello $(name)""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -221,11 +254,13 @@ mod test_parse {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
+                suffixed: 0,
             });
 
             let expr2 = arena.alloc(Var {
                 module_name: "",
                 ident: "project",
+                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -246,11 +281,13 @@ mod test_parse {
                 let expr1 = arena.alloc(Var {
                     module_name: "",
                     ident: "name",
+                    suffixed: 0,
                 });
 
                 let expr2 = arena.alloc(Var {
                     module_name: "",
                     ident: "project",
+                    suffixed: 0,
                 });
 
                 bumpalo::vec![in arena;

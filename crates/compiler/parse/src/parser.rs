@@ -366,6 +366,8 @@ pub enum EExpr<'a> {
 
     IndentStart(Position),
     IndentEnd(Position),
+
+    UnexpectedComma(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,6 +848,36 @@ where
     }
 }
 
+/// Allocates the output of the given parser and returns a reference to it.
+/// This also happens if the given parser fails.
+///
+/// # Examples
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("hello", Problem::NotFound);
+/// let alloc_parser = allocated(parser_inner);
+///
+/// // Success case
+/// let (progress, output, state) = alloc_parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, &());
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, err) = alloc_parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 pub fn allocated<'a, P, Val, Error>(parser: P) -> impl Parser<'a, &'a Val, Error>
 where
     Error: 'a,
@@ -859,6 +891,36 @@ where
     }
 }
 
+/// Apply transform function to turn output of given parser into another parser.
+/// Can be used to chain two parsers.
+///
+/// # Examples
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser = and_then(parser1, move |p,b| word(", ", Problem::NotFound));
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(7));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::new(5)));
+/// ```
 pub fn and_then<'a, P1, P2, F, Before, After, Error>(
     parser: P1,
     transform: F,
@@ -878,6 +940,37 @@ where
     }
 }
 
+/// Creates a new parser that can change its output based on a function.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     OddChar(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("hello", Problem::NotFound);
+///
+/// let parser = then(parser_inner,
+///     |arena, new_state, progress, output| {
+///         // arbitrary check
+///         if new_state.pos().offset % 2 == 0 {
+///             Ok((progress, output, new_state))
+///         } else {
+///             Err((Progress::NoProgress, Problem::OddChar(new_state.pos())))
+///         }
+///     }
+/// );
+///
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0);
+/// assert!(actual.is_err());
+/// ```
 pub fn then<'a, P1, F, Before, After, E>(parser: P1, transform: F) -> impl Parser<'a, After, E>
 where
     P1: Parser<'a, Before, E>,
@@ -894,15 +987,46 @@ where
     }
 }
 
-pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
+/// Matches a word/string exactly, useful when finding a keyword.
+/// This only matches if the next char is whitespace, the start of a comment, or the end of a line.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, keyword};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = keyword("when", Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("when".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 4);
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("whence".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
+pub fn keyword<'a, ToError, E>(
+    keyword_str: &'static str,
+    if_error: ToError,
+) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
     move |_, mut state: State<'a>, _min_indent| {
-        let width = keyword.len();
+        let width = keyword_str.len();
 
-        if !state.bytes().starts_with(keyword.as_bytes()) {
+        if !state.bytes().starts_with(keyword_str.as_bytes()) {
             return Err((NoProgress, if_error(state.pos())));
         }
 
@@ -1177,6 +1301,35 @@ where
     }
 }
 
+/// Make the given parser optional, it can complete or not consume anything,
+/// but it can't error with progress made.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, optional, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = optional(word("hello", Problem::NotFound));
+///
+/// // Parser completed case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Some(()));
+/// assert_eq!(state.pos().offset, 5);
+///
+/// // No progress case
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, None);
+/// assert_eq!(state.pos().offset, 0);
+/// ```
 pub fn optional<'a, P, T, E>(parser: P) -> impl Parser<'a, Option<T>, E>
 where
     P: Parser<'a, T, E>,
@@ -1197,9 +1350,35 @@ where
 
 // MACRO COMBINATORS
 //
-// Using some combinators together results in combinatorial type explosion
-// which makes things take forever to compile. Using macros instead avoids this!
+// Using some combinators together results in combinatorial type explosion,
+// this takes forever to compile. Using macros instead avoids this!
 
+/// Wraps the output of the given parser in a [`Loc`](../roc_region/all/struct.Loc.html) struct,
+/// to provide location information.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_parse::loc;
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = loc!(word("hello", Problem::NotFound));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Loc::new(0, 5, ()));
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! loc {
     ($parser:expr) => {
@@ -1222,6 +1401,29 @@ macro_rules! loc {
 }
 
 /// If the first one parses, ignore its output and move on to parse with the second one.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_parse::skip_first;
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = skip_first!(
+///    word("hello, ", |_| ()),
+///    lowercase_ident()
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "world");
+/// assert_eq!(state.pos().offset, 12);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! skip_first {
     ($p1:expr, $p2:expr) => {
@@ -1239,6 +1441,29 @@ macro_rules! skip_first {
 
 /// If the first one parses, parse the second one; if it also parses, use the
 /// output from the first one.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use roc_parse::skip_second;
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = skip_second!(
+///    lowercase_ident(),
+///    word(", world", |_| ())
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "hello");
+/// assert_eq!(state.pos().offset, 12);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! skip_second {
     ($p1:expr, $p2:expr) => {
@@ -1310,6 +1535,26 @@ macro_rules! collection_trailing_sep_e {
     };
 }
 
+/// Creates a parser that always succeeds with the given argument as output.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress};
+/// # use roc_parse::succeed;
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = succeed!("different");
+///
+/// let (progress, output, state) = Parser::<&'a str,()>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, "different");
+/// assert_eq!(state.pos().offset, 0);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! succeed {
     ($value:expr) => {
@@ -1319,6 +1564,34 @@ macro_rules! succeed {
     };
 }
 
+/// Creates a parser that always fails.
+/// If the given parser succeeds, the error is customized with the given function.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, fail_when};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     OtherProblem(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = fail_when(Problem::OtherProblem, word("hello", Problem::NotFound));
+///
+/// // When given parser succeeds:
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::OtherProblem(Position::new(0)));
+///
+/// // When given parser errors:
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(0)));
+/// ```
 pub fn fail_when<'a, T, T2, E, F, P>(f: F, p: P) -> impl Parser<'a, T, E>
 where
     T: 'a,
@@ -1336,6 +1609,26 @@ where
     }
 }
 
+/// Creates a parser that always fails using the given error function.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, fail};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = fail(Problem::NotFound);
+///
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(0)));
+/// ```
 pub fn fail<'a, T, E, F>(f: F) -> impl Parser<'a, T, E>
 where
     T: 'a,
@@ -1347,6 +1640,39 @@ where
     }
 }
 
+/// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
+/// Both parsers must have the same error type.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use roc_region::all::Position;
+/// # use roc_parse::and;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = and!(
+///     word("hello", Problem::NotFound),
+///     byte(b',', Problem::NotFound)
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ((), ()));
+/// assert_eq!(state.pos().offset, 6);
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(5)));
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
@@ -1381,8 +1707,8 @@ macro_rules! record {
     };
 }
 
-/// Similar to `and`, but we modify the min_indent of the second parser to be
-/// 1 greater than the line_indent() at the start of the first parser.
+/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
+/// 1 greater than the `line_indent()` at the start of the first parser.
 #[macro_export]
 macro_rules! indented_seq_skip_first {
     ($p1:expr, $p2:expr) => {
@@ -1409,7 +1735,7 @@ macro_rules! indented_seq_skip_first {
     };
 }
 
-/// Similar to `and`, but we modify the min_indent of the second parser to be
+/// Similar to [`and!`], but we modify the min_indent of the second parser to be
 /// 1 greater than the line_indent() at the start of the first parser.
 #[macro_export]
 macro_rules! indented_seq {
@@ -1437,9 +1763,8 @@ macro_rules! indented_seq {
     };
 }
 
-/// Similar to `and`, but we modify the min_indent of the second parser to be
-/// 1 greater than the column() at the start of the first parser.
-#[macro_export]
+/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
+/// 1 greater than the `column()` at the start of the first parser.
 macro_rules! absolute_indented_seq {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
@@ -1459,6 +1784,44 @@ macro_rules! absolute_indented_seq {
     };
 }
 
+/// Returns the result of the first parser that makes progress, even if it failed.
+/// If no parsers make progress, the last parser's result is returned.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use roc_region::all::Position;
+/// # use roc_parse::one_of;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser1 = one_of!(
+///     word("hello", Problem::NotFound),
+///     byte(b'h', Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser1.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+///
+/// let parser2 = one_of!(
+///     // swapped the order of the parsers
+///     byte(b'h', Problem::NotFound),
+///     word("hello", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser2.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 1);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
@@ -1478,25 +1841,6 @@ macro_rules! one_of {
     };
     ($p1:expr, $($others:expr),+ $(,)?) => {
         one_of!($p1, $($others),+)
-    };
-}
-
-#[macro_export]
-macro_rules! one_of_with_error {
-    ($toerror:expr; $p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                valid @ Ok(_) => valid,
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
-                Err((NoProgress, _)) => Err((MadeProgress, $toerror(original_state.pos()))),
-            }
-        }
-    };
-
-    ($toerror:expr; $p1:expr, $($others:expr),+) => {
-        one_of_with_error!($toerror, $p1, one_of_with_error!($($others),+))
     };
 }
 
@@ -1541,7 +1885,32 @@ where
     }
 }
 
-pub fn specialize<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
+/// Transforms a possible error, like `map_err` in Rust.
+/// It has no effect if the given parser succeeds.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_err};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     Other(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = specialize_err(
+///     |_prev_err, pos| Problem::Other(pos),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::Other(Position::new(0)));
+/// ```
+pub fn specialize_err<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
     F: Fn(X, Position) -> Y,
     P: Parser<'a, T, X>,
@@ -1556,7 +1925,34 @@ where
     }
 }
 
-pub fn specialize_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
+/// Transforms a possible error, like `map_err` in Rust.
+/// Similar to [`specialize_err`], but the error is arena allocated, and the
+/// mapping function receives a reference to the error.
+/// It has no effect if the inner parser succeeds.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_err_ref};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     Other(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = specialize_err_ref(
+///     |_prev_err, pos| Problem::Other(pos),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::Other(Position::new(0)));
+/// ```
+pub fn specialize_err_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
     F: Fn(&'a X, Position) -> Y,
     P: Parser<'a, T, X>,
@@ -1572,6 +1968,34 @@ where
     }
 }
 
+/// Matches an entire `str` and moves the state's position forward if it succeeds.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = word("hello", Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+/// ```
 pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
@@ -1589,15 +2013,43 @@ where
     }
 }
 
-pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+/// Matches a single `u8` and moves the state's position forward if it succeeds.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, byte};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = byte(b'h', Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+/// ```
+pub fn byte<'a, ToError, E>(byte_to_match: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word, b'\n');
+    debug_assert_ne!(byte_to_match, b'\n');
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| match state.bytes().first() {
-        Some(x) if *x == word => {
+        Some(x) if *x == byte_to_match => {
             let state = state.advance(1);
             Ok((MadeProgress, (), state))
         }
@@ -1605,12 +2057,44 @@ where
     }
 }
 
-pub fn word1_indent<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+/// Matches a single `u8` and moves the state's position forward if it succeeds.
+/// This parser will fail if it is a lower indentation level than it should be.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, byte, byte_indent};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     WrongIndentLevel(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = byte_indent(b'h', Problem::WrongIndentLevel);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+///
+/// // Error case
+/// let state = State::new(" hello, world".as_bytes());
+/// let _ = byte(b' ', Problem::NotFound).parse(&arena, state.clone(), 0).unwrap();
+/// let (progress, problem) = parser.parse(&arena, state, 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::WrongIndentLevel(Position::zero()));
+/// ```
+pub fn byte_indent<'a, ToError, E>(byte_to_match: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word, b'\n');
+    debug_assert_ne!(byte_to_match, b'\n');
 
     move |_arena: &'a Bump, state: State<'a>, min_indent: u32| {
         if min_indent > state.column() {
@@ -1618,7 +2102,7 @@ where
         }
 
         match state.bytes().first() {
-            Some(x) if *x == word => {
+            Some(x) if *x == byte_to_match => {
                 let state = state.advance(1);
                 Ok((MadeProgress, (), state))
             }
@@ -1627,15 +2111,47 @@ where
     }
 }
 
-pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
+/// Matches two `u8` in a row.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, two_bytes};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = two_bytes(b'h', b'e', Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(2));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+/// ```
+pub fn two_bytes<'a, ToError, E>(
+    byte_1: u8,
+    byte_2: u8,
+    to_error: ToError,
+) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word_1, b'\n');
-    debug_assert_ne!(word_2, b'\n');
+    debug_assert_ne!(byte_1, b'\n');
+    debug_assert_ne!(byte_2, b'\n');
 
-    let needle = [word_1, word_2];
+    let needle = [byte_1, byte_2];
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
         if state.bytes().starts_with(&needle) {
@@ -1647,21 +2163,49 @@ where
     }
 }
 
-pub fn word3<'a, ToError, E>(
-    word_1: u8,
-    word_2: u8,
-    word_3: u8,
+/// Matches three `u8` in a row.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, three_bytes};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = three_bytes(b'h', b'e', b'l', Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(3));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
+pub fn three_bytes<'a, ToError, E>(
+    byte_1: u8,
+    byte_2: u8,
+    byte_3: u8,
     to_error: ToError,
 ) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word_1, b'\n');
-    debug_assert_ne!(word_2, b'\n');
-    debug_assert_ne!(word_3, b'\n');
+    debug_assert_ne!(byte_1, b'\n');
+    debug_assert_ne!(byte_2, b'\n');
+    debug_assert_ne!(byte_3, b'\n');
 
-    let needle = [word_1, word_2, word_3];
+    let needle = [byte_1, byte_2, byte_3];
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
         if state.bytes().starts_with(&needle) {
@@ -1674,15 +2218,47 @@ where
 }
 
 #[macro_export]
-macro_rules! word1_check_indent {
-    ($word:expr, $word_problem:expr, $min_indent:expr, $indent_problem:expr) => {
+macro_rules! byte_check_indent {
+    ($byte_to_match:expr, $problem:expr, $min_indent:expr, $indent_problem:expr) => {
         and!(
-            word1($word, $word_problem),
+            byte($byte_to_match, $problem),
             $crate::parser::check_indent($min_indent, $indent_problem)
         )
     };
 }
 
+/// transform the `Ok` result of a parser
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::map;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map!(
+///     word("hello", Problem::NotFound),
+///     |_output| "new output!"
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 #[macro_export]
 macro_rules! map {
     ($parser:expr, $transform:expr) => {
@@ -1695,6 +2271,39 @@ macro_rules! map {
     };
 }
 
+/// Maps/transforms the `Ok` result of parsing using the given function.
+/// Similar to [`map!`], but the transform function also takes a bump allocator.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::map_with_arena;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena!(
+///     word("hello", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 #[macro_export]
 macro_rules! map_with_arena {
     ($parser:expr, $transform:expr) => {
@@ -1709,6 +2318,8 @@ macro_rules! map_with_arena {
     };
 }
 
+/// Applies the parser as many times as possible.
+/// This parser will only fail if the given parser makes partial progress.
 #[macro_export]
 macro_rules! zero_or_more {
     ($parser:expr) => {
@@ -1768,6 +2379,42 @@ macro_rules! zero_or_more {
     };
 }
 
+/// Creates a parser that matches one or more times.
+/// Will fail if the given parser fails to match or matches partially.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::one_or_more;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = one_or_more!(
+///     word("hello, ", Problem::NotFound),
+///     Problem::NotFound
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, bumpalo::vec![in &arena; (),()]);
+/// assert_eq!(state.pos(), Position::new(14));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! one_or_more {
     ($parser:expr, $to_error:expr) => {
@@ -1803,6 +2450,35 @@ macro_rules! one_or_more {
     };
 }
 
+/// Creates a parser that debug prints the result of parsing.
+/// It doesn't change the given parser at all,
+/// useful for inspecting a parser during development.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::debug;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = debug!(
+///     word("hello", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! debug {
     ($parser:expr) => {
@@ -1812,6 +2488,48 @@ macro_rules! debug {
     };
 }
 
+/// Matches either of the two given parsers.
+/// If the first parser succeeds, its result is used,
+/// otherwise, the second parser's result is used.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
+/// # use roc_region::all::Position;
+/// # use roc_parse::either;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = either!(
+///     word("hello", Problem::NotFound),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// // Success cases
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Either::First(()));
+/// assert_eq!(state.pos().offset, 5);
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Either::Second(()));
+/// assert_eq!(state.pos().offset, 3);
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("later, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! either {
     ($p1:expr, $p2:expr) => {
@@ -1835,8 +2553,37 @@ macro_rules! either {
     };
 }
 
-/// Parse everything between two braces (e.g. parentheses), skipping both braces
-/// and keeping only whatever was parsed in between them.
+/// Given three parsers, parse them all but ignore the output of the first and last one.
+/// Useful for parsing things between two braces (e.g. parentheses).
+///
+/// If any of the three parsers error, this will error.
+///
+/// # Example
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use roc_region::all::Position;
+/// # use roc_parse::{between, skip_first, skip_second};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = between!(
+///     byte(b'(', Problem::NotFound),
+///     word("hello", Problem::NotFound),
+///     byte(b')', Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("(hello), world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 7);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! between {
     ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
@@ -1844,7 +2591,40 @@ macro_rules! between {
     };
 }
 
-/// For some reason, some usages won't compile unless they use this instead of the macro version
+/// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
+/// Both parsers must have the same error type.
+///
+/// This is a function version of the [`and!`] macro.
+/// For some reason, some usages won't compile unless they use this instead of the macro version.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser2 = word(", ", Problem::NotFound);
+/// let parser = and(parser1, parser2);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ((),()));
+/// assert_eq!(state.pos(), Position::new(7));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(5)));
+/// ```
 #[inline(always)]
 pub fn and<'a, P1, P2, A, B, E>(p1: P1, p2: P2) -> impl Parser<'a, (A, B), E>
 where
@@ -1859,7 +2639,33 @@ where
     and!(p1, p2)
 }
 
-/// For some reason, some usages won't compile unless they use this instead of the macro version
+/// Adds location info. This is a function version the [`loc!`] macro.
+///
+/// For some reason, some usages won't compile unless they use this instead of the macro version.
+/// This is likely because the lifetime `'a` is not defined at the call site.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = loc(word("hello", Problem::NotFound));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Loc::new(0, 5, ()));
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[inline(always)]
 pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
 where
@@ -1869,7 +2675,43 @@ where
     loc!(parser)
 }
 
-/// For some reason, some usages won't compile unless they use this instead of the macro version
+/// Maps/transforms the `Ok` result of parsing using the given function.
+/// Similar to [`map!`], but the transform function also takes a bump allocator.
+///
+/// Function version of the [`map_with_arena!`] macro.
+///
+/// For some reason, some usages won't compile unless they use this instead of the macro version.
+/// This is likely because the lifetime `'a` is not defined at the call site.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map_with_arena};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena(
+///     word("hello", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error Case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 #[inline(always)]
 pub fn map_with_arena<'a, P, F, Before, After, E>(
     parser: P,
@@ -1887,6 +2729,37 @@ where
     map_with_arena!(parser, transform)
 }
 
+/// Creates a new parser that does not progress but still forwards the output of
+/// the given parser if it succeeds.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, backtrackable};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = backtrackable(
+///     word("hello", Problem::NotFound),
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+///
+/// // Error Case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 pub fn backtrackable<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Val, Error>
 where
     P: Parser<'a, Val, Error>,

@@ -11,12 +11,14 @@ extern crate roc_module;
 mod cli_run {
     use cli_utils::helpers::{
         extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use regex::Regex;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -198,7 +200,7 @@ mod cli_run {
                 vec.into_iter()
             };
 
-            let out = match cli_mode {
+            let cmd_output = match cli_mode {
                 CliMode::RocBuild => {
                     run_roc_on_failure_is_panic(
                         file,
@@ -294,41 +296,48 @@ mod cli_run {
                 }
             };
 
-            let mut actual = strip_colors(&out.stdout);
-
-            // e.g. "1 failed and 0 passed in 123 ms."
-            if let Some(split) = actual.rfind("passed in ") {
-                let (before_first_digit, _) = actual.split_at(split);
-                actual = format!("{before_first_digit}passed in <ignored for test> ms.");
-            }
-
             let self_path = file.display().to_string();
-            actual = actual.replace(&self_path, "<ignored for tests>");
 
-            if !actual.ends_with(expected_ending) {
+            let actual_cmd_stdout = ignore_test_timings(&strip_colors(&cmd_output.stdout))
+                .replace(&self_path, "<ignored for tests>");
+
+            if !actual_cmd_stdout.ends_with(expected_ending) {
                 panic!(
                     "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
-                    expected_ending, actual, out.stderr
+                    expected_ending, actual_cmd_stdout, cmd_output.stderr
                 );
             }
 
-            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
+            if !cmd_output.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
-                    out.status, out.stderr
+                    cmd_output.status, cmd_output.stderr
                 );
             }
         }
     }
 
+    fn ignore_test_timings(cmd_output: &str) -> String {
+        let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
+        let replacement = " in <ignored for test> ms.";
+        regex.replace_all(cmd_output, replacement).to_string()
+    }
+
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    // not currently used
-    // fn test_roc_expect(dir_name: &str, roc_filename: &str) {
-    //     let path = file_path_from_root(dir_name, roc_filename);
-    //     let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
-    //     assert!(out.status.success());
-    // }
+    fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
+        let path = file_path_from_root(dir_name, roc_filename);
+        check_output_with_stdin(
+            &path,
+            &[],
+            flags,
+            &[],
+            &[],
+            expected_ending,
+            UseValgrind::Yes,
+            TestCliCommands::Test,
+        );
+    }
 
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
@@ -546,16 +555,18 @@ mod cli_run {
         // on the building of the platform
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
                 This expectation failed:
 
-                19│      expect words == []
+                28│      expect words == []
                                 ^^^^^^^^^^^
 
                 When it failed, these variables had these values:
@@ -563,12 +574,12 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [<ignored for tests>:22] x = 42
-                [<ignored for tests>:23] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:24] "this is line 24" = "this is line 24"
-                [<ignored for tests>:13] x = "abc"
-                [<ignored for tests>:13] x = 10
-                [<ignored for tests>:13] x = (A (B C))
+                [<ignored for tests>:31] x = 42
+                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:35] "this is line 24" = "this is line 24"
+                [<ignored for tests>:21] x = "abc"
+                [<ignored for tests>:21] x = 10
+                [<ignored for tests>:21] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -577,35 +588,97 @@ mod cli_run {
         );
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
                 This expectation failed:
 
-                 6│>  expect
-                 7│>      a = 1
-                 8│>      b = 2
-                 9│>
-                10│>      a == b
+                9│      expect a == 2
+                               ^^^^^^
 
                 When it failed, these variables had these values:
 
                 a : Num *
                 a = 1
 
-                b : Num *
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                10│      expect a == 3
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                14│>  expect
+                15│>      a = makeA
+                16│>      b = 2i64
+                17│>
+                18│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Int Signed64
+                a = 1
+
+                b : I64
                 b = 2
 
 
-
-                1 failed and 0 passed in <ignored for test> ms."#
+                1 failed and 0 passed in <ignored for test> ms.
+                "#
             ),
             UseValgrind::Yes,
             TestCliCommands::Test,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &[],
+            indoc!(
+                r#"
+                0 failed and 3 passed in <ignored for test> ms.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects_verbose() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &["--verbose"],
+            indoc!(
+                r#"
+                Compiled in <ignored for test> ms.
+
+                Direct.roc:
+                    0 failed and 2 passed in <ignored for test> ms.
+
+                Transitive.roc:
+                    0 failed and 1 passed in <ignored for test> ms.
+                "#
+            ),
         );
     }
 
@@ -630,7 +703,7 @@ mod cli_run {
     )]
     fn fibonacci() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "fibonacci.roc",
             "",
             UseValgrind::Yes,
@@ -669,7 +742,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "quicksort.roc",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
@@ -872,10 +945,10 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                This roc file can print it's own source code. The source is:
+                This roc file can print its own source code. The source is:
 
                 app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
                     imports [
                         pf.Stdout,
                         "ingested-file.roc" as ownCode : Str,
@@ -883,7 +956,7 @@ mod cli_run {
                     provides [main] to pf
 
                 main =
-                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+                    Stdout.line "\nThis roc file can print its own source code. The source is:\n\n$(ownCode)"
 
                 "#
             ),

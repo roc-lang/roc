@@ -625,64 +625,27 @@ fn initFromBigStr(slice_bytes: [*]u8, len: usize, alloc_ptr: usize) RocStr {
 }
 
 fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
-    var ret_array_index: usize = 0;
-    var slice_start_index: usize = 0;
-    var str_index: usize = 0;
-
-    const bytes = string.asU8ptr();
-    const len = string.len();
-    const alloc_ptr = @intFromPtr(string.getAllocationPtr()) >> 1;
-    const init_fn = if (string.isSmallStr())
-        &initFromSmallStr
-    else
-        &initFromBigStr;
-
-    const delimiter_bytes_ptrs = delimiter.asU8ptr();
-    const delimiter_len = delimiter.len();
-
-    if (len >= delimiter_len and delimiter_len > 0) {
-        const end_index: usize = len - delimiter_len + 1;
-        while (str_index <= end_index) {
-            var delimiter_index: usize = 0;
-            var matches_delimiter = true;
-
-            while (delimiter_index < delimiter_len) {
-                var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-
-                if (str_index + delimiter_index >= len) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                var strChar = bytes[str_index + delimiter_index];
-
-                if (delimiterChar != strChar) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                delimiter_index += 1;
-            }
-
-            if (matches_delimiter) {
-                const segment_len: usize = str_index - slice_start_index;
-
-                array[ret_array_index] = init_fn(@constCast(bytes) + slice_start_index, segment_len, alloc_ptr);
-                slice_start_index = str_index + delimiter_len;
-                ret_array_index += 1;
-                str_index += delimiter_len;
-            } else {
-                str_index += 1;
-            }
-        }
+    if (delimiter.len() == 0) {
+        string.incref(1);
+        array[0] = string;
+        return;
     }
 
-    array[ret_array_index] = init_fn(@constCast(bytes) + slice_start_index, len - slice_start_index, alloc_ptr);
+    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
 
-    if (!string.isSmallStr()) {
-        // Correct refcount for all of the splits made.
-        string.incref(ret_array_index + 1);
+    var i: usize = 0;
+    var offset: usize = 0;
+
+    while (it.next()) |zig_slice| {
+        const roc_slice = substringUnsafe(string, offset, zig_slice.len);
+        array[i] = roc_slice;
+
+        i += 1;
+        offset += zig_slice.len + delimiter.len();
     }
+
+    // Correct refcount for all of the splits made.
+    string.incref(i); // i == array.len()
 }
 
 test "strSplitHelp: empty delimiter" {
@@ -1008,43 +971,14 @@ test "strSplitHelp: overlapping delimiter 2" {
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
-    const bytes = string.asU8ptr();
-    const len = string.len();
-
-    const delimiter_bytes_ptrs = delimiter.asU8ptr();
-    const delimiter_len = delimiter.len();
-
-    var count: usize = 1;
-
-    if (len >= delimiter_len and delimiter_len > 0) {
-        var str_index: usize = 0;
-        const end_cond: usize = len - delimiter_len + 1;
-
-        while (str_index < end_cond) {
-            var delimiter_index: usize = 0;
-
-            var matches_delimiter = true;
-
-            while (delimiter_index < delimiter_len) {
-                const delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-                const strChar = bytes[str_index + delimiter_index];
-
-                if (delimiterChar != strChar) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                delimiter_index += 1;
-            }
-
-            if (matches_delimiter) {
-                count += 1;
-                str_index += delimiter_len;
-            } else {
-                str_index += 1;
-            }
-        }
+    if (delimiter.isEmpty()) {
+        return 1;
     }
+
+    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
+    var count: usize = 0;
+
+    while (it.next()) |_| : (count += 1) {}
 
     return count;
 }
@@ -1134,8 +1068,8 @@ test "countSegments: overlapping delimiter 2" {
     try expectEqual(segments_count, 3);
 }
 
-pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
-    return string.len();
+pub fn countUtf8Bytes(string: RocStr) callconv(.C) u64 {
+    return @intCast(string.len());
 }
 
 pub fn isEmpty(string: RocStr) callconv(.C) bool {
@@ -1146,7 +1080,14 @@ pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
 
-pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
+pub fn substringUnsafeC(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
+    const start: usize = @intCast(start_u64);
+    const length: usize = @intCast(length_u64);
+
+    return substringUnsafe(string, start, length);
+}
+
+fn substringUnsafe(string: RocStr, start: usize, length: usize) RocStr {
     if (string.isSmallStr()) {
         if (start == 0) {
             var output = string;
@@ -1178,8 +1119,8 @@ pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C)
     return RocStr.empty();
 }
 
-pub fn getUnsafe(string: RocStr, index: usize) callconv(.C) u8 {
-    return string.getUnchecked(index);
+pub fn getUnsafeC(string: RocStr, index: u64) callconv(.C) u8 {
+    return string.getUnchecked(@intCast(index));
 }
 
 test "substringUnsafe: start" {
@@ -1242,7 +1183,8 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 }
 
 // Str.repeat
-pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
+pub fn repeatC(string: RocStr, count_u64: u64) callconv(.C) RocStr {
+    const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -1497,29 +1439,25 @@ inline fn strToBytes(arg: RocStr) RocList {
 }
 
 const FromUtf8Result = extern struct {
-    byte_index: usize,
+    byte_index: u64,
     string: RocStr,
     is_ok: bool,
     problem_code: Utf8ByteProblem,
 };
 
-const CountAndStart = extern struct {
-    count: usize,
-    start: usize,
-};
-
-pub fn fromUtf8RangeC(
+pub fn fromUtf8C(
     list: RocList,
-    start: usize,
-    count: usize,
     update_mode: UpdateMode,
 ) callconv(.C) FromUtf8Result {
-    return fromUtf8Range(list, start, count, update_mode);
+    return fromUtf8(list, update_mode);
 }
 
-pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
-    if (arg.len() == 0 or count == 0) {
-        arg.decref(RocStr.alignment);
+pub fn fromUtf8(
+    list: RocList,
+    update_mode: UpdateMode,
+) FromUtf8Result {
+    if (list.len() == 0) {
+        list.decref(1); // Alignment 1 for List U8
         return FromUtf8Result{
             .is_ok = true,
             .string = RocStr.empty(),
@@ -1527,11 +1465,11 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     }
-    const bytes = @as([*]const u8, @ptrCast(arg.bytes))[start .. start + count];
+    const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
-        const string = RocStr.fromSubListUnsafe(arg, start, count, update_mode);
+        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode);
         return FromUtf8Result{
             .is_ok = true,
             .string = string,
@@ -1539,25 +1477,25 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     } else {
-        const temp = errorToProblem(@as([*]u8, @ptrCast(arg.bytes)), arg.length);
+        const temp = errorToProblem(bytes);
 
-        // decref the list
-        arg.decref(RocStr.alignment);
+        list.decref(1); // Alignment 1 for List U8
 
         return FromUtf8Result{
             .is_ok = false,
             .string = RocStr.empty(),
-            .byte_index = temp.index,
+            .byte_index = @intCast(temp.index),
             .problem_code = temp.problem,
         };
     }
 }
 
-fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: Utf8ByteProblem } {
+fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8ByteProblem } {
+    const len = bytes.len;
     var index: usize = 0;
 
-    while (index < length) {
-        const nextNumBytes = numberOfNextCodepointBytes(bytes, length, index) catch |err| {
+    while (index < len) {
+        const nextNumBytes = numberOfNextCodepointBytes(bytes, index) catch |err| {
             switch (err) {
                 error.UnexpectedEof => {
                     return .{ .index = index, .problem = Utf8ByteProblem.UnexpectedEndOfSequence };
@@ -1631,13 +1569,13 @@ const Utf8DecodeError = error{
 // Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
 // but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
 // TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
-pub fn numberOfNextCodepointBytes(ptr: [*]u8, len: usize, index: usize) Utf8DecodeError!usize {
-    const codepoint_len = try unicode.utf8ByteSequenceLength(ptr[index]);
+pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeError!usize {
+    const codepoint_len = try unicode.utf8ByteSequenceLength(bytes[index]);
     const codepoint_end_index = index + codepoint_len;
-    if (codepoint_end_index > len) {
+    if (codepoint_end_index > bytes.len) {
         return error.UnexpectedEof;
     }
-    _ = try unicode.utf8Decode(ptr[index..codepoint_end_index]);
+    _ = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
     return codepoint_end_index - index;
 }
 
@@ -1653,11 +1591,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, 0, length, .Immutable);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8Range(str, 0, str.len(), .Immutable);
+    return fromUtf8(str, .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
@@ -1674,7 +1612,7 @@ fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
 }
 
 fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
-    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = index, .problem_code = problem };
+    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
 }
 
 // NOTE on memory: the validate function consumes a RC token of the input. Since
@@ -1736,7 +1674,7 @@ fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8Byt
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
 
-    try expectError(err, numberOfNextCodepointBytes(str_ptr, len, index));
+    try expectError(err, numberOfNextCodepointBytes(str_ptr[0..len], index));
     try expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, len));
 }
 
@@ -2367,8 +2305,13 @@ test "capacity: big string" {
     try expect(data.getCapacity() >= data_bytes.len);
 }
 
-pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
+pub fn reserveC(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
+    return reserve(string, @intCast(spare_u64));
+}
+
+fn reserve(string: RocStr, spare: usize) RocStr {
     const old_length = string.len();
+
     if (string.getCapacity() >= old_length + spare) {
         return string;
     } else {
@@ -2378,11 +2321,12 @@ pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
     }
 }
 
-pub fn withCapacity(capacity: usize) callconv(.C) RocStr {
-    var str = RocStr.allocate(capacity);
+pub fn withCapacityC(capacity: u64) callconv(.C) RocStr {
+    var str = RocStr.allocate(@intCast(capacity));
     str.setLen(0);
     return str;
 }
+
 pub fn strCloneTo(
     string: RocStr,
     ptr: [*]u8,

@@ -1768,6 +1768,9 @@ fn pretty_runtime_error<'b>(
         RuntimeError::MalformedClosure(_) => {
             todo!("");
         }
+        RuntimeError::MalformedSuffixed(_) => {
+            todo!("error for malformed suffix");
+        }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
             let tip = alloc

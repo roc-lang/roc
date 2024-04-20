@@ -155,7 +155,9 @@ fn fmt_comment(buf: &mut Buf, comment: &str) {
     }
 
     buf.push('#');
-    if !comment.starts_with(' ') {
+    // Add a space between the starting `#` and the rest of the comment,
+    // unless there already is a space or the comment is of the form `#### something`.
+    if !comment.starts_with(' ') && !comment.starts_with('#') {
         buf.spaces(1);
     }
     buf.push_str(comment.trim_end());
@@ -207,7 +209,7 @@ fn fmt_docs(buf: &mut Buf, docs: &str) {
 /// * Removing comments
 /// * Removing parens in Exprs
 ///
-/// Long term, we actuall want this transform to preserve comments (so we can assert they're maintained by formatting)
+/// Long term, we actually want this transform to preserve comments (so we can assert they're maintained by formatting)
 /// - but there are currently several bugs where they're _not_ preserved.
 /// TODO: ensure formatting retains comments
 pub trait RemoveSpaces<'a> {
@@ -570,6 +572,7 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
             IngestedFileImport(ingested_file_import) => {
                 IngestedFileImport(ingested_file_import.remove_spaces(arena))
             }
+            Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.remove_spaces(arena))),
         }
     }
 }
@@ -719,6 +722,7 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
 impl<'a> RemoveSpaces<'a> for Expr<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
+            Expr::EmptyDefsFinal => Expr::EmptyDefsFinal,
             Expr::Float(a) => Expr::Float(a),
             Expr::Num(a) => Expr::Num(a),
             Expr::NonBase10Int {
@@ -743,7 +747,15 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
             Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
-            Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
+            Expr::Var {
+                module_name,
+                ident,
+                suffixed,
+            } => Expr::Var {
+                module_name,
+                ident,
+                suffixed,
+            },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
@@ -806,6 +818,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
+            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
             Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
@@ -842,7 +855,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
 impl<'a> RemoveSpaces<'a> for Pattern<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Pattern::Identifier(a) => Pattern::Identifier(a),
+            Pattern::Identifier { ident, suffixed } => Pattern::Identifier { ident, suffixed },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
@@ -875,9 +888,15 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Pattern::QualifiedIdentifier { module_name, ident } => {
-                Pattern::QualifiedIdentifier { module_name, ident }
-            }
+            Pattern::QualifiedIdentifier {
+                module_name,
+                ident,
+                suffixed,
+            } => Pattern::QualifiedIdentifier {
+                module_name,
+                ident,
+                suffixed,
+            },
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),

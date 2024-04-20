@@ -13,7 +13,7 @@ import Str
 import Result
 import Encode exposing [EncoderFormatting, appendWith]
 import Decode exposing [DecoderFormatting, DecodeResult]
-import Num exposing [U8, U16, U64, F32, F64, Nat, Dec]
+import Num exposing [U8, U16, U64, F32, F64, Dec]
 import Bool exposing [Bool]
 
 ## An opaque type with the `EncoderFormatting` and
@@ -208,14 +208,20 @@ escapedByteToJson = \b ->
 encodeList = \lst, encodeElem ->
     Encode.custom \bytes, @Json {} ->
         writeList = \{ buffer, elemsLeft }, elem ->
-            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
-            bufferWithSuffix =
-                if elemsLeft > 1 then
-                    List.append bufferWithElem (Num.toU8 ',')
-                else
-                    bufferWithElem
+            beforeBufferLen = buffer |> List.len
 
-            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
+            # If our encoder returned [] we just skip the elem
+            if bufferWithElem |> List.len == beforeBufferLen then
+                { buffer: bufferWithElem, elemsLeft: elemsLeft - 1 }
+            else
+                bufferWithSuffix =
+                    if elemsLeft > 1 then
+                        List.append bufferWithElem (Num.toU8 ',')
+                    else
+                        bufferWithElem
+
+                { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
 
         head = List.append bytes (Num.toU8 '[')
         { buffer: withList } = List.walk lst { buffer: head, elemsLeft: List.len lst } writeList
@@ -225,21 +231,27 @@ encodeList = \lst, encodeElem ->
 encodeRecord = \fields ->
     Encode.custom \bytes, @Json {} ->
         writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
-            fieldName = key
-            bufferWithKeyValue =
-                List.append buffer (Num.toU8 '"')
-                |> List.concat (Str.toUtf8 fieldName)
-                |> List.append (Num.toU8 '"')
-                |> List.append (Num.toU8 ':') # Note we need to encode using the json config here
-                |> appendWith value (@Json {})
 
-            bufferWithSuffix =
-                if fieldsLeft > 1 then
-                    List.append bufferWithKeyValue (Num.toU8 ',')
-                else
-                    bufferWithKeyValue
+            fieldValue = [] |> appendWith value (json)
+            # If our encoder returned [] we just skip the field
+            if fieldValue == [] then
+                { buffer, fieldsLeft: fieldsLeft - 1 }
+            else
+                fieldName = key
+                bufferWithKeyValue =
+                    List.append buffer (Num.toU8 '"')
+                    |> List.concat (Str.toUtf8 fieldName)
+                    |> List.append (Num.toU8 '"')
+                    |> List.append (Num.toU8 ':') # Note we need to encode using the json config here
+                    |> List.concat fieldValue
 
-            { buffer: bufferWithSuffix, fieldsLeft: fieldsLeft - 1 }
+                bufferWithSuffix =
+                    if fieldsLeft > 1 then
+                        List.append bufferWithKeyValue (Num.toU8 ',')
+                    else
+                        bufferWithKeyValue
+
+                { buffer: bufferWithSuffix, fieldsLeft: fieldsLeft - 1 }
 
         bytesHead = List.append bytes (Num.toU8 '{')
         { buffer: bytesWithRecord } = List.walk fields { buffer: bytesHead, fieldsLeft: List.len fields } writeRecord
@@ -249,16 +261,21 @@ encodeRecord = \fields ->
 encodeTuple = \elems ->
     Encode.custom \bytes, @Json {} ->
         writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
-            bufferWithElem =
-                appendWith buffer elemEncoder (@Json {})
+            beforeBufferLen = buffer |> List.len
 
-            bufferWithSuffix =
-                if elemsLeft > 1 then
-                    List.append bufferWithElem (Num.toU8 ',')
-                else
-                    bufferWithElem
+            bufferWithElem = appendWith buffer (elemEncoder) (@Json {})
 
-            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+            # If our encoder returned [] we just skip the elem
+            if bufferWithElem |> List.len == beforeBufferLen then
+                { buffer: bufferWithElem, elemsLeft: elemsLeft - 1 }
+            else
+                bufferWithSuffix =
+                    if elemsLeft > 1 then
+                        List.append bufferWithElem (Num.toU8 ',')
+                    else
+                        bufferWithElem
+
+                { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
 
         bytesHead = List.append bytes (Num.toU8 '[')
         { buffer: bytesWithRecord } = List.walk elems { buffer: bytesHead, elemsLeft: List.len elems } writeTuple
@@ -653,21 +670,21 @@ numberHelp = \state, byte ->
 
 NumberState : [
     Start,
-    Minus Nat,
-    Zero Nat,
-    Integer Nat,
-    FractionA Nat,
-    FractionB Nat,
-    ExponentA Nat,
-    ExponentB Nat,
-    ExponentC Nat,
+    Minus U64,
+    Zero U64,
+    Integer U64,
+    FractionA U64,
+    FractionB U64,
+    ExponentA U64,
+    ExponentB U64,
+    ExponentC U64,
     Invalid,
-    Finish Nat,
+    Finish U64,
 ]
 
 # TODO confirm if we would like to be able to decode
 # "340282366920938463463374607431768211455" which is MAX U128 and 39 bytes
-maxBytes : Nat
+maxBytes : U64
 maxBytes = 21 # Max bytes in a double precision float
 
 isDigit0to9 : U8 -> Bool
@@ -869,13 +886,13 @@ stringHelp = \state, byte ->
 
 StringState : [
     Start,
-    Chars Nat,
-    Escaped Nat,
-    UnicodeA Nat,
-    UnicodeB Nat,
-    UnicodeC Nat,
-    UnicodeD Nat,
-    Finish Nat,
+    Chars U64,
+    Escaped U64,
+    UnicodeA U64,
+    UnicodeB U64,
+    UnicodeC U64,
+    UnicodeD U64,
+    Finish U64,
     InvalidNumber,
 ]
 
@@ -1151,14 +1168,14 @@ expect
     actual == expected
 
 ArrayOpeningState : [
-    BeforeOpeningBracket Nat,
-    AfterOpeningBracket Nat,
+    BeforeOpeningBracket U64,
+    AfterOpeningBracket U64,
 ]
 
 ArrayClosingState : [
-    BeforeNextElemOrClosingBracket Nat,
-    BeforeNextElement Nat,
-    AfterClosingBracket Nat,
+    BeforeNextElemOrClosingBracket U64,
+    BeforeNextElement U64,
+    AfterClosingBracket U64,
 ]
 
 # Test decoding an empty array
@@ -1249,7 +1266,7 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                             rest = List.dropFirst bytesAfterValue n
 
                             # Build final record from decoded fields and values
-                            when finalizer updatedRecord is
+                            when finalizer updatedRecord json is
                                 Ok val -> { result: Ok val, rest }
                                 Err e -> { result: Err e, rest }
 
@@ -1292,13 +1309,13 @@ objectHelp = \state, byte ->
         _ -> Break InvalidObject
 
 ObjectState : [
-    BeforeOpeningBrace Nat,
-    AfterOpeningBrace Nat,
-    ObjectFieldNameStart Nat,
-    BeforeColon Nat,
-    AfterColon Nat,
-    AfterObjectValue Nat,
-    AfterComma Nat,
-    AfterClosingBrace Nat,
+    BeforeOpeningBrace U64,
+    AfterOpeningBrace U64,
+    ObjectFieldNameStart U64,
+    BeforeColon U64,
+    AfterColon U64,
+    AfterObjectValue U64,
+    AfterComma U64,
+    AfterClosingBrace U64,
     InvalidObject,
 ]

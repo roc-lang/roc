@@ -624,6 +624,9 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
+        &ast::Expr::EmptyDefsFinal => {
+            internal_error!("EmptyDefsFinal should have been desugared")
+        }
         &ast::Expr::Num(str) => {
             let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
@@ -1051,9 +1054,11 @@ pub fn canonicalize_expr<'a>(
                 (expr, output)
             }
         }
-        ast::Expr::Var { module_name, ident } => {
-            canonicalize_var_lookup(env, var_store, scope, module_name, ident, region)
-        }
+        ast::Expr::Var {
+            module_name,
+            ident,
+            suffixed: _, // TODO should we use suffixed here?
+        } => canonicalize_var_lookup(env, var_store, scope, module_name, ident, region),
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
 
@@ -1457,6 +1462,10 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::MalformedSuffixed(..) => {
+            use roc_problem::can::RuntimeError::*;
+            (RuntimeError(MalformedSuffixed(region)), Output::default())
+        }
         ast::Expr::MultipleRecordBuilders(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1685,7 +1694,8 @@ fn canonicalize_closure_body<'a>(
 enum MultiPatternVariables {
     OnePattern,
     MultiPattern {
-        bound_occurrences: VecMap<Symbol, (Region, u8)>,
+        num_patterns: usize,
+        bound_occurrences: VecMap<Symbol, (Region, usize)>,
     },
 }
 
@@ -1694,7 +1704,8 @@ impl MultiPatternVariables {
     fn new(num_patterns: usize) -> Self {
         if num_patterns > 1 {
             Self::MultiPattern {
-                bound_occurrences: VecMap::with_capacity(2),
+                num_patterns,
+                bound_occurrences: VecMap::with_capacity(num_patterns),
             }
         } else {
             Self::OnePattern
@@ -1705,7 +1716,9 @@ impl MultiPatternVariables {
     fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
         match self {
             MultiPatternVariables::OnePattern => {}
-            MultiPatternVariables::MultiPattern { bound_occurrences } => {
+            MultiPatternVariables::MultiPattern {
+                bound_occurrences, ..
+            } => {
                 for (sym, region) in BindingsFromPattern::new(pattern) {
                     if !bound_occurrences.contains_key(&sym) {
                         bound_occurrences.insert(sym, (region, 0));
@@ -1718,15 +1731,18 @@ impl MultiPatternVariables {
 
     #[inline(always)]
     fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
-        let bound_occurrences = match self {
-            MultiPatternVariables::OnePattern => Default::default(),
-            MultiPatternVariables::MultiPattern { bound_occurrences } => bound_occurrences,
+        let (bound_occurrences, num_patterns) = match self {
+            MultiPatternVariables::OnePattern => (Default::default(), 1),
+            MultiPatternVariables::MultiPattern {
+                bound_occurrences,
+                num_patterns,
+            } => (bound_occurrences, num_patterns),
         };
 
         bound_occurrences
             .into_iter()
-            .filter_map(|(sym, (region, occurs))| {
-                if occurs == 1 {
+            .filter_map(move |(sym, (region, occurs))| {
+                if occurs != num_patterns {
                     Some((sym, region))
                 } else {
                     None
@@ -2524,7 +2540,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::IngestedFile(_, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
-        | ast::Expr::SpaceAfter(_, _) => false,
+        | ast::Expr::SpaceAfter(_, _)
+        | ast::Expr::EmptyDefsFinal => false,
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
@@ -2550,6 +2567,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
         ast::Expr::MultipleRecordBuilders(loc_expr)
+        | ast::Expr::MalformedSuffixed(loc_expr)
         | ast::Expr::UnappliedRecordBuilder(loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)
@@ -2712,10 +2730,38 @@ fn flatten_str_lines<'a>(
 fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;
 
+    let n = segments.len();
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
         Some(Plaintext(string)) => Loc::at(Region::zero(), Expr::Str(string)),
-        Some(Interpolation(loc_expr)) => loc_expr,
+        Some(Interpolation(loc_expr)) => {
+            if n == 1 {
+                // We concat with the empty string to ensure a type error when loc_expr is not a string
+                let empty_string = Loc::at(Region::zero(), Expr::Str("".into()));
+
+                let fn_expr = Loc::at(
+                    Region::zero(),
+                    Expr::Var(Symbol::STR_CONCAT, var_store.fresh()),
+                );
+                let expr = Expr::Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    vec![
+                        (var_store.fresh(), empty_string),
+                        (var_store.fresh(), loc_expr),
+                    ],
+                    CalledVia::StringInterpolation,
+                );
+
+                Loc::at(Region::zero(), expr)
+            } else {
+                loc_expr
+            }
+        }
         None => {
             // No segments? Empty string!
 

@@ -628,6 +628,7 @@ impl IterTokens for ValueDef<'_> {
             ValueDef::IngestedFileImport(..) => {
                 todo!("[modules-revamp]")
             }
+            ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
         }
     }
 }
@@ -703,7 +704,11 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::ParensAround(e) => Loc::at(region, *e).iter_tokens(arena),
             Expr::MultipleRecordBuilders(e) => e.iter_tokens(arena),
             Expr::UnappliedRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _) | Expr::MalformedClosure | Expr::PrecedenceConflict(_) => {
+            Expr::MalformedIdent(_, _)
+            | Expr::MalformedClosure
+            | Expr::PrecedenceConflict(_)
+            | Expr::EmptyDefsFinal
+            | Expr::MalformedSuffixed(_) => {
                 bumpvec![in arena;]
             }
         }
@@ -755,7 +760,7 @@ impl IterTokens for Loc<Pattern<'_>> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let region = self.region;
         match self.value {
-            Pattern::Identifier(_) => onetoken(Token::Variable, region, arena),
+            Pattern::Identifier { .. } => onetoken(Token::Variable, region, arena),
             Pattern::Tag(_) => onetoken(Token::Tag, region, arena),
             Pattern::OpaqueRef(_) => onetoken(Token::Type, region, arena),
             Pattern::Apply(p1, p2) => (p1.iter_tokens(arena).into_iter())

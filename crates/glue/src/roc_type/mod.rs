@@ -12,9 +12,9 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::let_and_return)]
 #![allow(clippy::missing_safety_doc)]
-#![allow(clippy::redundant_static_lifetimes)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
+#![allow(clippy::incorrect_partial_ord_impl_on_ord_type)]
 
 #[cfg(any(
     target_arch = "arm",
@@ -195,16 +195,18 @@ pub struct Target {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum OperatingSystem {
-    Unix = 0,
-    Wasi = 1,
-    Windows = 2,
+    Freestanding = 0,
+    Linux = 1,
+    Mac = 2,
+    Windows = 3,
 }
 
 impl core::fmt::Debug for OperatingSystem {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Unix => f.write_str("OperatingSystem::Unix"),
-            Self::Wasi => f.write_str("OperatingSystem::Wasi"),
+            Self::Freestanding => f.write_str("OperatingSystem::Freestanding"),
+            Self::Linux => f.write_str("OperatingSystem::Linux"),
+            Self::Mac => f.write_str("OperatingSystem::Mac"),
             Self::Windows => f.write_str("OperatingSystem::Windows"),
         }
     }
@@ -3553,20 +3555,7 @@ impl Clone for U1 {
         target_arch = "x86_64"
     ))]
     fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U1::None => core::mem::transmute::<core::mem::MaybeUninit<U1>, U1>(
-                    core::mem::MaybeUninit::uninit(),
-                ),
-                discriminant_U1::Some => Self {
-                    Some: self.Some.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
+        *self
     }
 }
 

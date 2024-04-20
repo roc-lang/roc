@@ -18,6 +18,7 @@ BinOps(
                 Var {
                     module_name: "Str",
                     ident: "toUtf8",
+                    suffixed: 0,
                 },
                 [
                     Newline,
@@ -31,13 +32,15 @@ BinOps(
                     @28-36 Var {
                         module_name: "List",
                         ident: "map",
+                        suffixed: 0,
                     },
                     [
                         @37-54 Closure(
                             [
-                                @38-42 Identifier(
-                                    "byte",
-                                ),
+                                @38-42 Identifier {
+                                    ident: "byte",
+                                    suffixed: 0,
+                                },
                             ],
                             @46-54 BinOps(
                                 [
@@ -45,6 +48,7 @@ BinOps(
                                         @46-50 Var {
                                             module_name: "",
                                             ident: "byte",
+                                            suffixed: 0,
                                         },
                                         @51-52 Plus,
                                     ),
@@ -67,5 +71,6 @@ BinOps(
     @58-70 Var {
         module_name: "List",
         ident: "reverse",
+        suffixed: 0,
     },
 )

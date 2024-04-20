@@ -1,0 +1,44 @@
+Apply(
+    @0-4 Var {
+        module_name: "",
+        ident: "foo",
+        suffixed: 1,
+    },
+    [
+        @9-17 ParensAround(
+            Apply(
+                @9-13 Var {
+                    module_name: "",
+                    ident: "bar",
+                    suffixed: 1,
+                },
+                [
+                    @14-17 Var {
+                        module_name: "",
+                        ident: "baz",
+                        suffixed: 0,
+                    },
+                ],
+                Space,
+            ),
+        ),
+        @22-32 ParensAround(
+            Apply(
+                @22-26 Var {
+                    module_name: "",
+                    ident: "blah",
+                    suffixed: 0,
+                },
+                [
+                    @27-32 Var {
+                        module_name: "",
+                        ident: "stuff",
+                        suffixed: 0,
+                    },
+                ],
+                Space,
+            ),
+        ),
+    ],
+    Space,
+)

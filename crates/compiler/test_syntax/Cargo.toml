@@ -18,6 +18,7 @@ roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_region = { path = "../region" }
 roc_test_utils = { path = "../../test_utils" }
+roc_test_utils_dir = { path = "../../test_utils_dir" }
 
 [dev-dependencies]
 indoc.workspace = true

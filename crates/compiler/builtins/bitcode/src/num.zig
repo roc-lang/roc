@@ -15,6 +15,18 @@ pub fn NumParseResult(comptime T: type) type {
     };
 }
 
+pub const F32Parts = extern struct {
+    fraction: u32,
+    exponent: u8,
+    sign: bool,
+};
+
+pub const F64Parts = extern struct {
+    fraction: u64,
+    exponent: u16,
+    sign: bool,
+};
+
 pub const U256 = struct {
     hi: u128,
     lo: u128,
@@ -81,6 +93,15 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
             } else |_| {
                 return .{ .errorcode = 1, .value = 0 };
             }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(x: T) callconv(.C) F {
+            return @floatFromInt(x);
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -272,42 +293,6 @@ pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comp
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(From), .linkage = .Strong });
-}
-
-pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {
-    return @call(.always_inline, bytesToU16, .{ arg, position });
-}
-
-fn bytesToU16(arg: RocList, position: usize) u16 {
-    const bytes = @as([*]const u8, @ptrCast(arg.bytes));
-    return @as(u16, @bitCast([_]u8{ bytes[position], bytes[position + 1] }));
-}
-
-pub fn bytesToU32C(arg: RocList, position: usize) callconv(.C) u32 {
-    return @call(.always_inline, bytesToU32, .{ arg, position });
-}
-
-fn bytesToU32(arg: RocList, position: usize) u32 {
-    const bytes = @as([*]const u8, @ptrCast(arg.bytes));
-    return @as(u32, @bitCast([_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3] }));
-}
-
-pub fn bytesToU64C(arg: RocList, position: usize) callconv(.C) u64 {
-    return @call(.always_inline, bytesToU64, .{ arg, position });
-}
-
-fn bytesToU64(arg: RocList, position: usize) u64 {
-    const bytes = @as([*]const u8, @ptrCast(arg.bytes));
-    return @as(u64, @bitCast([_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3], bytes[position + 4], bytes[position + 5], bytes[position + 6], bytes[position + 7] }));
-}
-
-pub fn bytesToU128C(arg: RocList, position: usize) callconv(.C) u128 {
-    return @call(.always_inline, bytesToU128, .{ arg, position });
-}
-
-fn bytesToU128(arg: RocList, position: usize) u128 {
-    const bytes = @as([*]const u8, @ptrCast(arg.bytes));
-    return @as(u128, @bitCast([_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3], bytes[position + 4], bytes[position + 5], bytes[position + 6], bytes[position + 7], bytes[position + 8], bytes[position + 9], bytes[position + 10], bytes[position + 11], bytes[position + 12], bytes[position + 13], bytes[position + 14], bytes[position + 15] }));
 }
 
 fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
@@ -656,4 +641,30 @@ pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
+    const u32Value = @as(u32, @bitCast(self));
+    return F32Parts{
+        .fraction = u32Value & 0x7fffff,
+        .exponent = @truncate(u32Value >> 23 & 0xff),
+        .sign = u32Value >> 31 & 1 == 1,
+    };
+}
+
+pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
+    const u64Value = @as(u64, @bitCast(self));
+    return F64Parts{
+        .fraction = u64Value & 0xfffffffffffff,
+        .exponent = @truncate(u64Value >> 52 & 0x7ff),
+        .sign = u64Value >> 63 & 1 == 1,
+    };
+}
+
+pub fn f32FromParts(parts: F32Parts) callconv(.C) f32 {
+    return @as(f32, @bitCast(parts.fraction & 0x7fffff | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
+}
+
+pub fn f64FromParts(parts: F64Parts) callconv(.C) f64 {
+    return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
 }

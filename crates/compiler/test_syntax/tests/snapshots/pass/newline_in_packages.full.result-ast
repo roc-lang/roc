@@ -24,7 +24,7 @@ Full {
                                         Newline,
                                     ],
                                     package_name: @31-145 PackageName(
-                                        "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br",
+                                        "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br",
                                     ),
                                 },
                                 [
@@ -100,14 +100,16 @@ Full {
         type_defs: [],
         value_defs: [
             Body(
-                @199-203 Identifier(
-                    "main",
-                ),
+                @199-203 Identifier {
+                    ident: "main",
+                    suffixed: 0,
+                },
                 @210-246 SpaceBefore(
                     Apply(
                         @210-221 Var {
                             module_name: "Stdout",
                             ident: "line",
+                            suffixed: 0,
                         },
                         [
                             @222-246 Str(
