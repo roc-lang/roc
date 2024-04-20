@@ -384,9 +384,7 @@ mod tests {
     }
 
     const DOC_LIT: &str = indoc! {r#"
-        interface Test
-          exposes []
-          imports []
+        module []
         "#};
 
     static INIT: Once = Once::new();
@@ -444,7 +442,7 @@ mod tests {
                   "#};
 
         let (inner, url) = test_setup(suffix.clone()).await;
-        let position = Position::new(6, 7);
+        let position = Position::new(4, 7);
         let registry = &inner.registry;
 
         let change = suffix.clone() + "o";
@@ -486,7 +484,7 @@ mod tests {
                   "#};
 
         let (inner, url) = test_setup(doc.clone()).await;
-        let position = Position::new(6, 7);
+        let position = Position::new(4, 7);
         let reg = &inner.registry;
 
         let change = doc.clone() + "o";
@@ -527,7 +525,7 @@ mod tests {
             main = \param1, param2 ->
               "},
             "par",
-            Position::new(4, 3),
+            Position::new(2, 3),
         )
         .await;
 
@@ -549,7 +547,7 @@ mod tests {
             main = [] |> List.map \ param1 , param2-> 
               "},
             "par",
-            Position::new(4, 3),
+            Position::new(2, 3),
         )
         .await;
         expect![[r#"
@@ -571,7 +569,7 @@ mod tests {
             main = mai
               "},
             "par",
-            Position::new(4, 10),
+            Position::new(2, 10),
         )
         .await;
 
