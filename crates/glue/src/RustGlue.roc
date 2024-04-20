@@ -1,21 +1,18 @@
-app "rust-glue"
-    packages { pf: "../platform/main.roc" }
-    imports [
-        pf.Types.{ Types },
-        pf.Shape.{ Shape, RocFn },
-        pf.File.{ File },
-        pf.TypeId.{ TypeId },
-        "../static/Cargo.toml" as rocAppCargoToml : Str,
-        "../../roc_std/Cargo.toml" as rocStdCargoToml : Str,
-        "../../roc_std/src/lib.rs" as rocStdLib : Str,
-        "../../roc_std/src/roc_box.rs" as rocStdBox : Str,
-        "../../roc_std/src/roc_list.rs" as rocStdList : Str,
-        "../../roc_std/src/roc_dict.rs" as rocStdDict : Str,
-        "../../roc_std/src/roc_set.rs" as rocStdSet : Str,
-        "../../roc_std/src/roc_str.rs" as rocStdStr : Str,
-        "../../roc_std/src/storage.rs" as rocStdStorage : Str,
-    ]
-    provides [makeGlue] to pf
+app [makeGlue] { pf: platform "../platform/main.roc" }
+
+import pf.Types exposing [Types]
+import pf.Shape exposing [Shape, RocFn]
+import pf.File exposing [File]
+import pf.TypeId exposing [TypeId]
+import "../static/Cargo.toml" as rocAppCargoToml : Str
+import "../../roc_std/Cargo.toml" as rocStdCargoToml : Str
+import "../../roc_std/src/lib.rs" as rocStdLib : Str
+import "../../roc_std/src/roc_box.rs" as rocStdBox : Str
+import "../../roc_std/src/roc_list.rs" as rocStdList : Str
+import "../../roc_std/src/roc_dict.rs" as rocStdDict : Str
+import "../../roc_std/src/roc_set.rs" as rocStdSet : Str
+import "../../roc_std/src/roc_str.rs" as rocStdStr : Str
+import "../../roc_std/src/storage.rs" as rocStdStorage : Str
 
 makeGlue : List Types -> Result (List File) Str
 makeGlue = \typesByArch ->
@@ -167,6 +164,7 @@ generateEntryPoint = \buf, types, name, id ->
                 when Types.shape types rocFn.ret is
                     Function _ ->
                         ("(_: *mut u8, $(arguments))", ret, Bool.true)
+
                     _ ->
                         ("(_: *mut $(ret), $(arguments))", ret, Bool.false)
 

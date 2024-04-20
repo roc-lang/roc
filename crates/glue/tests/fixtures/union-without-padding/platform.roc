@@ -2,7 +2,6 @@ platform "test-platform"
     requires {} { main : _ }
     exposes []
     packages {}
-    imports []
     provides [mainForHost]
 
 # This case is important to test because there's no padding

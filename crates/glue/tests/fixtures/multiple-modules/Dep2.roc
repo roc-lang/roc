@@ -1,4 +1,4 @@
-interface Dep2 exposes [DepStr2, string] imports []
+module [DepStr2, string]
 
 DepStr2 := [R Str]
 

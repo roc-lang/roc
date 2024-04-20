@@ -1,6 +1,9 @@
-interface Types
-    exposes [Types, shape, size, alignment, target, walkShapes, entryPoints]
-    imports [Shape.{ Shape }, TypeId.{ TypeId }, Target.{ Target }, TypeId]
+module [Types, shape, size, alignment, target, walkShapes, entryPoints]
+
+import Shape exposing [Shape]
+import TypeId exposing [TypeId]
+import Target exposing [Target]
+import TypeId
 
 # TODO: switch AssocList uses to Dict once roc_std is updated.
 Tuple1 : [T Str TypeId]

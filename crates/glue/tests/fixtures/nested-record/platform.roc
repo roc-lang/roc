@@ -2,7 +2,6 @@ platform "test-platform"
     requires {} { main : _ }
     exposes []
     packages {}
-    imports []
     provides [mainForHost]
 
 Outer : { x : Inner, y : Str, z : List U8 }
