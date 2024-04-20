@@ -13,7 +13,7 @@ use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocList, RocResult, RocStr, I128, U128};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -1345,8 +1345,8 @@ fn str_to_i128() {
             Str.toI128 "1"
             "#
         ),
-        RocResult::ok(1),
-        RocResult<i128, ()>
+        RocResult::ok(I128::from(1)),
+        RocResult<I128, ()>
     );
 }
 
@@ -1359,11 +1359,12 @@ fn str_to_u128() {
             Str.toU128 "1"
             "#
         ),
-        RocResult::ok(1),
-        RocResult<u128, ()>
+        RocResult::ok(U128::from(1)),
+        RocResult<U128, ()>
     );
 }
 
+// TODO add alignment check between i64 and I64 somewhere
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_to_i64() {
