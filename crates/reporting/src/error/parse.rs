@@ -3255,7 +3255,7 @@ fn to_header_report<'a>(
 
             let doc = alloc.stack(preamble.into_iter().chain([alloc.concat([
                 alloc.reflow("I am expecting a module keyword next, one of "),
-                alloc.keyword("interface"),
+                alloc.keyword("module"),
                 alloc.reflow(", "),
                 alloc.keyword("app"),
                 alloc.reflow(", "),

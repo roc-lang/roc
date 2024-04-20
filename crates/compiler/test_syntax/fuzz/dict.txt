@@ -16,7 +16,7 @@
 "exposes"
 "imports"
 "effects"
-"interface"
+"module"
 
 "|>"
 "=="

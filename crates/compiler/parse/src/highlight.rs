@@ -366,7 +366,7 @@ fn fast_forward_to(
 }
 
 pub const HEADER_KEYWORDS: [&str; 14] = [
-    "interface",
+    "module",
     "app",
     "package",
     "platform",
