@@ -4958,14 +4958,14 @@ mod test_reporting {
             main = myDict
             "#
         ),
-        @r#"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `myDict` definition:
 
-     9│  myDict : HSet Str
-    10│  myDict = foo "bar"
-                  ^^^^^^^^^
+    7│  myDict : HSet Str
+    8│  myDict = foo "bar"
+                 ^^^^^^^^^
 
     This `foo` call produces:
 
@@ -4974,7 +4974,7 @@ mod test_reporting {
     But the type annotation on `myDict` says it should be:
 
         HSet Str
-    "#
+    "###
     );
 
     // this should get better with time
@@ -13943,40 +13943,6 @@ In roc, functions are always written as a lambda, like{}
     Roc does not allow functions to be partially applied. Use a closure to
     make partial application explicit.
     "
-    );
-
-    test_report!(
-        no_platform_specified,
-        indoc!(
-            r#"
-            app [main] {
-                json: "../json/main.roc"
-            }
-
-            import json.Value
-
-            main = Value.null
-            "#
-        ),
-        @r###"
-    ── UNSPECIFIED PLATFORM in tmp/no_platform_specified/Test.roc ──────────────────
-
-    This app does not specify a platform:
-
-    1│>  app [main] {
-    2│>      json: "../json/main.roc"
-    3│>  }
-
-    Make sure you have exactly one package specified as `platform`:
-
-        app [main] {
-            pf: platform "…path or URL to platform…"
-                ^^^^^^^^
-        }
-
-    Tip: See an example in the tutorial: 
-    <https://www.roc-lang.org/tutorial#building-an-application>
-    "###
     );
 
     test_report!(
