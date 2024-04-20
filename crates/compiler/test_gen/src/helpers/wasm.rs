@@ -25,8 +25,7 @@ macro_rules! host_bytes_path {
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app [main] { pf: platform \"./src/helpers/platform.roc\" }\n\nmain =\n");
+    let mut buffer = String::from("app [main] { }\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -93,7 +92,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE_HTML,
         threading: Threading::Single,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode: ExecutionMode::ExecutableEval,
         function_kind: FunctionKind::LambdaSet,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(

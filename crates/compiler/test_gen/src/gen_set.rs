@@ -294,7 +294,7 @@ fn resolve_set_eq_issue_4671() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main =
                 s1 : Set U8

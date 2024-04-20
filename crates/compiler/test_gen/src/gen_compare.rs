@@ -390,7 +390,7 @@ fn eq_linked_list_long() {
     assert_evals_to!(
         indoc!(
             r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 

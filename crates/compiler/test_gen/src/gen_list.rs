@@ -2452,7 +2452,7 @@ fn gen_swap() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             swap : U64, U64, List a -> List a
             swap = \i, j, list ->
@@ -2481,7 +2481,7 @@ fn gen_quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 quicksort : List (Num a) -> List (Num a)
                 quicksort = \list ->
@@ -2555,7 +2555,7 @@ fn quicksort() {
         assert_evals_to!(
             indoc!(
                 r#"
-                   app [main] { pf: platform "./src/helpers/platform.roc" }
+                   app [main] { }
 
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
@@ -2631,7 +2631,7 @@ fn quicksort_singleton() {
         assert_evals_to!(
             indoc!(
                 r#"
-                   app [main] { pf: platform "./src/helpers/platform.roc" }
+                   app [main] { }
 
                    quicksort : List (Num a) -> List (Num a)
                    quicksort = \list ->
@@ -3727,7 +3727,7 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             apply : List (a -> b), List a -> List b
             apply = \funs, vals ->

@@ -18,7 +18,7 @@ fn hash_specialization() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -41,7 +41,7 @@ fn hash_specialization_multiple_add() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -68,7 +68,7 @@ fn alias_member_specialization() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -93,7 +93,7 @@ fn ability_constrained_in_non_member_usage() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -118,7 +118,7 @@ fn ability_constrained_in_non_member_usage_inferred() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -142,7 +142,7 @@ fn ability_constrained_in_non_member_multiple_specializations() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -170,7 +170,7 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -197,7 +197,7 @@ fn ability_used_as_type_still_compiles() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MHash implements
                 hash : a -> U64 where a implements MHash
@@ -225,7 +225,7 @@ fn bounds_to_multiple_abilities() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             Idempot implements idempot : a -> a where a implements Idempot
             Consume implements consume : a -> Str where a implements Consume
@@ -252,7 +252,7 @@ fn encode() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
@@ -297,7 +297,7 @@ fn decode() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MDecodeError : [TooShort, Leftover (List U8)]
 
@@ -354,7 +354,7 @@ fn encode_use_stdlib() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -382,7 +382,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -408,7 +408,7 @@ fn encode_derive_to_encoder_for_opaque() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -432,7 +432,7 @@ fn to_encoder_encode_custom_has_capture() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -473,7 +473,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -494,7 +494,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -515,7 +515,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -538,7 +538,7 @@ mod encode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         import TotallyNotJson
 
@@ -579,7 +579,7 @@ fn encode_derived_record_one_field_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -602,7 +602,7 @@ fn encode_derived_record_two_fields_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -626,7 +626,7 @@ fn encode_derived_nested_record_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -650,7 +650,7 @@ fn encode_derived_tag_one_payload_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -673,7 +673,7 @@ fn encode_derived_tag_two_payloads_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -696,7 +696,7 @@ fn encode_derived_nested_tag_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -721,7 +721,7 @@ fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -745,7 +745,7 @@ fn encode_derived_list_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -770,7 +770,7 @@ fn encode_derived_list_of_records() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -794,7 +794,7 @@ fn encode_derived_list_of_lists_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -819,7 +819,7 @@ fn encode_derived_record_with_many_types() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -846,7 +846,7 @@ fn encode_derived_tuple_two_fields() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -869,7 +869,7 @@ fn encode_derived_tuple_of_tuples() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -893,7 +893,7 @@ fn encode_derived_generic_record_with_different_field_types() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -919,7 +919,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -947,7 +947,7 @@ fn specialize_unique_newtype_records() {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -971,7 +971,7 @@ fn decode_use_stdlib() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1005,7 +1005,7 @@ fn decode_derive_decoder_for_opaque() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1028,7 +1028,7 @@ fn decode_use_stdlib_json_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1073,7 +1073,7 @@ mod decode_immediate {
             assert_evals_to!(
                 indoc!(
                     r#"
-                    app [main] { pf: platform "./src/helpers/platform.roc" }
+                    app [main] { }
 
                     import TotallyNotJson
 
@@ -1095,7 +1095,7 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -1119,7 +1119,7 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -1142,7 +1142,7 @@ mod decode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         import TotallyNotJson
 
@@ -1182,7 +1182,7 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -1205,7 +1205,7 @@ fn decode_list_of_strings() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -1228,7 +1228,7 @@ fn encode_then_decode_list_of_strings() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -1252,7 +1252,7 @@ fn encode_then_decode_list_of_lists_of_strings() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -1277,7 +1277,7 @@ fn decode_record_two_fields() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1301,7 +1301,7 @@ fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1325,7 +1325,7 @@ fn decode_record_two_fields_string_and_string_infer() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1349,7 +1349,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1374,7 +1374,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1397,7 +1397,7 @@ fn decode_empty_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1422,7 +1422,7 @@ fn decode_record_of_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1446,7 +1446,7 @@ fn decode_tuple_two_elements() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1470,7 +1470,7 @@ fn decode_tuple_of_tuples() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             import TotallyNotJson
 
@@ -1552,7 +1552,7 @@ mod hash {
         format!(
             indoc!(
                 r#"
-                app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                app [main] {{ }}
 
                 {}
 
@@ -1808,7 +1808,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -1836,7 +1836,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -1869,7 +1869,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -1904,7 +1904,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -1933,7 +1933,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -1963,7 +1963,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -2004,7 +2004,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -2036,7 +2036,7 @@ mod hash {
                 &format!(
                     indoc!(
                         r#"
-                        app [main] {{ pf: platform "./src/helpers/platform.roc" }}
+                        app [main] {{ }}
 
                         {}
 
@@ -2075,7 +2075,7 @@ mod eq {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 main =
                     ("a", "b") == ("a", "b")
@@ -2091,7 +2091,7 @@ mod eq {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 LyingEq := U8 implements [Eq {isEq}]
 
@@ -2117,7 +2117,7 @@ mod eq {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
@@ -2137,7 +2137,7 @@ mod eq {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
@@ -2156,7 +2156,7 @@ mod eq {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 main = Bool.isEq 10u8 10u8
                 "#
@@ -2171,7 +2171,7 @@ mod eq {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 Q := U8 implements [Eq]
 
@@ -2191,7 +2191,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app [main] { pf: platform "./src/helpers/platform.roc" }
+                app [main] { }
 
                 import TotallyNotJson
 
@@ -2238,7 +2238,7 @@ mod inspect {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main = [
                 Inspect.toStr Bool.true,
@@ -2257,7 +2257,7 @@ mod inspect {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main = [
                 Inspect.toStr 0,              # Num a
@@ -2289,7 +2289,7 @@ mod inspect {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main = [
                 Inspect.toStr [0, 1, 2],        # List (Num *)
@@ -2311,7 +2311,7 @@ mod inspect {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main = [
                 Inspect.toStr "",
@@ -2333,7 +2333,7 @@ mod inspect {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             Op := {}
 
@@ -2351,7 +2351,7 @@ mod inspect {
         assert_evals_to!(
             indoc!(
                 r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             Op := {}
 

@@ -17,7 +17,7 @@ fn crash_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main = if Bool.true then crash "hello crash" else 1u8
             "#
@@ -34,7 +34,7 @@ fn crash_variable() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main =
                 msg = "hello crash"
@@ -53,7 +53,7 @@ fn crash_in_call() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             getInfallible = \result -> when result is
                 Ok x -> x
@@ -77,7 +77,7 @@ fn crash_in_passed_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             main = List.map [1, 2, 3] \n -> if n == 2 then crash "no new even primes" else ""
             "#

@@ -22,7 +22,7 @@ fn string_eq() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
             main : I64
             main = if "*" == "*" then 123 else 456
             "#
@@ -39,7 +39,7 @@ fn string_neq() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
             main : I64
             main = if "*" != "*" then 123 else 456
             "#
@@ -1843,7 +1843,7 @@ fn destructure_pattern_assigned_from_thunk_opaque() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             MyCustomType := Str
             myMsg = @MyCustomType "Hello"
@@ -1865,7 +1865,7 @@ fn destructure_pattern_assigned_from_thunk_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            app [main] { pf: platform "./src/helpers/platform.roc" }
+            app [main] { }
 
             myMsg = A "hello " "world"
 

@@ -18,8 +18,7 @@ use roc_mono::ir::pretty_print_ir_symbols;
 
 #[allow(dead_code)]
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app [main] { pf: platform \"./src/helpers/platform.roc\" }\n\nmain =\n");
+    let mut buffer = String::from("app [main] { }\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -61,7 +60,7 @@ pub fn helper(
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode: ExecutionMode::ExecutableEval,
         function_kind: FunctionKind::LambdaSet,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
@@ -110,10 +109,7 @@ pub fn helper(
 
     debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
     let entry_point = match loaded.entry_point {
-        EntryPoint::Executable {
-            exposed_to_host,
-            platform_path: _,
-        } => {
+        EntryPoint::ExecutableEval { exposed_to_host } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
             let (symbol, layout) = exposed_to_host[0];
@@ -121,6 +117,9 @@ pub fn helper(
             SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
+            unreachable!()
+        }
+        EntryPoint::Executable { .. } => {
             unreachable!()
         }
     };

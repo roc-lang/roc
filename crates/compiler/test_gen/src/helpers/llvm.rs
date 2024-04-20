@@ -35,8 +35,7 @@ pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
 };
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app [main] { pf: platform \"./src/helpers/platform.roc\" }\n\nmain =\n");
+    let mut buffer = String::from("app [main] { }\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -78,7 +77,7 @@ fn create_llvm_module<'a>(
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode: ExecutionMode::ExecutableEval,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
@@ -239,10 +238,7 @@ fn create_llvm_module<'a>(
     add_default_roc_externs(&env);
 
     let entry_point = match loaded.entry_point {
-        EntryPoint::Executable {
-            exposed_to_host,
-            platform_path: _,
-        } => {
+        EntryPoint::ExecutableEval { exposed_to_host } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
             let (symbol, layout) = exposed_to_host[0];
@@ -250,6 +246,9 @@ fn create_llvm_module<'a>(
             SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
+            unreachable!()
+        }
+        EntryPoint::Executable { .. } => {
             unreachable!()
         }
     };
