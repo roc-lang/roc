@@ -136,12 +136,6 @@ pub(crate) mod diag {
                         filename.display()
                     )
                 }
-                LoadingProblem::NoPlatformPackage { filename, .. } => {
-                    format!(
-                        "No platform package specified ({}). An app must specify exactly one platform.",
-                        filename.display()
-                    )
-                }
                 LoadingProblem::ParsingFailed(fe) => {
                     let problem = &fe.problem.problem;
                     format!("Failed to parse Roc source file: {problem:?}")

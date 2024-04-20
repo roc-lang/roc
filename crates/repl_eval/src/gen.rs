@@ -67,7 +67,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
             render: roc_reporting::report::RenderTarget::ColorTerminal,
             palette,
             threading: Threading::Single,
-            exec_mode: ExecutionMode::Executable,
+            exec_mode: ExecutionMode::ExecutableEval,
         },
     );
 
@@ -172,7 +172,7 @@ fn promote_expr_to_module<'a, 'i, I: Iterator<Item = &'i str>>(
     defs: I,
     expr: &str,
 ) -> (usize, &'a str) {
-    const REPL_MODULE_HEADER: &str = "app \"app\" provides [replOutput] to \"./platform\"\n\n";
+    const REPL_MODULE_HEADER: &str = "app [replOutput] {}\n\n";
     const REPL_MODULE_MAIN_DEF: &str = "replOutput =\n";
     const INDENT: &str = "    ";
 

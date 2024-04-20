@@ -207,6 +207,9 @@ pub enum EntryPoint<'a> {
         exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
         platform_path: PathBuf,
     },
+    ExecutableEval {
+        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
+    },
     Test,
 }
 

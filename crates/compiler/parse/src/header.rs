@@ -39,7 +39,7 @@ impl<'a> HeaderType<'a> {
 pub enum HeaderType<'a> {
     App {
         provides: &'a [Loc<ExposedName<'a>>],
-        platform_shorthand: &'a str,
+        platform_shorthand: Option<&'a str>,
     },
     Hosted {
         name: ModuleName<'a>,

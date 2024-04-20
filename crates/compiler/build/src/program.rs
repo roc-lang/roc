@@ -235,6 +235,7 @@ fn gen_from_mono_module_llvm<'a>(
             roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
         }
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
+        EntryPoint::ExecutableEval { .. } => internal_error!(),
     };
 
     roc_gen_llvm::llvm::build::build_procedures(

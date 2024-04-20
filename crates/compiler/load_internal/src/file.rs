@@ -118,6 +118,9 @@ pub enum ExecutionMode {
     /// Test is like [`ExecutionMode::ExecutableIfCheck`], but rather than producing a proper
     /// executable, run tests.
     Test,
+    /// Like [`ExecutionMode::Executable`], but doesn't require a platform as its only used to
+    /// evaluate expressions.
+    ExecutableEval,
 }
 
 impl ExecutionMode {
@@ -125,7 +128,7 @@ impl ExecutionMode {
         use ExecutionMode::*;
 
         match self {
-            Executable => Phase::MakeSpecializations,
+            Executable | ExecutableEval => Phase::MakeSpecializations,
             Check | ExecutableIfCheck | Test => Phase::SolveTypes,
         }
     }
@@ -955,12 +958,6 @@ pub enum LoadingProblem<'a> {
         source: &'a [u8],
         region: Region,
     },
-    NoPlatformPackage {
-        filename: PathBuf,
-        module_id: ModuleId,
-        source: &'a [u8],
-        region: Region,
-    },
     HeaderImportFound {
         filename: PathBuf,
         module_id: ModuleId,
@@ -1693,20 +1690,6 @@ pub fn report_loading_problem(
                 render,
             )
         }
-        LoadingProblem::NoPlatformPackage {
-            filename,
-            module_id,
-            source,
-            region,
-        } => to_no_platform_package_report(
-            module_ids,
-            IdentIds::exposed_builtins(0),
-            module_id,
-            filename,
-            region,
-            source,
-            render,
-        ),
         LoadingProblem::MultiplePlatformPackages {
             filename,
             module_id,
@@ -2310,8 +2293,11 @@ fn update<'a>(
                     App {
                         platform_shorthand, ..
                     } => {
-                        state.platform_path = PlatformPath::Valid(platform_shorthand);
+                        if let Some(platform_shorthand) = platform_shorthand {
+                            state.platform_path = PlatformPath::Valid(platform_shorthand);
+                        }
                     }
+
                     Package {
                         config_shorthand,
                         exposes_ids,
@@ -3186,19 +3172,24 @@ fn finish_specialization<'a>(
         let interns: &mut Interns = &mut interns;
         match state.exec_mode {
             ExecutionMode::Test => Ok(EntryPoint::Test),
+            ExecutionMode::ExecutableEval => {
+                let src = &state.exposed_to_host.top_level_values;
+                let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
+
+                for &symbol in src.keys() {
+                    let proc_layout = proc_layout_for(state.procedures.keys().copied(), symbol);
+
+                    buf.push((symbol, proc_layout));
+                }
+
+                let exposed_symbols_and_layouts = buf.into_bump_slice();
+
+                Ok(EntryPoint::ExecutableEval {
+                    exposed_to_host: exposed_symbols_and_layouts,
+                })
+            }
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
-
-                let platform_path = match &state.platform_path {
-                    Valid(shorthand) => match state.arc_shorthands.lock().get(shorthand) {
-                        Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
-                        None => unreachable!(),
-                    },
-                    other => {
-                        let buf = report_cannot_run(state.root_id, state.root_path, other);
-                        return Err(LoadingProblem::FormattedReport(buf));
-                    }
-                };
 
                 let exposed_symbols_and_layouts = match state.platform_data {
                     None => {
@@ -3233,6 +3224,17 @@ fn finish_specialization<'a>(
                         }
 
                         buf.into_bump_slice()
+                    }
+                };
+
+                let platform_path = match &state.platform_path {
+                    Valid(shorthand) => match state.arc_shorthands.lock().get(shorthand) {
+                        Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
+                        None => unreachable!(),
+                    },
+                    other => {
+                        let buf = report_cannot_run(state.root_id, state.root_path, other);
+                        return Err(LoadingProblem::FormattedReport(buf));
                     }
                 };
 
@@ -3966,24 +3968,7 @@ fn parse_header<'a>(
                 }
             }
 
-            let platform_package = match platform_package {
-                Some(package) => package,
-                None => {
-                    let mut module_ids = (*module_ids).lock();
-
-                    let module_id = module_ids.get_or_insert(
-                        arena.alloc(PQModuleName::Unqualified(ModuleName::APP.into())),
-                    );
-
-                    return Err(LoadingProblem::NoPlatformPackage {
-                        module_id,
-                        filename,
-                        region: header.packages.region,
-                        source: src_bytes,
-                    });
-                }
-            };
-
+            let platform_shorthand = platform_package.map(|pkg| pkg.value.shorthand);
             let mut provides = bumpalo::collections::Vec::new_in(arena);
 
             provides.extend(unspace(arena, header.provides.items));
@@ -3995,7 +3980,7 @@ fn parse_header<'a>(
                 packages,
                 header_type: HeaderType::App {
                     provides: provides.into_bump_slice(),
-                    platform_shorthand: platform_package.value.shorthand,
+                    platform_shorthand,
                 },
                 module_comments: comments,
             };
@@ -4033,7 +4018,7 @@ fn parse_header<'a>(
             Ok(HeaderOutput {
                 module_id,
                 msg: Msg::Many(messages),
-                opt_platform_shorthand: Some(platform_package.value.shorthand),
+                opt_platform_shorthand: platform_shorthand,
             })
         }
         Ok((
@@ -6468,53 +6453,6 @@ fn to_header_import_found_report(
         filename,
         doc,
         title: "FOUND OLD IMPORT".to_string(),
-        severity: Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-    let palette = DEFAULT_PALETTE;
-    report.render(render, &mut buf, &alloc, &palette);
-    buf
-}
-
-fn to_no_platform_package_report(
-    module_ids: ModuleIds,
-    all_ident_ids: IdentIdsByModule,
-    module_id: ModuleId,
-    filename: PathBuf,
-    region: Region,
-    src: &[u8],
-    render: RenderTarget,
-) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
-    use ven_pretty::DocAllocator;
-
-    // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
-    // than an incorrect module name problem (the latter can happen only after parsing).
-    let src = unsafe { from_utf8_unchecked(src) };
-    let src_lines = src.lines().collect::<Vec<_>>();
-    let lines = LineInfo::new(src);
-
-    let interns = Interns {
-        module_ids,
-        all_ident_ids,
-    };
-    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
-
-    let doc = alloc.stack([
-        alloc.reflow("This app does not specify a platform:"),
-        alloc.region(lines.convert_region(region)),
-        alloc.reflow("Make sure you have exactly one package specified as `platform`:"),
-        alloc
-            .parser_suggestion("    app [main] {\n        pf: platform \"…path or URL to platform…\"\n            ^^^^^^^^\n    }"),
-        alloc.reflow("Tip: See an example in the tutorial:\n\n<https://www.roc-lang.org/tutorial#building-an-application>"),
-
-    ]);
-
-    let report = Report {
-        filename,
-        doc,
-        title: "UNSPECIFIED PLATFORM".to_string(),
         severity: Severity::RuntimeError,
     };
 
