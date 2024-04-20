@@ -111,7 +111,7 @@ fn partial_record_definition() {
 
             I am partway through parsing a record, but I got stuck here:
 
-            1│  app "app" provides [replOutput] to "./platform"
+            1│  app [replOutput] {}
             2│
             3│  replOutput =
             4│      failedRecord = {

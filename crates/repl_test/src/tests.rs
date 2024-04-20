@@ -1122,7 +1122,7 @@ fn parse_problem() {
 
                 I am partway through parsing a definition, but I got stuck here:
 
-                1│  app "app" provides [replOutput] to "./platform"
+                1│  app [replOutput] {}
                 2│
                 3│  replOutput =
                 4│      add m n = m + n
