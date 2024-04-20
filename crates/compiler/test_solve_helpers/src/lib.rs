@@ -26,7 +26,7 @@ use roc_types::{
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from(indoc::indoc!(
         r#"
-        app [main] { pf: platform "./platform.roc" }
+        app [main] { }
 
         main =
         "#
@@ -65,11 +65,6 @@ pub fn run_load_and_infer<'a>(
 
     let loaded = {
         let dir = tempdir()?;
-
-        std::fs::write(
-            dir.path().join("platform.roc"),
-            include_str!("./platform.roc"),
-        )?;
 
         for (file, source) in dependencies {
             std::fs::write(dir.path().join(format!("{file}.roc")), source)?;

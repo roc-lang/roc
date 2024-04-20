@@ -2690,7 +2690,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 Peano : [S Peano, Z]
 
@@ -2772,7 +2772,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 ConsList a : [Cons a (ConsList a), Nil]
 
@@ -2828,7 +2828,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 map =
                     \peano ->
@@ -3451,7 +3451,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 boom = \_ -> boom {}
 
@@ -3905,7 +3905,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
 
                 main : List x
@@ -3925,7 +3925,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
 
                 main =
@@ -3946,7 +3946,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 Bar : [Bar]
                 Foo : [Foo Bar I64, Empty]
@@ -3972,7 +3972,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 State a : { count : I64, x : a }
 
@@ -3997,7 +3997,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 # The color of a node. Leaves are considered Black.
                 NodeColor : [Red, Black]
@@ -4030,7 +4030,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 RBTree k : [Node k (RBTree k), Empty]
 
@@ -4055,7 +4055,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 NodeColor : [Red, Black]
 
@@ -4285,7 +4285,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
@@ -4325,7 +4325,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 NodeColor : [Red, Black]
 
@@ -4401,7 +4401,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
@@ -4441,7 +4441,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
@@ -4463,7 +4463,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
@@ -4487,7 +4487,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 NodeColor : [Red, Black]
 
@@ -4536,7 +4536,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
@@ -4564,7 +4564,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 Expr : [Add Expr Expr, Val I64, Var I64]
 
@@ -4593,7 +4593,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app [main] { pf: platform "./platform.roc" }
+                app [main] { }
 
                 x = 4
 
@@ -4616,7 +4616,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-        app [main] { pf: platform "./platform.roc" }
+        app [main] { }
 
         RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
