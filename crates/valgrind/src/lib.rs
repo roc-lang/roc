@@ -67,10 +67,7 @@ fn valgrind_test_linux(source: &str) {
         format!(
             indoc::indoc!(
                 r#"
-                app "test"
-                    packages {{ pf: "{}" }}
-                    imports []
-                    provides [main] to pf
+                app [main] {{ pf: platform "{}" }}
 
                 main =
             "#
@@ -390,10 +387,7 @@ fn joinpoint_with_reuse() {
 fn tree_rebalance() {
     valgrind_test(indoc!(
         r#"
-        app "test"
-            packages { pf: "replace_me_platform_path" }
-            imports []
-            provides [main] to pf
+        app [main] { pf: platform "replace_me_platform_path" }
 
         main = show (insert 0 {} Empty)
 

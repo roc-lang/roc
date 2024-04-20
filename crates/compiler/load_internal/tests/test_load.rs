@@ -1100,14 +1100,14 @@ fn explicit_builtin_import() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_import/Main.roc ─────────────
-            
+
             The builtin Bool was imported here:
-            
+
             3│  import Bool
                 ^^^^^^^^^^^
-            
+
             Builtins are imported automatically, so you can remove this import.
-            
+
             Tip: Learn more about builtins in the tutorial: 
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
@@ -1139,15 +1139,15 @@ fn explicit_builtin_type_import() {
         indoc!(
             r"
             ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_type_import/Main.roc ────────
-            
+
             `Dict.Dict` was imported here:
-            
+
             3│  import Dict exposing [Dict, isEmpty]
                                       ^^^^
-            
+
             All types from builtins are automatically exposed, so you can remove
             `Dict` from the exposing list.
-            
+
             Tip: Learn more about builtins in the tutorial: 
             <https://www.roc-lang.org/tutorial#builtin-modules>
             "
@@ -1479,9 +1479,7 @@ fn issue_2863_module_type_does_not_exist() {
             "main.roc",
             indoc!(
                 r#"
-                    app "test"
-                        packages { pf: "platform/main.roc" }
-                        provides [main] to pf
+                    app [main] { pf: platform "platform/main.roc" }
 
                     main : DoesNotExist
                     main = 1
@@ -1500,7 +1498,7 @@ fn issue_2863_module_type_does_not_exist() {
 
                         Nothing is named `DoesNotExist` in this scope.
 
-                        5│  main : DoesNotExist
+                        3│  main : DoesNotExist
                                    ^^^^^^^^^^^^
 
                         Did you mean one of these?
@@ -1541,9 +1539,7 @@ fn import_builtin_in_platform_and_check_app() {
             "main.roc",
             indoc!(
                 r#"
-                    app "test"
-                        packages { pf: "platform/main.roc" }
-                        provides [main] to pf
+                    app [main] { pf: platform "platform/main.roc" }
 
                     main = ""
                     "#
