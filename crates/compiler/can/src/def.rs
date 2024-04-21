@@ -3123,10 +3123,9 @@ fn to_pending_value_def<'a>(
             let typed_ident = ingested_file.name.item.extract_spaces().item;
             let body_pattern = env
                 .arena
-                .alloc(typed_ident.ident.map_owned(|ident| 
+                .alloc(typed_ident.ident.map_owned(|ident|
                         ast::Pattern::Identifier {
-                            ident, 
-                            // Agus TODO: check this
+                            ident,
                             suffixed: 0
                         }
                     ));
