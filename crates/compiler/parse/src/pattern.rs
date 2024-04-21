@@ -145,6 +145,7 @@ fn loc_tag_pattern_arg<'a>(
             min_indent,
         )?;
 
+        // Cannot have arguments here, pass `false` to make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
         let (_, loc_pat, state) = loc_pattern_help_help(false).parse(arena, state, min_indent)?;
 
         let Loc { region, value } = loc_pat;
