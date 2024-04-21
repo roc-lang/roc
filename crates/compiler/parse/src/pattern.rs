@@ -205,6 +205,7 @@ fn loc_parse_tag_pattern_arg<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern
             crate::pattern::record_pattern_help()
         )),
         loc!(string_like_pattern_help()),
+        loc!(specialize_err(EPattern::List, list_pattern_help())),
         loc!(number_pattern_help())
     )
 }
