@@ -182,14 +182,20 @@ pub fn can_expr_with<'a>(
     );
 
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(arena, home, &dep_idents, &module_ids, None);
+    let mut env = Env::new(
+        arena,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &module_ids,
+        None,
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
         &mut scope,
         loc_expr.region,
         &loc_expr.value,
-        "Test.roc",
     );
 
     let constraint = constrain_expr(

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -12,6 +14,8 @@ pub struct Env<'a> {
     /// The module's path. Opaques and unqualified references to identifiers
     /// are assumed to be relative to this path.
     pub home: ModuleId,
+
+    pub module_path: &'a Path,
 
     pub dep_idents: &'a IdentIdsByModule,
 
@@ -43,6 +47,7 @@ impl<'a> Env<'a> {
     pub fn new(
         arena: &'a Bump,
         home: ModuleId,
+        module_path: &'a Path,
         dep_idents: &'a IdentIdsByModule,
         qualified_module_ids: &'a PackageModuleIds<'a>,
         opt_shorthand: Option<&'a str>,
@@ -50,6 +55,7 @@ impl<'a> Env<'a> {
         Env {
             arena,
             home,
+            module_path,
             dep_idents,
             qualified_module_ids,
             problems: Vec::new(),

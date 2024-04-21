@@ -13,6 +13,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{AliasVar, Type};
 use std::hash::Hash;
+use std::path::Path;
 
 pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
@@ -79,14 +80,20 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     );
 
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(arena, home, &dep_idents, &qualified_module_ids, None);
+    let mut env = Env::new(
+        arena,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &qualified_module_ids,
+        None,
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
         &mut scope,
         Region::zero(),
         &loc_expr.value,
-        "Test.roc",
     );
 
     let mut all_ident_ids = IdentIds::exposed_builtins(1);

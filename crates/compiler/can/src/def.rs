@@ -57,6 +57,7 @@ use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
 use std::fs;
 use std::io;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct Def {
@@ -940,7 +941,6 @@ pub(crate) fn canonicalize_defs<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut roc_parse::ast::Defs<'a>,
     pattern_type: PatternType,
-    module_path: &str,
 ) -> (
     CanDefs,
     Output,
@@ -1001,7 +1001,6 @@ pub(crate) fn canonicalize_defs<'a>(
                 &pending_abilities_in_scope,
                 &mut output,
                 pattern_type,
-                module_path,
             );
 
             pending_value_defs.push(Loc::at(region, pending));
@@ -1041,7 +1040,6 @@ pub(crate) fn canonicalize_defs<'a>(
         pattern_type,
         aliases,
         symbols_introduced,
-        module_path,
     )
 }
 
@@ -1055,7 +1053,6 @@ fn canonicalize_value_defs<'a>(
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,
-    module_path: &str,
 ) -> (
     CanDefs,
     Output,
@@ -1141,7 +1138,6 @@ fn canonicalize_value_defs<'a>(
             var_store,
             pattern_type,
             &mut aliases,
-            module_path,
         );
 
         output = temp_output.output;
@@ -1162,7 +1158,6 @@ fn canonicalize_value_defs<'a>(
             scope,
             pending.condition.region,
             &pending.condition.value,
-            module_path,
         );
 
         dbgs.push(loc_can_condition, pending.preceding_comment);
@@ -1177,7 +1172,6 @@ fn canonicalize_value_defs<'a>(
             scope,
             pending.condition.region,
             &pending.condition.value,
-            module_path,
         );
 
         expects.push(loc_can_condition, pending.preceding_comment);
@@ -1192,7 +1186,6 @@ fn canonicalize_value_defs<'a>(
             scope,
             pending.condition.region,
             &pending.condition.value,
-            module_path,
         );
 
         expects_fx.push(loc_can_condition, pending.preceding_comment);
@@ -2187,7 +2180,6 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
-    module_path: &str,
 ) -> DefOutput {
     use PendingValueDef::*;
 
@@ -2327,7 +2319,6 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 Some(Loc::at(loc_ann.region, type_annotation)),
-                module_path,
             )
         }
         Body(loc_can_pattern, loc_expr) => {
@@ -2340,7 +2331,6 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 None,
-                module_path,
             )
         }
     };
@@ -2373,7 +2363,6 @@ fn canonicalize_pending_body<'a>(
     loc_expr: &'a Loc<ast::Expr>,
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
-    module_path: &str,
 ) -> DefOutput {
     let mut loc_value = &loc_expr.value;
 
@@ -2406,7 +2395,6 @@ fn canonicalize_pending_body<'a>(
                     arguments,
                     body,
                     Some(*defined_symbol),
-                    module_path,
                 );
 
                 // reset the tailcallable_symbol
@@ -2464,14 +2452,8 @@ fn canonicalize_pending_body<'a>(
             }
 
             _ => {
-                let (loc_can_expr, can_output) = canonicalize_expr(
-                    env,
-                    var_store,
-                    scope,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    module_path,
-                );
+                let (loc_can_expr, can_output) =
+                    canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
                 let def_references = DefReferences::Value(can_output.references.clone());
                 output.union(can_output);
@@ -2508,7 +2490,6 @@ pub fn can_defs_with_return<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
-    module_path: &str,
 ) -> (Expr, Output) {
     let (unsorted, defs_output, symbols_introduced, imports_introduced) = canonicalize_defs(
         env,
@@ -2517,19 +2498,12 @@ pub fn can_defs_with_return<'a>(
         scope,
         loc_defs,
         PatternType::DefExpr,
-        module_path,
     );
 
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
-    let (ret_expr, mut output) = canonicalize_expr(
-        env,
-        var_store,
-        scope,
-        loc_ret.region,
-        &loc_ret.value,
-        module_path,
-    );
+    let (ret_expr, mut output) =
+        canonicalize_expr(env, var_store, scope, loc_ret.region, &loc_ret.value);
 
     output
         .introduced_variables
@@ -2858,7 +2832,6 @@ fn to_pending_value_def<'a>(
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     output: &mut Output,
     pattern_type: PatternType,
-    module_path: &str,
 ) -> PendingValue<'a> {
     use ast::ValueDef::*;
 
@@ -2874,7 +2847,6 @@ fn to_pending_value_def<'a>(
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
-                module_path,
             );
 
             PendingValue::Def(PendingValueDef::AnnotationOnly(
@@ -2894,7 +2866,6 @@ fn to_pending_value_def<'a>(
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
-                module_path,
             );
 
             PendingValue::Def(PendingValueDef::Body(loc_can_pattern, loc_expr))
@@ -2924,7 +2895,6 @@ fn to_pending_value_def<'a>(
                     pattern_type,
                     &body_pattern.value,
                     body_pattern.region,
-                    module_path,
                 );
 
                 PendingValue::Def(PendingValueDef::TypedBody(
@@ -3089,7 +3059,7 @@ fn to_pending_value_def<'a>(
         IngestedFileImport(ingested_file) => {
             let file_path =
                 if let ast::StrLiteral::PlainLine(ingested_path) = ingested_file.path.value {
-                    let mut file_path = std::path::PathBuf::from(module_path);
+                    let mut file_path: PathBuf = env.module_path.into();
                     // Remove the header file name and push the new path.
                     file_path.pop();
                     file_path.push(ingested_path);
@@ -3144,7 +3114,6 @@ fn to_pending_value_def<'a>(
                 pattern_type,
                 &body_pattern.value,
                 region,
-                module_path,
             );
 
             PendingValue::Def(PendingValueDef::TypedBody(

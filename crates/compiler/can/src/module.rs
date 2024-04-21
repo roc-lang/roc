@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor, AnnotationReferences};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
@@ -273,7 +275,7 @@ pub fn canonicalize_module_defs<'a>(
     loc_defs: &'a mut Defs<'a>,
     header_type: &roc_parse::header::HeaderType,
     home: ModuleId,
-    module_path: &str,
+    module_path: &'a str,
     src: &'a str,
     qualified_module_ids: &'a PackageModuleIds<'a>,
     exposed_ident_ids: IdentIds,
@@ -297,7 +299,14 @@ pub fn canonicalize_module_defs<'a>(
         exposed_ident_ids,
         imported_abilities_state,
     );
-    let mut env = Env::new(arena, home, dep_idents, qualified_module_ids, opt_shorthand);
+    let mut env = Env::new(
+        arena,
+        home,
+        arena.alloc(Path::new(module_path)),
+        dep_idents,
+        qualified_module_ids,
+        opt_shorthand,
+    );
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(
@@ -379,7 +388,6 @@ pub fn canonicalize_module_defs<'a>(
         &mut scope,
         loc_defs,
         PatternType::TopLevelDef,
-        module_path,
     );
 
     let pending_derives = output.pending_derives;
