@@ -1,5 +1,5 @@
 [package]
-name = "roc_lang_srv"
+name = "roc_language_server"
 version = "0.0.1"
 edition = "2021"
 
