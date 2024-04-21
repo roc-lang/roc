@@ -63,6 +63,7 @@ tokens! {
     Number => "number",
     Operator => "operator",
     Comment => "comment",
+    Import => "import",
 }
 
 fn onetoken(token: Token, region: Region, arena: &Bump) -> BumpVec<Loc<Token>> {
@@ -622,11 +623,9 @@ impl IterTokens for ValueDef<'_> {
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),
-            ValueDef::ModuleImport(..) => {
-                todo!("[modules-revamp]")
-            }
-            ValueDef::IngestedFileImport(..) => {
-                todo!("[modules-revamp]")
+            ValueDef::ModuleImport(import) => onetoken(Token::Import, import.name.region, arena),
+            ValueDef::IngestedFileImport(import) => {
+                onetoken(Token::Import, import.name.item.region, arena)
             }
             ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
         }
