@@ -3007,25 +3007,22 @@ fn to_pending_value_def<'a>(
                                 let symbol = Symbol::new(module_id, ident_id);
                                 exposed_symbols.push((symbol, loc_name.region));
 
-                                match scope.import_symbol(ident, symbol, loc_name.region) {
-                                    Ok(()) => {}
-                                    Err((_shadowed_symbol, existing_symbol_region)) => {
-                                        if is_automatically_imported
-                                            && Symbol::builtin_types_in_scope(module_id)
-                                                .iter()
-                                                .any(|(_, (s, _))| *s == symbol)
-                                        {
-                                            env.problem(Problem::ExplicitBuiltinTypeImport(
-                                                symbol,
-                                                loc_name.region,
-                                            ));
-                                        } else {
-                                            env.problem(Problem::ImportShadowsSymbol {
-                                                region: loc_name.region,
-                                                new_symbol: symbol,
-                                                existing_symbol_region,
-                                            })
-                                        }
+                                if let Err((_shadowed_symbol, existing_symbol_region)) = scope.import_symbol(ident, symbol, loc_name.region) {
+                                    if is_automatically_imported
+                                        && Symbol::builtin_types_in_scope(module_id)
+                                            .iter()
+                                            .any(|(_, (s, _))| *s == symbol)
+                                    {
+                                        env.problem(Problem::ExplicitBuiltinTypeImport(
+                                            symbol,
+                                            loc_name.region,
+                                        ));
+                                    } else {
+                                        env.problem(Problem::ImportShadowsSymbol {
+                                            region: loc_name.region,
+                                            new_symbol: symbol,
+                                            existing_symbol_region,
+                                        })
                                     }
                                 }
                             }
