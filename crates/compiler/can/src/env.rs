@@ -194,7 +194,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    #[inline]
     fn module_exists_but_not_imported(
         &self,
         scope: &Scope,
