@@ -799,7 +799,7 @@ mod test_suffixed_helpers {
             suffixed: 0,
         });
 
-        std::assert_eq!(is_matching_intermediate_answer(&loc_pat, &loc_new), true);
+        std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
     }
 
     #[test]
@@ -821,6 +821,6 @@ mod test_suffixed_helpers {
 
         let loc_new = Loc::at_zero(Expr::Apply(&task_ok, intermetiate, CalledVia::BangSuffix));
 
-        std::assert_eq!(is_matching_intermediate_answer(&loc_pat, &loc_new), true);
+        std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
     }
 }
