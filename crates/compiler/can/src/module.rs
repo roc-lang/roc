@@ -407,8 +407,6 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    report_unused_imports(imports_introduced, &output.references, &mut env, &mut scope);
-
     for named in output.introduced_variables.named {
         rigid_variables.named.insert(named.variable, named.name);
     }
@@ -444,6 +442,7 @@ pub fn canonicalize_module_defs<'a>(
 
     let new_output = Output {
         aliases: output.aliases,
+        references: output.references,
         ..Default::default()
     };
 
@@ -492,6 +491,8 @@ pub fn canonicalize_module_defs<'a>(
             )
         })
         .collect();
+
+    report_unused_imports(imports_introduced, &output.references, &mut env, &mut scope);
 
     if let GeneratedInfo::Hosted {
         effect_symbol,
