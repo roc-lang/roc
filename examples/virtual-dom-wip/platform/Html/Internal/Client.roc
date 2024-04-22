@@ -19,7 +19,6 @@ interface Html.Internal.Client
             Attribute,
             CyclicStructureAccessor,
             Handler,
-            Size,
             translateStatic,
         },
         TotallyNotJson,
