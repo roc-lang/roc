@@ -1772,11 +1772,13 @@ fn finish_parsing_ability_def_help<'a>(
     Ok((MadeProgress, (type_def, def_region), state))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_expr_operator<'a>(
     min_indent: u32,
     options: ExprParseOptions,
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
+    line_indent: u32,
     arena: &'a Bump,
     state: State<'a>,
     initial_state: State<'a>,
@@ -1821,7 +1823,8 @@ fn parse_expr_operator<'a>(
         }
         BinOp::Assignment => {
             let expr_region = expr_state.expr.region;
-            let indented_more = min_indent + 1;
+
+            let indented_more = line_indent + 1;
 
             let call = expr_state
                 .validate_assignment_or_backpassing(arena, loc_op, EExpr::ElmStyleFunction)
@@ -2028,12 +2031,18 @@ fn parse_expr_end<'a>(
     state: State<'a>,
     initial_state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let inner_min_indent = if options.suffixed_found {
+        min_indent + 1
+    } else {
+        min_indent
+    };
+
     let parser = skip_first!(
-        crate::blankspace::check_indent(EExpr::IndentEnd, options.suffixed_found),
+        crate::blankspace::check_indent(EExpr::IndentEnd),
         loc_term_or_underscore(options)
     );
 
-    match parser.parse(arena, state.clone(), min_indent) {
+    match parser.parse(arena, state.clone(), inner_min_indent) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((
             _,
@@ -2135,6 +2144,7 @@ fn parse_expr_end<'a>(
         Err((NoProgress, _)) => {
             let before_op = state.clone();
             // try an operator
+            let line_indent = state.line_indent();
             match loc!(operator()).parse(arena, state.clone(), min_indent) {
                 Err((MadeProgress, f)) => Err((MadeProgress, f)),
                 Ok((_, loc_op, state)) => {
@@ -2145,6 +2155,7 @@ fn parse_expr_end<'a>(
                         options,
                         expr_state,
                         loc_op,
+                        line_indent,
                         arena,
                         state,
                         initial_state,

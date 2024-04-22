@@ -2665,7 +2665,7 @@ name = "roc_ident"
 version = "0.0.1"
 
 [[package]]
-name = "roc_lang_srv"
+name = "roc_language_server"
 version = "0.0.1"
 dependencies = [
  "bumpalo",

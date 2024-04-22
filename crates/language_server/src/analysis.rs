@@ -33,50 +33,49 @@ use self::{analysed_doc::ModuleIdToUrl, tokens::Token};
 
 pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
 
-/// Contains hashmaps of info about all modules that were analyzed
 #[derive(Debug)]
-pub(super) struct ModulesInfo {
-    subs: Mutex<HashMap<ModuleId, Subs>>,
-    exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    docs: VecMap<ModuleId, ModuleDocumentation>,
+struct ModulesInfo {
+    subs_by_module: HashMap<ModuleId, Mutex<Subs>>,
+    exposed_by_module: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    docs_by_module: HashMap<ModuleId, ModuleDocumentation>,
 }
 
 impl ModulesInfo {
-    fn with_subs<F, A>(&self, mod_id: &ModuleId, f: F) -> Option<A>
+    fn with_subs<F, A>(&self, module_id: &ModuleId, f: F) -> Option<A>
     where
         F: FnOnce(&mut Subs) -> A,
     {
-        self.subs.lock().get_mut(mod_id).map(f)
+        let subs = self.subs_by_module.get(module_id)?;
+        Some(f(&mut subs.lock()))
     }
-    /// Transforms some of the raw data from the analysis into a state that is
-    /// more useful during processes like completion.
-    fn from_analysis(
+
+    fn get_docs(&self, module_id: &ModuleId) -> Option<&ModuleDocumentation> {
+        self.docs_by_module.get(module_id)
+    }
+
+    fn from_loaded_module(
         exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
         typechecked: &MutMap<ModuleId, CheckedModule>,
         docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     ) -> ModulesInfo {
-        // We wrap this in Arc because later we will go through each module's imports and
-        // store the full list of symbols that each imported module exposes.
-        // example: A imports B. B exposes [add, multiply, divide] and A will store a reference to that list.
-        let exposed = exposes
+        let exposed_by_module = exposes
             .into_iter()
             .map(|(module_id, symbols)| (module_id, Arc::new(symbols)))
             .collect::<HashMap<_, _>>();
 
-        // Combine the subs from all modules
-        let all_subs = Mutex::new(
-            typechecked
-                .iter()
-                .map(|(module_id, checked_module)| {
-                    (*module_id, checked_module.solved_subs.0.clone())
-                })
-                .collect::<HashMap<_, _>>(),
-        );
+        let subs_by_module = typechecked
+            .iter()
+            .map(|(module_id, checked_module)| {
+                (*module_id, checked_module.solved_subs.0.clone().into())
+            })
+            .collect::<HashMap<_, _>>();
+
+        let docs_by_module = docs_by_module.into_iter().collect();
 
         ModulesInfo {
-            subs: all_subs,
-            exposed,
-            docs: docs_by_module,
+            subs_by_module,
+            exposed_by_module,
+            docs_by_module,
         }
     }
 }
@@ -84,15 +83,14 @@ impl ModulesInfo {
 #[derive(Debug, Clone)]
 pub(super) struct AnalyzedModule {
     exposed_imports: Vec<(Symbol, Variable)>,
-    /// imports are grouped by which module they come from
-    imports: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    imports_by_module: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     module_id: ModuleId,
     interns: Interns,
     subs: Subs,
     abilities: AbilitiesStore,
     declarations: Declarations,
     modules_info: Arc<ModulesInfo>,
-    // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
+    // ModuleIds are not stable between compilations, so a ModuleId visible to
     // one module may not be true global to the language server.
     module_id_to_url: ModuleIdToUrl,
 }
@@ -164,7 +162,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
 
     let exposed_imports = resolve_exposed_imports(exposed_imports, &exposes);
 
-    let modules_info = Arc::new(ModulesInfo::from_analysis(
+    let modules_info = Arc::new(ModulesInfo::from_loaded_module(
         exposes,
         &typechecked,
         docs_by_module,
@@ -304,7 +302,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
 
         let analyzed_module = AnalyzedModule {
             exposed_imports,
-            imports,
+            imports_by_module: imports,
             subs,
             abilities,
             declarations,
@@ -342,7 +340,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
                 (
                     id,
                     self.modules_info
-                        .exposed
+                        .exposed_by_module
                         .get(&id)
                         .unwrap_or(&Arc::new(vec![]))
                         .clone(),
