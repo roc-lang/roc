@@ -115,6 +115,15 @@ impl Symbol {
         )
     }
 
+    pub fn is_automatically_imported(self) -> bool {
+        let module_id = self.module_id();
+
+        module_id.is_automatically_imported()
+            && Self::builtin_types_in_scope(module_id)
+                .iter()
+                .any(|(_, (s, _))| *s == self)
+    }
+
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
         interns
             .module_ids

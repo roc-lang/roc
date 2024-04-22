@@ -2975,76 +2975,65 @@ fn to_pending_value_def<'a>(
                 return PendingValue::ImportNameConflict;
             }
 
-            let mut exposed_symbols;
+            let exposed_names = module_import
+                .exposed
+                .map(|kw| kw.item.items)
+                .unwrap_or_default();
 
-            let is_automatically_imported =
-                !env.home.is_builtin() && module_id.is_automatically_imported();
+            if exposed_names.is_empty() && !env.home.is_builtin() && module_id.is_automatically_imported() {
+                env.problems.push(Problem::ExplicitBuiltinImport(module_id, region));
+            }
 
-            match module_import.exposed {
-                None => {
-                    exposed_symbols = Vec::new();
+            let exposed_ids = env
+                .dep_idents
+                .get(&module_id)
+                .expect("Module id should have been added in load");
 
-                    if is_automatically_imported {
-                        env.problems
-                            .push(Problem::ExplicitBuiltinImport(module_id, region));
-                    }
-                }
-                Some(exposed_kw) => {
-                    let exposed_ids = env
-                        .dep_idents
-                        .get(&module_id)
-                        .expect("Module id should have been added in load");
+            let mut exposed_symbols = Vec::with_capacity(exposed_names.len());
 
-                    exposed_symbols = Vec::with_capacity(exposed_kw.item.len());
+            for loc_name in exposed_names {
+                let exposed_name = loc_name.value.item();
+                let name = exposed_name.as_str();
+                let ident = Ident::from(name);
 
-                    for loc_name in exposed_kw.item.items {
-                        let exposed_name = loc_name.value.item();
-                        let name = exposed_name.as_str();
-                        let ident = Ident::from(name);
+                match exposed_ids.get_id(name) {
+                    Some(ident_id) => {
+                        let symbol = Symbol::new(module_id, ident_id);
+                        exposed_symbols.push((symbol, loc_name.region));
 
-                        match exposed_ids.get_id(name) {
-                            Some(ident_id) => {
-                                let symbol = Symbol::new(module_id, ident_id);
-                                exposed_symbols.push((symbol, loc_name.region));
-
-                                if let Err((_shadowed_symbol, existing_symbol_region)) = scope.import_symbol(ident, symbol, loc_name.region) {
-                                    if is_automatically_imported
-                                        && Symbol::builtin_types_in_scope(module_id)
-                                            .iter()
-                                            .any(|(_, (s, _))| *s == symbol)
-                                    {
-                                        env.problem(Problem::ExplicitBuiltinTypeImport(
-                                            symbol,
-                                            loc_name.region,
-                                        ));
-                                    } else {
-                                        env.problem(Problem::ImportShadowsSymbol {
-                                            region: loc_name.region,
-                                            new_symbol: symbol,
-                                            existing_symbol_region,
-                                        })
-                                    }
-                                }
-                            }
-                            None => {
-                                let exposed_values = exposed_ids
-                                    .ident_strs()
-                                    .filter(|(_, ident)| {
-                                        ident.starts_with(|c: char| c.is_lowercase())
-                                    })
-                                    .map(|(_, ident)| Lowercase::from(ident))
-                                    .collect();
-
-                                env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
-                                    module_name: module_name.clone(),
-                                    ident,
+                        if let Err((_shadowed_symbol, existing_symbol_region)) = scope.import_symbol(ident, symbol, loc_name.region) {
+                            if symbol.is_automatically_imported() {
+                                env.problem(Problem::ExplicitBuiltinTypeImport(
+                                    symbol,
+                                    loc_name.region,
+                                ));
+                            } else {
+                                env.problem(Problem::ImportShadowsSymbol {
                                     region: loc_name.region,
-                                    exposed_values,
-                                }))
+                                    new_symbol: symbol,
+                                    existing_symbol_region,
+                                })
                             }
                         }
                     }
+                    None => {
+                        let exposed_values = exposed_ids
+                            .ident_strs()
+                            .filter(|(_, ident)| {
+                                ident.starts_with(|c: char| c.is_lowercase())
+                            })
+                            .map(|(_, ident)| Lowercase::from(ident))
+                            .collect();
+
+                        env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
+                            module_name: module_name.clone(),
+                            ident,
+                            region: loc_name.region,
+                            exposed_values,
+                        }))
+                    }
                 }
+
             }
 
             PendingValue::ModuleImport(IntroducedImport {

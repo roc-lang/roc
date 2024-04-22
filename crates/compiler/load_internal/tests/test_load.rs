@@ -1147,6 +1147,41 @@ fn explicit_builtin_import() {
 }
 
 #[test]
+fn explicit_builtin_import_empty_exposing() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                interface Main exposes [main] imports []
+
+                import Bool exposing []
+
+                main = Bool.true
+                "#
+        ),
+    )];
+    let err = multiple_modules("empty_exposing_builtin_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── EXPLICIT BUILTIN IMPORT in tmp/empty_exposing_builtin_import/Main.roc ───────
+            
+            The builtin Bool was imported here:
+            
+            3│  import Bool exposing []
+                ^^^^^^^^^^^^^^^^^^^^^^^
+            
+            Builtins are imported automatically, so you can remove this import.
+            
+            Tip: Learn more about builtins in the tutorial: 
+            <https://www.roc-lang.org/tutorial#builtin-modules>
+            "
+        )
+    );
+}
+
+#[test]
 fn explicit_builtin_type_import() {
     let modules = vec![(
         "Main.roc",
