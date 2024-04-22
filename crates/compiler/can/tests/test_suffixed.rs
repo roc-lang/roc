@@ -757,4 +757,70 @@ mod suffixed_tests {
             r##"Defs { tags: [Index(2147483648)], regions: [@0-195], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list", suffixed: 0 }, @24-195 Apply(@24-195 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-37 Var { module_name: "", ident: "getList", suffixed: 0 }, @24-195 Closure([@29-37 Identifier { ident: "#!a0", suffixed: 0 }], @24-195 When(@29-37 Var { module_name: "", ident: "#!a0", suffixed: 0 }, [WhenBranch { patterns: [@61-63 List([])], value: @97-103 Apply(@97-103 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@97-103 Apply(@97-103 Var { module_name: "", ident: "line", suffixed: 0 }, [@98-103 Str(PlainLine("foo"))], Space), @97-103 Closure([@97-103 RecordDestructure([])], @128-139 Apply(@128-139 Var { module_name: "", ident: "line", suffixed: 0 }, [@134-139 Str(PlainLine("bar"))], Space))], BangSuffix), guard: None }, WhenBranch { patterns: [@160-161 Underscore("")], value: @190-195 Apply(@190-192 Var { module_name: "", ident: "ok", suffixed: 0 }, [@193-195 Record([])], Space), guard: None }]))], BangSuffix))] }"##,
         );
     }
+
+    #[test]
+    fn trailing_suffix_inside_when() {
+        run_test(
+            r#"
+            main =
+                result = Stdin.line!
+
+                when result is
+                    End ->
+                        Task.ok {}
+
+                    Input name ->
+                        Stdout.line! "Hello, $(name)"
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-226], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @32-43 Apply(@32-43 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@32-43 Var { module_name: "Stdin", ident: "line", suffixed: 0 }, @32-43 Closure([@23-29 Identifier { ident: "result", suffixed: 0 }], @61-226 When(@66-72 Var { module_name: "", ident: "result", suffixed: 0 }, [WhenBranch { patterns: [@96-99 Tag("End")], value: @127-137 Apply(@127-134 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@135-137 Record([])], Space), guard: None }, WhenBranch { patterns: [@159-169 Apply(@159-164 Tag("Input"), [@165-169 Identifier { ident: "name", suffixed: 0 }])], value: @197-226 Apply(@197-226 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@210-226 Str(Line([Plaintext("Hello, "), Interpolated(@220-224 Var { module_name: "", ident: "name", suffixed: 0 })]))], Space), guard: None }]))], BangSuffix))] }"#,
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_suffixed_helpers {
+
+    use roc_can::suffixed::is_matching_intermediate_answer;
+    use roc_module::called_via::CalledVia;
+    use roc_module::ident::ModuleName;
+    use roc_parse::ast::Expr;
+    use roc_parse::ast::Pattern;
+    use roc_region::all::Loc;
+
+    #[test]
+    fn test_matching_answer() {
+        let loc_pat = Loc::at_zero(Pattern::Identifier {
+            ident: "#!a0",
+            suffixed: 0,
+        });
+        let loc_new = Loc::at_zero(Expr::Var {
+            module_name: "",
+            ident: "#!a0",
+            suffixed: 0,
+        });
+
+        std::assert_eq!(is_matching_intermediate_answer(&loc_pat, &loc_new), true);
+    }
+
+    #[test]
+    fn test_matching_answer_task_ok() {
+        let loc_pat = Loc::at_zero(Pattern::Identifier {
+            ident: "#!a0",
+            suffixed: 0,
+        });
+        let intermetiate = &[&Loc::at_zero(Expr::Var {
+            module_name: "",
+            ident: "#!a0",
+            suffixed: 0,
+        })];
+        let task_ok = Loc::at_zero(Expr::Var {
+            module_name: ModuleName::TASK,
+            ident: "ok",
+            suffixed: 0,
+        });
+
+        let loc_new = Loc::at_zero(Expr::Apply(&task_ok, intermetiate, CalledVia::BangSuffix));
+
+        std::assert_eq!(is_matching_intermediate_answer(&loc_pat, &loc_new), true);
+    }
 }
