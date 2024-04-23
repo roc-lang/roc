@@ -5225,12 +5225,7 @@ fn parse<'a>(
     for (def, region) in ast::RecursiveValueDefIter::new(&parsed_defs) {
         match def {
             ValueDef::ModuleImport(import) => {
-                let qualified_module_name = QualifiedModuleName {
-                    opt_package: import.name.value.package,
-                    module: import.name.value.name.as_str().into(),
-                };
-
-                imported.push((qualified_module_name, *region));
+                imported.push((import.name.value.into(), *region));
             }
 
             ValueDef::IngestedFileImport(_) => {}

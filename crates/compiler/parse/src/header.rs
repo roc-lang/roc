@@ -156,6 +156,12 @@ impl<'a> From<ModuleName<'a>> for &'a str {
     }
 }
 
+impl<'a> From<ModuleName<'a>> for roc_module::ident::ModuleName {
+    fn from(name: ModuleName<'a>) -> Self {
+        name.0.into()
+    }
+}
+
 impl<'a> ModuleName<'a> {
     pub const fn new(name: &'a str) -> Self {
         ModuleName(name)

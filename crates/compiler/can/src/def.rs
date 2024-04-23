@@ -3013,12 +3013,9 @@ fn to_pending_value_def<'a>(
         }),
 
         ModuleImport(module_import) => {
-            let module_name = ModuleName::from(module_import.name.value.name.as_str());
-            let pq_module_name = QualifiedModuleName {
-                opt_package: module_import.name.value.package,
-                module: module_name.clone(),
-            }
-            .into_pq_module_name(env.opt_shorthand);
+            let qualified_module_name: QualifiedModuleName = module_import.name.value.into();
+            let module_name = qualified_module_name.module.clone();
+            let pq_module_name = qualified_module_name.into_pq_module_name(env.opt_shorthand);
 
             let module_id = env
                 .qualified_module_ids

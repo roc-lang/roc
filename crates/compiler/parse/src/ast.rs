@@ -10,6 +10,7 @@ use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
+use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -997,6 +998,15 @@ impl header::Keyword for ImportExposingKeyword {
 pub struct ImportedModuleName<'a> {
     pub package: Option<&'a str>,
     pub name: ModuleName<'a>,
+}
+
+impl<'a> From<ImportedModuleName<'a>> for QualifiedModuleName<'a> {
+    fn from(imported: ImportedModuleName<'a>) -> Self {
+        Self {
+            opt_package: imported.package,
+            module: imported.name.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
