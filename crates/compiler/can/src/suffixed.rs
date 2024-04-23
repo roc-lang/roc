@@ -857,15 +857,21 @@ fn is_matching_empty_record<'a>(
     is_empty_record && is_pattern_empty_record
 }
 
-fn is_matching_intermediate_answer<'a>(
+pub fn is_matching_intermediate_answer<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
-    loc_expr: &'a Loc<Expr<'a>>,
+    loc_new: &'a Loc<Expr<'a>>,
 ) -> bool {
     let pat_ident = match loc_pat.value {
         Pattern::Identifier { ident, .. } => Some(ident),
         _ => None,
     };
-    let exp_ident = match extract_wrapped_task_ok_value(loc_expr) {
+    let exp_ident = match loc_new.value {
+        Expr::Var {
+            module_name, ident, ..
+        } if module_name.is_empty() && ident.starts_with('#') => Some(ident),
+        _ => None,
+    };
+    let exp_ident_in_task = match extract_wrapped_task_ok_value(loc_new) {
         Some(task_expr) => match task_expr.value {
             Expr::Var {
                 module_name, ident, ..
@@ -874,8 +880,9 @@ fn is_matching_intermediate_answer<'a>(
         },
         None => None,
     };
-    match (pat_ident, exp_ident) {
-        (Some(a), Some(b)) => a == b,
+    match (pat_ident, exp_ident, exp_ident_in_task) {
+        (Some(a), Some(b), None) => a == b,
+        (Some(a), None, Some(b)) => a == b,
         _ => false,
     }
 }
