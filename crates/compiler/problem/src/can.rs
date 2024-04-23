@@ -393,6 +393,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
             | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
             | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -601,6 +602,11 @@ pub enum RuntimeError {
         /// If unsure, this should be set to `false`
         module_exists: bool,
     },
+    ReadIngestedFileError {
+        filename: PathBuf,
+        error: io::ErrorKind,
+        region: Region,
+    },
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
     MalformedTypeName(Box<str>, Region),
@@ -684,7 +690,8 @@ impl RuntimeError {
             | RuntimeError::InvalidHexadecimal(region)
             | RuntimeError::MultipleRecordBuilders(region)
             | RuntimeError::UnappliedRecordBuilder(region)
-            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
+            | RuntimeError::ReadIngestedFileError { region, .. } => *region,
+            RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
             RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,

@@ -47,7 +47,6 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | IngestedFile(_, _)
             | EmptyDefsFinal
             | Crash => false,
 
@@ -579,7 +578,6 @@ impl<'a> Formattable for Expr<'a> {
             PrecedenceConflict { .. } => {}
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
-            IngestedFile(_, _) => {}
         }
     }
 }

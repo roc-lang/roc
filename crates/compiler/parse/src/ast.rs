@@ -1,5 +1,4 @@
 use std::fmt::Debug;
-use std::path::Path;
 
 use crate::header::{
     self, AppHeader, HostedHeader, InterfaceHeader, ModuleName, PackageHeader, PlatformHeader,
@@ -390,9 +389,6 @@ pub enum Expr<'a> {
 
     // Record Builders
     RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
-
-    // The name of a file to be ingested directly into a variable.
-    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
 
     // Lookups
     Var {
@@ -914,7 +910,6 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Str(_)
                 | SingleQuote(_)
                 | AccessorFunction(_)
-                | IngestedFile(_, _)
                 | Var { .. }
                 | Underscore(_)
                 | Crash
@@ -2283,7 +2278,6 @@ impl<'a> Malformed for Expr<'a> {
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
-            IngestedFile(_, _) |
             EmptyDefsFinal |
             Crash => false,
 

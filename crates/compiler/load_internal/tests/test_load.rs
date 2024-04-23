@@ -1282,6 +1282,46 @@ fn import_shadows_symbol() {
 }
 
 #[test]
+fn ingested_file_import_shadows_symbol() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                interface Main exposes [main] imports []
+
+                name = "Joe"
+
+                import "name.txt" as name : Str
+
+                main = name
+                "#
+        ),
+    )];
+    let err = multiple_modules("ingested_import_shadows_symbol", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── DUPLICATE NAME in tmp/ingested_import_shadows_symbol/Main.roc ───────────────
+
+            The `name` name is first defined here:
+
+            3│  name = "Joe"
+                ^^^^
+
+            But then it's defined a second time here:
+
+            5│  import "name.txt" as name : Str
+                                     ^^^^
+
+            Since these variables have the same name, it's easy to use the wrong
+            one by accident. Give one of them a new name.
+            "#
+        )
+    );
+}
+
+#[test]
 fn import_with_alias() {
     let modules = vec![
         (

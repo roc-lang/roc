@@ -34,6 +34,7 @@ pub const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
+const INGESTED_FILE_ERROR: &str = "INGESTED FILE ERROR";
 const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
@@ -1862,6 +1863,16 @@ fn pretty_runtime_error<'b>(
             );
 
             title = MODULE_NOT_IMPORTED;
+        }
+        RuntimeError::ReadIngestedFileError {
+            filename,
+            error,
+            region: _,
+        } => {
+            let report = to_file_problem_report(alloc, filename, error);
+
+            doc = report.doc;
+            title = INGESTED_FILE_ERROR;
         }
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem

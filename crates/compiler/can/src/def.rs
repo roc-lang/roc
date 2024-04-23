@@ -56,8 +56,9 @@ use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
 use std::fs;
-use std::io;
+use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct Def {
@@ -164,6 +165,12 @@ enum PendingValueDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
         &'a Loc<ast::Expr<'a>>,
     ),
+    /// Ingested file
+    IngestedFile(
+        Loc<Pattern>,
+        Loc<ast::TypeAnnotation<'a>>,
+        Loc<ast::StrLiteral<'a>>,
+    ),
 }
 
 impl PendingValueDef<'_> {
@@ -172,6 +179,7 @@ impl PendingValueDef<'_> {
             PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
             PendingValueDef::Body(loc_pattern, _) => loc_pattern,
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
+            PendingValueDef::IngestedFile(loc_pattern, _, _) => loc_pattern,
         }
     }
 }
@@ -2333,6 +2341,69 @@ fn canonicalize_pending_value_def<'a>(
                 None,
             )
         }
+        IngestedFile(loc_pattern, loc_ann, path_literal) => {
+            let relative_path =
+                if let ast::StrLiteral::PlainLine(ingested_path) = path_literal.value {
+                    ingested_path
+                } else {
+                    todo!(
+                    "Only plain strings are supported. Other cases should be made impossible here"
+                );
+                };
+
+            let mut file_path: PathBuf = env.module_path.into();
+            // Remove the header file name and push the new path.
+            file_path.pop();
+            file_path.push(relative_path);
+
+            let mut bytes = vec![];
+
+            let expr = match fs::File::open(&file_path)
+                .and_then(|mut file| file.read_to_end(&mut bytes))
+            {
+                Ok(_) => Expr::IngestedFile(file_path.into(), Arc::new(bytes), var_store.fresh()),
+                Err(e) => {
+                    env.problems.push(Problem::FileProblem {
+                        filename: file_path.to_path_buf(),
+                        error: e.kind(),
+                    });
+
+                    Expr::RuntimeError(RuntimeError::ReadIngestedFileError {
+                        filename: file_path.to_path_buf(),
+                        error: e.kind(),
+                        region: path_literal.region,
+                    })
+                }
+            };
+
+            let loc_expr = Loc::at(path_literal.region, expr);
+
+            let can_ann = canonicalize_annotation(
+                env,
+                scope,
+                &loc_ann.value,
+                loc_ann.region,
+                var_store,
+                pending_abilities_in_scope,
+                AnnotationFor::Value,
+            );
+
+            can_ann.references.insert_lookups(&mut output.references);
+
+            let def = single_can_def(
+                loc_pattern,
+                loc_expr,
+                var_store.fresh(),
+                Some(Loc::at(loc_ann.region, can_ann)),
+                SendMap::default(),
+            );
+
+            DefOutput {
+                output,
+                references: DefReferences::Value(References::new()),
+                def,
+            }
+        }
     };
 
     // Disallow ability specializations that aren't on the toplevel (note: we might loosen this
@@ -3043,71 +3114,24 @@ fn to_pending_value_def<'a>(
             })
         }
         IngestedFileImport(ingested_file) => {
-            let file_path =
-                if let ast::StrLiteral::PlainLine(ingested_path) = ingested_file.path.value {
-                    let mut file_path: PathBuf = env.module_path.into();
-                    // Remove the header file name and push the new path.
-                    file_path.pop();
-                    file_path.push(ingested_path);
-
-                    match fs::metadata(&file_path) {
-                        Ok(md) => {
-                            if md.is_dir() {
-                                env.problem(Problem::FileProblem {
-                                    filename: file_path.clone(),
-                                    // TODO: change to IsADirectory once that is stable.
-                                    error: io::ErrorKind::InvalidInput,
-                                });
-                                return PendingValue::InvalidIngestedFile;
-                            }
-                            file_path
-                        }
-                        Err(e) => {
-                            env.problem(Problem::FileProblem {
-                                filename: file_path,
-                                error: e.kind(),
-                            });
-                            return PendingValue::InvalidIngestedFile;
-                        }
-                    }
-                } else {
-                    todo!(
-                    "Only plain strings are supported. Other cases should be made impossible here"
-                );
-                };
-
             let typed_ident = ingested_file.name.item.extract_spaces().item;
-            let body_pattern = env
-                .arena
-                .alloc(typed_ident.ident.map_owned(|ident|
-                        ast::Pattern::Identifier {
-                            ident,
-                            suffixed: 0
-                        }
-                    ));
-            let ann_type = env.arena.alloc(typed_ident.ann);
-            let body_expr = Loc {
-                value: ast::Expr::IngestedFile(env.arena.alloc(file_path), ann_type),
-                region,
+
+            let symbol = match scope.introduce(typed_ident.ident.value.into(), typed_ident.ident.region) {
+                Ok(symbol ) => symbol,
+                Err((original, shadow, _)) => {
+                    env.problem(Problem::Shadowing {
+                        original_region: original.region,
+                        shadow,
+                        kind: ShadowKind::Variable
+                    });
+
+                    return PendingValue::InvalidIngestedFile;
+                }
             };
 
-            let loc_can_pattern = canonicalize_def_header_pattern(
-                env,
-                var_store,
-                scope,
-                pending_abilities_in_scope,
-                output,
-                pattern_type,
-                &body_pattern.value,
-                region,
-            );
+            let loc_pattern = Loc::at(typed_ident.ident.region, Pattern::Identifier(symbol));
 
-            PendingValue::Def(PendingValueDef::TypedBody(
-                body_pattern,
-                loc_can_pattern,
-                ann_type,
-                env.arena.alloc(body_expr),
-            ))
+            PendingValue::Def(PendingValueDef::IngestedFile(loc_pattern, typed_ident.ann, ingested_file.path))
         }
         Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
     }

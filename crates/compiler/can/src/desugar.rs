@@ -299,7 +299,6 @@ pub fn desugar_expr<'a>(
         | UnappliedRecordBuilder { .. }
         | Tag(_)
         | OpaqueRef(_)
-        | IngestedFile(_, _)
         | Crash => loc_expr,
 
         Str(str_literal) => match str_literal {
