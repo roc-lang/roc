@@ -158,7 +158,11 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - run: git clone https://github.com/roc-lang/basic-cli.git
+      - run: |
+          git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
+          git checkout $RELEASE_TAG
+          cd ..
 
       - run: cp macos-apple-silicon-files/* ./basic-cli/platform
 

@@ -6,9 +6,6 @@ set -euxo pipefail
 git clone https://github.com/roc-lang/basic-cli.git
 cd basic-cli
 git checkout $RELEASE_TAG
-echo $RELEASE_TAG
-cat platform/Stdout.roc
-paniccc
 cd ..
 
 if [ "$(uname -s)" == "Linux" ]; then
