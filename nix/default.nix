@@ -18,7 +18,7 @@ let
 
     # all rust crates in workspace.members of Cargo.toml
     roc-full = callPackage ./builder.nix { };
-    roc-lang-server = callPackage ./builder.nix { subPackage = "lang_srv"; };
+    roc-lang-server = callPackage ./builder.nix { subPackage = "language_server"; };
     # only the CLI crate = executable provided in nightly releases
     roc-cli = callPackage ./builder.nix { subPackage = "cli"; };
   };

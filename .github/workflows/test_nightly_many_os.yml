@@ -18,11 +18,14 @@ jobs:
         with:
           version: 0.11.0
 
+      - name: Install zlib on macOS-13
+        if: matrix.os == 'macos-13'
+        run: brew install zlib
+
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
         run:  |
           curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
-
 
       - name: get the latest release archive for macos (x86_64)
         if: startsWith(matrix.os, 'macos')
