@@ -11,7 +11,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.9.0
+  RELEASE_TAG: 0.9.1
 
 jobs:
   prepare:
@@ -158,7 +158,11 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - run: git clone https://github.com/roc-lang/basic-cli.git
+      - run: |
+          git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
+          git checkout $RELEASE_TAG
+          cd ..
 
       - run: cp macos-apple-silicon-files/* ./basic-cli/platform
 
