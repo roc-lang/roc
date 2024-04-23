@@ -3,7 +3,7 @@ let
   inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
   subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
-  mainBin = if subPackage == "lang_srv" then "roc_language_server" else "roc";
+  mainBin = if subPackage == "language_server" then "roc_language_server" else "roc";
   filteredSource = pkgs.callPackage ./fileFilter.nix { };
 in
 rustPlatform.buildRustPackage {
