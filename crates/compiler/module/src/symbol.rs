@@ -1,4 +1,4 @@
-use crate::ident::{Ident, ModuleName};
+use crate::ident::{Ident, Lowercase, ModuleName};
 use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
@@ -772,6 +772,13 @@ impl IdentIds {
 
     pub fn is_empty(&self) -> bool {
         self.interner.is_empty()
+    }
+
+    pub fn exposed_values(&self) -> Vec<Lowercase> {
+        self.ident_strs()
+            .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
+            .map(|(_, ident)| Lowercase::from(ident))
+            .collect()
     }
 }
 

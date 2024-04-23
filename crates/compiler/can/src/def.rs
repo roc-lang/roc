@@ -3085,19 +3085,11 @@ fn to_pending_value_def<'a>(
                         }
                     }
                     None => {
-                        let exposed_values = exposed_ids
-                            .ident_strs()
-                            .filter(|(_, ident)| {
-                                ident.starts_with(|c: char| c.is_lowercase())
-                            })
-                            .map(|(_, ident)| Lowercase::from(ident))
-                            .collect();
-
                         env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
                             module_name: module_name.clone(),
                             ident,
                             region: loc_name.region,
-                            exposed_values,
+                            exposed_values: exposed_ids.exposed_values(),
                         }))
                     }
                 }

@@ -4,7 +4,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
-use roc_module::ident::{Ident, Lowercase, ModuleName};
+use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIdsByModule, ModuleId, PQModuleName, PackageModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -170,24 +170,17 @@ impl<'a> Env<'a> {
 
                         Ok(symbol)
                     }
-                    None => {
-                        let exposed_values = exposed_ids
-                            .ident_strs()
-                            .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
-                            .map(|(_, ident)| Lowercase::from(ident))
-                            .collect();
-                        Err(RuntimeError::ValueNotExposed {
-                            module_name: self
-                                .qualified_module_ids
-                                .get_name(module_id)
-                                .expect("Module ID known, but not in the module IDs somehow")
-                                .as_inner()
-                                .clone(),
-                            ident: Ident::from(ident),
-                            region,
-                            exposed_values,
-                        })
-                    }
+                    None => Err(RuntimeError::ValueNotExposed {
+                        module_name: self
+                            .qualified_module_ids
+                            .get_name(module_id)
+                            .expect("Module ID known, but not in the module IDs somehow")
+                            .as_inner()
+                            .clone(),
+                        ident: Ident::from(ident),
+                        region,
+                        exposed_values: exposed_ids.exposed_values(),
+                    }),
                 },
                 _ => Err(self.module_exists_but_not_imported(scope, module_id, region)),
             }
