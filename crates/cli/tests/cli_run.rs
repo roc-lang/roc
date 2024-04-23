@@ -821,7 +821,6 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
-    #[ignore = "Disabled until https://github.com/roc-lang/basic-cli/pull/183 lands"]
     fn cli_file_check() {
         let path = file_path_from_root("examples/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
