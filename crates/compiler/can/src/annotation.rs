@@ -17,41 +17,8 @@ use roc_types::types::{
 pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
-    pub references: AnnotationReferences,
+    pub references: References,
     pub aliases: VecMap<Symbol, Alias>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AnnotationReferences {
-    symbols: VecSet<Symbol>,
-    qualified: Vec<QualifiedReference>,
-}
-
-impl AnnotationReferences {
-    pub fn new() -> Self {
-        Self {
-            symbols: Default::default(),
-            qualified: Default::default(),
-        }
-    }
-
-    pub fn insert(&mut self, symbol: Symbol, qualified: QualifiedReference) {
-        if !self.symbols.insert(symbol) {
-            self.qualified.push(qualified);
-        }
-    }
-
-    pub fn insert_lookups(&self, references: &mut References) {
-        for (symbol, qualified) in self.symbols.iter().zip(&self.qualified) {
-            references.insert_type_lookup(*symbol, *qualified);
-        }
-    }
-}
-
-impl Default for AnnotationReferences {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl Annotation {
@@ -61,7 +28,7 @@ impl Annotation {
         references: &mut References,
         introduced_variables: &mut IntroducedVariables,
     ) {
-        self.references.insert_lookups(references);
+        references.union_mut(&self.references);
 
         introduced_variables.union(&self.introduced_variables);
 
@@ -322,7 +289,7 @@ pub(crate) fn canonicalize_annotation(
     annotation_for: AnnotationFor,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = AnnotationReferences::new();
+    let mut references = References::new();
     let mut aliases = VecMap::default();
 
     let (annotation, region) = match annotation {
@@ -412,7 +379,7 @@ pub(crate) fn make_apply_symbol(
     scope: &mut Scope,
     module_name: &str,
     ident: &str,
-    references: &mut AnnotationReferences,
+    references: &mut References,
 ) -> Result<Symbol, Type> {
     if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified type.
@@ -420,7 +387,7 @@ pub(crate) fn make_apply_symbol(
 
         match scope.lookup_str(ident, region) {
             Ok(symbol) => {
-                references.insert(symbol, QualifiedReference::Unqualified);
+                references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
                 Ok(symbol)
             }
             Err(problem) => {
@@ -432,7 +399,7 @@ pub(crate) fn make_apply_symbol(
     } else {
         match env.qualified_lookup(scope, module_name, ident, region) {
             Ok(symbol) => {
-                references.insert(symbol, QualifiedReference::Qualified);
+                references.insert_type_lookup(symbol, QualifiedReference::Qualified);
                 Ok(symbol)
             }
             Err(problem) => {
@@ -575,7 +542,7 @@ fn can_annotation_help(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut AnnotationReferences,
+    references: &mut References,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
 
@@ -781,7 +748,7 @@ fn can_annotation_help(
             let mut vars = Vec::with_capacity(loc_vars.len());
             let mut lowercase_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(loc_vars.len());
 
-            references.insert(symbol, QualifiedReference::Unqualified);
+            references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
 
             for loc_var in *loc_vars {
                 let var = match loc_var.value {
@@ -1093,7 +1060,7 @@ fn canonicalize_has_clause(
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::ImplementsClause<'_>>,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
-    references: &mut AnnotationReferences,
+    references: &mut References,
 ) -> Result<(), Type> {
     let Loc {
         region,
@@ -1167,7 +1134,7 @@ fn can_extension_type(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut AnnotationReferences,
+    references: &mut References,
     opt_ext: &Option<&Loc<TypeAnnotation>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> (Type, ExtImplicitOpenness) {
@@ -1370,7 +1337,7 @@ fn can_assigned_fields<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut AnnotationReferences,
+    references: &mut References,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
     use roc_types::types::RecordField::*;
@@ -1485,7 +1452,7 @@ fn can_assigned_tuple_elems(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut AnnotationReferences,
+    references: &mut References,
 ) -> VecMap<usize, Type> {
     let mut elem_types = VecMap::with_capacity(elems.len());
 
@@ -1519,7 +1486,7 @@ fn can_tags<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut AnnotationReferences,
+    references: &mut References,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());
 

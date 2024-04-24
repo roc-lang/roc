@@ -6,7 +6,6 @@ use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
 use crate::annotation::AnnotationFor;
-use crate::annotation::AnnotationReferences;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
@@ -371,7 +370,7 @@ fn canonicalize_alias<'a>(
     );
 
     // Record all the annotation's references in output.references.lookups
-    can_ann.references.insert_lookups(&mut output.references);
+    output.references.union_mut(&can_ann.references);
 
     let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
     let mut is_phantom = false;
@@ -719,7 +718,7 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
-    let mut references = AnnotationReferences::new();
+    let mut references = References::new();
 
     let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
@@ -933,7 +932,7 @@ fn canonicalize_opaque<'a>(
         }
     }
 
-    references.insert_lookups(&mut output.references);
+    output.references.union_mut(&references);
 
     Ok(CanonicalizedOpaque {
         opaque_def: alias,
@@ -1424,9 +1423,7 @@ fn resolve_abilities(
             );
 
             // Record all the annotation's references in output.references.lookups
-            member_annot
-                .references
-                .insert_lookups(&mut output.references);
+            output.references.union_mut(&member_annot.references);
 
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
@@ -2388,7 +2385,7 @@ fn canonicalize_pending_value_def<'a>(
                 AnnotationFor::Value,
             );
 
-            can_ann.references.insert_lookups(&mut output.references);
+            output.references.union_mut(&can_ann.references);
 
             let def = single_can_def(
                 loc_pattern,

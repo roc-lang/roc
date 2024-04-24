@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
-use crate::annotation::{canonicalize_annotation, AnnotationFor, AnnotationReferences};
+use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
@@ -9,6 +9,7 @@ use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
 use crate::pattern::{BindingsFromPattern, Pattern};
+use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecMap, VecSet};
@@ -557,7 +558,7 @@ pub fn canonicalize_module_defs<'a>(
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
-                                references: AnnotationReferences::new(),
+                                references: References::new(),
                                 aliases: Default::default(),
                             };
 
@@ -615,7 +616,7 @@ pub fn canonicalize_module_defs<'a>(
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
-                                references: AnnotationReferences::new(),
+                                references: References::new(),
                                 aliases: Default::default(),
                             };
 
