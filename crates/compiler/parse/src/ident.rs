@@ -388,6 +388,12 @@ impl<'a> Accessor<'a> {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Suffix<'a> {
+    Accessor(Accessor<'a>),
+    TaskAwaitBang,
+}
+
 /// a `.foo` or `.1` accessor function
 fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     // assumes the leading `.` has been chomped already
@@ -529,16 +535,16 @@ fn chomp_identifier_chain<'a>(
                 chomped += width as usize;
 
                 // Parse any `!` suffixes
-                let mut suffixed = 0;
-                while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                    if ch == '!' {
-                        suffixed += 1;
-                        chomped += width;
-                    } else {
-                        // we're done
-                        break;
-                    }
-                }
+                let suffixed = 0;
+                // while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                //     if ch == '!' {
+                //         suffixed += 1;
+                //         chomped += width;
+                //     } else {
+                //         // we're done
+                //         break;
+                //     }
+                // }
 
                 let ident = Ident::Access {
                     module_name,

@@ -1171,6 +1171,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
+        ast::Expr::TaskAwaitBang(..) => todo!("canonicalize_expr on TaskAwaitBang"),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -2464,7 +2465,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
-        | ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
+        | ast::Expr::RecordAccess(sub_expr, _)
+        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
