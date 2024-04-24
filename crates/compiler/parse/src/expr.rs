@@ -7,7 +7,7 @@ use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
-use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
+use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident, Suffix};
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
@@ -135,7 +135,7 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
             specialize_err(EExpr::InParens, loc_expr_in_parens_help()),
             record_field_access_chain()
         )),
-        move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Accessor<'a>>)>| {
+        move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Suffix<'a>>)>| {
             let Loc {
                 mut region,
                 value: (loc_expr, field_accesses),
@@ -156,16 +156,23 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
     )
 }
 
-fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Accessor<'a>>, EExpr<'a>> {
-    zero_or_more!(skip_first!(
-        byte(b'.', EExpr::Access),
-        specialize_err(
-            |_, pos| EExpr::Access(pos),
-            one_of!(
-                map!(lowercase_ident(), Accessor::RecordField),
-                map!(integer_ident(), Accessor::TupleIndex),
+fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
+    zero_or_more!(one_of!(
+        skip_first!(
+            byte(b'.', EExpr::Access),
+            specialize_err(
+                |_, pos| EExpr::Access(pos),
+                one_of!(
+                    map!(lowercase_ident(), |x| Suffix::Accessor(
+                        Accessor::RecordField(x)
+                    )),
+                    map!(integer_ident(), |x| Suffix::Accessor(Accessor::TupleIndex(
+                        x
+                    ))),
+                )
             )
-        )
+        ),
+        map!(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
     ))
 }
 
@@ -188,10 +195,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc!(underscore_expression()),
         loc!(record_literal_help()),
         loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
-            assign_or_destructure_identifier(),
-            ident_to_expr
-        )),
+        ident_seq(),
     )
 }
 
@@ -211,10 +215,7 @@ fn loc_term_or_underscore<'a>(
         loc!(underscore_expression()),
         loc!(record_literal_help()),
         loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
-            assign_or_destructure_identifier(),
-            ident_to_expr
-        )),
+        ident_seq(),
     )
 }
 
@@ -229,12 +230,35 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(record_literal_help()),
         loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
-            assign_or_destructure_identifier(),
-            ident_to_expr
-        )),
+        ident_seq(),
     )
 }
+
+fn ident_seq<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    (|arena: &'a Bump, state: State<'a>, min_indent: u32| parse_ident_seq(arena, state, min_indent))
+        .trace("ident_seq")
+}
+
+fn parse_ident_seq<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let (p, loc_ident, state) =
+        loc!(assign_or_destructure_identifier()).parse(arena, state, min_indent)?;
+    let expr = ident_to_expr(arena, loc_ident.value);
+    let (_p, suffixes, state) = record_field_access_chain()
+        .trace("record_field_access_chain")
+        .parse(arena, state, min_indent)
+        .map_err(|(_p, e)| (MadeProgress, e))?;
+    let expr = apply_expr_access_chain(arena, expr, suffixes);
+    Ok((MadeProgress, Loc::at(loc_ident.region, expr), state))
+}
+//     loc!(map_with_arena!(
+//         assign_or_destructure_identifier(),
+//         ident_to_expr
+//     ))
+// }
 
 fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
@@ -2249,6 +2273,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::UnappliedRecordBuilder { .. }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
+        | Expr::TaskAwaitBang(..)
         | Expr::Crash => return Err(()),
 
         Expr::Str(string) => Pattern::StrLiteral(string),
@@ -3174,13 +3199,18 @@ fn record_builder_help<'a>(
 fn apply_expr_access_chain<'a>(
     arena: &'a Bump,
     value: Expr<'a>,
-    accessors: Vec<'a, Accessor<'a>>,
+    accessors: Vec<'a, Suffix<'a>>,
 ) -> Expr<'a> {
     accessors
         .into_iter()
         .fold(value, |value, accessor| match accessor {
-            Accessor::RecordField(field) => Expr::RecordAccess(arena.alloc(value), field),
-            Accessor::TupleIndex(field) => Expr::TupleAccess(arena.alloc(value), field),
+            Suffix::Accessor(Accessor::RecordField(field)) => {
+                Expr::RecordAccess(arena.alloc(value), field)
+            }
+            Suffix::Accessor(Accessor::TupleIndex(field)) => {
+                Expr::TupleAccess(arena.alloc(value), field)
+            }
+            Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
         })
 }
 

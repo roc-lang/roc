@@ -252,7 +252,7 @@ pub enum Expr<'a> {
         is_negative: bool,
     },
 
-    // String Literals
+    /// String Literals
     Str(StrLiteral<'a>), // string without escapes in it
     /// eg 'b'
     SingleQuote(&'a str),
@@ -265,6 +265,9 @@ pub enum Expr<'a> {
 
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
+
+    /// Task await bang - i.e. the ! in `File.readUtf8! path`
+    TaskAwaitBang(&'a Expr<'a>),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -1873,7 +1876,8 @@ impl<'a> Malformed for Expr<'a> {
             Str(inner) => inner.is_malformed(),
 
             RecordAccess(inner, _) |
-            TupleAccess(inner, _) => inner.is_malformed(),
+            TupleAccess(inner, _) |
+            TaskAwaitBang(inner) => inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 
