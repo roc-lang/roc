@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{is_loc_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef, WhenBranch};
+use roc_parse::ast::{is_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
@@ -260,7 +260,7 @@ pub fn unwrap_suffixed_expression_closure_help<'a>(
                 return Err(EUnwrapped::Malformed);
             }
 
-            // note we use `None` here as we don't want to pass a DefExpr up and 
+            // note we use `None` here as we don't want to pass a DefExpr up and
             // unwrap the definition pattern for the closure
             match unwrap_suffixed_expression(arena, closure_loc_ret, None) {
                 Ok(unwrapped_expr) => {
@@ -368,7 +368,7 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 let (current_if_then_statement, current_if_then_expression) = if_then;
 
                 // unwrap suffixed (innermost) expressions e.g. `if true then doThing! then ...`
-                if is_loc_expr_suffixed(current_if_then_expression) {
+                if is_expr_suffixed(&current_if_then_expression.value) {
                     // split if_thens around the current index
                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
@@ -429,7 +429,7 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 // unwrap suffixed statements e.g. `if isThing! then ...`
                 // note we want to split and nest if-then's so we only run Task's
                 // that are required
-                if is_loc_expr_suffixed(current_if_then_statement) {
+                if is_expr_suffixed(&current_if_then_statement.value) {
                     // split if_thens around the current index
                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
@@ -572,14 +572,14 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
         Expr::When(condition, branches) => {
 
             // first unwrap any when branches values
-            // e.g. 
-            // when foo is 
+            // e.g.
+            // when foo is
             //     [] -> line! "bar"
             //      _ -> line! "baz"
             for (branch_index, WhenBranch{value: branch_loc_expr,patterns, guard}) in branches.iter().enumerate() {
 
                 // if the branch isn't suffixed we can leave it alone
-                if is_loc_expr_suffixed(branch_loc_expr) {
+                if is_expr_suffixed(&branch_loc_expr.value) {
                     let unwrapped_branch_value = match unwrap_suffixed_expression(arena, branch_loc_expr, None) {
                         Ok(unwrapped_branch_value) => unwrapped_branch_value,
                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => apply_task_await(arena, branch_loc_expr.region, sub_arg, sub_pat, sub_new),

@@ -1,5 +1,5 @@
 use crate::ast::{
-    is_loc_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
+    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
     Implements, ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaces,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
@@ -365,7 +365,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
-        let new_options = if is_loc_expr_suffixed(&expr) {
+        let new_options = if is_expr_suffixed(&expr.value) {
             options.set_suffixed_found()
         } else {
             options
@@ -394,7 +394,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     Ok((progress, expr, new_state)) => {
                         // We need to check if we have just parsed a suffixed statement,
                         // if so, this is a defs node.
-                        if is_loc_expr_suffixed(&Loc::at_zero(expr)) {
+                        if is_expr_suffixed(&expr) {
                             let def_region = Region::new(end, new_state.pos());
                             let value_def = ValueDef::Stmt(arena.alloc(Loc::at(def_region, expr)));
 
@@ -466,7 +466,7 @@ impl<'a> ExprState<'a> {
         } else if !self.expr.value.is_tag()
             && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
-            && !is_loc_expr_suffixed(&self.expr)
+            && !is_expr_suffixed(&self.expr.value)
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
 
@@ -693,7 +693,9 @@ pub fn parse_single_def<'a>(
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
-                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
+                    Either::Second(ValueDef::Stmt(loc_expr))
+                        if is_expr_suffixed(&loc_expr.value) =>
+                    {
                         Ok((MadeProgress, Some(single_def), state))
                     }
                     _ => Ok((NoProgress, None, initial)), // a hacky way to get expression-based error messages. TODO fix this
@@ -926,7 +928,9 @@ pub fn parse_single_def<'a>(
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
-                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
+                    Either::Second(ValueDef::Stmt(loc_expr))
+                        if is_expr_suffixed(&loc_expr.value) =>
+                    {
                         Ok((MadeProgress, Some(single_def), state))
                     }
                     _ => Ok((NoProgress, None, initial)),
@@ -955,7 +959,7 @@ pub fn parse_single_def_assignment<'a>(
 
     // If the expression is actually a suffixed statement, then we need to continue
     // to parse the rest of the expression
-    if crate::ast::is_loc_expr_suffixed(&first_loc_expr) {
+    if crate::ast::is_expr_suffixed(&first_loc_expr.value) {
         let mut defs = Defs::default();
         // Take the suffixed value and make it a e.g. Body(`{}=`, Apply(Var(...)))
         // we will keep the pattern `def_loc_pattern` for the new Defs
@@ -1858,7 +1862,7 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        let new_options = if is_loc_expr_suffixed(&new_expr) {
+                        let new_options = if is_expr_suffixed(&new_expr.value) {
                             options.set_suffixed_found()
                         } else {
                             options
@@ -1877,7 +1881,7 @@ fn parse_expr_operator<'a>(
                                     let def_region = expr.get_region_spanning_binops();
                                     let mut new_expr = Loc::at(def_region, expr);
 
-                                    if is_loc_expr_suffixed(&new_expr) {
+                                    if is_expr_suffixed(&new_expr.value) {
                                         // We have parsed a statement such as `"hello" |> line!`
                                         // put the spaces from after the operator in front of the call
                                         if !spaces_after_operator.is_empty() {
@@ -1990,7 +1994,7 @@ fn parse_expr_end<'a>(
         Ok((_, mut arg, state)) => {
             let new_end = state.pos();
 
-            let new_options = if is_loc_expr_suffixed(&arg) {
+            let new_options = if is_expr_suffixed(&arg.value) {
                 options.set_suffixed_found()
             } else {
                 options

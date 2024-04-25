@@ -9,7 +9,7 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    is_loc_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
+    is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
     Pattern, RecordBuilderField, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
@@ -749,8 +749,8 @@ fn fmt_binops<'a>(
         || loc_right_side.value.is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
-    let is_any_lefts_suffixed = lefts.iter().any(|(left, _)| is_loc_expr_suffixed(left));
-    let is_right_suffixed = is_loc_expr_suffixed(loc_right_side);
+    let is_any_lefts_suffixed = lefts.iter().any(|(left, _)| is_expr_suffixed(&left.value));
+    let is_right_suffixed = is_expr_suffixed(&loc_right_side.value);
     let is_any_suffixed = is_any_lefts_suffixed || is_right_suffixed;
 
     let mut is_first = false;

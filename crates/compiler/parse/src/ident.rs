@@ -585,16 +585,16 @@ fn chomp_identifier_chain<'a>(
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
 
         // Parse any `!` suffixes
-        let mut suffixed = 0;
-        while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-            if ch == '!' {
-                suffixed += 1;
-                chomped += width;
-            } else {
-                // we're done
-                break;
-            }
-        }
+        let suffixed = 0;
+        // while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        //     if ch == '!' {
+        //         suffixed += 1;
+        //         chomped += width;
+        //     } else {
+        //         // we're done
+        //         break;
+        //     }
+        // }
 
         let ident = Ident::Access {
             module_name: "",

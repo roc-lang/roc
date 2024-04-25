@@ -125,7 +125,7 @@ Full {
                                 Index(2147483649),
                             ],
                             regions: [
-                                @199-212,
+                                @199-211,
                                 @241-284,
                             ],
                             space_before: [
@@ -140,7 +140,7 @@ Full {
                             type_defs: [],
                             value_defs: [
                                 Stmt(
-                                    @199-212 BinOps(
+                                    @199-211 BinOps(
                                         [
                                             (
                                                 @199-204 Str(
@@ -151,11 +151,13 @@ Full {
                                                 @205-207 Pizza,
                                             ),
                                         ],
-                                        @208-212 Var {
-                                            module_name: "A",
-                                            ident: "x",
-                                            suffixed: 1,
-                                        },
+                                        @208-211 TaskAwaitBang(
+                                            Var {
+                                                module_name: "A",
+                                                ident: "x",
+                                                suffixed: 0,
+                                            },
+                                        ),
                                     ),
                                 ),
                                 Stmt(
@@ -172,11 +174,13 @@ Full {
                                                 ),
                                             ],
                                             @250-284 Apply(
-                                                @250-254 Var {
-                                                    module_name: "B",
-                                                    ident: "y",
-                                                    suffixed: 1,
-                                                },
+                                                @250-253 TaskAwaitBang(
+                                                    Var {
+                                                        module_name: "B",
+                                                        ident: "y",
+                                                        suffixed: 0,
+                                                    },
+                                                ),
                                                 [
                                                     @264-284 SpaceBefore(
                                                         Record(

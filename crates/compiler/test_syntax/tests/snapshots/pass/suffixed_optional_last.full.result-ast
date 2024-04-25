@@ -143,11 +143,13 @@ Full {
                             ),
                         ],
                         @167-202 Apply(
-                            @167-179 Var {
-                                module_name: "Task",
-                                ident: "mapErr",
-                                suffixed: 1,
-                            },
+                            @167-178 TaskAwaitBang(
+                                Var {
+                                    module_name: "Task",
+                                    ident: "mapErr",
+                                    suffixed: 0,
+                                },
+                            ),
                             [
                                 @180-202 Tag(
                                     "UnableToCheckJQVersion",

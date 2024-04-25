@@ -49,11 +49,13 @@ Defs {
                         value_defs: [
                             Stmt(
                                 @14-21 Apply(
-                                    @12-14 Var {
-                                        module_name: "",
-                                        ident: "a",
-                                        suffixed: 1,
-                                    },
+                                    @12-13 TaskAwaitBang(
+                                        Var {
+                                            module_name: "",
+                                            ident: "a",
+                                            suffixed: 0,
+                                        },
+                                    ),
                                     [
                                         @16-21 Str(
                                             PlainLine(
@@ -70,11 +72,13 @@ Defs {
                                     suffixed: 0,
                                 },
                                 @26-39 Apply(
-                                    @29-33 Var {
-                                        module_name: "B",
-                                        ident: "b",
-                                        suffixed: 1,
-                                    },
+                                    @29-32 TaskAwaitBang(
+                                        Var {
+                                            module_name: "B",
+                                            ident: "b",
+                                            suffixed: 0,
+                                        },
+                                    ),
                                     [
                                         @34-39 Str(
                                             PlainLine(
@@ -88,11 +92,13 @@ Defs {
                             Stmt(
                                 @45-49 SpaceBefore(
                                     Apply(
-                                        @45-47 Var {
-                                            module_name: "",
-                                            ident: "c",
-                                            suffixed: 1,
-                                        },
+                                        @45-46 TaskAwaitBang(
+                                            Var {
+                                                module_name: "",
+                                                ident: "c",
+                                                suffixed: 0,
+                                            },
+                                        ),
                                         [
                                             @48-49 Var {
                                                 module_name: "",

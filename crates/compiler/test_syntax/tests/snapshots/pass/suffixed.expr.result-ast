@@ -1,5 +1,11 @@
-Var {
-    module_name: "Stdout",
-    ident: "line",
-    suffixed: 3,
-}
+TaskAwaitBang(
+    TaskAwaitBang(
+        TaskAwaitBang(
+            Var {
+                module_name: "Stdout",
+                ident: "line",
+                suffixed: 0,
+            },
+        ),
+    ),
+)

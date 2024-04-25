@@ -1,17 +1,21 @@
 Apply(
-    @0-4 Var {
-        module_name: "",
-        ident: "foo",
-        suffixed: 1,
-    },
+    @0-3 TaskAwaitBang(
+        Var {
+            module_name: "",
+            ident: "foo",
+            suffixed: 0,
+        },
+    ),
     [
         @9-17 ParensAround(
             Apply(
-                @9-13 Var {
-                    module_name: "",
-                    ident: "bar",
-                    suffixed: 1,
-                },
+                @9-12 TaskAwaitBang(
+                    Var {
+                        module_name: "",
+                        ident: "bar",
+                        suffixed: 0,
+                    },
+                ),
                 [
                     @14-17 Var {
                         module_name: "",

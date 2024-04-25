@@ -395,45 +395,43 @@ pub fn split_loc_exprs_around<'a>(
     (before, after)
 }
 
-pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
-    match loc_expr.value.extract_spaces().item {
+pub fn is_expr_suffixed(expr: &Expr) -> bool {
+    match expr {
         // expression without arguments, `read!`
-        Expr::Var { suffixed, .. } => suffixed > 0,
+        Expr::Var { suffixed, .. } => false,
+
+        Expr::TaskAwaitBang(..) => true,
 
         // expression with arguments, `line! "Foo"`
         Expr::Apply(sub_loc_expr, apply_args, _) => {
-            let is_function_suffixed = is_loc_expr_suffixed(sub_loc_expr);
-            let any_args_suffixed = apply_args.iter().any(|arg| is_loc_expr_suffixed(arg));
+            let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
+            let any_args_suffixed = apply_args.iter().any(|arg| is_expr_suffixed(&arg.value));
 
             any_args_suffixed || is_function_suffixed
         }
 
         // expression in a pipeline, `"hi" |> say!`
         Expr::BinOps(firsts, last) => {
-            let is_expr_suffixed = is_loc_expr_suffixed(last);
-            let any_chain_suffixed = firsts
+            firsts
                 .iter()
-                .any(|(chain_loc_expr, _)| is_loc_expr_suffixed(chain_loc_expr));
-
-            is_expr_suffixed || any_chain_suffixed
+                .any(|(chain_loc_expr, _)| is_expr_suffixed(&chain_loc_expr.value))
+                || is_expr_suffixed(&last.value)
         }
 
         // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
         Expr::If(if_thens, final_else) => {
             let any_if_thens_suffixed = if_thens.iter().any(|(if_then, else_expr)| {
-                is_loc_expr_suffixed(if_then) || is_loc_expr_suffixed(else_expr)
+                is_expr_suffixed(&if_then.value) || is_expr_suffixed(&else_expr.value)
             });
 
-            is_loc_expr_suffixed(final_else) || any_if_thens_suffixed
+            is_expr_suffixed(&final_else.value) || any_if_thens_suffixed
         }
 
         // expression in parens `(read!)`
-        Expr::ParensAround(sub_loc_expr) => {
-            is_loc_expr_suffixed(&Loc::at(loc_expr.region, *sub_loc_expr))
-        }
+        Expr::ParensAround(sub_loc_expr) => is_expr_suffixed(sub_loc_expr),
 
         // expression in a closure
-        Expr::Closure(_, sub_loc_expr) => is_loc_expr_suffixed(sub_loc_expr),
+        Expr::Closure(_, sub_loc_expr) => is_expr_suffixed(&sub_loc_expr.value),
 
         // expressions inside a Defs
         // note we ignore the final expression as it should not be suffixed
@@ -441,16 +439,85 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
             let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
                 Ok(_) => false,
                 Err(value_index) => match defs.value_defs[value_index.index()] {
-                    ValueDef::Body(_, loc_expr) => is_loc_expr_suffixed(loc_expr),
-                    ValueDef::AnnotatedBody { body_expr, .. } => is_loc_expr_suffixed(body_expr),
+                    ValueDef::Body(_, loc_expr) => is_expr_suffixed(&loc_expr.value),
+                    ValueDef::AnnotatedBody { body_expr, .. } => is_expr_suffixed(&body_expr.value),
                     _ => false,
                 },
             });
 
             any_defs_suffixed
         }
+        Expr::Float(_) => false,
+        Expr::Num(_) => false,
+        Expr::NonBase10Int {
+            string,
+            base,
+            is_negative,
+        } => false,
+        Expr::Str(_) => false,
+        Expr::SingleQuote(_) => false,
+        Expr::RecordAccess(a, _) => is_expr_suffixed(a),
+        Expr::AccessorFunction(_) => false,
+        Expr::TupleAccess(a, _) => is_expr_suffixed(a),
+        Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
+        Expr::RecordUpdate { update, fields } => {
+            is_expr_suffixed(&update.value)
+                || fields
+                    .iter()
+                    .any(|field| is_assigned_value_suffixed(&field.value))
+        }
+        Expr::Record(items) => items
+            .iter()
+            .any(|field| is_assigned_value_suffixed(&field.value)),
+        Expr::Tuple(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
+        Expr::RecordBuilder(items) => items
+            .iter()
+            .any(|rbf| is_record_builder_field_suffixed(&rbf.value)),
+        Expr::IngestedFile(_, _) => false,
+        Expr::Underscore(_) => false,
+        Expr::Crash => false,
+        Expr::Tag(_) => false,
+        Expr::OpaqueRef(_) => false,
+        Expr::EmptyDefsFinal => false,
+        Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
+        Expr::Expect(a, b) | Expr::Dbg(a, b) => {
+            is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value)
+        }
+        Expr::LowLevelDbg(_, _, _) => todo!(),
+        Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
+        Expr::When(a, _) => is_expr_suffixed(&a.value),
+        Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
+        Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
+        Expr::MalformedIdent(_, _) => false,
+        Expr::MalformedClosure => false,
+        Expr::MalformedSuffixed(_) => false,
+        Expr::PrecedenceConflict(_) => false,
+        Expr::MultipleRecordBuilders(_) => false,
+        Expr::UnappliedRecordBuilder(_) => false,
+    }
+}
 
-        _ => false,
+fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
+    match value {
+        AssignedField::RequiredValue(_, _, a) | AssignedField::OptionalValue(_, _, a) => {
+            is_expr_suffixed(&a.value)
+        }
+        AssignedField::LabelOnly(_) => false,
+        AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
+            is_assigned_value_suffixed(a)
+        }
+        AssignedField::Malformed(_) => false,
+    }
+}
+
+fn is_record_builder_field_suffixed(field: &RecordBuilderField<'_>) -> bool {
+    match field {
+        RecordBuilderField::Value(_, _, a) => is_expr_suffixed(&a.value),
+        RecordBuilderField::ApplyValue(_, _, _, a) => is_expr_suffixed(&a.value),
+        RecordBuilderField::LabelOnly(_) => false,
+        RecordBuilderField::SpaceBefore(a, _) => is_record_builder_field_suffixed(a),
+        RecordBuilderField::SpaceAfter(a, _) => is_record_builder_field_suffixed(a),
+        RecordBuilderField::Malformed(_) => false,
     }
 }
 
@@ -669,13 +736,13 @@ impl<'a> Defs<'a> {
                         ..
                     },
                     loc_expr,
-                ) if collection.is_empty() && is_loc_expr_suffixed(loc_expr) => {
+                ) if collection.is_empty() && is_expr_suffixed(&loc_expr.value) => {
                     let mut new_defs = self.clone();
                     new_defs.remove_value_def(tag_index);
 
                     return Some((new_defs, loc_expr));
                 }
-                ValueDef::Stmt(loc_expr) if is_loc_expr_suffixed(loc_expr) => {
+                ValueDef::Stmt(loc_expr) if is_expr_suffixed(&loc_expr.value) => {
                     let mut new_defs = self.clone();
                     new_defs.remove_value_def(tag_index);
 
