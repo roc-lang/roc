@@ -19,39 +19,39 @@ view : Html.Node
 view =
     output =
         sectionsToStr [
-            Desc [Comment "<span class='desktop'>Click anything here to see an explanation.</span><span class='mobile'>Tap anything here to\n# see an explanation.</span>"] "<p><a href=\"/tutorial#comments\">Comments</a> in Roc begin with a <code>#</code> and go to the end of the line.</p>",
+            Desc [Comment "<span class='desktop'>Click anything here to see an explanation.</span><span class='mobile'>Tap anything here to\n# see an explanation.</span>"] "<p><a href=\"/tutorial#comments\">Comments</a> in Roc begin with <code>#</code> and go to the end of the line.</p>",
             Newline,
             Desc [Ident "main", Kw "="] "<p>This defines <code class=\"ident\">main</code>, which is where our program will begin.</p><p>In Roc, <a href=\"/tutorial#https://www.roc-lang.org/tutorial#naming-things\">all definitions are constant</a>, so writing <code class=\"ident\">main =</code> again in the same scope would give an error.</p>",
             Indent,
             Desc [Ident "Path.fromStr", Str "\"url.txt\""] "<p>This converts the string <code>\"url.txt\"</code> into a <code>Path</code> by passing it to <code>Path.fromStr</code>.</p><p>Function arguments are separated with whitespace. Parentheses are only needed in <a href=\"/tutorial#calling-functions\">nested function calls</a>.</p>",
-            Newline,
+            Indent,
             Desc [Kw "|>", Ident "storeEmail"] "<p>The <a href=\"/tutorial#the-pipe-operator\">pipe operator</a> (<code>|></code>) is syntax sugar for passing the previous value to the next function in the \"pipeline.\"</p><p>This line takes the value that <code>Path.fromStr \"url.txt\"</code> returns and passes it to <code>storeEmail</code>.</p><p>The next <code>|></code> continues the pipeline.</p>",
             Newline,
-            Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>If the task returned by the previous step in the pipeline fails, pass its error to <code>handleErr</code>.</p><p>The pipeline essentially does this:</p><pre><code>a = Path.fromStr \"url.txt\"\nb = storeEmail a\n\nTask.onErr b handleErr</code></pre><p>It creates a <code>Path</code> from a string, stores an email based on that path, and then does error handling.</p>",
+            Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>If the task returned by the previous step in the pipeline fails, pass its error to <code>handleErr</code>.</p><p>The pipeline essentially does this:</p><pre><code>a = Path.fromStr \"url.txt\"\nb = storeEmail a\n\nTask.onErr b handleErr</code></pre><p>It creates a <code>Path</code> from a string, passes it to <code>storeEmail</code>, and specifies how to handle errors if storing the email fails.</p>",
             Outdent,
-            Newline,
+            Outdent,
             Desc [Ident "storeEmail", Kw "=", Lambda ["path"]] "<p>This <a href=\"/tutorial#defining-functions\">defines a function</a> named <code>storeEmail</code>. It takes one argument, named <code>path</code>.</p><p>In Roc, functions are ordinary values, so we assign names to them using <code>=</code> like with any other value.</p><p>The <code>\\arg1, arg2 -&gt;</code> syntax begins a function, and the part after <code>-&gt;</code> is the function's body.</p>",
             Indent,
-            Desc [Ident "url", Kw "&lt;-", Ident "File.readUtf8", Ident "path", Kw "|>", Ident "Task.await"] "<p>This reads the contents of the file (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p><p>The <code>&lt;-</code> does <a href=\"/tutorial#backpassing\">backpassing</a>, which is syntax sugar for defining a function. This line desugars to:</p><pre><code>Task.await\n    (File.readUtf8 path)\n    \\url -&gt;</code></pre><p>The lines after this one form the body of the <code>\\url -&gt;</code> <a href=\"https://en.wikipedia.org/wiki/Callback_(computer_programming)\">callback</a>, which runs if the file read succeeds.</p>",
+            Desc [Ident "url", Kw "=", Ident "File.readUtf8!", Ident "path"] "<p>This passes <code>path</code> to the <code>File.readUtf8</code> function, which reads the contents of the file (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p><p>The <code>!</code> operator is similar to <code>await</code> in other languages. It means “wait until the asynchronous <code>File.readUtf8</code> operation successfully completes.”</p><p>If the file read fails (maybe because <code>path</code> refers to a missing file), the rest of this function will be skipped, and the <code>handleErr</code> function will take over.</p>",
             Newline,
-            Desc [Ident "user", Kw "&lt;-", Ident "Http.get", Ident "url", Ident "Json.codec", Kw "|>", Ident "Task.await"] "<p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p><p>If the shape of the JSON isn't compatible with the type of <code>user</code> (based on type inference), this will give a decoding error immediately.</p><p>As with all the other lines ending in <code>|> Task.await</code>, if there's an error, nothing else in <code>storeEmail</code> will be run, and <code>handleErr</code> will end up handling the error.</p>",
+            Desc [Ident "user", Kw "=", Ident "Http.get!", Ident "url", Ident "Json.format"] "<p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p><p>If the shape of the JSON isn't compatible with the type of <code>user</code> (based on type inference), this will give a decoding error immediately.</p><p>As with all the other function calls involving the <code>!</code> operator, if there's an error, nothing else in <code>storeEmail</code> will be run, and <code>handleErr</code> will run.</p>",
             Newline,
-            Desc [Ident "dest", Kw "=", Ident "Path.fromStr", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\$(user.name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
+            Desc [Ident "dest", Kw "=", Ident "Path.fromStr", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\$(user.name)</code> in this string literal will be replaced with the value stored in the <code>user</code> record's <code>name</code> field. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this function call doesn't involve the <code>!</code> operator. That's because <code>Path.fromStr</code> is a synchronous operation, so there's no need to use <code>!</code> to wait for it to finish.</p>",
             Newline,
-            Desc [Literal "_", Kw "&lt;-", Ident "File.writeUtf8", Ident "dest", Ident "user.email", Kw "|>", Ident "Task.await"] "<p>This writes <code>user.email</code> to the file, encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>We won't be using the output of <code>writeUtf8</code>, so we name it <code>_</code>. The special name <code>_</code> is for when you don't want to use something.</p><p>You can name as many things as you like <code>_</code>, but you can never reference anything named <code>_</code>. So it's only useful for when you don't want to choose a name.</p>",
+            Desc [Ident "File.writeUtf8!", Ident "dest", Ident "user.email"] "<p>This writes <code>user.email</code> to the file, encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>Since <code>File.writeUtf8</code> doesn't produce any information on success, we don't bother using <code>=</code> like we did on the other lines.</p>",
             Newline,
-            Desc [Ident "Stdout.line", StrInterpolation "\"Wrote email to " "Path.display dest" "\""] "<p>This prints what we did to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)\">stdout</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. That's because, although <code>Stdout.line</code> returns a <a href=\"/tutorial#tasks\">task</a>, we don't need to await it because nothing happens after it.</p>",
+            Desc [Ident "Stdout.line!", StrInterpolation "\"Wrote email to " "Path.display dest" "\""] "<p>This prints what we did to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)\">stdout</a>.</p><p>Notice that this does a function call inside the string interpolation. Any valid Roc expression is allowed inside string interpolation, as long as it doesn't contain any newlines.</p>",
             Outdent,
             Newline,
             Desc [Ident "handleErr", Kw "=", Lambda ["err"]] "<p>Like <code>storeEmail</code>, <code>handleErr</code> is also a function.</p><p>Although type annotations are optional everywhere in Roc—because the language has 100% type inference—you could add type annotations to <code>main</code>, <code>storeEmail</code>, and <code>handleErr</code> if you wanted to.</p>",
             Indent,
             Desc [Kw "when", Ident "err", Kw "is"] "<p>This will run one of the following lines depending on what value the <code>err</code> argument has.</p><p>Each line does a <a href=\"/tutorial#tags-with-payloads\">pattern match</a> on the shape of the error to decide whether to run, or to move on and try the next line's pattern.</p><p>Roc will do compile-time <a href=\"/tutorial#exhaustiveness\">exhaustiveness checking</a> and tell you if you forgot to handle any error cases here that could have occurred, based on the tasks that were run in <code>storeEmail</code>.</p>",
             Indent,
-            Desc [Literal "HttpErr", Ident "url", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error fetching URL " "url" "\""] "<p>This line will run if the <code>Http.get</code> request from earlier encountered an HTTP error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>HttpErr</code>. If we wanted to print more detail about what the error was, we'd name that something other than <code>_</code> and actually use it.</p>",
+            Desc [Literal "HttpErr", Ident "url", Kw "_", Kw "->", Ident "Stderr.line!", StrInterpolation "\"Error fetching URL " "url" "\""] "<p>This line will run if the <code>Http.get</code> request from earlier encountered an HTTP error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>HttpErr</code>. If we wanted to print more detail about what the error was, we'd name that something other than <code>_</code> and actually use it.</p>",
             Newline,
-            Desc [Literal "FileReadErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error reading from " "Path.display path" "\""] "<p>This line will run if the <code>File.readUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>FileReadErr</code>. If we wanted to print more detail about what the error was, we'd name that something other than <code>_</code> and actually use it.</p>",
+            Desc [Literal "FileReadErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line!", StrInterpolation "\"Error reading from " "Path.display path" "\""] "<p>This line will run if the <code>File.readUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>FileReadErr</code>. If we wanted to print more detail about what the error was, we'd name that something other than <code>_</code> and actually use it.</p>",
             Newline,
-            Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error writing to " "Path.display path" "\""] "<p>This line will run if the <code>File.writeUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>FileWriteErr</code>. If we wanted to print more detail about what the error was, we'd name that something other than <code>_</code> and actually use it.</p>",
+            Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line!", StrInterpolation "\"Error writing to " "Path.display path" "\""] "<p>This line will run if the <code>File.writeUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>FileWriteErr</code>. If we wanted to print more detail about what the error was, we'd name that something other than <code>_</code> and actually use it.</p>",
         ]
 
     div [role "presentation"] [
@@ -118,12 +118,21 @@ tokensToStr = \tokens ->
 identToHtml : Str -> Str
 identToHtml = \str ->
     List.walk (Str.split str ".") "" \accum, ident ->
-        identHtml = "<span class=\"ident\">$(ident)</span>"
+        len = Str.countUtf8Bytes ident
+        withoutSuffix = ident |> Str.replaceLast "!" ""
+
+        identHtml = "<span class=\"ident\">$(withoutSuffix)</span>"
+        html =
+            # If removing a trailing "!" changed the length, then there must have been a trailing "!"
+            if len > Str.countUtf8Bytes withoutSuffix then
+                "$(identHtml)<span class=\"kw\">!</span>"
+            else
+                identHtml
 
         if Str.isEmpty accum then
-            identHtml
+            html
         else
-            "$(accum)<span class=\"kw\">.</span>$(identHtml)"
+            "$(accum)<span class=\"kw\">.</span>$(html)"
 
 sectionsToStr : List Section -> Str
 sectionsToStr = \sections ->
