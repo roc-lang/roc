@@ -876,7 +876,6 @@ macro_rules! define_builtins {
                         module_id.register_debug_idents(&ident_ids);
                     }
 
-
                     exposed_idents_by_module.insert(
                         module_id,
                         ident_ids
@@ -1015,27 +1014,6 @@ macro_rules! define_builtins {
                     )+
                     m => roc_error_macros::internal_error!("{:?} is not a builtin module!", m),
                 }
-            }
-
-            /// Symbols that should be added to the default scope, for hints as suggestions of
-            /// names you might want to use.
-            ///
-            /// TODO: this is a hack to get tag names to show up in error messages as suggestions,
-            /// really we should be extracting tag names from candidate type aliases in scope.
-            pub fn symbols_in_scope_for_hints() -> VecMap<Ident, (Symbol, Region)> {
-                let mut scope = VecMap::default();
-
-                $(
-                    $(
-                        $(
-                            if $in_scope_for_hints {
-                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
-                            }
-                        )?
-                    )*
-                )+
-
-                scope
             }
         }
     };
@@ -1434,15 +1412,13 @@ define_builtins! {
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
-        1 RESULT_OK: "Ok" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
-        2 RESULT_ERR: "Err" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
+        1 RESULT_IS_ERR: "isErr"
+        2 RESULT_ON_ERR: "onErr"
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
         6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
-        8 RESULT_IS_ERR: "isErr"
-        9 RESULT_ON_ERR: "onErr"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias

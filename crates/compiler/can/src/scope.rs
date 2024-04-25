@@ -53,13 +53,11 @@ impl Scope {
         initial_ident_ids: IdentIds,
         starting_abilities_store: PendingAbilitiesStore,
     ) -> Scope {
-        let default_imports =
-            // Add all `Apply` types.
-            (Symbol::apply_types_in_scope().into_iter())
-            // Add all tag names we might want to suggest as hints in error messages.
-            .chain(Symbol::symbols_in_scope_for_hints());
-
-        let default_imports = default_imports.map(|(a, (b, c))| (a, b, c)).collect();
+        // Add all `Apply` types.
+        let default_imports = Symbol::apply_types_in_scope()
+            .into_iter()
+            .map(|(a, (b, c))| (a, b, c))
+            .collect();
 
         Scope {
             home,
