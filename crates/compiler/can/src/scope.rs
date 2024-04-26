@@ -726,13 +726,7 @@ mod test {
 
         assert_eq!(
             &idents,
-            &[
-                Ident::from("Str"),
-                Ident::from("List"),
-                Ident::from("Box"),
-                Ident::from("Ok"),
-                Ident::from("Err"),
-            ]
+            &[Ident::from("Str"), Ident::from("List"), Ident::from("Box"),]
         );
     }
 
@@ -749,13 +743,7 @@ mod test {
 
         assert_eq!(
             &idents,
-            &[
-                Ident::from("Str"),
-                Ident::from("List"),
-                Ident::from("Box"),
-                Ident::from("Ok"),
-                Ident::from("Err"),
-            ]
+            &[Ident::from("Str"), Ident::from("List"), Ident::from("Box"),]
         );
 
         let builtin_count = idents.len();

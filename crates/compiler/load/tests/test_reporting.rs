@@ -812,10 +812,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Ok
                     List
-                    Err
                     Box
+                    Str
+                    isDisabled
                 "
             ),
         );
