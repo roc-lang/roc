@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
@@ -17,6 +17,10 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.11.0:$PATH" >> $GITHUB_ENV
 
       - run: zig version
 
