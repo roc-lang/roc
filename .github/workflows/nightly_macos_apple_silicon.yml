@@ -24,9 +24,6 @@ jobs:
 
       - run: zig version
 
-      - name: llvm version
-        run: llc --version | grep LLVM
-
       - name: run tests
         run: cargo test --locked --release
 
