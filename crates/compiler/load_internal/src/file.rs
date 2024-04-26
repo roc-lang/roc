@@ -3381,6 +3381,7 @@ fn finish(
 
     LoadedModule {
         module_id: state.root_id,
+        filename: state.root_path,
         interns,
         solved,
         can_problems: state.module_cache.can_problems,

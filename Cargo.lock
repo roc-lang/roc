@@ -2502,12 +2502,14 @@ dependencies = [
  "roc_module",
  "roc_packaging",
  "roc_parse",
+ "roc_problem",
  "roc_region",
  "roc_reporting",
  "roc_solve",
  "roc_target",
  "roc_types",
  "snafu",
+ "ven_pretty",
 ]
 
 [[package]]
