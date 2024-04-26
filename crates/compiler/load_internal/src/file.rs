@@ -2161,11 +2161,25 @@ fn report_unused_imported_modules(
         Occupied(entry) => entry.into_mut(),
     };
 
-    for (unused, region) in unused_imported_modules.drain() {
-        if !unused.is_builtin() {
-            existing.push(roc_problem::can::Problem::UnusedModuleImport(
-                unused, region,
-            ));
+    // TODO this outer conditional can be replaced by just the for loop
+    // once we have Task as builtin. (Also the for loop doesn't need the "Task" check.)
+    if !unused_imported_modules.is_empty() {
+        let module_ids = Arc::clone(&state.arc_modules);
+        let module_ids = module_ids.lock();
+
+        for (unused, region) in unused_imported_modules.drain() {
+            if !unused.is_builtin() {
+                let is_task_module = match module_ids.get_name(unused) {
+                    Some(name) => name.as_inner().as_str() == "Task",
+                    None => false,
+                };
+
+                if !is_task_module {
+                    existing.push(roc_problem::can::Problem::UnusedModuleImport(
+                        unused, region,
+                    ));
+                }
+            }
         }
     }
 
