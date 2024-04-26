@@ -647,7 +647,7 @@ mod test_reporting {
             if true then 1 else 2
             "
         ),
-        @r"
+        @r###"
     ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `true` in this scope.
@@ -657,11 +657,11 @@ mod test_reporting {
 
     Did you mean one of these?
 
+        Str
         Frac
         Num
-        Str
-        Err
-    "
+        U8
+    "###
     );
 
     test_report!(
@@ -2212,10 +2212,10 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        Ok
         U8
         Box
         Eq
+        f
     "
     );
 
@@ -5805,9 +5805,9 @@ All branches in an `if` must have the same type!
     Did you mean one of these?
 
         Str
-        Err
         U8
         F64
+        Box
     "###
     );
 
