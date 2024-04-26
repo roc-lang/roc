@@ -24,6 +24,10 @@ jobs:
 
       - run: zig version
 
+      - run: which zig
+
+      - run: ls /Users/m1ci/Downloads/zig-macos-aarch64-0.11.0/
+
       - name: run tests
         run: cargo test --locked --release
 
