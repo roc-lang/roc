@@ -406,10 +406,7 @@ fn loc_ident_pattern_help<'a>(
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Identifier {
-                                    ident: var,
-                                    suffixed: 0,
-                                },
+                                value: Pattern::Identifier { ident: var },
                             },
                             state,
                         ))
@@ -424,7 +421,6 @@ fn loc_ident_pattern_help<'a>(
                             value: Pattern::QualifiedIdentifier {
                                 module_name,
                                 ident: var,
-                                suffixed: 0,
                             },
                         },
                         state,
@@ -451,10 +447,7 @@ fn loc_ident_pattern_help<'a>(
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Identifier {
-                                    ident: var,
-                                    suffixed: 0,
-                                },
+                                value: Pattern::Identifier { ident: var },
                             },
                             state,
                         ));
@@ -615,18 +608,9 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             None => {
                 let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    Pattern::SpaceAfter(
-                        arena.alloc(Pattern::Identifier {
-                            ident: value,
-                            suffixed: 0,
-                        }),
-                        spaces,
-                    )
+                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: value }), spaces)
                 } else {
-                    Pattern::Identifier {
-                        ident: value,
-                        suffixed: 0,
-                    }
+                    Pattern::Identifier { ident: value }
                 };
 
                 Ok((MadeProgress, Loc::at(region, value), state))

@@ -25,10 +25,7 @@ fn to_encoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         opaque_ref,
         &*env.arena.alloc([Loc::at(
             DERIVED_REGION,
-            ast::Pattern::Identifier {
-                ident: payload,
-                suffixed: 0,
-            },
+            ast::Pattern::Identifier { ident: payload },
         )]),
     );
 
@@ -100,20 +97,8 @@ fn decoder<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         //     Decode.mapResult (Decode.decodeWith bytes Decode.decoder fmt) @Opaq
         let custom_closure = ast::Expr::Closure(
             env.arena.alloc([
-                Loc::at(
-                    DERIVED_REGION,
-                    ast::Pattern::Identifier {
-                        ident: bytes,
-                        suffixed: 0,
-                    },
-                ),
-                Loc::at(
-                    DERIVED_REGION,
-                    ast::Pattern::Identifier {
-                        ident: fmt,
-                        suffixed: 0,
-                    },
-                ),
+                Loc::at(DERIVED_REGION, ast::Pattern::Identifier { ident: bytes }),
+                Loc::at(DERIVED_REGION, ast::Pattern::Identifier { ident: fmt }),
             ]),
             alloc_expr(call_map_result),
         );
@@ -145,10 +130,7 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         opaque_ref,
         &*env.arena.alloc([Loc::at(
             DERIVED_REGION,
-            ast::Pattern::Identifier {
-                ident: payload,
-                suffixed: 0,
-            },
+            ast::Pattern::Identifier { ident: payload },
         )]),
     );
 
@@ -174,13 +156,7 @@ fn hash<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     // \hasher, @Opaq payload -> Hash.hash hasher payload
     ast::Expr::Closure(
         env.arena.alloc([
-            Loc::at(
-                DERIVED_REGION,
-                ast::Pattern::Identifier {
-                    ident: hasher,
-                    suffixed: 0,
-                },
-            ),
+            Loc::at(DERIVED_REGION, ast::Pattern::Identifier { ident: hasher }),
             Loc::at(DERIVED_REGION, opaque_apply_pattern),
         ]),
         call_member,
@@ -200,10 +176,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         opaque_ref,
         &*env.arena.alloc([Loc::at(
             DERIVED_REGION,
-            ast::Pattern::Identifier {
-                ident: payload1,
-                suffixed: 0,
-            },
+            ast::Pattern::Identifier { ident: payload1 },
         )]),
     );
     // \@Opaq payload2
@@ -211,10 +184,7 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         opaque_ref,
         &*env.arena.alloc([Loc::at(
             DERIVED_REGION,
-            ast::Pattern::Identifier {
-                ident: payload2,
-                suffixed: 0,
-            },
+            ast::Pattern::Identifier { ident: payload2 },
         )]),
     );
 
@@ -260,10 +230,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         opaque_ref,
         &*env.arena.alloc([Loc::at(
             DERIVED_REGION,
-            ast::Pattern::Identifier {
-                ident: payload,
-                suffixed: 0,
-            },
+            ast::Pattern::Identifier { ident: payload },
         )]),
     );
 
@@ -316,10 +283,7 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     let custom_closure = alloc_expr(ast::Expr::Closure(
         env.arena.alloc([Loc::at(
             DERIVED_REGION,
-            ast::Pattern::Identifier {
-                ident: fmt,
-                suffixed: 0,
-            },
+            ast::Pattern::Identifier { ident: fmt },
         )]),
         apply_opaque_inspector,
     ));

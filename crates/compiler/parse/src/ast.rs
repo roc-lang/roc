@@ -1130,12 +1130,10 @@ pub enum Pattern<'a> {
     // Identifier
     Identifier {
         ident: &'a str,
-        suffixed: u8,
     },
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,
-        suffixed: u8,
     },
 
     Tag(&'a str),
@@ -1253,21 +1251,11 @@ impl<'a> Pattern<'a> {
             //      { x, y } : { x : Int, y ? Bool }
             //      { x, y ? False } = rec
             OptionalField(x, _) => match other {
-                Identifier {
-                    ident: y,
-                    suffixed: 0,
-                }
-                | OptionalField(y, _) => x == y,
+                Identifier { ident: y } | OptionalField(y, _) => x == y,
                 _ => false,
             },
-            Identifier {
-                ident: x,
-                suffixed: a,
-            } => match other {
-                Identifier {
-                    ident: y,
-                    suffixed: b,
-                } => x == y && a == b,
+            Identifier { ident: x } => match other {
+                Identifier { ident: y } => x == y,
                 OptionalField(y, _) => x == y,
                 _ => false,
             },
@@ -1329,15 +1317,13 @@ impl<'a> Pattern<'a> {
             QualifiedIdentifier {
                 module_name: a,
                 ident: x,
-                suffixed: i,
             } => {
                 if let QualifiedIdentifier {
                     module_name: b,
                     ident: y,
-                    suffixed: j,
                 } = other
                 {
-                    a == b && x == y && i == j
+                    a == b && x == y
                 } else {
                     false
                 }
@@ -1400,15 +1386,6 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-        }
-    }
-
-    // used to check if a pattern is suffixed to report as an error
-    pub fn is_suffixed(&self) -> bool {
-        match self {
-            Pattern::Identifier { suffixed, .. } => *suffixed > 0,
-            Pattern::QualifiedIdentifier { suffixed, .. } => *suffixed > 0,
-            _ => false,
         }
     }
 }

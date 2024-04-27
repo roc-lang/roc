@@ -2186,13 +2186,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
     let mut pat = match expr.item {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
-                Pattern::Identifier { ident, suffixed: 0 }
+                Pattern::Identifier { ident }
             } else {
-                Pattern::QualifiedIdentifier {
-                    module_name,
-                    ident,
-                    suffixed: 0,
-                }
+                Pattern::QualifiedIdentifier { module_name, ident }
             }
         }
         Expr::Underscore(opt_name) => Pattern::Underscore(opt_name),
@@ -2328,10 +2324,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
                 )
             }
         }
-        AssignedField::LabelOnly(name) => Pattern::Identifier {
-            ident: name.value,
-            suffixed: 0,
-        },
+        AssignedField::LabelOnly(name) => Pattern::Identifier { ident: name.value },
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,

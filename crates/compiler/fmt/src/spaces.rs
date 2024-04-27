@@ -795,7 +795,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
 impl<'a> RemoveSpaces<'a> for Pattern<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Pattern::Identifier { ident, suffixed } => Pattern::Identifier { ident, suffixed },
+            Pattern::Identifier { ident } => Pattern::Identifier { ident },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
@@ -828,15 +828,9 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Pattern::QualifiedIdentifier {
-                module_name,
-                ident,
-                suffixed,
-            } => Pattern::QualifiedIdentifier {
-                module_name,
-                ident,
-                suffixed,
-            },
+            Pattern::QualifiedIdentifier { module_name, ident } => {
+                Pattern::QualifiedIdentifier { module_name, ident }
+            }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),

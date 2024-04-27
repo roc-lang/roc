@@ -1069,10 +1069,7 @@ fn record_builder_arg<'a>(
 
     for label in apply_field_names.iter().rev() {
         let name = arena.alloc("#".to_owned() + label.value);
-        let ident = roc_parse::ast::Pattern::Identifier {
-            ident: name,
-            suffixed: 0,
-        };
+        let ident = roc_parse::ast::Pattern::Identifier { ident: name };
 
         let arg_pattern = arena.alloc(Loc {
             value: ident,

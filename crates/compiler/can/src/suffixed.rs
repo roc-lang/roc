@@ -34,7 +34,6 @@ fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
             },
             Pattern::Identifier {
                 ident: answer_ident.as_str(),
-                suffixed: 0,
             },
         )
     })
@@ -194,18 +193,6 @@ pub fn unwrap_suffixed_expression_closure_help<'a>(
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
         Expr::Closure(closure_args, closure_loc_ret) => {
-
-            // Check to make sure that arguments are not suffixed
-            let suffixed_arg_count = closure_args
-                .iter()
-                .filter(|loc_pat| loc_pat.value.is_suffixed())
-                .count();
-
-            if suffixed_arg_count > 0 {
-                debug_assert!(false,"closure arguments should not be suffixed");
-                return Err(EUnwrapped::Malformed);
-            }
-
             // note we use `None` here as we don't want to pass a DefExpr up and
             // unwrap the definition pattern for the closure
             match unwrap_suffixed_expression(arena, closure_loc_ret, None) {
