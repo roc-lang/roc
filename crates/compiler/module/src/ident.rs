@@ -53,7 +53,7 @@ impl ModuleName {
     pub fn filename(&self, root_filename: impl AsRef<Path>) -> PathBuf {
         let mut answer = root_filename.as_ref().with_file_name("");
 
-        for part in self.split(".") {
+        for part in self.split('.') {
             answer = answer.join(part);
         }
 
