@@ -772,7 +772,7 @@ mod suffixed_tests {
                     Input name ->
                         Stdout.line! "Hello, $(name)"
             "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-226], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @32-43 Apply(@32-43 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@32-43 Var { module_name: "Stdin", ident: "line", suffixed: 0 }, @32-43 Closure([@23-29 Identifier { ident: "result", suffixed: 0 }], @61-226 When(@66-72 Var { module_name: "", ident: "result", suffixed: 0 }, [WhenBranch { patterns: [@96-99 Tag("End")], value: @127-137 Apply(@127-134 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@135-137 Record([])], Space), guard: None }, WhenBranch { patterns: [@159-169 Apply(@159-164 Tag("Input"), [@165-169 Identifier { ident: "name", suffixed: 0 }])], value: @197-226 Apply(@197-226 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@210-226 Str(Line([Plaintext("Hello, "), Interpolated(@220-224 Var { module_name: "", ident: "name", suffixed: 0 })]))], Space), guard: None }]))], BangSuffix))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-226], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @32-43 Apply(@32-43 Var { module_name: "Task", ident: "await" }, [@32-43 Var { module_name: "Stdin", ident: "line" }, @32-43 Closure([@23-29 Identifier { ident: "result" }], @61-226 When(@66-72 Var { module_name: "", ident: "result" }, [WhenBranch { patterns: [@96-99 Tag("End")], value: @127-137 Apply(@127-134 Var { module_name: "Task", ident: "ok" }, [@135-137 Record([])], Space), guard: None }, WhenBranch { patterns: [@159-169 Apply(@159-164 Tag("Input"), [@165-169 Identifier { ident: "name" }])], value: @197-226 Apply(@197-226 Var { module_name: "Stdout", ident: "line" }, [@210-226 Str(Line([Plaintext("Hello, "), Interpolated(@220-224 Var { module_name: "", ident: "name" })]))], Space), guard: None }]))], BangSuffix))] }"#,
         );
     }
 }
@@ -789,14 +789,10 @@ mod test_suffixed_helpers {
 
     #[test]
     fn test_matching_answer() {
-        let loc_pat = Loc::at_zero(Pattern::Identifier {
-            ident: "#!a0",
-            suffixed: 0,
-        });
+        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!a0" });
         let loc_new = Loc::at_zero(Expr::Var {
             module_name: "",
             ident: "#!a0",
-            suffixed: 0,
         });
 
         std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
@@ -804,19 +800,14 @@ mod test_suffixed_helpers {
 
     #[test]
     fn test_matching_answer_task_ok() {
-        let loc_pat = Loc::at_zero(Pattern::Identifier {
-            ident: "#!a0",
-            suffixed: 0,
-        });
+        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!a0" });
         let intermetiate = &[&Loc::at_zero(Expr::Var {
             module_name: "",
             ident: "#!a0",
-            suffixed: 0,
         })];
         let task_ok = Loc::at_zero(Expr::Var {
             module_name: ModuleName::TASK,
             ident: "ok",
-            suffixed: 0,
         });
 
         let loc_new = Loc::at_zero(Expr::Apply(&task_ok, intermetiate, CalledVia::BangSuffix));
