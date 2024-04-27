@@ -88,16 +88,9 @@ impl<'a> Formattable for Pattern<'a> {
         use self::Pattern::*;
 
         match self {
-            Identifier {
-                ident: string,
-                suffixed,
-            } => {
+            Identifier { ident: string } => {
                 buf.indent(indent);
                 buf.push_str(string);
-
-                for _ in 0..*suffixed {
-                    buf.push('!');
-                }
             }
             Tag(name) | OpaqueRef(name) => {
                 buf.indent(indent);
@@ -277,19 +270,11 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            QualifiedIdentifier {
-                module_name,
-                ident,
-                suffixed,
-            } => {
+            QualifiedIdentifier { module_name, ident } => {
                 buf.indent(indent);
                 if !module_name.is_empty() {
                     buf.push_str(module_name);
                     buf.push('.');
-                }
-
-                for _ in 0..*suffixed {
-                    buf.push('!');
                 }
 
                 buf.push_str(ident);

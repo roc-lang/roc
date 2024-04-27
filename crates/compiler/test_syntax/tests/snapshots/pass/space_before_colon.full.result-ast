@@ -95,13 +95,11 @@ Full {
             Body(
                 @98-102 Identifier {
                     ident: "main",
-                    suffixed: 0,
                 },
                 @105-124 Apply(
                     @105-116 Var {
                         module_name: "Stdout",
                         ident: "line",
-                        suffixed: 0,
                     },
                     [
                         @117-124 Str(

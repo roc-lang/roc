@@ -17,25 +17,21 @@ Defs {
         Body(
             @0-4 Identifier {
                 ident: "main",
-                suffixed: 0,
             },
             @12-50 SpaceBefore(
                 Backpassing(
                     [
                         @12-16 Identifier {
                             ident: "arg1",
-                            suffixed: 0,
                         },
                         @18-22 Identifier {
                             ident: "arg2",
-                            suffixed: 0,
                         },
                     ],
                     @26-30 Apply(
                         @26-27 Var {
                             module_name: "",
                             ident: "f",
-                            suffixed: 0,
                         },
                         [
                             @28-30 Record(

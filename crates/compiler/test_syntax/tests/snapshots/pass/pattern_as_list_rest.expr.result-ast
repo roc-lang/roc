@@ -2,7 +2,6 @@ When(
     @5-11 Var {
         module_name: "",
         ident: "myList",
-        suffixed: 0,
     },
     [
         WhenBranch {
@@ -12,7 +11,6 @@ When(
                         [
                             @20-25 Identifier {
                                 ident: "first",
-                                suffixed: 0,
                             },
                             @27-37 ListRest(
                                 Some(

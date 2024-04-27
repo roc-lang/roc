@@ -2,7 +2,6 @@ Apply(
     @0-1 Var {
         module_name: "",
         ident: "e",
-        suffixed: 0,
     },
     [
         @1-10 Str(

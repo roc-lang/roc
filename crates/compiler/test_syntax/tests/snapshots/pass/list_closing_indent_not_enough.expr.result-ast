@@ -18,7 +18,6 @@ Defs(
             Body(
                 @0-6 Identifier {
                     ident: "myList",
-                    suffixed: 0,
                 },
                 @9-57 List(
                     Collection {
@@ -39,7 +38,6 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "a",
-                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,
@@ -49,7 +47,6 @@ Defs(
                                                 Var {
                                                     module_name: "",
                                                     ident: "b",
-                                                    suffixed: 0,
                                                 },
                                                 [
                                                     Newline,

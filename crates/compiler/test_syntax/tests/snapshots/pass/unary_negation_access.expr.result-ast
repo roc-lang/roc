@@ -3,7 +3,6 @@ UnaryOp(
         Var {
             module_name: "",
             ident: "rec1",
-            suffixed: 0,
         },
         "field",
     ),

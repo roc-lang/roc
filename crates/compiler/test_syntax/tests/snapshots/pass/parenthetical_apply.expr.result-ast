@@ -3,7 +3,6 @@ Apply(
         Var {
             module_name: "",
             ident: "whee",
-            suffixed: 0,
         },
     ),
     [

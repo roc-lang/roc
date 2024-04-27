@@ -5663,13 +5663,7 @@ fn value_def_from_imports<'a>(
             };
             let typed_ident = typed_ident.extract_spaces().item;
             let Loc { region, value } = typed_ident.ident;
-            let ident = arena.alloc(Loc::at(
-                region,
-                Pattern::Identifier {
-                    ident: value,
-                    suffixed: 0,
-                },
-            ));
+            let ident = arena.alloc(Loc::at(region, Pattern::Identifier { ident: value }));
 
             let ann_type = arena.alloc(typed_ident.ann);
             Some(ValueDef::AnnotatedBody {

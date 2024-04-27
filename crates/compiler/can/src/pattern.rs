@@ -265,10 +265,7 @@ pub fn canonicalize_def_header_pattern<'a>(
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
-        Identifier {
-            ident: name,
-            suffixed: _,
-        } => {
+        Identifier { ident: name } => {
             match scope.introduce_or_shadow_ability_member(
                 pending_abilities_in_scope,
                 (*name).into(),
@@ -376,13 +373,12 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier {
-            ident: name,
-            suffixed: _,
-        } => match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
-            Ok(symbol) => Pattern::Identifier(symbol),
-            Err(pattern) => pattern,
-        },
+        Identifier { ident: name } => {
+            match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
+                Ok(symbol) => Pattern::Identifier(symbol),
+                Err(pattern) => pattern,
+            }
+        }
         Underscore(name) => {
             // An underscored identifier can't be used, but we'll still add it to the scope
             // for better error messages if someone tries to use it.
@@ -632,10 +628,7 @@ pub fn canonicalize_pattern<'a>(
 
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
-                    Identifier {
-                        ident: label,
-                        suffixed: _,
-                    } => {
+                    Identifier { ident: label } => {
                         match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
                                 output.references.insert_bound(symbol);

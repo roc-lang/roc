@@ -2,7 +2,6 @@ When(
     @5-6 Var {
         module_name: "",
         ident: "x",
-        suffixed: 0,
     },
     [
         WhenBranch {
@@ -20,7 +19,6 @@ When(
                 @19-26 Var {
                     module_name: "Num",
                     ident: "neg",
-                    suffixed: 0,
                 },
                 [
                     @32-33 SpaceBefore(

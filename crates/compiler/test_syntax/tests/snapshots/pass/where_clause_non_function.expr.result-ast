@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 @4-26 Where(
                     @4-5 BoundVariable(
@@ -44,7 +43,6 @@ Defs(
         Var {
             module_name: "",
             ident: "f",
-            suffixed: 0,
         },
         [
             Newline,

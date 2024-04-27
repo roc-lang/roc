@@ -686,6 +686,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
+            Expr::TaskAwaitBang(a) => Expr::TaskAwaitBang(arena.alloc(a.remove_spaces(arena))),
             Expr::List(a) => Expr::List(a.remove_spaces(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.remove_spaces(arena)),
@@ -694,15 +695,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
             Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
-            Expr::Var {
-                module_name,
-                ident,
-                suffixed,
-            } => Expr::Var {
-                module_name,
-                ident,
-                suffixed,
-            },
+            Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
@@ -802,7 +795,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
 impl<'a> RemoveSpaces<'a> for Pattern<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Pattern::Identifier { ident, suffixed } => Pattern::Identifier { ident, suffixed },
+            Pattern::Identifier { ident } => Pattern::Identifier { ident },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
@@ -835,15 +828,9 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Pattern::QualifiedIdentifier {
-                module_name,
-                ident,
-                suffixed,
-            } => Pattern::QualifiedIdentifier {
-                module_name,
-                ident,
-                suffixed,
-            },
+            Pattern::QualifiedIdentifier { module_name, ident } => {
+                Pattern::QualifiedIdentifier { module_name, ident }
+            }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),

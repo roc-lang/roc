@@ -18,20 +18,17 @@ Defs(
             Body(
                 @0-4 Identifier {
                     ident: "func",
-                    suffixed: 0,
                 },
                 @7-43 Closure(
                     [
                         @8-9 Identifier {
                             ident: "x",
-                            suffixed: 0,
                         },
                     ],
                     @13-43 When(
                         @18-19 Var {
                             module_name: "",
                             ident: "n",
-                            suffixed: 0,
                         },
                         [
                             WhenBranch {

@@ -9,8 +9,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    wrap_in_task_ok, AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral,
-    StrSegment, ValueDef, WhenBranch,
+    AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral, StrSegment, ValueDef,
+    WhenBranch,
 };
 use roc_region::all::{LineInfo, Loc, Region};
 
@@ -57,11 +57,7 @@ fn new_op_call_expr<'a>(
             let args = arena.alloc([left, right]);
 
             let loc_expr = arena.alloc(Loc {
-                value: Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed: 0,
-                },
+                value: Expr::Var { module_name, ident },
                 region: loc_op.region,
             });
 
@@ -193,13 +189,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     arena,
                     Body(
                         loc_pattern,
-                        apply_task_await(
-                            arena,
-                            loc_expr.region,
-                            sub_arg,
-                            sub_pat,
-                            wrap_in_task_ok(arena, sub_new),
-                        ),
+                        apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new),
                     ),
                 ),
                 Err(..) => Body(
@@ -241,7 +231,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                             body_expr.region,
                             sub_arg,
                             sub_pat,
-                            wrap_in_task_ok(arena, sub_new),
+                            sub_new,
                         ),
                     },
                 ),
@@ -341,6 +331,15 @@ pub fn desugar_expr<'a>(
             );
 
             arena.alloc(Loc { region, value })
+        }
+        // desugar the sub_expression, but leave the TaskAwaitBang as this will
+        // be unwrapped later in desugar_value_def_suffixed
+        TaskAwaitBang(sub_expr) => {
+            let intermediate = arena.alloc(Loc::at(loc_expr.region, **sub_expr));
+            let new_sub_loc_expr = desugar_expr(arena, intermediate, src, line_info, module_path);
+            let new_sub_expr = arena.alloc(new_sub_loc_expr.value);
+
+            arena.alloc(Loc::at(loc_expr.region, TaskAwaitBang(new_sub_expr)))
         }
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -601,12 +600,10 @@ pub fn desugar_expr<'a>(
                 Negate => Var {
                     module_name: ModuleName::NUM,
                     ident: "neg",
-                    suffixed: 0,
                 },
                 Not => Var {
                     module_name: ModuleName::BOOL,
                     ident: "not",
-                    suffixed: 0,
                 },
             };
             let loc_fn_var = arena.alloc(Loc { region, value });
@@ -704,7 +701,6 @@ pub fn desugar_expr<'a>(
             let inspect_fn = Var {
                 module_name: ModuleName::INSPECT,
                 ident: "toStr",
-                suffixed: 0,
             };
             let loc_inspect_fn_var = arena.alloc(Loc {
                 value: inspect_fn,
@@ -759,7 +755,6 @@ pub fn desugar_expr<'a>(
                         Expr::Var {
                             module_name: ModuleName::TASK,
                             ident: "ok",
-                            suffixed: 0,
                         },
                     )),
                     arena.alloc(apply_args),
@@ -855,7 +850,6 @@ fn desugar_field<'a>(
                 value: Var {
                     module_name: "",
                     ident: loc_str.value,
-                    suffixed: 0,
                 },
                 region: loc_str.region,
             };
@@ -1036,7 +1030,6 @@ fn record_builder_arg<'a>(
                         value: Expr::Var {
                             module_name: "",
                             ident: arena.alloc("#".to_owned() + label.value),
-                            suffixed: 0,
                         },
                     });
 
@@ -1076,10 +1069,7 @@ fn record_builder_arg<'a>(
 
     for label in apply_field_names.iter().rev() {
         let name = arena.alloc("#".to_owned() + label.value);
-        let ident = roc_parse::ast::Pattern::Identifier {
-            ident: name,
-            suffixed: 0,
-        };
+        let ident = roc_parse::ast::Pattern::Identifier { ident: name };
 
         let arg_pattern = arena.alloc(Loc {
             value: ident,

@@ -2,15 +2,12 @@ Closure(
     [
         @1-2 Identifier {
             ident: "a",
-            suffixed: 0,
         },
         @4-5 Identifier {
             ident: "b",
-            suffixed: 0,
         },
         @7-8 Identifier {
             ident: "c",
-            suffixed: 0,
         },
     ],
     @12-14 Num(

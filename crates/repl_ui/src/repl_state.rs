@@ -74,7 +74,7 @@ impl ReplState {
                     ValueDef::Annotation(
                         Loc {
                             // TODO is this right for suffixed
-                            value: Pattern::Identifier { ident, suffixed: _ },
+                            value: Pattern::Identifier { ident },
                             ..
                         },
                         _,
@@ -89,7 +89,7 @@ impl ReplState {
                     ValueDef::Body(
                         Loc {
                             // TODO is this right for suffixed
-                            value: Pattern::Identifier { ident, suffixed: _ },
+                            value: Pattern::Identifier { ident },
                             ..
                         },
                         _,
@@ -98,7 +98,7 @@ impl ReplState {
                         body_pattern:
                             Loc {
                                 // TODO is this right for suffixed
-                                value: Pattern::Identifier { ident, suffixed: _ },
+                                value: Pattern::Identifier { ident },
                                 ..
                             },
                         ..

@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-5 Identifier {
                     ident: "where",
-                    suffixed: 0,
                 },
                 @8-20 Record {
                     fields: [
@@ -38,7 +37,6 @@ Defs(
             AnnotatedBody {
                 ann_pattern: @0-5 Identifier {
                     ident: "where",
-                    suffixed: 0,
                 },
                 ann_type: @8-20 Record {
                     fields: [
@@ -57,7 +55,6 @@ Defs(
                 comment: None,
                 body_pattern: @21-26 Identifier {
                     ident: "where",
-                    suffixed: 0,
                 },
                 body_expr: @29-39 Record(
                     [
@@ -78,7 +75,6 @@ Defs(
             Var {
                 module_name: "",
                 ident: "where",
-                suffixed: 0,
             },
             "where",
         ),
