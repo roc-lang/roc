@@ -521,24 +521,6 @@ fn is_record_builder_field_suffixed(field: &RecordBuilderField<'_>) -> bool {
     }
 }
 
-pub fn wrap_in_task_ok<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
-    arena.alloc(Loc::at(
-        loc_expr.region,
-        Expr::Apply(
-            arena.alloc(Loc::at(
-                loc_expr.region,
-                Expr::Var {
-                    module_name: ModuleName::TASK,
-                    ident: "ok",
-                    suffixed: 0,
-                },
-            )),
-            arena.alloc([loc_expr]),
-            CalledVia::BangSuffix,
-        ),
-    ))
-}
-
 pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
     let (before, rest) = items.split_at(target);
     let after = &rest[1..];
