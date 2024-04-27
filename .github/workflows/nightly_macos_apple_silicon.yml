@@ -14,6 +14,8 @@ jobs:
   test-and-build:
     name: Rust tests, build and package nightly release
     runs-on: [self-hosted, macOS, ARM64]
+    env:
+      LIBRARY_PATH: ${{ steps.set_lib_path.outputs.library_path }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -24,9 +26,9 @@ jobs:
 
       - run: zig version
 
-      - run: which zig
-
-      - run: ls /Users/m1ci/Downloads/zig-macos-aarch64-0.11.0/
+      - name: Need to make sure zstd can be found
+        id: set_lib_path
+        run: echo "::set-output name=library_path::$(brew --prefix zstd)/lib"
 
       - name: run tests
         run: cargo test --locked --release
