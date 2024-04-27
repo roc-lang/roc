@@ -1001,7 +1001,7 @@ bitwiseNot = \n ->
 ## ```roc
 ## shiftLeftBy 0b0000_0011 2 == 0b0000_1100
 ##
-## 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
+## 0b0000_0101 |> shiftLeftBy 2 == 0b0001_0100
 ## ```
 ## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
 shiftLeftBy : Int a, U8 -> Int a

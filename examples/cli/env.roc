@@ -1,5 +1,5 @@
 app "env"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.1/y_Ww7a2_ZGjp0ZTt9Y_pNdSqqMRdMLzHMKfdN8LWidk.tar.br" }
     imports [pf.Stdout, pf.Stderr, pf.Env, pf.Task.{ Task }]
     provides [main] to pf
 

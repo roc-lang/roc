@@ -189,14 +189,17 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_arg,
                     sub_pat,
                     sub_new,
-                }) => Body(
-                    loc_pattern,
-                    apply_task_await(
-                        arena,
-                        loc_expr.region,
-                        sub_arg,
-                        sub_pat,
-                        wrap_in_task_ok(arena, sub_new),
+                }) => desugar_value_def_suffixed(
+                    arena,
+                    Body(
+                        loc_pattern,
+                        apply_task_await(
+                            arena,
+                            loc_expr.region,
+                            sub_arg,
+                            sub_pat,
+                            wrap_in_task_ok(arena, sub_new),
+                        ),
                     ),
                 ),
                 Err(..) => Body(
@@ -226,19 +229,22 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_arg,
                     sub_pat,
                     sub_new,
-                }) => AnnotatedBody {
-                    ann_pattern,
-                    ann_type,
-                    comment,
-                    body_pattern,
-                    body_expr: apply_task_await(
-                        arena,
-                        body_expr.region,
-                        sub_arg,
-                        sub_pat,
-                        wrap_in_task_ok(arena, sub_new),
-                    ),
-                },
+                }) => desugar_value_def_suffixed(
+                    arena,
+                    AnnotatedBody {
+                        ann_pattern,
+                        ann_type,
+                        comment,
+                        body_pattern,
+                        body_expr: apply_task_await(
+                            arena,
+                            body_expr.region,
+                            sub_arg,
+                            sub_pat,
+                            wrap_in_task_ok(arena, sub_new),
+                        ),
+                    },
+                ),
                 Err(..) => AnnotatedBody {
                     ann_pattern,
                     ann_type,

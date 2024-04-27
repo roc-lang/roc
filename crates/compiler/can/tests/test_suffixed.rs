@@ -423,6 +423,26 @@ mod suffixed_tests {
     /**
      * Nested suffixed expressions
     ```roc
+    run = line! (nextMsg!)
+
+    run = Task.await nextMsg \#!a0 -> line! (#!a0)
+
+    run = Task.await nextMsg \#!a0 -> line (#!a0)
+    ```
+    */
+    #[test]
+    fn nested_simple() {
+        run_test(
+            r#"
+            run = line! (nextMsg!)
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-22], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-3 Identifier { ident: "run", suffixed: 0 }, @0-22 Apply(@0-22 Var { module_name: "Task", ident: "await", suffixed: 0 }, [Var { module_name: "", ident: "nextMsg", suffixed: 0 }, @0-22 Closure([Identifier { ident: "#!a0", suffixed: 0 }], @0-22 Apply(@0-22 Var { module_name: "", ident: "line", suffixed: 0 }, [@13-21 ParensAround(Var { module_name: "", ident: "#!a0", suffixed: 0 })], Space))], BangSuffix))] }"##,
+        );
+    }
+
+    /**
+     * Nested suffixed expressions
+    ```roc
     main =
         z = foo! (bar! baz) (blah stuff)
         doSomething z
@@ -437,9 +457,8 @@ mod suffixed_tests {
             Task.await [foo (#!a0) (blah stuff)] \z -> doSomething z
     ```
     */
-
     #[test]
-    fn nested_suffixed() {
+    fn nested_complex() {
         run_test(
             r#"
             main = 
@@ -664,5 +683,144 @@ mod suffixed_tests {
             "#,
             r#"Defs { tags: [Index(2147483648)], regions: [@0-103], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "copy", suffixed: 0 }, @7-103 Closure([@8-9 Identifier { ident: "a", suffixed: 0 }, @10-11 Identifier { ident: "b", suffixed: 0 }], @36-42 Apply(@36-42 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@36-42 Apply(@36-42 Var { module_name: "", ident: "line", suffixed: 0 }, [@37-42 Str(PlainLine("FOO"))], Space), @36-42 Closure([@36-42 RecordDestructure([])], @60-103 Apply(@60-103 Var { module_name: "", ident: "mapErr", suffixed: 0 }, [@60-72 Apply(@60-67 Var { module_name: "CMD", ident: "new", suffixed: 0 }, [@68-72 Str(PlainLine("cp"))], Space), @100-103 Tag("ERR")], BinOp(Pizza)))], BangSuffix)))] }"#,
         );
+    }
+
+    /**
+     * Unwrap a when expression
+     ```roc
+     list =
+        when getList! is
+            [] -> "empty"
+            _ -> "non-empty"
+
+    list =
+        Task.await getList \#!a0 ->
+            when #!a0 is
+                [] -> "empty"
+                _ -> "non-empty"
+     ```
+     */
+    #[test]
+    fn when_simple() {
+        run_test(
+            r#"
+            list = 
+                when getList! is
+                    [] -> "empty"
+                    _ -> "non-empty"
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-111], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list", suffixed: 0 }, @24-111 Apply(@24-111 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-37 Var { module_name: "", ident: "getList", suffixed: 0 }, @24-111 Closure([@29-37 Identifier { ident: "#!a0", suffixed: 0 }], @24-111 When(@29-37 Var { module_name: "", ident: "#!a0", suffixed: 0 }, [WhenBranch { patterns: [@61-63 List([])], value: @67-74 Str(PlainLine("empty")), guard: None }, WhenBranch { patterns: [@95-96 Underscore("")], value: @100-111 Str(PlainLine("non-empty")), guard: None }]))], BangSuffix))] }"##,
+        );
+    }
+
+    /**
+     * Unwrap a when expression
+     ```roc
+    list =
+        when getList! is
+            [] ->
+                line! "foo"
+                line! "bar"
+            _ ->
+                ok {}
+
+    list =
+        Task.await getList \#!a0 ->
+            when getList is
+                [] ->
+                    line! "foo"
+                    line! "bar"
+                _ ->
+                    ok {}
+
+    list =
+        Task.await getList \#!a0 ->
+            when getList is
+                [] ->
+                    Task.await line "foo" \{} -> line! "bar"
+                _ ->
+                    ok {}
+     ```
+     */
+    #[test]
+    fn when_branches() {
+        run_test(
+            r#"
+            list = 
+                when getList! is
+                    [] -> 
+                        line! "foo"
+                        line! "bar"
+                    _ -> 
+                        ok {}
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-195], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list", suffixed: 0 }, @24-195 Apply(@24-195 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@29-37 Var { module_name: "", ident: "getList", suffixed: 0 }, @24-195 Closure([@29-37 Identifier { ident: "#!a0", suffixed: 0 }], @24-195 When(@29-37 Var { module_name: "", ident: "#!a0", suffixed: 0 }, [WhenBranch { patterns: [@61-63 List([])], value: @97-103 Apply(@97-103 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@97-103 Apply(@97-103 Var { module_name: "", ident: "line", suffixed: 0 }, [@98-103 Str(PlainLine("foo"))], Space), @97-103 Closure([@97-103 RecordDestructure([])], @128-139 Apply(@128-139 Var { module_name: "", ident: "line", suffixed: 0 }, [@134-139 Str(PlainLine("bar"))], Space))], BangSuffix), guard: None }, WhenBranch { patterns: [@160-161 Underscore("")], value: @190-195 Apply(@190-192 Var { module_name: "", ident: "ok", suffixed: 0 }, [@193-195 Record([])], Space), guard: None }]))], BangSuffix))] }"##,
+        );
+    }
+
+    #[test]
+    fn trailing_suffix_inside_when() {
+        run_test(
+            r#"
+            main =
+                result = Stdin.line!
+
+                when result is
+                    End ->
+                        Task.ok {}
+
+                    Input name ->
+                        Stdout.line! "Hello, $(name)"
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-226], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main", suffixed: 0 }, @32-43 Apply(@32-43 Var { module_name: "Task", ident: "await", suffixed: 0 }, [@32-43 Var { module_name: "Stdin", ident: "line", suffixed: 0 }, @32-43 Closure([@23-29 Identifier { ident: "result", suffixed: 0 }], @61-226 When(@66-72 Var { module_name: "", ident: "result", suffixed: 0 }, [WhenBranch { patterns: [@96-99 Tag("End")], value: @127-137 Apply(@127-134 Var { module_name: "Task", ident: "ok", suffixed: 0 }, [@135-137 Record([])], Space), guard: None }, WhenBranch { patterns: [@159-169 Apply(@159-164 Tag("Input"), [@165-169 Identifier { ident: "name", suffixed: 0 }])], value: @197-226 Apply(@197-226 Var { module_name: "Stdout", ident: "line", suffixed: 0 }, [@210-226 Str(Line([Plaintext("Hello, "), Interpolated(@220-224 Var { module_name: "", ident: "name", suffixed: 0 })]))], Space), guard: None }]))], BangSuffix))] }"#,
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_suffixed_helpers {
+
+    use roc_can::suffixed::is_matching_intermediate_answer;
+    use roc_module::called_via::CalledVia;
+    use roc_module::ident::ModuleName;
+    use roc_parse::ast::Expr;
+    use roc_parse::ast::Pattern;
+    use roc_region::all::Loc;
+
+    #[test]
+    fn test_matching_answer() {
+        let loc_pat = Loc::at_zero(Pattern::Identifier {
+            ident: "#!a0",
+            suffixed: 0,
+        });
+        let loc_new = Loc::at_zero(Expr::Var {
+            module_name: "",
+            ident: "#!a0",
+            suffixed: 0,
+        });
+
+        std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
+    }
+
+    #[test]
+    fn test_matching_answer_task_ok() {
+        let loc_pat = Loc::at_zero(Pattern::Identifier {
+            ident: "#!a0",
+            suffixed: 0,
+        });
+        let intermetiate = &[&Loc::at_zero(Expr::Var {
+            module_name: "",
+            ident: "#!a0",
+            suffixed: 0,
+        })];
+        let task_ok = Loc::at_zero(Expr::Var {
+            module_name: ModuleName::TASK,
+            ident: "ok",
+            suffixed: 0,
+        });
+
+        let loc_new = Loc::at_zero(Expr::Apply(&task_ok, intermetiate, CalledVia::BangSuffix));
+
+        std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
     }
 }

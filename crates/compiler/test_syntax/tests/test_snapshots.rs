@@ -482,6 +482,7 @@ mod test_snapshots {
         pass/when_in_function_python_style_indent.expr,
         pass/when_in_parens.expr,
         pass/when_in_parens_indented.expr,
+        pass/when_result_list.expr,
         pass/when_with_alternative_patterns.expr,
         pass/when_with_function_application.expr,
         pass/when_with_negative_numbers.expr,
