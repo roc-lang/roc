@@ -1137,6 +1137,21 @@ code .dim {
     color: #7c38f5;
 }
 
+.interactive-desc code, .interactive-desc pre {
+    background: none;
+    color: inherit;
+}
+
+.interactive-desc pre {
+    border: 1px solid;
+    padding: 0 8px;
+}
+
+.interactive-desc code {
+    font-weight: bold;
+    padding: 0;
+}
+
 .interactive-radio {
     display: none;
 }
@@ -1222,10 +1237,10 @@ code .dim {
 }
 
 #tutorial-main h3 {
-    font-size: 3rem;
+    font-family: inherit;
+    font-size: 1.65rem;
     line-height: 3rem;
     text-shadow: 1px 1px 1px #010101;
-    margin-bottom: 0.5rem;
 }
 
 #tutorial-main h4 {
