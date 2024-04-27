@@ -3,7 +3,6 @@ Apply(
         @1-5 Var {
             module_name: "",
             ident: "whee",
-            suffixed: 0,
         },
         @0-1 Negate,
     ),
@@ -14,7 +13,6 @@ Apply(
         @10-13 Var {
             module_name: "",
             ident: "foo",
-            suffixed: 0,
         },
     ],
     Space,

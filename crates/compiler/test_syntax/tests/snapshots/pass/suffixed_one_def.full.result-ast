@@ -115,7 +115,6 @@ Full {
             Body(
                 @155-159 Identifier {
                     ident: "main",
-                    suffixed: 0,
                 },
                 @199-299 SpaceBefore(
                     Defs(
@@ -155,7 +154,6 @@ Full {
                                             Var {
                                                 module_name: "A",
                                                 ident: "x",
-                                                suffixed: 0,
                                             },
                                         ),
                                     ),
@@ -178,7 +176,6 @@ Full {
                                                     Var {
                                                         module_name: "B",
                                                         ident: "y",
-                                                        suffixed: 0,
                                                     },
                                                 ),
                                                 [
@@ -220,7 +217,6 @@ Full {
                                 @290-293 Var {
                                     module_name: "C",
                                     ident: "z",
-                                    suffixed: 0,
                                 },
                                 [
                                     @294-299 Str(

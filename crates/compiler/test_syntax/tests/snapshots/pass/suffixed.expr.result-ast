@@ -4,7 +4,6 @@ TaskAwaitBang(
             Var {
                 module_name: "Stdout",
                 ident: "line",
-                suffixed: 0,
             },
         ),
     ),

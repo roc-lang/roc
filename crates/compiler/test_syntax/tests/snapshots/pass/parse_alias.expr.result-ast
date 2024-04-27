@@ -20,11 +20,9 @@ Defs(
                     vars: [
                         @5-6 Identifier {
                             ident: "a",
-                            suffixed: 0,
                         },
                         @7-8 Identifier {
                             ident: "b",
-                            suffixed: 0,
                         },
                     ],
                 },

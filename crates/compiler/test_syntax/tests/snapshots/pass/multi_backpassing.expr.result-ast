@@ -2,18 +2,15 @@ Backpassing(
     [
         @0-1 Identifier {
             ident: "x",
-            suffixed: 0,
         },
         @3-4 Identifier {
             ident: "y",
-            suffixed: 0,
         },
     ],
     @8-23 Apply(
         @8-17 Var {
             module_name: "List",
             ident: "map2",
-            suffixed: 0,
         },
         [
             @18-20 List(
@@ -32,7 +29,6 @@ Backpassing(
                     @25-26 Var {
                         module_name: "",
                         ident: "x",
-                        suffixed: 0,
                     },
                     @27-28 Plus,
                 ),
@@ -40,7 +36,6 @@ Backpassing(
             @29-30 Var {
                 module_name: "",
                 ident: "y",
-                suffixed: 0,
             },
         ),
         [

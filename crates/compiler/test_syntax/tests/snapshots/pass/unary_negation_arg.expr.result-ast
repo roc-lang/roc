@@ -2,7 +2,6 @@ Apply(
     @0-4 Var {
         module_name: "",
         ident: "whee",
-        suffixed: 0,
     },
     [
         @6-8 Num(
@@ -12,7 +11,6 @@ Apply(
             @10-13 Var {
                 module_name: "",
                 ident: "foo",
-                suffixed: 0,
             },
             @9-10 Negate,
         ),

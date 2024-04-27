@@ -21,12 +21,10 @@ Defs(
                         @2-5 Apply(
                             @2-3 Identifier {
                                 ident: "b",
-                                suffixed: 0,
                             },
                             [
                                 @4-5 Identifier {
                                     ident: "a",
-                                    suffixed: 0,
                                 },
                             ],
                         ),
@@ -43,7 +41,6 @@ Defs(
         Var {
             module_name: "",
             ident: "a",
-            suffixed: 0,
         },
         [
             Newline,

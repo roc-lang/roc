@@ -19,7 +19,6 @@ Defs(
                 @0-1 Apply(
                     @0-1 Identifier {
                         ident: "i",
-                        suffixed: 0,
                     },
                     [
                         @5-6 SpaceBefore(
@@ -45,7 +44,6 @@ Defs(
         Var {
             module_name: "",
             ident: "a",
-            suffixed: 0,
         },
         [
             Newline,

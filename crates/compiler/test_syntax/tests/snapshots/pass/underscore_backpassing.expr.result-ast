@@ -10,13 +10,11 @@ SpaceBefore(
                 [
                     @25-26 Identifier {
                         ident: "y",
-                        suffixed: 0,
                     },
                 ],
                 @30-31 Var {
                     module_name: "",
                     ident: "y",
-                    suffixed: 0,
                 },
             ),
         ),

@@ -43,7 +43,6 @@ Defs(
         Var {
             module_name: "",
             ident: "p",
-            suffixed: 0,
         },
         [
             Newline,

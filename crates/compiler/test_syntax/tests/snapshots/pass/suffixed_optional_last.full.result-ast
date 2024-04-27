@@ -97,7 +97,6 @@ Full {
             Body(
                 @88-92 Identifier {
                     ident: "main",
-                    suffixed: 0,
                 },
                 @88-202 SpaceBefore(
                     BinOps(
@@ -120,7 +119,6 @@ Full {
                                     Var {
                                         module_name: "Cmd",
                                         ident: "new",
-                                        suffixed: 0,
                                     },
                                     [
                                         Newline,
@@ -133,7 +131,6 @@ Full {
                                     Var {
                                         module_name: "Cmd",
                                         ident: "status",
-                                        suffixed: 0,
                                     },
                                     [
                                         Newline,
@@ -147,7 +144,6 @@ Full {
                                 Var {
                                     module_name: "Task",
                                     ident: "mapErr",
-                                    suffixed: 0,
                                 },
                             ),
                             [
