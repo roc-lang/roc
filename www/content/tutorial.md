@@ -313,40 +313,6 @@ Comments that begin with `##` are "doc comments" which will be included in gener
 
 Like other comments, doc comments do not affect the running program.
 
-### [Debugging](#debugging) {#debugging}
-
-[Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
-
-```roc
-pluralize = \singular, plural, count ->
-    dbg count
-
-    if count == 1 then
-        singular
-    else
-        plural
-```
-
-Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
-
-<samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
-
-Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pluralize.roc` on line 6, column 8.
-
-You can give `dbg` any expression you like, for example:
-
-```roc
-dbg Str.concat singular plural
-```
-
-An easy way to print multiple values at a time is to wrap them in a tag, for example a concise tag like `T`:
-
-```roc
-dbg T "the value of count is:" count
-```
-
-> **Note:** `dbg` is a debugging tool, and is only available when running your program with `roc program.roc`, `roc dev program.roc` or `roc test program.roc`. When you build a standalone binary with `roc build`, any uses of `dbg` won't be included!
-
 ### [Records](#records) {#records}
 
 Currently our `addAndStringify` function takes two arguments. We can instead make it take one argument like so:
@@ -448,6 +414,70 @@ The `fromScratch` and `fromOriginal` records are equal, although they're defined
 
 Note that `&` can't introduce new fields to a record, or change the types of existing fields.
 (Trying to do either of these will result in an error at build time!)
+
+### [Debugging with `dbg`](#dbg) {#dbg}
+
+[Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
+
+```roc
+pluralize = \singular, plural, count ->
+    dbg count
+
+    if count == 1 then
+        singular
+    else
+        plural
+```
+
+Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
+
+<samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
+
+Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pluralize.roc` on line 6, column 8.
+
+You can give `dbg` any expression you like, for example:
+
+```roc
+dbg Str.concat singular plural
+```
+
+### [Tuples](#tuples) {#tuples}
+
+One way to have `dbg` print multiple values at a time is to wrap them in a record:
+
+```roc
+dbg { text: "the value of count is:", value: count }
+```
+
+A more concise way would be to wrap them in a _tuple_, like so:
+
+```roc
+dbg ("the value of count is:", count)
+```
+
+Visually, tuples in Roc look like lists (but with parentheses instead of square brackets). However, a tuple is much more like a record - in fact, tuples and records compile down to the exact same representation at runtime! So anywhere you would use a tuple, you can use a record instead, and the in-memory representation will be exactly the same.
+
+Like records, tuples are fixed-length and can't be iterated over. Also, they can contain values of different types. The difference is that in a record, each field is labeled (and their position doesn't matter), whereas in a tuple, each field is specified by its position.
+
+### [Accessing values in tuples](#tuple-access) {#tuple-access}
+
+Just like how there are two ways to access a record's fields (namely, the `.` operator and [record destructuring(#record-destructuring)), there are also two similar ways to access tuple fields:
+
+```roc
+# tuple field access
+tuple = ("hello", 42, ["list"])
+
+first = tuple.0 # "hello"
+second = tuple.1 # 42
+third = tuple.2 # ["list"]
+```
+
+```roc
+# tuple destructuring
+(first, second, third) = ("hello", 42, ["list"])
+```
+
+By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
 
 ## [Pattern Matching](#pattern-matching) {#pattern-matching}
 
