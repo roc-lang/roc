@@ -1,15 +1,14 @@
-
 # Abilities
 
 An Ability defines a set of functions that can be implemented by different types.
 
-Abilities are used to constrain the types of function arguments to only those which implement the required functions. 
+Abilities are used to constrain the types of function arguments to only those which implement the required functions.
 
 The function `toJson` below is an example which uses the `Encoding` Ability.
 
 ```roc
 toJson : a -> List U8 where a implements Encoding
-toJson = \val -> 
+toJson = \val ->
     val |> Encode.toBytes JSON.encoder
 ```
 
@@ -60,10 +59,11 @@ Eq implements
 ```
 
 **Structural equality** is defined as follows:
+
 1. Tags are equal if their name and also contents are equal.
 2. Records are equal if their fields are equal.
 3. The collections `Str`, `List`, `Dict`, and `Set` are equal iff they are the same length and their elements are equal.
-4. `Num` values are equal if their numbers are equal. However, if both inputs are *NaN* then `isEq` returns `Bool.false`. Refer to `Num.isNaN` for more detail.
+4. `Num` values are equal if their numbers are equal. However, if both inputs are _NaN_ then `isEq` returns `Bool.false`. Refer to `Num.isNaN` for more detail.
 5. Functions cannot be compared for structural equality, therefore Roc cannot derive `isEq` for types that contain functions.
 
 ### [`Hash` Ability](#hash-ability) {#hash-ability}
@@ -80,9 +80,9 @@ Hash implements
 
 **Implementation Status** - Design Proposal, implementation has not yet started. See [zulip discussion thread](https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/ordering.2Fsorting.20ability/near/395539545) for more information. If you would like to help implement this, please let us know.
 
-The `Sort` Ability defines the `compare` function, which can be used to compare two values for ordering. 
+The `Sort` Ability defines the `compare` function, which can be used to compare two values for ordering.
 
-`Sort` is not derived for `Str` as working with utf-8 strings which is a variable length encoding scheme is complex and is achieved through a dedicated library such as [roc-lang/unicode](https://github.com/roc-lang/unicode). 
+`Sort` is not derived for `Str` as working with utf-8 strings which is a variable length encoding scheme is complex and is achieved through a dedicated library such as [roc-lang/unicode](https://github.com/roc-lang/unicode).
 
 **Proposed Definition** of the `Sort` Ability.
 
@@ -111,7 +111,7 @@ fruitBasket = [
     ("Apples", 10),
     ("Bananas", 12),
     ("Oranges", 5)
-] 
+]
 
 expect Encode.toBytes fruitBasket json == bytes # true
 ```
@@ -134,15 +134,15 @@ Decoding for `Dict` values **has not been implemented**, see [#5294](https://git
 
 ```roc
 bytes : List U8
-bytes = 
+bytes =
     """
     [
-        [ 10, \"Green Bottles\" ], 
+        [ 10, \"Green Bottles\" ],
         [ 12, \"Buckle My Shoe\" ],
         [ 5, \"Little Ducks\" ]
     ]
     """
-    |> Str.toUtf8 
+    |> Str.toUtf8
 
 result : Result (List (U32, Str)) _
 result = Decode.fromBytes bytes json
@@ -160,31 +160,36 @@ Decoding implements
 
 ### [`Inspect` Ability](#inspect-ability) {#inspect-ability}
 
-**Implementation Status** - Accepted Proposal, implementation in-progress. See [#5775](https://github.com/roc-lang/roc/pull/5775) for progress on auto-deriving `Inspect` for builtin types.
+The `Inspect` Ability lets you turn values into strings (or other things, but most commonly strings) that inform Roc programmers about the contents of the value.
 
-The `Inspect` Ability defines the `toInspector` function which can be used with an Inspector to inspect Roc values using the `Inspect.inspect` function. 
-
-Example Inspectors:
-- A [LogFormatter](https://github.com/roc-lang/roc/blob/main/examples/LogFormatter.roc) which creates a string representation of Roc values, for use e.g. debug printing to the console. 
-- A [GuiFormatter](https://github.com/roc-lang/roc/blob/main/examples/GuiFormatter.roc) which creates a GUI representation of Roc values for use e.g. debug visualization in a graphical application. 
+Every Roc value has the `Inspect` ability automatically, although some of them (such as opaque types which do not list `Inspect` as one of their abilities) use a default `Inspect` implementation which doesn't expose any information about the value. Any opaque type can replace this default `Inspect` implementation with a custom one which exposes as much information as desired about that type's values.
 
 **Definition** of the `Inspect` Ability.
 
 ```roc
-# Inspect.roc
 Inspect implements
-    toInspector : val -> Inspector f where val implements Inspect, f implements InspectFormatter
+    toInspector : val -> Inspector f
+        where
+            val implements Inspect,
+            f implements InspectFormatter
 ```
+
+The `toInspector` function takes a value and returns an `Inspector` which describes how to abstractly represent that value's contents in a way that doesn't tie it to a particular representation (such as a string). Then a separate "formatter" can translate a given `Inspector` to a specific format (such as a string in the case of [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr), but also possibly a structured log format, or an interactive GUI element).
+
+Example formatters:
+
+- A [LogFormatter](https://github.com/roc-lang/roc/blob/main/examples/LogFormatter.roc) which creates a string representation of Roc values, for use e.g. debug printing to the console.
+- A [GuiFormatter](https://github.com/roc-lang/roc/blob/main/examples/GuiFormatter.roc) which creates a GUI representation of Roc values for use e.g. debug visualization in a graphical application.
 
 ## [Opaque Types](#opaque-types) {#opaque-types}
 
-Opaque Types are used to hide implementation details of a type. Modules export functions to define a *public* API for working with a type. 
+Opaque Types are used to hide implementation details of a type. Modules export functions to define a _public_ API for working with a type.
 
 By default abilities are not derived for Opaque Types. However, [Derived](#derived-implementations) and [Custom](#custom-implementations) implementations are two ways to work with abilities for your Opaque Types.
 
 ### [Derived Implementations](#derived-implementations) {#derived-implementations}
 
-Abilities can be automatically derived for Opaque Types where the type is an alias for a builtin, or it is composed of other types which also implement that ability. 
+Abilities can be automatically derived for Opaque Types where the type is an alias for a builtin, or it is composed of other types which also implement that ability.
 
 For example you can automatically derive the `Eq` and `Hash` abilities using `implements [ Eq, Hash ]`.
 
@@ -196,7 +201,7 @@ StatsDB := Dict Str { score : Dec, average : Dec } implements [ Eq, Hash ]
 add : StatsDB, Str, { score : Dec, average : Dec } -> StatsDB
 add = \@StatsDB db, name, stats -> db |> Dict.insert name stats |> @StatsDB
 
-expect 
+expect
     db1 = Dict.empty {} |> @StatsDB |> add "John" { score: 10, average: 10 }
     db2 = Dict.empty {} |> @StatsDB |> add "John" { score: 10, average: 10 }
 
@@ -237,16 +242,16 @@ fromU8 = \r, g, b, a -> @Color (RGBAu8 r g b a)
 
 fromI16 : I16, I16, I16, I16 -> Result Color [OutOfRange]
 fromI16 = \r, g, b, a ->
-    if r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 || a < 0 || a > 255 then 
+    if r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 || a < 0 || a > 255 then
         Err OutOfRange
-    else 
+    else
         Ok (@Color (RGBAu8 (Num.toU8 r) (Num.toU8 g) (Num.toU8 b) (Num.toU8 a)))
 
 fromF32 : F32, F32, F32, F32 -> Result Color [OutOfRange]
 fromF32 = \r, g, b, a ->
-    if r < 0.0 || r > 1.0 || g < 0.0 || g > 1.0 || b < 0.0 || b > 1.0 || a < 0.0 || a > 1.0 then 
+    if r < 0.0 || r > 1.0 || g < 0.0 || g > 1.0 || b < 0.0 || b > 1.0 || a < 0.0 || a > 1.0 then
         Err OutOfRange
-    else 
+    else
         Ok (@Color (RGBAf32 r g b a))
 ```
 
