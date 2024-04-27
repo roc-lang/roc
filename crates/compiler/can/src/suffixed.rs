@@ -10,8 +10,6 @@ use roc_parse::ast::{is_expr_suffixed, Pattern, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
-static DEBUG_PRINT_UNWRAPPED: bool = false;
-
 thread_local! {
     // we use a thread_local here so that tests consistently give the same pattern
     static SUFFIXED_ANSWER_COUNTER: Cell<usize> = Cell::new(0);
@@ -33,7 +31,6 @@ fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
             Expr::Var {
                 module_name: "",
                 ident: answer_ident,
-                suffixed: 0,
             },
             Pattern::Identifier {
                 ident: answer_ident.as_str(),
@@ -103,17 +100,6 @@ pub fn unwrap_suffixed_expression<'a>(
                 init_unwrapped_err(arena, unwrapped_sub_expr, maybe_def_pat)
             }
 
-            Expr::Var {
-                module_name,
-                ident,
-                suffixed,
-            } => {
-                // TODO remove this when we remove suffixed as no longer used
-                debug_assert!(suffixed == 0);
-
-                Ok(loc_expr)
-            }
-
             Expr::Defs(..) => unwrap_suffixed_expression_defs_help(arena, loc_expr, maybe_def_pat),
 
             Expr::Apply(..) => {
@@ -149,9 +135,12 @@ pub fn unwrap_suffixed_expression<'a>(
         }
     };
 
-    if DEBUG_PRINT_UNWRAPPED && is_expr_suffixed(&loc_expr.value) {
-        dbg!(&maybe_def_pat, &loc_expr, &unwrapped_expression);
-    }
+    // KEEP THIS HERE FOR DEBUGGING
+    // USEFUL TO SEE THE UNWRAPPING
+    // OF AST NODES AS THEY DESCEND
+    // if is_expr_suffixed(&loc_expr.value) {
+    //     dbg!(&maybe_def_pat, &loc_expr, &unwrapped_expression);
+    // }
 
     unwrapped_expression
 }
@@ -732,8 +721,7 @@ pub fn apply_task_await<'a>(
 
     // If the pattern and the new are matching answers then we don't need to unwrap anything
     // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
-    dbg!(&loc_pat, &loc_new);
-    if dbg!(is_matching_intermediate_answer(loc_pat, loc_new)) {
+    if is_matching_intermediate_answer(loc_pat, loc_new) {
         return loc_arg;
     }
 
@@ -758,7 +746,6 @@ pub fn apply_task_await<'a>(
                 value: Var {
                     module_name: ModuleName::TASK,
                     ident: "await",
-                    suffixed: 0,
                 },
             }),
             arena.alloc(task_await_apply_args),

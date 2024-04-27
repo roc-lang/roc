@@ -51,12 +51,12 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
         let pattern_state = state.clone();
 
         // Return early with the suffixed statement
-        match pattern.value {
-            Pattern::Identifier { suffixed, .. } if suffixed > 0 => {
-                return Ok((MadeProgress, pattern, pattern_state))
-            }
-            _ => {}
-        }
+        // match pattern.value {
+        //     Pattern::Identifier { .. } if suffixed > 0 => {
+        //         return Ok((MadeProgress, pattern, pattern_state))
+        //     }
+        //     _ => {}
+        // }
 
         let (pattern_spaces, state) =
             match space0_e(EPattern::AsKeyword).parse(arena, state, min_indent) {
@@ -408,7 +408,7 @@ fn loc_ident_pattern_help<'a>(
                                 region: loc_ident.region,
                                 value: Pattern::Identifier {
                                     ident: var,
-                                    suffixed,
+                                    suffixed: 0,
                                 },
                             },
                             state,
@@ -424,7 +424,7 @@ fn loc_ident_pattern_help<'a>(
                             value: Pattern::QualifiedIdentifier {
                                 module_name,
                                 ident: var,
-                                suffixed,
+                                suffixed: 0,
                             },
                         },
                         state,

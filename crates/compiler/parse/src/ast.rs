@@ -9,7 +9,6 @@ use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_module::ident::ModuleName;
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,7 +290,6 @@ pub enum Expr<'a> {
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
-        suffixed: u8, // how many `!` suffixes, for example `doTheThing!!` executes a Task that returns a Task
     },
 
     Underscore(&'a str),
@@ -358,17 +356,6 @@ pub enum Expr<'a> {
 }
 
 impl Expr<'_> {
-    pub fn increment_var_suffix(&mut self, count: u8) {
-        match self {
-            Expr::Var { suffixed, .. } => {
-                *suffixed += count;
-            }
-            _ => {
-                internal_error!("increment_var_suffix called on non-Var expression");
-            }
-        }
-    }
-
     pub fn get_region_spanning_binops(&self) -> Region {
         match self {
             Expr::BinOps(firsts, last) => {
@@ -398,7 +385,7 @@ pub fn split_loc_exprs_around<'a>(
 pub fn is_expr_suffixed(expr: &Expr) -> bool {
     match expr {
         // expression without arguments, `read!`
-        Expr::Var { suffixed, .. } => false,
+        Expr::Var { .. } => false,
 
         Expr::TaskAwaitBang(..) => true,
 
@@ -449,11 +436,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         }
         Expr::Float(_) => false,
         Expr::Num(_) => false,
-        Expr::NonBase10Int {
-            string,
-            base,
-            is_negative,
-        } => false,
+        Expr::NonBase10Int { .. } => false,
         Expr::Str(_) => false,
         Expr::SingleQuote(_) => false,
         Expr::RecordAccess(a, _) => is_expr_suffixed(a),
@@ -1684,13 +1667,11 @@ impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
         ident: "<function>",
-        suffixed: 0,
     };
 
     pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
         module_name: "",
         ident: "*",
-        suffixed: 0,
     };
 
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {

@@ -57,11 +57,7 @@ fn new_op_call_expr<'a>(
             let args = arena.alloc([left, right]);
 
             let loc_expr = arena.alloc(Loc {
-                value: Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed: 0,
-                },
+                value: Expr::Var { module_name, ident },
                 region: loc_op.region,
             });
 
@@ -604,12 +600,10 @@ pub fn desugar_expr<'a>(
                 Negate => Var {
                     module_name: ModuleName::NUM,
                     ident: "neg",
-                    suffixed: 0,
                 },
                 Not => Var {
                     module_name: ModuleName::BOOL,
                     ident: "not",
-                    suffixed: 0,
                 },
             };
             let loc_fn_var = arena.alloc(Loc { region, value });
@@ -707,7 +701,6 @@ pub fn desugar_expr<'a>(
             let inspect_fn = Var {
                 module_name: ModuleName::INSPECT,
                 ident: "toStr",
-                suffixed: 0,
             };
             let loc_inspect_fn_var = arena.alloc(Loc {
                 value: inspect_fn,
@@ -762,7 +755,6 @@ pub fn desugar_expr<'a>(
                         Expr::Var {
                             module_name: ModuleName::TASK,
                             ident: "ok",
-                            suffixed: 0,
                         },
                     )),
                     arena.alloc(apply_args),
@@ -858,7 +850,6 @@ fn desugar_field<'a>(
                 value: Var {
                     module_name: "",
                     ident: loc_str.value,
-                    suffixed: 0,
                 },
                 region: loc_str.region,
             };
@@ -1039,7 +1030,6 @@ fn record_builder_arg<'a>(
                         value: Expr::Var {
                             module_name: "",
                             ident: arena.alloc("#".to_owned() + label.value),
-                            suffixed: 0,
                         },
                     });
 

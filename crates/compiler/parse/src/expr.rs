@@ -244,7 +244,7 @@ fn parse_ident_seq<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let (p, loc_ident, state) =
+    let (_, loc_ident, state) =
         loc!(assign_or_destructure_identifier()).parse(arena, state, min_indent)?;
     let expr = ident_to_expr(arena, loc_ident.value);
     let (_p, suffixes, state) = record_field_access_chain()
@@ -2184,18 +2184,14 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
     }
 
     let mut pat = match expr.item {
-        Expr::Var {
-            module_name,
-            ident,
-            suffixed,
-        } => {
+        Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
-                Pattern::Identifier { ident, suffixed }
+                Pattern::Identifier { ident, suffixed: 0 }
             } else {
                 Pattern::QualifiedIdentifier {
                     module_name,
                     ident,
-                    suffixed,
+                    suffixed: 0,
                 }
             }
         }
@@ -2830,18 +2826,14 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
         Ident::Access {
             module_name,
             parts,
-            suffixed,
+            suffixed: _,
         } => {
             let mut iter = parts.iter();
 
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(Accessor::RecordField(ident)) => Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed,
-                },
+                Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
                 Some(Accessor::TupleIndex(_)) => {
                     // TODO: make this state impossible to represent in Ident::Access,
                     // by splitting out parts[0] into a separate field with a type of `&'a str`,
