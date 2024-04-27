@@ -4,7 +4,7 @@ use std::{fs, io};
 use bumpalo::Bump;
 use roc_collections::MutSet;
 use roc_load::MonomorphizedModule;
-use roc_parse::ast::{Expr, Pattern, TypeDef, TypeHeader, ValueDef};
+use roc_parse::ast::{Expr, Pattern, StrLiteral, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
 use roc_parse::parser::Parser;
 use roc_parse::parser::{EClosure, EExpr, EPattern};
@@ -169,8 +169,20 @@ impl ReplState {
                             return ReplAction::Nothing;
                         }
                     },
-                    ValueDef::IngestedFileImport(_) => {
-                        todo!("handle ingesting a file from the REPL")
+                    ValueDef::IngestedFileImport(file) => {
+                        if let StrLiteral::PlainLine(path) = file.path.value {
+                            let filename = PathBuf::from(path);
+                            if let Err(err) = fs::metadata(&filename) {
+                                return ReplAction::FileProblem {
+                                    filename,
+                                    error: err.kind(),
+                                };
+                            }
+                        }
+
+                        self.past_defs.push(PastDef::Import(line.to_string()));
+
+                        return ReplAction::Nothing;
                     }
                     ValueDef::Stmt(_) => todo!(),
                 }
