@@ -254,11 +254,6 @@ fn parse_ident_seq<'a>(
     let expr = apply_expr_access_chain(arena, expr, suffixes);
     Ok((MadeProgress, Loc::at(loc_ident.region, expr), state))
 }
-//     loc!(map_with_arena!(
-//         assign_or_destructure_identifier(),
-//         ident_to_expr
-//     ))
-// }
 
 fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
@@ -2816,11 +2811,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
-        Ident::Access {
-            module_name,
-            parts,
-            suffixed: _,
-        } => {
+        Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 
             // The first value in the iterator is the variable name,

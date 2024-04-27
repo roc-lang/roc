@@ -42,7 +42,6 @@ pub enum Ident<'a> {
     Access {
         module_name: &'a str,
         parts: &'a [Accessor<'a>],
-        suffixed: u8,
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
@@ -193,12 +192,7 @@ pub fn parse_ident<'a>(
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             let state = advance_state!(state, width as usize)?;
-            if let Ident::Access {
-                module_name,
-                parts,
-                suffixed,
-            } = ident
-            {
+            if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
@@ -209,15 +203,7 @@ pub fn parse_ident<'a>(
                     }
                 }
 
-                return Ok((
-                    MadeProgress,
-                    Ident::Access {
-                        module_name,
-                        parts,
-                        suffixed,
-                    },
-                    state,
-                ));
+                return Ok((MadeProgress, Ident::Access { module_name, parts }, state));
             }
 
             Ok((MadeProgress, ident, state))
@@ -534,22 +520,9 @@ fn chomp_identifier_chain<'a>(
 
                 chomped += width as usize;
 
-                // Parse any `!` suffixes
-                let suffixed = 0;
-                // while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                //     if ch == '!' {
-                //         suffixed += 1;
-                //         chomped += width;
-                //     } else {
-                //         // we're done
-                //         break;
-                //     }
-                // }
-
                 let ident = Ident::Access {
                     module_name,
                     parts: parts.into_bump_slice(),
-                    suffixed,
                 };
 
                 Ok((chomped as u32, ident))
@@ -584,22 +557,9 @@ fn chomp_identifier_chain<'a>(
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
 
-        // Parse any `!` suffixes
-        let suffixed = 0;
-        // while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        //     if ch == '!' {
-        //         suffixed += 1;
-        //         chomped += width;
-        //     } else {
-        //         // we're done
-        //         break;
-        //     }
-        // }
-
         let ident = Ident::Access {
             module_name: "",
             parts: arena.alloc([Accessor::RecordField(value)]),
-            suffixed,
         };
 
         Ok((chomped as u32, ident))
