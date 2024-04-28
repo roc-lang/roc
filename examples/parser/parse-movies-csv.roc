@@ -6,7 +6,7 @@ app "example"
     imports [
         pf.Stdout,
         pf.Stderr,
-        pf.Task.{ Task },
+        pf.Task,
         parser.Core.{ Parser, map, keep },
         parser.String.{ strFromUtf8 },
         parser.CSV.{ CSV },

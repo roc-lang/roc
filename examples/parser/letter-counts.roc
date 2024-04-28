@@ -6,6 +6,7 @@ app "example"
     imports [
         cli.Stdout,
         cli.Stderr,
+        cli.Task,
         parser.Core.{ Parser, buildPrimitiveParser, many },
         parser.String.{ parseStr },
     ]
