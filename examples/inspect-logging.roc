@@ -5,6 +5,7 @@ app "inspect-logging"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [
         pf.Stdout,
+        pf.Task,
         Community,
     ]
     provides [main] to pf
@@ -35,4 +36,4 @@ main =
     |> Community.addFriend 0 2
     |> Community.addFriend 1 2
     |> Inspect.toStr
-    |> Stdout.line
+    |> Stdout.line!
