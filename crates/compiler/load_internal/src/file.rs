@@ -4306,7 +4306,6 @@ impl<'a> BuildTask<'a> {
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
-        // Next, solve this module in the background.
         Self::Solve {
             module,
             ident_ids,
