@@ -5183,8 +5183,6 @@ fn parse<'a>(
             ValueDef::ModuleImport(import) => {
                 imported.push((import.name.value.into(), *region));
             }
-
-            ValueDef::IngestedFileImport(_) => {}
             _ => {}
         }
     }
