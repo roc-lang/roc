@@ -192,8 +192,6 @@ fn start_phase<'a>(
 
                 BuildTask::Parse {
                     header,
-                    // Provide mutexes of ModuleIds and IdentIds by module,
-                    // so other modules can populate them as they load.
                     module_ids: Arc::clone(&state.arc_modules),
                     ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
                 }
