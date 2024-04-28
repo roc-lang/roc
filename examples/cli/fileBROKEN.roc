@@ -16,11 +16,9 @@ main =
 
     task =
         cwd = Env.cwd!
-
         Stdout.line! "cwd: $(Path.display cwd)"
         dirEntries = Dir.list! cwd
         contentsStr = Str.joinWith (List.map dirEntries Path.display) "\n    "
-
         Stdout.line! "Directory contents:\n    $(contentsStr)\n"
         Stdout.line! "Writing a string to out.txt"
         File.writeUtf8! path "a string!"

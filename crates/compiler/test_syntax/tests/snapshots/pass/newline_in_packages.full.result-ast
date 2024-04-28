@@ -17,13 +17,13 @@ Full {
                             after: [],
                         },
                         item: [
-                            @27-145 SpaceAfter(
+                            @27-146 SpaceAfter(
                                 PackageEntry {
                                     shorthand: "pf",
                                     spaces_after_shorthand: [
                                         Newline,
                                     ],
-                                    package_name: @31-145 PackageName(
+                                    package_name: @31-146 PackageName(
                                         "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
                                     ),
                                 },
@@ -44,7 +44,7 @@ Full {
                             after: [],
                         },
                         item: [
-                            @161-170 Package(
+                            @162-171 Package(
                                 "pf",
                                 ModuleName(
                                     "Stdout",
@@ -63,7 +63,7 @@ Full {
                         after: [],
                     },
                     entries: [
-                        @186-190 ExposedName(
+                        @187-191 ExposedName(
                             "main",
                         ),
                     ],
@@ -73,7 +73,7 @@ Full {
                         item: ToKeyword,
                         after: [],
                     },
-                    to: @195-197 ExistingPackage(
+                    to: @196-198 ExistingPackage(
                         "pf",
                     ),
                 },
@@ -85,7 +85,7 @@ Full {
             Index(2147483648),
         ],
         regions: [
-            @199-246,
+            @200-247,
         ],
         space_before: [
             Slice(start = 0, length = 2),
@@ -100,17 +100,17 @@ Full {
         type_defs: [],
         value_defs: [
             Body(
-                @199-203 Identifier {
+                @200-204 Identifier {
                     ident: "main",
                 },
-                @210-246 SpaceBefore(
+                @211-247 SpaceBefore(
                     Apply(
-                        @210-221 Var {
+                        @211-222 Var {
                             module_name: "Stdout",
                             ident: "line",
                         },
                         [
-                            @222-246 Str(
+                            @223-247 Str(
                                 PlainLine(
                                     "I'm a Roc application!",
                                 ),

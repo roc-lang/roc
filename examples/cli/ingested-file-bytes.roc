@@ -10,7 +10,7 @@ app "ingested-file-bytes"
 main =
     # Due to how license is used, it will be a List U8.
     license
-    |> List.map Num.toU64
-    |> List.sum
-    |> Num.toStr
-    |> Stdout.line!
+        |> List.map Num.toU64
+        |> List.sum
+        |> Num.toStr
+        |> Stdout.line!

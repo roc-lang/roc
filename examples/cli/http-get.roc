@@ -15,8 +15,9 @@ main =
 
     resp = Http.send! request
 
-    output = when resp |> Http.handleStringResponse is 
-        Err err -> crash (Http.errorToString err)
-        Ok body -> body
+    output =
+        when resp |> Http.handleStringResponse is
+            Err err -> crash (Http.errorToString err)
+            Ok body -> body
 
     Stdout.line output
