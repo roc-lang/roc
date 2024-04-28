@@ -1715,7 +1715,7 @@ We could also use `Task.onErr` instead, which is like `mapErr` except instead of
 
 Since we don't have any extra tasks to run, `mapErr` is more concise because we don't have to say `Task.err` at the end of each branch.
 
-### [The \_ type](#_) {#\_}
+### [The \_ type](#underscore) {#underscore}
 
 In a larger program, we might want to split `main` into different pieces for logic and handling errors:
 
