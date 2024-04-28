@@ -8,7 +8,7 @@ Here is a Roc application that prints `"Hello, World!"` to the command line:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.1/y_Ww7a2_ZGjp0ZTt9Y_pNdSqqMRdMLzHMKfdN8LWidk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 

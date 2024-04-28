@@ -1,31 +1,23 @@
 app "http-get"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.1/y_Ww7a2_ZGjp0ZTt9Y_pNdSqqMRdMLzHMKfdN8LWidk.tar.br" }
-    imports [pf.Http, pf.Task.{ Task }, pf.Stdin, pf.Stdout]
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+    imports [pf.Http, pf.Task, pf.Stdout]
     provides [main] to pf
 
-main : Task {} I32
 main =
-    _ <- Task.await (Stdout.line "Enter a URL to fetch. It must contain a scheme like \"http://\" or \"https://\".")
+    request = {
+        method: Get,
+        headers: [],
+        url: "http://www.example.com",
+        mimeType: "",
+        body: [],
+        timeout: TimeoutMilliseconds 5000,
+    }
 
-    input <- Task.await Stdin.line
+    resp = Http.send! request
 
-    when input is
-        End ->
-            Stdout.line "I received end-of-input (EOF) instead of a URL."
+    output =
+        when resp |> Http.handleStringResponse is
+            Err err -> crash (Http.errorToString err)
+            Ok body -> body
 
-        Input url ->
-            request = {
-                method: Get,
-                headers: [],
-                url,
-                mimeType: "",
-                body: [],
-                timeout: NoTimeout,
-            }
-
-            output <- Http.send request
-                |> Task.await \resp -> resp |> Http.handleStringResponse |> Task.fromResult
-                |> Task.onErr \err -> crash (Http.errorToString err)
-                |> Task.await
-
-            Stdout.line output
+    Stdout.line output
