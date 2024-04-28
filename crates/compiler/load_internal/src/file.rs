@@ -2350,31 +2350,6 @@ fn update<'a>(
         }
         Parsed(parsed) => {
             let module_id = parsed.module_id;
-
-            if let HeaderType::Platform {
-                config_shorthand, ..
-            } = parsed.header_type
-            {
-                let undefined_shorthands: Vec<_> = parsed
-                    .package_qualified_imported_modules
-                    .iter()
-                    .filter(|pqim| match pqim {
-                        PackageQualified::Unqualified(_) => false,
-                        PackageQualified::Qualified(shorthand, _) => {
-                            !(parsed.packages.contains_key(shorthand)
-                                || shorthand == &config_shorthand)
-                        }
-                    })
-                    .collect();
-
-                // shorthands must be defined by the module!
-                assert!(
-                    undefined_shorthands.is_empty(),
-                    "{undefined_shorthands:?} not in {:?} ",
-                    &parsed.packages
-                );
-            }
-
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in parsed.deps_by_name.iter() {
                 state.module_cache.module_names.insert(*id, name.clone());
