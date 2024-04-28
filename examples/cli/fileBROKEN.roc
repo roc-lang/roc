@@ -2,7 +2,6 @@ app "file-io"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [
         pf.Stdout,
-        pf.Stderr,
         pf.Task.{ Task },
         pf.File,
         pf.Path,
@@ -11,7 +10,7 @@ app "file-io"
     ]
     provides [main] to pf
 
-main : Task {} [Exit I32 Str]
+main : Task {} [Exit I32 Str]_
 main =
     path = Path.fromStr "out.txt"
 

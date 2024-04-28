@@ -4,7 +4,7 @@ app "args"
     provides [main] to pf
 
 main =
-    args <- Arg.list |> Task.await
+    args = Arg.list!
     parser =
         divCmd =
             Arg.succeed (\dividend -> \divisor -> Div (Num.toF64 dividend) (Num.toF64 divisor))
@@ -54,9 +54,8 @@ main =
             |> Num.toStr
             |> Stdout.line
 
-        Err helpMenu ->
-            {} <- Stdout.line helpMenu |> Task.await
-            Task.err [Exit 1 ""]
+        Err helpMenuErr ->
+            Task.err (Exit 1 "unable to parse args: $(Inspect.toStr helpMenuErr)")
 
 runCmd = \cmd ->
     when cmd is
