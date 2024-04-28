@@ -5180,11 +5180,8 @@ fn parse<'a>(
     let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
 
     for (def, region) in ast::RecursiveValueDefIter::new(&parsed_defs) {
-        match def {
-            ValueDef::ModuleImport(import) => {
-                imported.push((import.name.value.into(), *region));
-            }
-            _ => {}
+        if let ValueDef::ModuleImport(import) = def {
+            imported.push((import.name.value.into(), *region));
         }
     }
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
