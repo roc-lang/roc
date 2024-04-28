@@ -2350,6 +2350,7 @@ fn update<'a>(
         }
         Parsed(parsed) => {
             let module_id = parsed.module_id;
+
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in parsed.deps_by_name.iter() {
                 state.module_cache.module_names.insert(*id, name.clone());
@@ -4248,20 +4249,6 @@ fn build_header<'a>(
         .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
         .collect::<MutMap<_, _>>();
 
-    // make sure when we run the bulitin modules in /compiler/builtins/roc that we
-    // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
-    // and we just have a bunch of definitions with runtime errors in their bodies
-    let header_type = {
-        match header_type {
-            HeaderType::Interface { name, exposes } if home.is_builtin() => HeaderType::Builtin {
-                name,
-                exposes,
-                generates_with: &[],
-            },
-            _ => header_type,
-        }
-    };
-
     Ok((
         home,
         name,
@@ -4271,7 +4258,7 @@ fn build_header<'a>(
             is_root_module,
             packages: package_entries,
             parse_state,
-            header_type,
+            header_type: header_type.to_maybe_builtin(home),
             header_comments,
             module_timing,
             opt_shorthand,

@@ -103,6 +103,19 @@ impl<'a> HeaderType<'a> {
             }
         }
     }
+
+    pub fn to_maybe_builtin(self, module_id: ModuleId) -> Self {
+        match self {
+            HeaderType::Interface { name, exposes } if module_id.is_builtin() => {
+                HeaderType::Builtin {
+                    name,
+                    exposes,
+                    generates_with: &[],
+                }
+            }
+            _ => self,
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
