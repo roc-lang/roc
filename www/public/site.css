@@ -39,6 +39,7 @@
     --header-link-color: #1bbcb3;
     --header-link-hover: #222;
     --h1-color: #8055e4;
+    --tutorial-h3-color: #8c5ce3; /* Slightly darker than --primary-1, which looks washed-out in <h3>s */
 }
 
 html {
@@ -167,7 +168,7 @@ hr {
 }
 
 #sponsor-logos .logo-decem .cls-1 {
-    fill:#04021e;
+    fill: #04021e;
 }
 
 #sponsor-logos + p {
@@ -731,7 +732,8 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2")
+    src:
+        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2")
             format("woff2"),
         url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff")
             format("woff");
@@ -746,7 +748,8 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2")
+    src:
+        url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2")
             format("woff2"),
         url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff")
             format("woff");
@@ -760,7 +763,8 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2")
+    src:
+        url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2")
             format("woff2"),
         url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
@@ -774,7 +778,8 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2")
+    src:
+        url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2")
             format("woff2"),
         url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff")
             format("woff");
@@ -788,7 +793,8 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2")
+    src:
+        url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2")
             format("woff2"),
         url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff")
             format("woff");
@@ -825,6 +831,7 @@ li {
         --header-link-color: #9c7cea;
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
+        --tutorial-h3-color: var(--primary-1);
     }
 
     .logo-dark {
@@ -1137,7 +1144,8 @@ code .dim {
     color: #7c38f5;
 }
 
-.interactive-desc code, .interactive-desc pre {
+.interactive-desc code,
+.interactive-desc pre {
     background: none;
     color: inherit;
 }
@@ -1201,9 +1209,12 @@ code .dim {
     border: none;
 }
 
+#tutorial-main h3 a {
+    color: var(--tutorial-h3-color);
+}
+
 #tutorial-main h1 a,
 #tutorial-main h2 a,
-#tutorial-main h3 a,
 #tutorial-main h4 a,
 #tutorial-main h5 a {
     color: var(--header-link-color);
@@ -1240,7 +1251,7 @@ code .dim {
     font-family: inherit;
     font-size: 1.65rem;
     line-height: 3rem;
-    text-shadow: 1px 1px 1px #010101;
+    margin-bottom: 0.5rem;
 }
 
 #tutorial-main h4 {
@@ -1364,12 +1375,14 @@ code .dim {
     font-size: 18px;
 }
 
-#homepage-repl-container #repl-prompt, #homepage-repl-container .input-line-prefix {
+#homepage-repl-container #repl-prompt,
+#homepage-repl-container .input-line-prefix {
     top: 1.25rem;
     color: var(--light-cyan);
 }
 
-.input-line-prefix, #repl-prompt {
+.input-line-prefix,
+#repl-prompt {
     color: var(--cyan);
     color: var(--primary-2);
 }
@@ -1481,7 +1494,7 @@ code .dim {
     in a light color scheme, and only white in dark mode. The name could be better!
 */
 #homepage-repl-container .color-white {
-    color: #FFF;
+    color: #fff;
 }
 
 #repl-container .color-white {
@@ -1489,15 +1502,13 @@ code .dim {
 }
 
 @media (prefers-color-scheme: dark) {
-
     #homepage-repl-container .color-white {
-        color: #FFF;
+        color: #fff;
     }
 
     #repl-container .color-white {
-        color: #FFF;
+        color: #fff;
     }
-
 }
 
 .bold {
