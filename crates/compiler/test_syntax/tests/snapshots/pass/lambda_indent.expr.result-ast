@@ -2,7 +2,6 @@ Closure(
     [
         @1-2 Identifier {
             ident: "x",
-            suffixed: 0,
         },
     ],
     @8-9 SpaceBefore(

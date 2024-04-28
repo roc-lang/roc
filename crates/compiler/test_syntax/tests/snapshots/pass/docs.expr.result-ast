@@ -19,7 +19,6 @@ SpaceBefore(
                 Body(
                     @48-49 Identifier {
                         ident: "x",
-                        suffixed: 0,
                     },
                     @52-53 Num(
                         "5",

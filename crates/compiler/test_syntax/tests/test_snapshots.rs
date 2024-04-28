@@ -752,7 +752,6 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -769,7 +768,6 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -785,7 +783,6 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -801,13 +798,11 @@ mod test_snapshots {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             let expr2 = arena.alloc(Var {
                 module_name: "",
                 ident: "project",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;

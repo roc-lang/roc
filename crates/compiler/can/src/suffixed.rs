@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{is_loc_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef, WhenBranch};
+use roc_parse::ast::{is_expr_suffixed, Pattern, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
@@ -31,11 +31,9 @@ fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
             Expr::Var {
                 module_name: "",
                 ident: answer_ident,
-                suffixed: 0,
             },
             Pattern::Identifier {
                 ident: answer_ident.as_str(),
-                suffixed: 0,
             },
         )
     })
@@ -95,63 +93,10 @@ pub fn unwrap_suffixed_expression<'a>(
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     let unwrapped_expression = {
         match loc_expr.value {
-            Expr::Var {
-                module_name,
-                ident,
-                suffixed,
-            } => {
-                match suffixed {
-                    0 => Ok(loc_expr),
-                    1 => {
-                        let unwrapped_var = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            Expr::Var {
-                                module_name,
-                                ident,
-                                suffixed: suffixed.saturating_sub(1),
-                            },
-                        ));
+            Expr::TaskAwaitBang(sub_expr) => {
+                let unwrapped_sub_expr = arena.alloc(Loc::at(loc_expr.region, *sub_expr));
 
-                        init_unwrapped_err(arena, unwrapped_var, maybe_def_pat)
-                    }
-                    _ => {
-                        let unwrapped_var = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            Expr::Var {
-                                module_name,
-                                ident,
-                                suffixed: 0,
-                            },
-                        ));
-
-                        // we generate an intermediate pattern `#!a0` etc
-                        // so we dont unwrap the definition pattern
-                        let (mut answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
-
-                        // we transfer the suffix from the Var to the intermediate answer Var
-                        // as that will need to be unwrapped in a future call
-                        if let Expr::Var {
-                            module_name: "",
-                            ident: answer_ident,
-                            suffixed: 0,
-                        } = answer_var
-                        {
-                            answer_var = Expr::Var {
-                                module_name: "",
-                                ident: answer_ident,
-                                suffixed: suffixed.saturating_sub(1),
-                            }
-                        } else {
-                            internal_error!("expected a suffixed Var to be generated");
-                        }
-
-                        Err(EUnwrapped::UnwrappedSubExpr {
-                            sub_arg: unwrapped_var,
-                            sub_pat: arena.alloc(Loc::at(unwrapped_var.region, answer_pat)),
-                            sub_new: arena.alloc(Loc::at(unwrapped_var.region, answer_var)),
-                        })
-                    }
-                }
+                init_unwrapped_err(arena, unwrapped_sub_expr, maybe_def_pat)
             }
 
             Expr::Defs(..) => unwrap_suffixed_expression_defs_help(arena, loc_expr, maybe_def_pat),
@@ -192,8 +137,8 @@ pub fn unwrap_suffixed_expression<'a>(
     // KEEP THIS HERE FOR DEBUGGING
     // USEFUL TO SEE THE UNWRAPPING
     // OF AST NODES AS THEY DESCEND
-    // if is_loc_expr_suffixed(loc_expr) {
-    //     dbg!(&loc_expr, &unwrapped_expression);
+    // if is_expr_suffixed(&loc_expr.value) {
+    //     dbg!(&maybe_def_pat, &loc_expr, &unwrapped_expression);
     // }
 
     unwrapped_expression
@@ -248,18 +193,6 @@ pub fn unwrap_suffixed_expression_closure_help<'a>(
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
         Expr::Closure(closure_args, closure_loc_ret) => {
-
-            // Check to make sure that arguments are not suffixed
-            let suffixed_arg_count = closure_args
-                .iter()
-                .filter(|loc_pat| loc_pat.value.is_suffixed())
-                .count();
-
-            if suffixed_arg_count > 0 {
-                debug_assert!(false,"closure arguments should not be suffixed");
-                return Err(EUnwrapped::Malformed);
-            }
-
             // note we use `None` here as we don't want to pass a DefExpr up and
             // unwrap the definition pattern for the closure
             match unwrap_suffixed_expression(arena, closure_loc_ret, None) {
@@ -316,21 +249,15 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
             }
 
             // special case for when our Apply function is a suffixed Var (but not multiple suffixed)
-            if let Expr::Var { module_name, ident, suffixed } = function.value {
-                if suffixed == 1 {
-                    let unwrapped_function = arena.alloc(Loc::at(
-                        loc_expr.region,
-                        Expr::Var {
-                            module_name,
-                            ident,
-                            suffixed: suffixed - 1,
-                        },
-                    ));
+            if let Expr::TaskAwaitBang(sub_expr) = function.value {
+                let unwrapped_function = arena.alloc(Loc::at(
+                    loc_expr.region,
+                    *sub_expr,
+                ));
 
-                    let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
+                let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
 
-                    return init_unwrapped_err(arena, new_apply, maybe_def_pat);
-                }
+                return init_unwrapped_err(arena, new_apply, maybe_def_pat);
             }
 
             // function is another expression
@@ -368,7 +295,7 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 let (current_if_then_statement, current_if_then_expression) = if_then;
 
                 // unwrap suffixed (innermost) expressions e.g. `if true then doThing! then ...`
-                if is_loc_expr_suffixed(current_if_then_expression) {
+                if is_expr_suffixed(&current_if_then_expression.value) {
                     // split if_thens around the current index
                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
@@ -398,13 +325,8 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                             sub_pat,
                             sub_new,
                         }) => {
-                            let unwrapped_expression = apply_task_await(
-                                arena,
-                                sub_arg.region,
-                                sub_arg,
-                                sub_pat,
-                                wrap_in_task_ok(arena, sub_new),
-                            );
+                            let unwrapped_expression =
+                                apply_task_await(arena, sub_arg.region, sub_arg, sub_pat, sub_new);
 
                             let mut new_if_thens = Vec::new_in(arena);
 
@@ -429,7 +351,7 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 // unwrap suffixed statements e.g. `if isThing! then ...`
                 // note we want to split and nest if-then's so we only run Task's
                 // that are required
-                if is_loc_expr_suffixed(current_if_then_statement) {
+                if is_expr_suffixed(&current_if_then_statement.value) {
                     // split if_thens around the current index
                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
@@ -541,13 +463,8 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                     sub_pat,
                     sub_new,
                 }) => {
-                    let unwrapped_final_else = apply_task_await(
-                        arena,
-                        sub_arg.region,
-                        sub_arg,
-                        sub_pat,
-                        wrap_in_task_ok(arena, sub_new),
-                    );
+                    let unwrapped_final_else =
+                        apply_task_await(arena, sub_arg.region, sub_arg, sub_pat, sub_new);
 
                     let new_if = arena.alloc(Loc::at(
                         loc_expr.region,
@@ -579,7 +496,7 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
             for (branch_index, WhenBranch{value: branch_loc_expr,patterns, guard}) in branches.iter().enumerate() {
 
                 // if the branch isn't suffixed we can leave it alone
-                if is_loc_expr_suffixed(branch_loc_expr) {
+                if is_expr_suffixed(&branch_loc_expr.value) {
                     let unwrapped_branch_value = match unwrap_suffixed_expression(arena, branch_loc_expr, None) {
                         Ok(unwrapped_branch_value) => unwrapped_branch_value,
                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => apply_task_await(arena, branch_loc_expr.region, sub_arg, sub_pat, sub_new),
@@ -670,7 +587,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                         Ok(next_expr) => next_expr,
                                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
                                             // We need to apply Task.ok here as the defs final expression was unwrapped
-                                            apply_task_await(arena,def_expr.region,sub_arg,sub_pat,wrap_in_task_ok(arena, sub_new))
+                                            apply_task_await(arena,def_expr.region,sub_arg,sub_pat,sub_new)
                                         }
                                         Err(EUnwrapped::UnwrappedDefExpr(..)) | Err(EUnwrapped::Malformed) => {
                                             // TODO handle case when we have maybe_def_pat so can return an unwrapped up
@@ -816,7 +733,6 @@ pub fn apply_task_await<'a>(
                 value: Var {
                     module_name: ModuleName::TASK,
                     ident: "await",
-                    suffixed: 0,
                 },
             }),
             arena.alloc(task_await_apply_args),

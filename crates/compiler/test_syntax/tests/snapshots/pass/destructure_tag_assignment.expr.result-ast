@@ -23,7 +23,6 @@ Defs(
                     [
                         @6-9 Identifier {
                             ident: "str",
-                            suffixed: 0,
                         },
                     ],
                 ),
@@ -47,7 +46,6 @@ Defs(
         Var {
             module_name: "",
             ident: "str",
-            suffixed: 0,
         },
         [
             Newline,

@@ -13,6 +13,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ident::{parse_ident, Accessor, Ident};
 use roc_parse::keyword;
 use roc_parse::state::State;
+use roc_problem::Severity;
 use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -146,7 +147,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     }
 
     // Write each package module's index.html file
-    for (_, module_docs) in exposed_module_docs.iter() {
+    for (module_id, module_docs) in exposed_module_docs.iter() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
 
@@ -164,8 +165,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
             )
             .replace(
                 "<!-- Module Docs -->",
-                render_module_documentation(module_docs, &loaded_module, &all_exposed_symbols)
-                    .as_str(),
+                render_module_documentation(
+                    *module_id,
+                    module_docs,
+                    &loaded_module,
+                    &all_exposed_symbols,
+                )
+                .as_str(),
             );
 
         fs::write(module_dir.join("index.html"), rendered_module)
@@ -235,6 +241,7 @@ fn render_package_index(docs_by_module: &[(ModuleId, ModuleDocumentation)]) -> S
 }
 
 fn render_module_documentation(
+    module_id: ModuleId,
     module: &ModuleDocumentation,
     root_module: &LoadedModule,
     all_exposed_symbols: &VecSet<Symbol>,
@@ -292,6 +299,7 @@ fn render_module_documentation(
                     if let Some(docs) = &doc_def.docs {
                         markdown_to_html(
                             &mut buf,
+                            &root_module.filename(module_id),
                             all_exposed_symbols,
                             &module.scope,
                             docs,
@@ -305,6 +313,7 @@ fn render_module_documentation(
             DocEntry::ModuleDoc(docs) => {
                 markdown_to_html(
                     &mut buf,
+                    &root_module.filename(module_id),
                     all_exposed_symbols,
                     &module.scope,
                     docs,
@@ -314,6 +323,7 @@ fn render_module_documentation(
             DocEntry::DetachedDoc(docs) => {
                 markdown_to_html(
                     &mut buf,
+                    &root_module.filename,
                     all_exposed_symbols,
                     &module.scope,
                     docs,
@@ -899,13 +909,20 @@ struct DocUrl {
     title: String,
 }
 
+enum LinkProblem {
+    MalformedAutoLink,
+    AutoLinkIdentNotInScope,
+    AutoLinkNotExposed,
+    AutoLinkModuleNotImported,
+}
+
 fn doc_url<'a>(
     all_exposed_symbols: &VecSet<Symbol>,
     scope: &Scope,
     interns: &'a Interns,
     mut module_name: &'a str,
     ident: &str,
-) -> DocUrl {
+) -> Result<DocUrl, (String, LinkProblem)> {
     if module_name.is_empty() {
         // This is an unqualified lookup, so look for the ident
         // in scope!
@@ -918,10 +935,7 @@ fn doc_url<'a>(
                 module_name = symbol.module_string(interns);
             }
             Err(_) => {
-                // TODO return Err here
-                panic!(
-                    "Tried to generate an automatic link in docs for symbol `{ident}`, but that symbol was not in scope in this module."
-                );
+                return Err((format!("[{ident}]"), LinkProblem::AutoLinkIdentNotInScope));
             }
         }
     } else {
@@ -940,9 +954,10 @@ fn doc_url<'a>(
                 // Note: You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 else if !all_exposed_symbols.contains(&symbol) {
-                    // TODO return Err here
-                    panic!(
-                            "Tried to generate an automatic link in docs for `{module_name}.{ident}`, but `{module_name}` does not expose `{ident}`.");
+                    return Err((
+                        format!("[{module_name}.{ident}]"),
+                        LinkProblem::AutoLinkNotExposed,
+                    ));
                 }
 
                 // This is a valid symbol for this dependency,
@@ -952,8 +967,10 @@ fn doc_url<'a>(
                 // incorporate the package name into the link.
             }
             None => {
-                // TODO return Err here
-                panic!("Tried to generate a doc link for `{module_name}.{ident}` but the `{module_name}` module was not imported!");
+                return Err((
+                    format!("[{module_name}.{ident}]"),
+                    LinkProblem::AutoLinkModuleNotImported,
+                ));
             }
         }
     }
@@ -967,14 +984,15 @@ fn doc_url<'a>(
     url.push('#');
     url.push_str(ident);
 
-    DocUrl {
+    Ok(DocUrl {
         url,
         title: format!("Docs for {module_name}.{ident}"),
-    }
+    })
 }
 
 fn markdown_to_html(
     buf: &mut String,
+    filename: &Path,
     all_exposed_symbols: &VecSet<Symbol>,
     scope: &Scope,
     markdown: &str,
@@ -1010,20 +1028,33 @@ fn markdown_to_html(
 
                         match iter.next() {
                             Some(Accessor::RecordField(symbol_name)) if iter.next().is_none() => {
-                                let DocUrl { url, title } = doc_url(
+                                match doc_url(
                                     all_exposed_symbols,
                                     scope,
                                     &loaded_module.interns,
                                     module_name,
                                     symbol_name,
-                                );
+                                ) {
+                                    Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
+                                    Err((link_markdown, problem)) => {
+                                        report_markdown_link_problem(
+                                            loaded_module.module_id,
+                                            filename.to_path_buf(),
+                                            &link_markdown,
+                                            problem,
+                                        );
 
-                                Some((url.into(), title.into()))
+                                        None
+                                    }
+                                }
                             }
                             _ => {
-                                // This had record field access,
-                                // e.g. [foo.bar] - which we
-                                // can't create a doc link to!
+                                report_markdown_link_problem(
+                                    loaded_module.module_id,
+                                    filename.to_path_buf(),
+                                    &format!("[{}]", link.reference),
+                                    LinkProblem::MalformedAutoLink,
+                                );
                                 None
                             }
                         }
@@ -1031,17 +1062,36 @@ fn markdown_to_html(
                     Ok((_, Ident::Tag(type_name), _)) => {
                         // This looks like a tag name, but it could
                         // be a type alias that's in scope, e.g. [I64]
-                        let DocUrl { url, title } = doc_url(
+                        match doc_url(
                             all_exposed_symbols,
                             scope,
                             &loaded_module.interns,
                             "",
                             type_name,
+                        ) {
+                            Ok(DocUrl { url, title }) => Some((url.into(), title.into())),
+                            Err((link_markdown, problem)) => {
+                                report_markdown_link_problem(
+                                    loaded_module.module_id,
+                                    filename.to_path_buf(),
+                                    &link_markdown,
+                                    problem,
+                                );
+
+                                None
+                            }
+                        }
+                    }
+                    _ => {
+                        report_markdown_link_problem(
+                            loaded_module.module_id,
+                            filename.to_path_buf(),
+                            &format!("[{}]", link.reference),
+                            LinkProblem::MalformedAutoLink,
                         );
 
-                        Some((url.into(), title.into()))
+                        None
                     }
-                    _ => None,
                 }
             }
             _ => None,
@@ -1136,4 +1186,63 @@ fn markdown_to_html(
     }
 
     pulldown_cmark::html::push_html(buf, docs_parser.into_iter());
+}
+
+/// TODO: this should be moved into Reporting, and the markdown checking
+/// for docs should be part of `roc check`. Problems like these should
+/// be reported as `roc check` warnings and included in the total count
+/// of warnings at the end.
+fn report_markdown_link_problem(
+    module_id: ModuleId,
+    filename: PathBuf,
+    link_markdown: &str,
+    problem: LinkProblem,
+) {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    // Report parsing and canonicalization problems
+    let interns = Interns::default();
+    let alloc = RocDocAllocator::new(&[], module_id, &interns);
+
+    let report = {
+        const AUTO_LINK_TIP: &str = "Tip: When a link in square brackets doesn't have a URL immediately after it in parentheses, the part in square brackets needs to be the name of either an uppercase type in scope, or a lowercase value in scope. Then Roc will generate a link to its docs, if available.";
+
+        let link_problem = match problem {
+            LinkProblem::MalformedAutoLink => alloc.stack([
+                alloc.reflow("The part in square brackets is not a Roc type or value name that can be automatically linked to."),
+                alloc.reflow(AUTO_LINK_TIP),
+            ]),
+            LinkProblem::AutoLinkIdentNotInScope => alloc.stack([
+                alloc.reflow("The name in square brackets was not found in scope."),
+                alloc.reflow(AUTO_LINK_TIP),
+            ]),
+            LinkProblem::AutoLinkNotExposed => alloc.stack([
+                alloc.reflow("The name in square brackets is not exposed by the module where it's defined."),
+                alloc.reflow(AUTO_LINK_TIP),
+            ]),
+            LinkProblem::AutoLinkModuleNotImported => alloc.stack([
+                alloc.reflow("The name in square brackets is not in scope because its module is not imported."),
+                alloc.reflow(AUTO_LINK_TIP),
+            ])
+        };
+
+        let doc = alloc.stack([
+            alloc.reflow("This link in a doc comment is invalid:"),
+            alloc.reflow(link_markdown).indent(4),
+            link_problem,
+        ]);
+
+        Report {
+            filename,
+            doc,
+            title: "INVALID DOCS LINK".to_string(),
+            severity: Severity::Warning,
+        }
+    };
+
+    let palette = DEFAULT_PALETTE;
+    let mut buf = String::new();
+
+    report.render_color_terminal(&mut buf, &alloc, &palette);
 }

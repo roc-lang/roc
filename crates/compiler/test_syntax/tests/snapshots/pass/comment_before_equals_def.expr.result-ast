@@ -19,7 +19,6 @@ Defs(
                 @0-1 SpaceAfter(
                     Identifier {
                         ident: "t",
-                        suffixed: 0,
                     },
                     [
                         LineComment(
@@ -37,7 +36,6 @@ Defs(
         Var {
             module_name: "",
             ident: "e",
-            suffixed: 0,
         },
         [
             Newline,

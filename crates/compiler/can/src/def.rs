@@ -558,11 +558,7 @@ fn canonicalize_claimed_ability_impl<'a>(
         }
         AssignedField::RequiredValue(label, _spaces, value) => {
             let impl_ident = match value.value {
-                ast::Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed: _,
-                } => {
+                ast::Expr::Var { module_name, ident } => {
                     if module_name.is_empty() {
                         ident
                     } else {
@@ -2612,14 +2608,15 @@ pub fn report_unused_imports(
 ) {
     for import in imports_introduced {
         if references.has_module_lookup(import.module_id) {
-            for (symbol, region) in import.exposed_symbols {
-                if !references.has_unqualified_type_or_value_lookup(symbol)
-                    && !scope.abilities_store.is_specialization_name(symbol)
+            for (symbol, region) in &import.exposed_symbols {
+                if !references.has_unqualified_type_or_value_lookup(*symbol)
+                    && !scope.abilities_store.is_specialization_name(*symbol)
+                    && !import.is_task(env)
                 {
-                    env.problem(Problem::UnusedImport(symbol, region));
+                    env.problem(Problem::UnusedImport(*symbol, *region));
                 }
             }
-        } else {
+        } else if !import.is_task(env) {
             env.problem(Problem::UnusedModuleImport(import.module_id, import.region));
         }
     }
@@ -2692,10 +2689,9 @@ fn to_pending_alias_or_opaque<'a>(
 
             for loc_var in vars.iter() {
                 match loc_var.value {
-                    ast::Pattern::Identifier {
-                        ident: name,
-                        suffixed: _,
-                    } if name.chars().next().unwrap().is_lowercase() => {
+                    ast::Pattern::Identifier { ident: name, .. }
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
                         let lowercase = Lowercase::from(name);
                         can_rigids.push(Loc {
                             value: lowercase,
@@ -2888,6 +2884,16 @@ pub struct IntroducedImport {
     module_id: ModuleId,
     region: Region,
     exposed_symbols: Vec<(Symbol, Region)>,
+}
+
+impl IntroducedImport {
+    pub fn is_task(&self, env: &Env<'_>) -> bool {
+        // Temporarily needed for `!` convenience. Can be removed when Task becomes a builtin.
+        match env.qualified_module_ids.get_name(self.module_id) {
+            Some(name) => name.as_inner().as_str() == "Task",
+            None => false,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

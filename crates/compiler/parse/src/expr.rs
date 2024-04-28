@@ -1,5 +1,5 @@
 use crate::ast::{
-    is_loc_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
+    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, RecordBuilderField, Spaceable,
     Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
@@ -10,7 +10,7 @@ use crate::blankspace::{
 };
 use crate::ident::{
     integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
-    Ident,
+    Ident, Suffix,
 };
 use crate::module::module_name_help;
 use crate::parser::{
@@ -140,7 +140,7 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
             specialize_err(EExpr::InParens, loc_expr_in_parens_help()),
             record_field_access_chain()
         )),
-        move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Accessor<'a>>)>| {
+        move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Suffix<'a>>)>| {
             let Loc {
                 mut region,
                 value: (loc_expr, field_accesses),
@@ -161,16 +161,23 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
     )
 }
 
-fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Accessor<'a>>, EExpr<'a>> {
-    zero_or_more!(skip_first!(
-        byte(b'.', EExpr::Access),
-        specialize_err(
-            |_, pos| EExpr::Access(pos),
-            one_of!(
-                map!(lowercase_ident(), Accessor::RecordField),
-                map!(integer_ident(), Accessor::TupleIndex),
+fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
+    zero_or_more!(one_of!(
+        skip_first!(
+            byte(b'.', EExpr::Access),
+            specialize_err(
+                |_, pos| EExpr::Access(pos),
+                one_of!(
+                    map!(lowercase_ident(), |x| Suffix::Accessor(
+                        Accessor::RecordField(x)
+                    )),
+                    map!(integer_ident(), |x| Suffix::Accessor(Accessor::TupleIndex(
+                        x
+                    ))),
+                )
             )
-        )
+        ),
+        map!(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
     ))
 }
 
@@ -193,10 +200,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc!(underscore_expression()),
         loc!(record_literal_help()),
         loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
-            assign_or_destructure_identifier(),
-            ident_to_expr
-        )),
+        ident_seq(),
     )
 }
 
@@ -216,10 +220,7 @@ fn loc_term_or_underscore<'a>(
         loc!(underscore_expression()),
         loc!(record_literal_help()),
         loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
-            assign_or_destructure_identifier(),
-            ident_to_expr
-        )),
+        ident_seq(),
     )
 }
 
@@ -234,11 +235,29 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(record_literal_help()),
         loc!(specialize_err(EExpr::List, list_literal_help())),
-        loc!(map_with_arena!(
-            assign_or_destructure_identifier(),
-            ident_to_expr
-        )),
+        ident_seq(),
     )
+}
+
+fn ident_seq<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    (|arena: &'a Bump, state: State<'a>, min_indent: u32| parse_ident_seq(arena, state, min_indent))
+        .trace("ident_seq")
+}
+
+fn parse_ident_seq<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let (_, loc_ident, state) =
+        loc!(assign_or_destructure_identifier()).parse(arena, state, min_indent)?;
+    let expr = ident_to_expr(arena, loc_ident.value);
+    let (_p, suffixes, state) = record_field_access_chain()
+        .trace("record_field_access_chain")
+        .parse(arena, state, min_indent)
+        .map_err(|(_p, e)| (MadeProgress, e))?;
+    let expr = apply_expr_access_chain(arena, expr, suffixes);
+    Ok((MadeProgress, Loc::at(loc_ident.region, expr), state))
 }
 
 fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -347,7 +366,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
-        let new_options = if is_loc_expr_suffixed(&expr) {
+        let new_options = if is_expr_suffixed(&expr.value) {
             options.set_suffixed_found()
         } else {
             options
@@ -376,7 +395,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     Ok((progress, expr, new_state)) => {
                         // We need to check if we have just parsed a suffixed statement,
                         // if so, this is a defs node.
-                        if is_loc_expr_suffixed(&Loc::at_zero(expr)) {
+                        if is_expr_suffixed(&expr) {
                             let def_region = Region::new(end, new_state.pos());
                             let value_def = ValueDef::Stmt(arena.alloc(Loc::at(def_region, expr)));
 
@@ -448,7 +467,7 @@ impl<'a> ExprState<'a> {
         } else if !self.expr.value.is_tag()
             && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
-            && !is_loc_expr_suffixed(&self.expr)
+            && !is_expr_suffixed(&self.expr.value)
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
 
@@ -688,7 +707,9 @@ pub fn parse_single_def<'a>(
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
-                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
+                    Either::Second(ValueDef::Stmt(loc_expr))
+                        if is_expr_suffixed(&loc_expr.value) =>
+                    {
                         Ok((MadeProgress, Some(single_def), state))
                     }
                     _ => Ok((NoProgress, None, initial)), // a hacky way to get expression-based error messages. TODO fix this
@@ -921,7 +942,9 @@ pub fn parse_single_def<'a>(
                 |_, loc_def_expr| -> ValueDef<'a> { ValueDef::Stmt(arena.alloc(loc_def_expr)) },
             ) {
                 Ok((_, Some(single_def), state)) => match single_def.type_or_value {
-                    Either::Second(ValueDef::Stmt(loc_expr)) if is_loc_expr_suffixed(loc_expr) => {
+                    Either::Second(ValueDef::Stmt(loc_expr))
+                        if is_expr_suffixed(&loc_expr.value) =>
+                    {
                         Ok((MadeProgress, Some(single_def), state))
                     }
                     _ => Ok((NoProgress, None, initial)),
@@ -1065,7 +1088,7 @@ pub fn parse_single_def_assignment<'a>(
 
     // If the expression is actually a suffixed statement, then we need to continue
     // to parse the rest of the expression
-    if crate::ast::is_loc_expr_suffixed(&first_loc_expr) {
+    if crate::ast::is_expr_suffixed(&first_loc_expr.value) {
         let mut defs = Defs::default();
         // Take the suffixed value and make it a e.g. Body(`{}=`, Apply(Var(...)))
         // we will keep the pattern `def_loc_pattern` for the new Defs
@@ -1968,7 +1991,7 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        let new_options = if is_loc_expr_suffixed(&new_expr) {
+                        let new_options = if is_expr_suffixed(&new_expr.value) {
                             options.set_suffixed_found()
                         } else {
                             options
@@ -1987,7 +2010,7 @@ fn parse_expr_operator<'a>(
                                     let def_region = expr.get_region_spanning_binops();
                                     let mut new_expr = Loc::at(def_region, expr);
 
-                                    if is_loc_expr_suffixed(&new_expr) {
+                                    if is_expr_suffixed(&new_expr.value) {
                                         // We have parsed a statement such as `"hello" |> line!`
                                         // put the spaces from after the operator in front of the call
                                         if !spaces_after_operator.is_empty() {
@@ -2100,7 +2123,7 @@ fn parse_expr_end<'a>(
         Ok((_, mut arg, state)) => {
             let new_end = state.pos();
 
-            let new_options = if is_loc_expr_suffixed(&arg) {
+            let new_options = if is_expr_suffixed(&arg.value) {
                 options.set_suffixed_found()
             } else {
                 options
@@ -2290,19 +2313,11 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
     }
 
     let mut pat = match expr.item {
-        Expr::Var {
-            module_name,
-            ident,
-            suffixed,
-        } => {
+        Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
-                Pattern::Identifier { ident, suffixed }
+                Pattern::Identifier { ident }
             } else {
-                Pattern::QualifiedIdentifier {
-                    module_name,
-                    ident,
-                    suffixed,
-                }
+                Pattern::QualifiedIdentifier { module_name, ident }
             }
         }
         Expr::Underscore(opt_name) => Pattern::Underscore(opt_name),
@@ -2382,6 +2397,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::UnappliedRecordBuilder { .. }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
+        | Expr::TaskAwaitBang(..)
         | Expr::Crash => return Err(()),
 
         Expr::Str(string) => Pattern::StrLiteral(string),
@@ -2436,10 +2452,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
                 )
             }
         }
-        AssignedField::LabelOnly(name) => Pattern::Identifier {
-            ident: name.value,
-            suffixed: 0,
-        },
+        AssignedField::LabelOnly(name) => Pattern::Identifier { ident: name.value },
         AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
             arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
             spaces,
@@ -2944,21 +2957,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
-        Ident::Access {
-            module_name,
-            parts,
-            suffixed,
-        } => {
+        Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
 
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(Accessor::RecordField(ident)) => Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed,
-                },
+                Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
                 Some(Accessor::TupleIndex(_)) => {
                     // TODO: make this state impossible to represent in Ident::Access,
                     // by splitting out parts[0] into a separate field with a type of `&'a str`,
@@ -3320,13 +3325,18 @@ fn record_builder_help<'a>(
 fn apply_expr_access_chain<'a>(
     arena: &'a Bump,
     value: Expr<'a>,
-    accessors: Vec<'a, Accessor<'a>>,
+    accessors: Vec<'a, Suffix<'a>>,
 ) -> Expr<'a> {
     accessors
         .into_iter()
         .fold(value, |value, accessor| match accessor {
-            Accessor::RecordField(field) => Expr::RecordAccess(arena.alloc(value), field),
-            Accessor::TupleIndex(field) => Expr::TupleAccess(arena.alloc(value), field),
+            Suffix::Accessor(Accessor::RecordField(field)) => {
+                Expr::RecordAccess(arena.alloc(value), field)
+            }
+            Suffix::Accessor(Accessor::TupleIndex(field)) => {
+                Expr::TupleAccess(arena.alloc(value), field)
+            }
+            Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
         })
 }
 

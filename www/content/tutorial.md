@@ -5,22 +5,13 @@
     <ol>
     <li><a href="#repl">REPL</a></li>
     <li><a href="#building-an-application">Building an Application</a></li>
-    <li><a href="#defining-functions">Defining Functions</a></li>
-    <li><a href="#if-then-else">if-then-else</a></li>
-    <li><a href="#debugging">Debugging</a></li>
-    <li><a href="#records">Records</a></li>
-    <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
-    <li><a href="#booleans">Booleans</a></li>
-    <li><a href="#lists">Lists</a></li>
+    <li><a href="#pattern-matching">Pattern Matching</a></li>
     <li><a href="#types">Types</a></li>
-    <li><a href="#numeric-types">Numeric Types</a></li>
     <li><a href="#crashing">Crashing</a></li>
-    <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
+    <li><a href="#testing">Testing</a></li>
     <li><a href="#modules">Modules</a></li>
     <li><a href="#tasks">Tasks</a></li>
-    <li><a href="#appendix-advanced-concepts">Advanced Concepts</a></li>
-    <li><a href="#reserved-keywords">Reserved Keywords</a></li>
-    <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
+    <li><a href="#advanced-concepts">Advanced Concepts</a></li>
     </ol>
 </nav>
 <section id="tutorial-body">
@@ -169,7 +160,7 @@ app "hello"
     provides [main] to pf
 
 main =
-    Stdout.line "I'm a Roc application!"
+    Stdout.line! "I'm a Roc application!"
 ```
 
 Try running this with:
@@ -194,7 +185,7 @@ iguanas = 2
 total = Num.toStr (birds + iguanas)
 
 main =
-    Stdout.line "There are $(total) animals."
+    Stdout.line! "There are $(total) animals."
 ```
 
 Now run `roc dev` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
@@ -203,13 +194,13 @@ You should see this:
 
 <samp>There are 5 animals.</samp>
 
-`main.roc` now has four definitions (_defs_ for short) `birds`, `iguanas`, `total`, and `main`.
+`main.roc` now has four definitions (_defs_ for short) `birds`, <span class="nowrap">`iguanas`,</span> `total`, and `main`.
 
 A definition names an expression.
 
--   The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
--   The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
--   The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
+- The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
+- The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
+- The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
 Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are $(total) animals."` refers to `total`.
 
@@ -234,7 +225,7 @@ iguanas = 2
 total = addAndStringify birds iguanas
 
 main =
-    Stdout.line "There are $(total) animals."
+    Stdout.line! "There are $(total) animals."
 
 addAndStringify = \num1, num2 ->
     Num.toStr (num1 + num2)
@@ -244,7 +235,7 @@ This new `addAndStringify` function we've defined accepts two numbers, adds them
 
 The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
 
-### [if-then-else](#if-then-else) {#if-then-else}
+### [`if`-`then`-`else` expressions](#if-then-else) {#if-then-else}
 
 Let's modify this function to return an empty string if the numbers add to zero.
 
@@ -260,12 +251,12 @@ addAndStringify = \num1, num2 ->
 
 We did two things here:
 
--   We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
--   We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
+- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
+- We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
 Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
 
-### [else if](#else-if) {#else-if}
+### [`else if` expressions](#else-if) {#else-if}
 
 We can combine `if` and `else` to get `else if`, like so:
 
@@ -322,41 +313,7 @@ Comments that begin with `##` are "doc comments" which will be included in gener
 
 Like other comments, doc comments do not affect the running program.
 
-## [Debugging](#debugging) {#debugging}
-
-[Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
-
-```roc
-pluralize = \singular, plural, count ->
-    dbg count
-
-    if count == 1 then
-        singular
-    else
-        plural
-```
-
-Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
-
-<samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
-
-Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pluralize.roc` on line 6, column 8.
-
-You can give `dbg` any expression you like, for example:
-
-```roc
-dbg Str.concat singular plural
-```
-
-An easy way to print multiple values at a time is to wrap them in a tag, for example a concise tag like `T`:
-
-```roc
-dbg T "the value of count is:" count
-```
-
-> **Note:** `dbg` is a debugging tool, and is only available when running your program with `roc program.roc`, `roc dev program.roc` or `roc test program.roc`. When you build a standalone binary with `roc build`, any uses of `dbg` won't be included!
-
-## [Records](#records) {#records}
+### [Records](#records) {#records}
 
 Currently our `addAndStringify` function takes two arguments. We can instead make it take one argument like so:
 
@@ -411,10 +368,10 @@ returnFoo { foo: "hi!", bar: "blah" }
 Sometimes we assign a def to a field that happens to have the same name—for example, `{ x: x }`.
 In these cases, we shorten it to writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like; here are several different ways to define the same record:
 
--   `{ x: x, y: y }`
--   `{ x, y }`
--   `{ x: x, y }`
--   `{ x, y: y }`
+- `{ x: x, y: y }`
+- `{ x, y }`
+- `{ x: x, y }`
+- `{ x, y: y }`
 
 ### [Record destructuring](#record-destructuring) {#record-destructuring}
 
@@ -452,64 +409,77 @@ fromOriginal = { original & birds: 4, iguanas: 3 }
 
 The `fromScratch` and `fromOriginal` records are equal, although they're defined in different ways.
 
--   `fromScratch` was built using the same record syntax we've been using up to this point.
--   `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
+- `fromScratch` was built using the same record syntax we've been using up to this point.
+- `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
 
 Note that `&` can't introduce new fields to a record, or change the types of existing fields.
 (Trying to do either of these will result in an error at build time!)
 
-## [Default Value Record Fields](#default-value-record-fields) {#default-value-record-fields}
+### [Debugging with `dbg`](#dbg) {#dbg}
 
-Roc supports default value record fields using the `?` operator. This can be a useful pattern where you pass a function a record of configuration values, some of which you'd like to provide defaults for.
-
-In Roc you can write a function like:
+[Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
 
 ```roc
-table = \{
-        height,
-        width,
-        title ? "oak",
-        description ? "a wooden table"
-    }
-    ->
+pluralize = \singular, plural, count ->
+    dbg count
+
+    if count == 1 then
+        singular
+    else
+        plural
 ```
 
-This is using _default value field destructuring_ to destructure a record while
-providing default values for any fields that might be missing.
+Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
 
-Here's the type of `table`:
+<samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
+
+Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pluralize.roc` on line 6, column 8.
+
+You can give `dbg` any expression you like, for example:
 
 ```roc
-table :
-    {
-        height : Pixels,
-        width : Pixels,
-        title ? Str,
-        description ? Str,
-    }
-    -> Table
+dbg Str.concat singular plural
 ```
 
-This says that `table` takes a record with two fields that are _required_, `height` and
-`width`, and two fields that may be _omitted_, `title` and `description`. It also says that
-the `height` and `width` fields have the type `Pixels`, a type alias for some
-numeric type, and the `title` and `description` fields have the type `Str`.
-This means you can choose to omit the `title`, `description`, or both fields, when calling
-the function... but if you provide them, they must have the type `Str`.
+### [Tuples](#tuples) {#tuples}
 
-This is also the type that would have been inferred for `table` if no annotation
-had been written. Roc's compiler can tell from the destructuring syntax
-`title ? ""` that `title` is a default value field, and that it has the type `Str`.
+One way to have `dbg` print multiple values at a time is to wrap them in a record:
 
-Destructuring is the only way to implement a record with default value fields. For example,
-if you write the expression `config.title` and `title` is a default value field,
-you'll get a compile error.
+```roc
+dbg { text: "the value of count is:", value: count }
+```
 
-Default values is a concept that exists only in record fields, and it's intended for the use
-case of config records like this. The ergonomics of destructuring mean this wouldn't be a good
-fit for data modeling, consider using a custom tag union or the `Result` type instead.
+A more concise way would be to wrap them in a _tuple_, like so:
 
-## [Tags &amp; Pattern Matching](#tags) {#tags}
+```roc
+dbg ("the value of count is:", count)
+```
+
+Visually, tuples in Roc look like lists (but with parentheses instead of square brackets). However, a tuple is much more like a record - in fact, tuples and records compile down to the exact same representation at runtime! So anywhere you would use a tuple, you can use a record instead, and the in-memory representation will be exactly the same.
+
+Like records, tuples are fixed-length and can't be iterated over. Also, they can contain values of different types. The difference is that in a record, each field is labeled (and their position doesn't matter), whereas in a tuple, each field is specified by its position.
+
+### [Accessing values in tuples](#tuple-access) {#tuple-access}
+
+Just like how there are two ways to access a record's fields (namely, the `.` operator and [record destructuring(#record-destructuring)), there are also two similar ways to access tuple fields:
+
+```roc
+# tuple field access
+tuple = ("hello", 42, ["list"])
+
+first = tuple.0 # "hello"
+second = tuple.1 # 42
+third = tuple.2 # ["list"]
+```
+
+```roc
+# tuple destructuring
+(first, second, third) = ("hello", 42, ["list"])
+```
+
+By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+
+## [Pattern Matching](#pattern-matching) {#pattern-matching}
 
 Sometimes we want to represent that something can have one of several values. For example:
 
@@ -524,6 +494,8 @@ stoplightColor =
 ```
 
 Here, `stoplightColor` can have one of three values: `Red`, `Yellow`, or `Green`. The capitalization is very important! If these were lowercase (`red`, `yellow`, `green`), then they would refer to defs. However, because they are capitalized, they instead refer to _tags_.
+
+### [Tags](#tags) {#tags}
 
 A tag is a literal value just like a number or a string. Similarly to how I can write the number `42` or the string `"forty-two"` without defining them first, I can also write the tag `FortyTwo` without defining it first. Also, similarly to how `42 == 42` and `"forty-two" == "forty-two"`, it's also the case that `FortyTwo == FortyTwo`.
 
@@ -639,31 +611,7 @@ A tag can also have a payload with more than one value. Instead of `Custom { r: 
 
 We refer to whatever comes before a `->` in a `when` expression as a _pattern_—so for example, in the `Custom description -> description` branch, `Custom description` would be a pattern. In programming, using patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to suggest making a `when` branch that begins with something like `Custom description ->`.
 
-### [Pattern Matching on Lists](#pattern-matching-on-lists) {#pattern-matching-on-lists}
-
-You can also pattern match on lists, like so:
-
-```roc
-when myList is
-    [] -> 0 # the list is empty
-    [Foo, ..] -> 1 # it starts with a Foo tag
-    [_, ..] -> 2 # it contains at least one element, which we ignore
-    [Foo, Bar, ..] -> 3 # it starts with a Foo tag followed by a Bar tag
-    [Foo, Bar, Baz] -> 4 # it has exactly 3 elements: Foo, Bar, and Baz
-    [Foo, a, ..] -> 5 # its first element is Foo, and its second we name `a`
-    [Ok a, ..] -> 6 # it starts with an Ok containing a payload named `a`
-    [.., Foo] -> 7 # it ends with a Foo tag
-    [A, B, .., C, D] -> 8 # it has certain elements at the beginning and end
-    [head, .. as tail] -> 9 # destructure a list into a first element (head) and the rest (tail)
-```
-
-This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
-
-> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
-
-See the [Pattern Matching example](https://www.roc-lang.org/examples/PatternMatching/README.html) which shows different ways to do pattern matching in Roc using tags, strings, and numbers.
-
-## [Booleans](#booleans) {#booleans}
+### [Booleans](#booleans) {#booleans}
 
 In many programming languages, `true` and `false` are special language keywords that refer to the two [boolean](https://en.wikipedia.org/wiki/Boolean_data_type) values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
 
@@ -671,7 +619,7 @@ This design is partly to keep the number of special keywords in the language sma
 
 As an example of why tags are encouraged for data modeling, in many languages it would be common to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` - some of which might also want payloads.
 
-## [Lists](#lists) {#lists}
+### [Lists](#lists) {#lists}
 
 Another thing we can do in Roc is to make a _list_ of values. Here's an example:
 
@@ -876,9 +824,9 @@ that quite does what you want, and you might find yourself calling `List.get` re
 retrieve every element in the list and use it to build up the new value you want. That approach
 can work, but it has a few downsides:
 
--   Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
--   There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
--   It's more verbose than the alternative we're about to discuss
+- Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
+- There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
+- It's more verbose than the alternative we're about to discuss
 
 The `List.walk` function gives you a way to walk over the elements in a list and build up whatever
 return value you like. It's a great alternative to calling `List.get` on every element in the list
@@ -925,6 +873,30 @@ Note that the state doesn't have to be a record; it can be anything you want. Fo
 A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
 
 > **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for...in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
+
+### [Pattern Matching on Lists](#pattern-matching-on-lists) {#pattern-matching-on-lists}
+
+You can also pattern match on lists, like so:
+
+```roc
+when myList is
+    [] -> 0 # the list is empty
+    [Foo, ..] -> 1 # it starts with a Foo tag
+    [_, ..] -> 2 # it contains at least one element, which we ignore
+    [Foo, Bar, ..] -> 3 # it starts with a Foo tag followed by a Bar tag
+    [Foo, Bar, Baz] -> 4 # it has exactly 3 elements: Foo, Bar, and Baz
+    [Foo, a, ..] -> 5 # its first element is Foo, and its second we name `a`
+    [Ok a, ..] -> 6 # it starts with an Ok containing a payload named `a`
+    [.., Foo] -> 7 # it ends with a Foo tag
+    [A, B, .., C, D] -> 8 # it has certain elements at the beginning and end
+    [head, .. as tail] -> 9 # destructure a list into a first element (head) and the rest (tail)
+```
+
+This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
+
+> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
+
+See the [Pattern Matching example](https://www.roc-lang.org/examples/PatternMatching/README.html) which shows different ways to do pattern matching in Roc using tags, strings, and numbers.
 
 ### [The pipe operator](#the-pipe-operator) {#the-pipe-operator}
 
@@ -1160,9 +1132,9 @@ Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, b
 
 A type can be defined to be opaque to hide its internal structure. This is a lot more amazing than it may seem. It can make your code more modular, robust, and easier to read:
 
--   If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
--   You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case.
--   Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
+- If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
+- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case.
+- Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
 
 You can create an opaque type with the `:=` operator. Let's make one called `Username`:
 
@@ -1184,13 +1156,11 @@ Now we can expose the `Username` opaque type so that other modules can use it in
 
 Note that if we define `Username := Str` inside another module (e.g. `Main`) and also use `@Username`, this will compile, however the new `Username` type in main would not be equal to the one defined in the `Username` module. Although both opaque types have the name `Username`, they were defined in different modules and so they are type-incompatible with each other, and even attempting to use `==` to compare them would be a type mismatch.
 
-## [Numeric types](#numeric-types) {#numeric-types}
+### [Integers](#integers) {#integers}
 
 Roc has different numeric types that each have different tradeoffs. They can all be broken down into two categories: [fractions](https://en.wikipedia.org/wiki/Fraction), and [integers](https://en.wikipedia.org/wiki/Integer). In Roc we call these `Frac` and `Int` for short.
 
-### [Integers](#integers) {#integers}
-
-Roc's integer types have two important characteristics: their _size_ and their [_signedness_](https://en.wikipedia.org/wiki/Signedness). Together, these two characteristics determine the range of numbers the integer type can represent.
+Integer types have two important characteristics: their _size_ and their [_signedness_](https://en.wikipedia.org/wiki/Signedness). Together, these two characteristics determine the range of numbers the integer type can represent.
 
 For example, the Roc type `U8` can represent the numbers 0 through 255, whereas the `I16` type can represent the numbers -32768 through 32767. You can actually infer these ranges from their names (`U8` and `I16`) alone!
 
@@ -1204,9 +1174,9 @@ Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
--   Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
--   Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
--   Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+- Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
+- Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+- Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 Here are the different fixed-size integer types that Roc supports:
 
@@ -1217,11 +1187,11 @@ Here are the different fixed-size integer types that Roc supports:
 | `-32_768` <br> `32_767`                                                                                           | `I16`  |
 | `0` <br> `65_535`                                                                                                 | `U16`  |
 | `-2_147_483_648` <br> `2_147_483_647`                                                                             | `I32`  |
-| `0` <br> (over 4 billion) `4_294_967_295`                                                                         | `U32`  |
+| `0` <br>`4_294_967_295` (over 4 billion)                                                                          | `U32`  |
 | `-9_223_372_036_854_775_808` <br> `9_223_372_036_854_775_807`                                                     | `I64`  |
-| `0` <br> _(over 18 quintillion)_`18_446_744_073_709_551_615`                                                      | `U64`  |
+| `0` <br>`18_446_744_073_709_551_615` (over 18 quintillion)                                                        | `U64`  |
 | `-170_141_183_460_469_231_731_687_303_715_884_105_728` <br> `170_141_183_460_469_231_731_687_303_715_884_105_727` | `I128` |
-| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455`                            | `U128` |
+| `0` <br>`340_282_366_920_938_463_463_374_607_431_768_211_455` (over 340 undecillion)                              | `U128` |
 
 If any operation would result in an integer that is either too big or too small to fit in that range (e.g. calling `Int.maxI32 + 1`, which adds 1 to the highest possible 32-bit integer), then the operation will [overflow](https://en.wikipedia.org/wiki/Integer_overflow). When an overflow occurs, the program will crash.
 
@@ -1231,9 +1201,9 @@ As such, it's very important to design your integer operations not to exceed the
 
 Roc has three fractional types:
 
--   `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
--   `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
--   `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+- `F32`, a 32-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+- `F64`, a 64-bit [floating-point number](https://en.wikipedia.org/wiki/IEEE_754)
+- `Dec`, a 128-bit decimal [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
 
 These are different from integers, they can represent numbers with fractional components, such as 1.5 and -0.123.
 
@@ -1280,6 +1250,52 @@ The full list of possible suffixes includes:
 `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `u128`, `i128`, `f32`, `f64`, `dec`
 
 Integer literals can be written in [hexadecimal](https://en.wikipedia.org/wiki/Hexadecimal) form by prefixing with `0x` followed by hexadecimal characters (`a` - `f` in addition to `0` - `9`). For example, writing `0xfe` is the same as writing `254`. Similarly, the prefix `0b` specifies binary integers. Writing `0b0000_1000` is the same as writing `8`.
+
+### [Default-Value Record Fields](#default-value-record-fields) {#default-value-record-fields}
+
+Sometimes you may want to write a function that accepts configuration options. The way to do this in Roc is to accept a record. When you do this, it can sometimes be convenient to provide default values for certain fields in that record, so the caller can omit those fields and let them be populated by the defaults you specified.
+
+For example:
+
+```roc
+table = \{ height, width, title ? "oak", description ? "a wooden table" } ->
+```
+
+This is using _default value field destructuring_ to destructure a record while
+providing default values for any fields that the caller didn't provide. Here, the `?` operator
+essentially means "if the caller did not provide this field, default it to the following value."
+
+The type of `table` uses `?` instead of `:` to indicate which fields the caller can omit:
+
+```roc
+table :
+    {
+        height : U64,
+        width : U64,
+        title ? Str,
+        description ? Str,
+    }
+    -> Table
+```
+
+This says that `table` takes a record with two fields that are _required_—`height` and
+`width`—and two fields that may be _omitted_, namely `title` and `description`. It also says that
+the `height` and `width` fields have the type `U64` and the `title` and `description` fields have
+the type `Str`. This means you can choose to omit the `title`, `description`, or both fields,
+when calling the function…but if you provide them, they must have the type `Str`.
+
+This is also the type that would have been inferred for `table` if it had no annotation.
+Roc's compiler can tell from the destructuring syntax `title ? ""` that `title` is a field with a default,
+and that it has the type `Str`.
+
+Destructuring is the only way to implement a record with default value fields! For example,
+if you write the expression `config.title` and `title` is a default value field, you'll get a compile error.
+
+Note that this language feature is really designed for passing configuration records to functions.
+It's not intended to be used for data modeling; if you want to represent a value that might not be available,
+use a tag union with tag names that describe why the value might not be there. For example, the tag union
+`[Specified Str, Unspecified]` conveys different information from `[Found Str, NotFound]` even though both
+of them store either a `Str` or nothing.
 
 ## [Crashing](#crashing) {#crashing}
 
@@ -1328,7 +1344,7 @@ The reason Roc has a `crash` keyword is for scenarios where it's expected that n
 
 Errors that are recoverable should be represented using normal Roc types (like [Result](https://www.roc-lang.org/builtins/Result)) and then handled without crashing. For example, by having the application report that something went wrong, and then continue running from there.
 
-## [Tests and expectations](#tests-and-expectations) {#tests-and-expectations}
+## [Testing](#testing) {#testing}
 
 You can write automated tests for your Roc code like so:
 
@@ -1376,11 +1392,13 @@ pluralize = \singular, plural, count ->
 This `expect` will fail if you call `pluralize` passing a count of 0.
 
 Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. Different `roc` commands will also handle `expect`s differently:
+
 - `roc build` discards all `expect`s for optimal runtime performance.
 - `roc dev` only runs inline `expect`s that are encountered during normal execution of the program.
 - `roc test` runs top level `expect`s and inline `expect`s that are encountered because of the running of top level `expect`s.
 
 Let's clear up any confusion with an example:
+
 ```roc
 main =
     expect 1 == 2
@@ -1394,6 +1412,7 @@ double = \num ->
 
 expect double 0 == 0
 ```
+
 - `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hello, World!`.
 - `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hello, World!`.
 - `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
@@ -1402,12 +1421,12 @@ expect double 0 == 0
 
 Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
 
--   **Builtins** provide functions that are automatically imported into every module.
--   **Applications** are combined with a platform and compiled into an executable.
--   **Interfaces** provide functions which can be imported into other modules.
--   **Packages** organise modules to share functionality across applications and platforms.
--   **Platforms** provide effects such as IO to interface with the outside world.
--   **Hosted** _note this module type is likely to be deprecated soon_.
+- **Builtins** provide functions that are automatically imported into every module.
+- **Applications** are combined with a platform and compiled into an executable.
+- **Interfaces** provide functions which can be imported into other modules.
+- **Packages** organise modules to share functionality across applications and platforms.
+- **Platforms** provide effects such as IO to interface with the outside world.
+- **Hosted** _note this module type is likely to be deprecated soon_.
 
 ### [Builtin Modules](#builtin-modules) {#builtin-modules}
 
@@ -1427,8 +1446,8 @@ These modules are not ordinary `.roc` files that live on your filesystem. Rather
 
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
--   They are always imported. You never need to add them to `imports`.
--   All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.)
+- They are always imported. You never need to add them to `imports`.
+- All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.)
 
 ### [App Module Header](#app-module-header) {#app-module-header}
 
@@ -1455,9 +1474,9 @@ provides [main] to pf
 
 The `packages { pf: "https://...tar.br" }` part says three things:
 
--   We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
--   That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
--   We're going to name that package `pf` so we can refer to it more concisely in the future.
+- We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
+- That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
+- We're going to name that package `pf` so we can refer to it more concisely in the future.
 
 The `imports [pf.Stdout]` line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
 
@@ -1532,14 +1551,14 @@ See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/REA
 
 ## [Tasks](#tasks) {#tasks}
 
-Tasks are technically not part of the Roc language, but they're very common in platforms. Let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
+Tasks are not currently part of the Roc builtins—for now, each platform exposes their own `Task` implementation, but the plan is to standardize them into a builtin `Task` like module like the builtin modules we already have for `List`, `Str`, and so on—but they're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
 
-In the `basic-cli` platform, we have four operations we can do:
+In the `basic-cli` platform, here are four operations we can do:
 
--   Write a string to the terminal
--   Read a string from user input
--   Write a string to a file
--   Read a string from a file
+- Write a string to the terminal
+- Read a string from user input
+- Write a string to a file
+- Read a string from a file
 
 We'll use these four operations to learn about tasks.
 
@@ -1552,10 +1571,10 @@ app "cli-tutorial"
     provides [main] to pf
 
 main =
-    Stdout.line "Hello, World!"
+    Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). It has this type:
+The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). (We'll discuss the `!` part later.) `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
@@ -1575,7 +1594,7 @@ Stdin.line : Task [Input Str, End] *
 
 Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/tutorial#tags-with-payloads) `[Input Str, End]`. Then we can check whether we got an `End` or some actual `Input`, and print out a message accordingly.
 
-### [Printing Roc values with `Inspect.toStr`](#inspect) {#inspect}
+### [Reading values from tasks](#inspect) {#task-input}
 
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
@@ -1586,153 +1605,279 @@ app "cli-tutorial"
     provides [main] to pf
 
 main =
-    Task.await Stdin.line \input ->
-        Stdout.line "Your input was: $(Inspect.toStr input)"
+    Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
 ```
 
-The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value. It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but in a real program we'd run a `when` on `input` and do something different depending on whether we got an `End` or `Input` tag.
+If you run this program, it will print "Type in something and press Enter:" and then pause.
+That's because it's waiting for you to type something in and press Enter! Once you do,
+it should print back out what you entered.
 
-If you run this program, at first it won't do anything. It's waiting for you to type something in and press Enter! Once you do, it should print back out what you entered—either `Your input was: End` or `Your input was: Input <whatever you entered>` depending on whether you pressed Enter or the key combination to close stdin (namely Ctrl+D on UNIX or Ctrl+Z on Windows). Try doing it both ways to watch the output change!
+### [Task failure](#task-failure) {#task-failure}
 
-### [Chaining tasks with `Task.await`](#await) {#await}
+Sometimes, tasks can fail. For example, a task for reading from a file might fail if the file is not found.
+Even reading from stdin and writing to stdout can fail!
 
-The `Task.await` function combines two tasks into one bigger `Task` which first runs one of the given tasks and then the other. In this case, it's combining a `Stdin.line` task with a `Stdout.line` task into one bigger `Task`, and then setting `main` to be that bigger task.
+For example, the `Stdin.line` task can fail if stdin is closed before it receives a line. You can try this out
+by running the program and pressing Ctrl+Z on Windows, or Ctrl+D on macOS or Linux. (Press that key rather than
+typing in text and pressing Enter.) You'll see a default error message, which the `basic-cli` platform provides
+in case an error occurs that we didn't handle.
 
-The type of `Task.await` is:
+Although this default error handling behavior might be exactly what we want if we're writing a quick script,
+high-quality programs handle errors gracefully. Fortunately, we can do this nicely in Roc!
+
+If we wanted to add the type annotation to `main` that Roc is inferring for it, we would add this annotation:
+
+```roc
+main : Task {} [Exit I32, StdoutErr Stdout.Err, StinErr Stdin.Err]
+main =
+```
+
+Let's break down what this type is saying:
+
+- `Task` tells us this is a `Task` type. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
+- `{}` tells us that this task always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main` comes from `Stdout.line`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
+- `[Exit I32, StdoutErr Stdout.Err, StinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there becase we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32` more in a moment.
+
+To understand what the `Exit I32 Str` error means, let's try temporarily commenting out our current `main` and replacing
+it with this one:
+
+```roc
+main : Task {} [Exit I32 Str]
+main = Task.err (Exit 42 "An error happened!")
+```
+
+Now if we run the application, it will print the line "An error happened!" to stderr and exit with a status code of 42. (You can check the status code of the most recent terminal command that finished in Windows by running `echo %ERRORLEVEL%` (or `$LASTEXITCODE` in PowerShell), or by running `echo $?` in macOS or Linux.)
+
+Now let's try running it with this version of `main`:
+
+```roc
+main : Task {} [Exit I32 Str]
+main = Task.ok {}
+```
+
+This program won't print anything at all, but it will exit with a status code of `0`, indicating success.
+
+In summary:
+
+- If the `main` task ends in a `Task.ok {}`, then it means the final task succeeded and the program will exit with status code 0.
+- If the `main` task ends in a `Task.err (Exit 42 "…")`, then it means the final task failed, and the only information we got about the failure was that the program should exit with code 42 instead of 0, and that it should print a particular string to stderr to inform the user about what happened.
+
+### [Handling task failures](#handling-task-failures) {#handling-task-failures}
+
+If the `main` task ends up failing with any other errors besides `Exit` (such as `StdoutErr` or `StdinErr`), then the `basic-cli` platform's automatic error handling will handle them by printing out words taken from the source code (such as "StdoutErr" and "StinErr"), which could lead to a bad experience for people using this program!
+
+We can prevent that by gracefully handling the other error types, and then translating them into `Exit` errors so that they affect the program's exit code and don't result in the platform printing anything. A convenient way to make sure we've handled all the other errors is to keep our current type annotation for `main` but restore our old implementation:
+
+```roc
+main : Task {} [Exit I32 Str]
+main =
+    Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+```
+
+Adding this type annotation will give us a type mismatch - which is exactly what we want in this case! The type mismatch is telling us that we're claiming the `main` task will only ever fail with an `Exit` tag, but this implementation can _also_ fail with `StdoutErr` and `StdinErr` tags.
+
+In other words, adding this annotation effectively opted us out of `basic-cli`'s default error handling. Now any potential task failures (now and in the future) will have to be handled somehow; if we forget to handle any, we'll get a type mismatch like this! For that reason, `basic-cli` applications that are intended to be high-quality (so, not things like quick scripts) will generally benefit from applying this type annotation to `main`.
+
+Here's one way we can handle those errors:
+
+```roc
+main : Task {} [Exit I32 Str]
+main =
+    task =
+        Stdout.line! "Type in something and press Enter:"
+        input = Stdin.line!
+        Stdout.line! "Your input was: $(input)"
+
+    Task.mapErr task \err ->
+        when err is
+            StdoutErr _ -> Exit 1 "Error writing to stdout."
+            StdinErr _ -> Exit 2 "Error writing to stdin."
+```
+
+The `Task.mapErr` function translates one error into another. Here, we're translating the `StdoutErr` and `StdinErr` errors into `Exit` errors which include a different exit code plus a message that will print to stderr to explain what happened.
+
+We could also use `Task.onErr` instead, which is like `mapErr` except instead of returning a new error, it returns an entirely new `Task`. This means each branch of our `when` gets a bit more verbose, but it does mean we can run additional tasks before exiting. For example:
+
+```roc
+    Task.onErr task \err ->
+        when err is
+            StdoutErr _ -> Task.err (Exit 1 "Error writing to stdout.")
+            StdinErr _ ->
+                # Here we could now run some other tasks,
+                # e.g. to log the error to disk.
+
+                Task.err (Exit 2 "Error writing to stdin.")
+```
+
+Since we don't have any extra tasks to run, `mapErr` is more concise because we don't have to say `Task.err` at the end of each branch.
+
+### [The \_ type](#underscore) {#underscore}
+
+In a larger program, we might want to split `main` into different pieces for logic and handling errors:
+
+```roc
+main : Task {} [Exit I32 Str]
+main =
+    run
+    |> Task.mapErr handleErr
+
+run : Task {} _
+run =
+    Stdout.line! "Type in something and press Enter:"
+    input = Stdin.line!
+    Stdout.line! "Your input was: $(input)"
+
+handleErr : _ -> [Exit I32 Str]
+handleErr = \err ->
+    when err is
+        StdoutErr _ -> Exit 1 "Error writing to stdout."
+        StdinErr _ -> Exit 2 "Error writing to stdin."
+```
+
+Here, we used `_` to create _partial_ type annotations. Wherever a `_` appears in a type annotation, it essentially means "I'm choosing not to annotate this part right here" and it lets Roc use type inference to fill in the blank behind the scenes. Roc will still compile them and check their types as normal (just like it did before we had any annotations at all); the `_` is about which parts of the type we're choosing to annotate and which parts we're leaving to inference.
+
+This is a useful technique to use when we don't want to write out a bunch of error types that we're going to handle anyway, and would otherwise have to keep updating every time a new error appeared. If we want to know the full list of errors, we can see it in a number of ways:
+
+- Look at the branches of our `when err is`, since they cover all the errors (and we'd get a compile error if we left any out)
+- If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
+- We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
+
+We can also use `_` in type aliases, to express that two types are the same without annotating either of them. For example:
+
+```roc
+RunErr : _
+```
+
+```roc
+run : Task {} RunErr
+```
+
+```roc
+handleErr : RunErr -> [Exit I32 Str]
+```
+
+Of course, we could also choose not to use `_` at all and populate the `RunErr` type alias with the full list of errors that could happen in our `run` task. All of these are totally reasonable stylistic choices, depending on how you prefer the code to look. They all compile to exactly the same thing, and have the same runtime characteristics.
+
+### [The ! suffix](#the-!-suffix) {#the-!-suffix}
+
+The `!` suffix operator is syntax sugar for the `Task.await` function, which has this type:
 
 ```roc
 Task.await : Task a err, (a -> Task b err) -> Task b err
 ```
 
-The second argument to `Task.await` is a "callback function" which runs after the first task completes. This callback function receives the output of that first task, and then returns the second task. This means the second task can make use of output from the first task, like we did in our `\input -> ...` callback function here:
+Basically, this function creates a task which runs one task, and then runs a second task which can use the output of the first task. (If the first task fails, the second task never gets run.)
+
+More specifically, `Task.await` returns a `Task` which:
+
+1. Runs the given `Task a err`
+2. If it fails with some error, returns a `Task` which fails with that same error. (So if the given `Task a err` fails, the `a -> Task b err` function never gets called.)
+3. If it succeeds (meaning it produces a success value which has the type `a`), pass the value it succeeded with to the `a -> Task b err` function. Whatever `Task b err` that function returns will be the `Task b err` the entire `Task.await` call returns.
+
+The `!` suffix is syntax sugar for connecting tasks using `Task.await`. Let's revisit our earlier example here:
 
 ```roc
-\input ->
-    Stdout.line "Your input was: $(Inspect.toStr input)"
+Stdout.line! "Type in something and press Enter:"
+input = Stdin.line!
+Stdout.line! "Your input was: $(input)"
 ```
 
-Notice that, just like before, we're still building `main` from a single `Task`. This is how we'll always do it! We'll keep building up bigger and bigger `Task`s out of smaller tasks, and then setting `main` to be that one big `Task`.
-
-For example, we can print a prompt before we pause to read from `stdin`, so it no longer looks like the program isn't doing anything when we start it up:
+This desugars to the following:
 
 ```roc
-main =
-    Task.await (Stdout.line "Type something press Enter:") \_ ->
-        Task.await Stdin.line \input ->
-            Stdout.line "Your input was: $(Inspect.toStr input)"
+Task.await (Stdout.line "Type in something and press Enter:") \_ ->
+    Task.await Stdin.line \input ->
+        Stdout.line "Your input was: $(input)"
 ```
 
-This works, but we can make it a little nicer to read. Let's change it to the following:
+Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the programa does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
-```roc
-app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.1/y_Ww7a2_ZGjp0ZTt9Y_pNdSqqMRdMLzHMKfdN8LWidk.tar.br" }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
-    provides [main] to pf
+If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylsitic convention in the Roc ecosystem to use `!` instead.
 
-main =
-    await (Stdout.line "Type something press Enter:") \_ ->
-        await Stdin.line \input ->
-            Stdout.line "Your input was: $(Inspect.toStr input)"
-```
+### [Tagging errors](#tagging-errors) {#tagging-errors}
 
-Here we've changed how we're importing the `Task` module. Before it was `pf.Task` and now it's `pf.Task.{ await }`. The difference is that we're importing `await` in an _unqualified_ way, meaning that whenever we write `await` in this module, it will refer to `Task.await`. Now we no longer need to write `Task.` every time we want to use `await`.
-
-It's most common in Roc to call functions from other modules in a _qualified_ way (`Task.await`) rather than unqualified (`await`) like this, but it can be nice for a function with an uncommon name (like "await") which often gets called repeatedly across a small number of lines of code.
-
-Speaking of calling `await` repeatedly, if we keep calling it more and more on this code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we can rewrite `task` into this style which looks different but does the same thing:
+Although it's rare, it is possible that either of the `Stdout.line!` operations in our example could fail:
 
 ```roc
 main =
-    _ <- await (Stdout.line "Type something press Enter:")
-    input <- await Stdin.line
-
-    Stdout.line "Your input was: $(Inspect.toStr input)"
+    Stdout.line! "Type something and press Enter."
+    input = Stdin.line!
+    Stdout.line! "You entered: $(input)"
 ```
 
-## [Backpassing](#backpassing) {#backpassing}
+If that happens, we don't necessarily know which one was the cause of the failure. Our `handleErr` function runs when a `StdoutErr` happens, but once it receives a `StdoutErr` it has no way of knowing whether the first or second `Stdout.line` was the cause.
 
-This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ ... ->` is.
+(In this particular example, it's not very likely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)
 
-Here, we're using backpassing to define two anonymous functions. Here's one of them:
-
-```roc
-input <-
-
-Stdout.line "Your input was: $(Inspect.toStr input)"
-```
-
-It may not look like it, but this code is defining an anonymous function! You might remember it as the anonymous function we previously defined like this:
-
-```roc
-\input ->
-    Stdout.line "Your input was: $(Inspect.toStr input)"
-```
-
-These two anonymous functions are the same, just defined using different syntax.
-
-The reason the `<-` syntax is called _backpassing_ is because it both defines a function and passes that function _back_ as an argument to whatever comes after the `<-` (which in this case is `await Stdin.line`).
-
-Let's look at these two complete expressions side by side. They are both saying exactly the same thing, with different syntax!
-
-Here's the original:
-
-```roc
-await Stdin.line \input ->
-    Stdout.line "Your input was: $(Inspect.toStr input)"
-```
-
-And here's the equivalent expression with backpassing syntax:
-
-```roc
-input <- await Stdin.line
-
-Stdout.line "Your input was: $(Inspect.toStr input)"
-```
-
-Here's the other function we're defining with backpassing:
-
-```roc
-_ <-
-input <- await Stdin.line
-
-Stdout.line "Your input was: $(Inspect.toStr input)"
-```
-
-We could also have written that function this way if we preferred:
-
-```roc
-_ <-
-
-await Stdin.line \input ->
-    Stdout.line "Your input was: $(Inspect.toStr input)"
-```
-
-This is using a mix of a backpassing function `_ <-` and a normal function `\input ->`, which is totally allowed! Since backpassing is nothing more than syntax sugar for defining a function and passing back as an argument to another function, there's no reason we can't mix and match if we like.
-
-That said, the typical style in which this `task` would be written in Roc is using backpassing for all the `await` calls, like we had above:
+A quick way to do this is to "tag the error" using `Task.mapErr` to wrap the error in a [tag](#tags) like so:
 
 ```roc
 main =
-    _ <- await (Stdout.line "Type something press Enter:")
-    input <- await Stdin.line
+    Stdout.line "Type something and press Enter."
+    |> Task.mapErr! PrintPrompt
 
-    Stdout.line "Your input was: $(Inspect.toStr input)"
+    input = Stdin.line!
+
+    Stdout.line "You entered: $(input)"
+    |> Task.mapErr! PrintInput
 ```
 
-This way, it reads like a series of instructions:
+The `mapErr` function has this type:
 
-1.  First, run the `Stdout.line` task and await its completion. Ignore its output (hence the underscore in `_ <-`)
-2.  Next, run the `Stdin.line` task and await its completion. Name its output `input`.
-3.  Finally, run the `Stdout.line` task again, using the `input` value we got from the `Stdin.line` effect.
+```
+Task.mapErr : Task ok a, (a -> b) -> Task ok b
+```
 
-Some important things to note about backpassing and `await`:
+Here we're passing in "tagging functions"—namely, `PrintPrompt` and `PrintInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
 
--   `await` is not a language keyword in Roc! It's referring to the `Task.await` function, which we imported unqualified by writing `Task.{ await }` in our module imports. (That said, it is playing a similar role here to the `await` keyword in languages that have `async`/`await` keywords, even though in this case it's a function instead of a special keyword.)
--   Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
--   Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\input ->` and `input <-` is how they look, so feel free to use whichever looks nicer to you!
+Note that the `!` moves when we do this. It's no longer after `Stdout.line`, but rather after `Task.mapErr` instead:
+
+```roc
+    Stdout.line "Type something and press Enter."
+    |> Task.mapErr! PrintPrompt
+```
+
+This code is doing three things:
+
+1. Call `Stdout.line "..."`, which returns a `Task` value
+2. Transform that `Task` value into another `Task` value using `|> Task.mapErr`
+3. Wait until that final `Task` value (returned by `mapErr`) successfully completes, using `!`
+
+It's easier to see why the `!` needs to move when considering a `Task` that produces a useful value, like `Stdin.line`. Compare these two:
+
+```roc
+    input =
+        Stdin.line
+        |> Task.mapErr! ReadStdin
+```
+
+This versions starts with the `Stdin.line` task, then passes it to `Task.mapErr` to tag its error with `ReadStdin`, and then finally uses `!` to await that final transformed task that `Task.mapErr` returned.
+
+```roc
+    input =
+        Stdin.line!
+        |> Task.mapErr ReadStdin
+```
+
+This version starts with the `Stdin.line` task, awaits it with `!` to get its `Str` value if it succeded, and then tries to call `Task.mapErr` on that `Str` value. This will be a type mismatch!
+
+In general, an easy rule to remember is "do the `!` last" - if you want to modify a `Task` before running it, use the `!` only after you've made all the modifications and ended up with the final `Task` you'd like to run.
 
 See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
+
+### [Displaying Roc values with `Inspect.toStr`](#inspect) {#inspect}
+
+The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value using its [`Inspect` ability](/abilities#inspect-ability). It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging in particular), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but it would be better to run a `when` on `e` and display a more helpful message.
+
+```roc
+when err is
+    StdoutErr e -> Exit 1 "Error writing to stdout: $(Inspect.toStr e)"
+    StdinErr e -> Exit 2 "Error writing to stdin: $(Inspect.toStr e)"
+```
 
 ## [Examples](#examples) {#examples}
 
@@ -1742,7 +1887,7 @@ We've covered all of the basic syntax and features of Roc in this Tutorial. You 
 
 You can continue reading through more advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
 
-## [Appendix: Advanced Concepts](#appendix-advanced-concepts) {#appendix-advanced-concepts}
+## [Advanced Concepts](#advanced-concepts) {#advanced-concepts}
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually. This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine to stop reading here and go build things!
 
@@ -1757,9 +1902,9 @@ fullName = \user ->
 
 I can pass this function a record that has more fields than just `firstName` and `lastName`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
 
--   `fullName { firstName: "Sam", lastName: "Sample" }`
--   `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
--   `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
+- `fullName { firstName: "Sam", lastName: "Sample" }`
+- `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
+- `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
 
 This `user` argument is an _open record_ - that is, a description of a minimum set of fields on a record, and their types. When a function takes an open record as an argument, it's okay if you pass it a record with more fields than just the ones specified.
 
@@ -1799,9 +1944,9 @@ addHttps = \record ->
 
 This function uses _constrained records_ in its type. The annotation is saying:
 
--   This function takes a record which has at least a `url` field, and possibly others
--   That `url` field has the type `Str`
--   It returns a record of exactly the same type as the one it was given
+- This function takes a record which has at least a `url` field, and possibly others
+- That `url` field has the type `Str`
+- It returns a record of exactly the same type as the one it was given
 
 So if we give this function a record with five fields, it will return a record with those same five fields. The only requirement is that one of those fields must be `url: Str`.
 
@@ -1809,9 +1954,9 @@ In practice, constrained records appear in type annotations much less often than
 
 Here's when you can typically expect to encounter these three flavors of type variables in records:
 
--   _Open records_ are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
--   _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
--   _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
+- _Open records_ are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
+- _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
+- _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
 
 Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record, but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
 
@@ -1991,10 +2136,10 @@ However, I could not pass an `[Ok Str]*` to a function with a _closed_ tag union
 
 In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
 
--   If you _have_ a closed union, that means it has all the tags it ever will, and can't accumulate more.
--   If you _have_ an open union, that means it can accumulate more tags through conditional branches.
--   If you _accept_ a closed union, that means you only have to handle the possibilities listed in the union.
--   If you _accept_ an open union, that means you have to handle the possibility that it has a tag you can't know about.
+- If you _have_ a closed union, that means it has all the tags it ever will, and can't accumulate more.
+- If you _have_ an open union, that means it can accumulate more tags through conditional branches.
+- If you _accept_ a closed union, that means you only have to handle the possibilities listed in the union.
+- If you _accept_ an open union, that means you have to handle the possibility that it has a tag you can't know about.
 
 ### [Type Variables in Tag Unions](#type-variables-in-tag-unions) {#type-variables-in-tag-unions}
 
@@ -2034,8 +2179,8 @@ So if we give this function a `[Foo Str, Bar Bool, Baz (List Str)]` argument, th
 
 If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway. This may be surprising if you look closely at the body of the function, because:
 
--   The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[Bar Bool]a` instead?
--   The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
+- The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[Bar Bool]a` instead?
+- The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
 
 The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question: "What is the type of `other`?" There has to be exactly one answer! It can't be the case that `other` has one type before the `->` and another type after it; whenever you see a named value in Roc, it is guaranteed to have the same type everywhere it appears in that scope.
 
@@ -2081,7 +2226,7 @@ These are all the reserved keywords in Roc. You can't choose any of these as nam
 
 `if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `interface`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
 
-### [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
+## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
 Here are various Roc expressions involving operators, and what they desugar to.
 

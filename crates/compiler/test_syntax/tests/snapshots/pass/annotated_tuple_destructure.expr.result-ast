@@ -20,11 +20,9 @@ Defs(
                     [
                         @2-3 Identifier {
                             ident: "x",
-                            suffixed: 0,
                         },
                         @5-6 Identifier {
                             ident: "y",
-                            suffixed: 0,
                         },
                     ],
                 ),
@@ -39,11 +37,9 @@ Defs(
                     [
                         @2-3 Identifier {
                             ident: "x",
-                            suffixed: 0,
                         },
                         @5-6 Identifier {
                             ident: "y",
-                            suffixed: 0,
                         },
                     ],
                 ),
@@ -57,11 +53,9 @@ Defs(
                     [
                         @17-18 Identifier {
                             ident: "x",
-                            suffixed: 0,
                         },
                         @20-21 Identifier {
                             ident: "y",
-                            suffixed: 0,
                         },
                     ],
                 ),
@@ -84,7 +78,6 @@ Defs(
         Var {
             module_name: "",
             ident: "x",
-            suffixed: 0,
         },
         [
             Newline,

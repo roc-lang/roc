@@ -3,7 +3,6 @@ ParensAround(
         Var {
             module_name: "",
             ident: "i",
-            suffixed: 0,
         },
         [
             LineComment(

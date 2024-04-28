@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct LoadedModule {
     pub module_id: ModuleId,
+    pub filename: PathBuf,
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -54,6 +55,13 @@ pub struct LoadedModule {
 }
 
 impl LoadedModule {
+    /// Infer the filename for the given ModuleId, based on this root module's filename.
+    pub fn filename(&self, module_id: ModuleId) -> PathBuf {
+        let module_name = self.interns.module_name(module_id);
+
+        module_name.filename(&self.filename)
+    }
+
     pub fn total_problems(&self) -> usize {
         let mut total = 0;
 
