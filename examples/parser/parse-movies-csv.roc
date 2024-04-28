@@ -16,7 +16,6 @@ app "example"
 input : Str
 input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\""
 
-main : Task {} *
 main =
     when CSV.parseStr movieInfoParser input is
         Ok movies ->

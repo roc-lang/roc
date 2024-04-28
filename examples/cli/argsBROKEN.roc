@@ -3,7 +3,6 @@ app "args"
     imports [pf.Stdout, pf.Arg, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Task {} I32
 main =
     args <- Arg.list |> Task.await
     parser =
@@ -57,7 +56,7 @@ main =
 
         Err helpMenu ->
             {} <- Stdout.line helpMenu |> Task.await
-            Task.err 1
+            Task.err [Exit 1 ""]
 
 runCmd = \cmd ->
     when cmd is

@@ -11,7 +11,6 @@ app "file-io"
     ]
     provides [main] to pf
 
-main : Task {} I32
 main =
     path = Path.fromStr "out.txt"
     task =
