@@ -2,7 +2,7 @@ app "ingested-file-bytes"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [
         pf.Stdout,
-        pf.Task
+        pf.Task,
         "../../LICENSE" as license : _, # A type hole can also be used here.
     ]
     provides [main] to pf
