@@ -2336,13 +2336,10 @@ fn update<'a>(
                 }
             }
 
-            work.insert((home, Phase::Parse));
-
             state.module_cache.headers.insert(header.module_id, header);
 
-            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
-
-            let work = state.dependencies.notify(home, Phase::LoadHeader);
+            work.extend(state.dependencies.notify(home, Phase::LoadHeader));
+            work.insert((home, Phase::Parse));
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
