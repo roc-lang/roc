@@ -1,5 +1,5 @@
 app "http-get"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.1/y_Ww7a2_ZGjp0ZTt9Y_pNdSqqMRdMLzHMKfdN8LWidk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [pf.Http, pf.Task.{ Task }, pf.Stdin, pf.Stdout]
     provides [main] to pf
 
