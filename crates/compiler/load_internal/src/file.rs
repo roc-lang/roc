@@ -5353,19 +5353,10 @@ fn parse<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let mut package_qualified_imported_modules = MutSet::default();
-    for (pq_module_name, module_id) in &deps_by_name {
-        match pq_module_name {
-            PackageQualified::Unqualified(_) => {
-                package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(*module_id));
-            }
-            PackageQualified::Qualified(shorthand, _) => {
-                package_qualified_imported_modules
-                    .insert(PackageQualified::Qualified(shorthand, *module_id));
-            }
-        }
-    }
+    let package_qualified_imported_modules = deps_by_name
+        .iter()
+        .map(|(pq_module_name, module_id)| pq_module_name.map_module(|_| *module_id))
+        .collect();
 
     // SAFETY: By this point we've already incrementally verified that there
     // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,

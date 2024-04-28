@@ -462,6 +462,15 @@ impl<'a, T> PackageQualified<'a, T> {
             PackageQualified::Qualified(_, name) => name,
         }
     }
+
+    pub fn map_module<B>(&self, f: impl FnOnce(&T) -> B) -> PackageQualified<'a, B> {
+        match self {
+            PackageQualified::Unqualified(name) => PackageQualified::Unqualified(f(name)),
+            PackageQualified::Qualified(package, name) => {
+                PackageQualified::Qualified(package, f(name))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
