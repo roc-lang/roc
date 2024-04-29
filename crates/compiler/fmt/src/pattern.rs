@@ -64,7 +64,7 @@ impl<'a> Formattable for Pattern<'a> {
                 }
             },
 
-            Pattern::Identifier(_)
+            Pattern::Identifier { .. }
             | Pattern::Tag(_)
             | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
@@ -88,9 +88,9 @@ impl<'a> Formattable for Pattern<'a> {
         use self::Pattern::*;
 
         match self {
-            Identifier(string) => {
+            Identifier { ident: string } => {
                 buf.indent(indent);
-                buf.push_str(string)
+                buf.push_str(string);
             }
             Tag(name) | OpaqueRef(name) => {
                 buf.indent(indent);

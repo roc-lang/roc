@@ -17,6 +17,7 @@ members = [
   "crates/repl_expect",
   "crates/roc_std",
   "crates/test_utils",
+  "crates/test_utils_dir",
   "crates/valgrind",
   "crates/tracing",
   "crates/utils/*",
@@ -26,7 +27,7 @@ members = [
   "crates/wasi-libc-sys",
   "crates/wasm_module",
   "crates/wasm_interp",
-  "crates/lang_srv",
+  "crates/language_server",
 ]
 
 exclude = [
@@ -124,7 +125,6 @@ packed_struct = "0.10.1"
 page_size = "0.5.0"
 palette = "0.6.1"
 parking_lot = "0.12"
-peg = "0.8.1"
 perfcnt = "0.8.0"
 pest = "2.5.6"
 pest_derive = "2.5.6"
@@ -159,7 +159,7 @@ tar = "0.4.38"
 target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
 threadpool = "1.8.1"
-tracing = { version = "0.1.37", features = ["release_max_level_off"] }
+tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 unicode-segmentation = "1.10.1"

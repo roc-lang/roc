@@ -1,6 +1,10 @@
-Suffixed(
-    Var {
-        module_name: "Stdout",
-        ident: "line",
-    },
+TaskAwaitBang(
+    TaskAwaitBang(
+        TaskAwaitBang(
+            Var {
+                module_name: "Stdout",
+                ident: "line",
+            },
+        ),
+    ),
 )

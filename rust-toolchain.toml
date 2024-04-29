@@ -7,6 +7,7 @@
 #  - to update the nightly version:
 #     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2023
 #     - update `channel = "nightly-OLD_DATE"` below
+#     - update nightly-OLD_DATE in .github/workflows/ubuntu_x86_64.yml
 #     - update nightly-OLD_DATE in .github/workflows/windows_tests.yml
 #     - update nightly-OLD_DATE in .github/workflows/windows_release_build.yml
 #     - update nightly-OLD_DATE in crates/compiler/build/src/link.rs

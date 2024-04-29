@@ -11,7 +11,8 @@ mod test_fmt {
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
-    use roc_test_utils::{assert_multiline_str_eq, workspace_root};
+    use roc_test_utils::assert_multiline_str_eq;
+    use roc_test_utils_dir::workspace_root;
     use test_syntax::test_helpers::Input;
 
     fn check_formatting(expected: &'_ str) -> impl Fn(Input) + '_ {

@@ -748,7 +748,9 @@ fn can_annotation_help(
 
             for loc_var in *loc_vars {
                 let var = match loc_var.value {
-                    Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
+                    Pattern::Identifier { ident: name, .. }
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
                         name
                     }
                     _ => unreachable!("I thought this was validated during parsing"),

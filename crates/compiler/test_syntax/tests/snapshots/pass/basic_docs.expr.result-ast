@@ -17,9 +17,9 @@ SpaceBefore(
             type_defs: [],
             value_defs: [
                 Body(
-                    @107-108 Identifier(
-                        "x",
-                    ),
+                    @107-108 Identifier {
+                        ident: "x",
+                    },
                     @111-112 Num(
                         "5",
                     ),

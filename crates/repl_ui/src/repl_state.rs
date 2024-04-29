@@ -73,7 +73,8 @@ impl ReplState {
                 match value_def {
                     ValueDef::Annotation(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident },
                             ..
                         },
                         _,
@@ -87,7 +88,8 @@ impl ReplState {
                     }
                     ValueDef::Body(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident },
                             ..
                         },
                         _,
@@ -95,7 +97,8 @@ impl ReplState {
                     | ValueDef::AnnotatedBody {
                         body_pattern:
                             Loc {
-                                value: Pattern::Identifier(ident),
+                                // TODO is this right for suffixed
+                                value: Pattern::Identifier { ident },
                                 ..
                             },
                         ..
@@ -131,6 +134,7 @@ impl ReplState {
                     ValueDef::ExpectFx { .. } => {
                         todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                     }
+                    ValueDef::Stmt(_) => todo!(),
                 }
             }
             ParseOutcome::TypeDef(TypeDef::Alias {
@@ -229,6 +233,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                         ExprParseOptions {
                             accept_multi_backpassing: true,
                             check_for_arrow: true,
+                            suffixed_found: false,
                         },
                         0,
                         arena,
@@ -253,6 +258,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
+                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,
@@ -301,6 +307,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
+                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,

@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-3 Identifier(
-                    "abc",
-                ),
+                @0-3 Identifier {
+                    ident: "abc",
+                },
                 @6-15 Tuple(
                     [
                         @7-8 Num(

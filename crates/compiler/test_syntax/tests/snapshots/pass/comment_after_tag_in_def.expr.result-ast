@@ -20,9 +20,9 @@ Defs(
                     vars: [
                         @3-4 SpaceAfter(
                             SpaceBefore(
-                                Identifier(
-                                    "h",
-                                ),
+                                Identifier {
+                                    ident: "h",
+                                },
                                 [
                                     LineComment(
                                         "",

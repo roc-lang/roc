@@ -21,9 +21,9 @@ Defs(
                         "@Thunk",
                     ),
                     [
-                        @7-9 Identifier(
-                            "it",
-                        ),
+                        @7-9 Identifier {
+                            ident: "it",
+                        },
                     ],
                 ),
                 @12-22 Apply(

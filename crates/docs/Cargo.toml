@@ -21,11 +21,10 @@ roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
+roc_problem = { path = "../compiler/problem" }
+
+ven_pretty = { path = "../vendor/pretty" }
 
 bumpalo.workspace = true
-peg.workspace = true
 pulldown-cmark.workspace = true
 snafu.workspace = true
-
-[dev-dependencies]
-pretty_assertions.workspace = true

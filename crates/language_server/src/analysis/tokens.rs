@@ -622,6 +622,7 @@ impl IterTokens for ValueDef<'_> {
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),
+            ValueDef::Stmt(loc_expr) => loc_expr.iter_tokens(arena),
         }
     }
 }
@@ -644,6 +645,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::RecordAccess(rcd, _field) => Loc::at(region, *rcd).iter_tokens(arena),
             Expr::AccessorFunction(accessor) => Loc::at(region, accessor).iter_tokens(arena),
             Expr::TupleAccess(tup, _field) => Loc::at(region, *tup).iter_tokens(arena),
+            Expr::TaskAwaitBang(inner) => Loc::at(region, *inner).iter_tokens(arena),
             Expr::List(lst) => lst.iter_tokens(arena),
             Expr::RecordUpdate { update, fields } => (update.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
@@ -697,10 +699,13 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::ParensAround(e) => Loc::at(region, *e).iter_tokens(arena),
             Expr::MultipleRecordBuilders(e) => e.iter_tokens(arena),
             Expr::UnappliedRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _) | Expr::MalformedClosure | Expr::PrecedenceConflict(_) => {
+            Expr::MalformedIdent(_, _)
+            | Expr::MalformedClosure
+            | Expr::PrecedenceConflict(_)
+            | Expr::EmptyDefsFinal
+            | Expr::MalformedSuffixed(_) => {
                 bumpvec![in arena;]
             }
-            Expr::Suffixed(_) => todo!(),
         }
     }
 }
@@ -750,7 +755,7 @@ impl IterTokens for Loc<Pattern<'_>> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let region = self.region;
         match self.value {
-            Pattern::Identifier(_) => onetoken(Token::Variable, region, arena),
+            Pattern::Identifier { .. } => onetoken(Token::Variable, region, arena),
             Pattern::Tag(_) => onetoken(Token::Tag, region, arena),
             Pattern::OpaqueRef(_) => onetoken(Token::Type, region, arena),
             Pattern::Apply(p1, p2) => (p1.iter_tokens(arena).into_iter())

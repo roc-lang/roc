@@ -77,7 +77,7 @@ pub(super) fn get_module_completion_items(
                         mod_id,
                         interns,
                         exposed_symbols,
-                        modules_info.docs.get(mod_id),
+                        modules_info.get_docs(mod_id),
                         modules_info,
                     )),
                     ..Default::default()
@@ -90,7 +90,7 @@ pub(super) fn get_module_completion_items(
                     exposed_symbols,
                     modules_info,
                     mod_id,
-                    modules_info.docs.get(mod_id),
+                    modules_info.get_docs(mod_id),
                     interns,
                 )
             } else {

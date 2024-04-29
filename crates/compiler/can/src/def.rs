@@ -2570,7 +2570,7 @@ fn to_pending_alias_or_opaque<'a>(
 
             for loc_var in vars.iter() {
                 match loc_var.value {
-                    ast::Pattern::Identifier(name)
+                    ast::Pattern::Identifier { ident: name, .. }
                         if name.chars().next().unwrap().is_lowercase() =>
                     {
                         let lowercase = Lowercase::from(name);
@@ -2874,6 +2874,8 @@ fn to_pending_value_def<'a>(
             condition,
             preceding_comment: *preceding_comment,
         }),
+
+        Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
     }
 }
 

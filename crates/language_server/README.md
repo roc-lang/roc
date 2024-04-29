@@ -44,7 +44,7 @@ Follow the [building from source](https://github.com/roc-lang/roc/blob/main/BUIL
 
 ```
 # do `nix develop` first if you're using nix!
-cargo build -p roc_language_server --release
+cargo build --bin roc_language_server --release
 ```
 
 This will give you the language server binary at:

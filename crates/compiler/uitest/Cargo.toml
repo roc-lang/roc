@@ -29,9 +29,7 @@ test_solve_helpers = { path = "../test_solve_helpers" }
 
 bumpalo.workspace = true
 indoc.workspace = true
-insta.workspace = true
 lazy_static.workspace = true
-pretty_assertions.workspace = true
 regex.workspace = true
 tempfile.workspace = true
 libtest-mimic.workspace = true

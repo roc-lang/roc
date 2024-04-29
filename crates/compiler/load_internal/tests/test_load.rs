@@ -32,6 +32,7 @@ use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_reporting::report::{strip_colors, RenderTarget};
 use roc_solve::FunctionKind;
 use roc_target::Target;
+use roc_test_utils_dir::TmpDir;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use std::collections::HashMap;
@@ -153,7 +154,7 @@ fn multiple_modules_help<'a>(
     // We can't have all tests use "tmp" because tests run in parallel,
     // so append the test name to the tmp path.
     let tmp = format!("tmp/{subdir}");
-    let dir = roc_test_utils::TmpDir::new(&tmp);
+    let dir = TmpDir::new(&tmp);
 
     let app_module = files.pop().unwrap();
 
@@ -988,8 +989,8 @@ fn issue_2863_module_type_does_not_exist() {
                         Did you mean one of these?
 
                             Decoding
-                            Dict
                             Result
+                            Dict
                             DecodeError
                         "
                       )
@@ -1279,7 +1280,7 @@ fn roc_file_no_extension() {
         indoc!(
             r#"
             app "helloWorld"
-                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
                 imports [pf.Stdout]
                 provides [main] to pf
 

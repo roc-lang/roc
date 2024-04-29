@@ -54,6 +54,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    #[allow(dead_code)]
     const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
@@ -962,15 +963,16 @@ mod cli_run {
                 This roc file can print its own source code. The source is:
 
                 app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
                     imports [
                         pf.Stdout,
+                        pf.Task,
                         "ingested-file.roc" as ownCode : Str,
                     ]
                     provides [main] to pf
 
                 main =
-                    Stdout.line "\nThis roc file can print its own source code. The source is:\n\n$(ownCode)"
+                    Stdout.line! "\nThis roc file can print its own source code. The source is:\n\n$(ownCode)"
 
                 "#
             ),
@@ -1039,20 +1041,21 @@ mod cli_run {
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        #[allow(unused_imports)]
         use super::{TestCliCommands, UseValgrind};
         use cli_utils::helpers::cli_testing_dir;
 
+        #[allow(unused_imports)]
         use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
 
+        #[allow(unused_imports)]
         use std::{path::Path, sync::Once};
-
-        static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
         fn test_benchmark(
             roc_filename: &str,
             stdin: &[&str],
             expected_ending: &str,
-            use_valgrind: UseValgrind,
+            _use_valgrind: UseValgrind,
         ) {
             let file_name = cli_testing_dir("benchmarks").join(roc_filename);
 
@@ -1076,14 +1079,17 @@ mod cli_run {
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            check_output_regular(&file_name, stdin, expected_ending, use_valgrind);
+            check_output_regular(&file_name, stdin, expected_ending, _use_valgrind);
 
             #[cfg(feature = "wasm32-cli-run")]
             check_output_wasm(&file_name, stdin, expected_ending);
 
             #[cfg(feature = "i386-cli-run")]
-            check_output_i386(&file_name, stdin, expected_ending, use_valgrind);
+            check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
         }
+
+        #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
+        static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
         #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
         fn check_output_regular(

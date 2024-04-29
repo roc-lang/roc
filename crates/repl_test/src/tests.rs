@@ -1200,6 +1200,22 @@ fn tag_with_type_behind_alias() {
     );
 }
 
+#[test]
+fn aliases_named_err_and_ok() {
+    expect_success(
+        indoc!(
+            r#"
+            Err : [Blah]
+            Ok : [Stuff]
+
+            v : (Err, Ok)
+            v = (Blah, Stuff)
+            v"#
+        ),
+        r#"(Blah, Stuff) : ( [Blah], [Stuff] )*"#,
+    );
+}
+
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2588_record_with_function_and_nonfunction() {

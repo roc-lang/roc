@@ -1,12 +1,12 @@
 app "example"
     packages {
-        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br",
+        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
         parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5.2/9VrPjwfQQ1QeSL3CfmWr2Pr9DESdDIXy97pwpuq84Ck.tar.br",
     }
     imports [
         pf.Stdout,
         pf.Stderr,
-        pf.Task.{ Task },
+        pf.Task,
         parser.Core.{ Parser, map, keep },
         parser.String.{ strFromUtf8 },
         parser.CSV.{ CSV },
@@ -16,7 +16,6 @@ app "example"
 input : Str
 input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\""
 
-main : Task {} *
 main =
     when CSV.parseStr movieInfoParser input is
         Ok movies ->
