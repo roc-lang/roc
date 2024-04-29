@@ -1124,7 +1124,11 @@ pub fn construct_optimization_passes<'a>(
         }
         OptLevel::Size => {
             pmb.set_optimization_level(OptimizationLevel::Default);
+            // 2 is equivalent to `-Oz`.
+            pmb.set_size_level(2);
+
             // TODO: For some usecase, like embedded, it is useful to expose this and tune it.
+            // This really depends on if inlining causes enough simplifications to reduce code size.
             pmb.set_inliner_with_threshold(50);
         }
         OptLevel::Optimize => {
@@ -1134,9 +1138,10 @@ pub fn construct_optimization_passes<'a>(
         }
     }
 
-    // Add optimization passes for Size and Optimize.
-    if matches!(opt_level, OptLevel::Size | OptLevel::Optimize) {
-        // TODO figure out which of these actually help
+    // Add extra optimization passes for Optimize.
+    if matches!(opt_level, OptLevel::Optimize) {
+        // TODO: figure out which of these actually help.
+        // Note, llvm probably already runs all of these as part of Aggressive.
 
         // function passes
 
