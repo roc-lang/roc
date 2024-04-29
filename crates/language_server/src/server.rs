@@ -173,17 +173,25 @@ impl RocServerState {
                 return Err("Not latest version skipping analysis".to_string());
             }
 
-            let results =
-                match tokio::task::spawn_blocking(|| catch_unwind(|| global_analysis(doc_info)))
-                    .await
-                {
-                    Err(e) => {
-                        return Err(format!("Document analysis thread failed. reason:{:?}", e))
-                    }
-                    Ok(res) => {
-                        res.map_err(|err| format!("Document analysis panicked with: {:?}", err))?
-                    }
-                };
+            let results = match tokio::time::timeout(
+                Duration::from_secs(60),
+                tokio::task::spawn_blocking(|| catch_unwind(|| global_analysis(doc_info))),
+            )
+            .await
+            {
+                Err(e) => {
+                    return Err(format!(
+                        "Document analysis thread timeout out after: {:?}",
+                        e
+                    ))
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("Document analysis thread failed. reason:{:?}", e))
+                }
+                Ok(Ok(res)) => {
+                    res.map_err(|err| format!("Document analysis panicked with: {:?}", err))?
+                }
+            };
             let latest_version = inner_ref.registry.get_latest_version(fi).await;
 
             //if this version is not the latest another change must have come in and this analysis is useless
