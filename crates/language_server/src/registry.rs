@@ -74,7 +74,7 @@ impl Registry {
         if &document.doc_info.url == updating_url {
             //Write the newly analysed document into the oncelock that any request requiring the latest document will be waiting on
             if let Some(a) = documents.get_mut(updating_url) {
-                //We don't care if this fails becasue we expect the document to sometimes alreday be there
+                //We don't care if this fails because we expect the document to sometimes already be there
                 a.latest_document.set(document.clone()).unwrap_or(())
             }
         }
