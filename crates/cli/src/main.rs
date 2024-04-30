@@ -4,16 +4,18 @@ use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
-    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
-    GLUE_SPEC, ROC_FILE,
+    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_OUTPUT,
+    FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
-use roc_error_macros::user_error;
+
+#[allow(unused_imports)]
+use roc_error_macros::{internal_error, user_error};
+
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{FunctionKind, LoadingProblem, Threading};
+use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_target::Target;
 use std::fs::{self, FileType};
@@ -120,47 +122,76 @@ fn main() -> io::Result<()> {
                 Ok(1)
             }
         }
-        Some((CMD_GEN_STUB_LIB, matches)) => {
-            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
-            let target = matches
-                .get_one::<String>(FLAG_TARGET)
-                .and_then(|s| Target::from_str(s).ok())
-                .unwrap_or_default();
-            let function_kind = FunctionKind::LambdaSet;
-            roc_linker::generate_stub_lib(
-                input_path,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                target,
-                function_kind,
-            );
-            Ok(0)
-        }
         Some((CMD_PREPROCESS_HOST, matches)) => {
+            let preprocess_host_err =
+                { |msg: String| user_error!("\n\n ERROR PRE-PROCESSING HOST: {}\n\n", msg) };
+
+            // the directory containing the platform and prebuilt binaries
             let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            if !input_path.is_dir() {
+                preprocess_host_err(format!(
+                    "Expected to be provided a path to the platform directory, got '{}' which is not a directory",
+                    input_path.display()
+                ));
+            }
+
             let target = matches
                 .get_one::<String>(FLAG_TARGET)
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
 
-            let function_kind = FunctionKind::LambdaSet;
-            let (platform_path, stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib(
-                input_path,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                target,
-                function_kind,
-            );
+            // the stubbed app dynamic library, built e.g. `roc build --lib libapp.roc`
+            let expected_stub_lib_name = match target {
+                Target::LinuxX32 | Target::LinuxX64 | Target::LinuxArm64 => "libapp.so",
+                Target::MacX64 | Target::MacArm64 => "libapp.dylib",
+                Target::WinX32 | Target::WinX64 => "libapp.obj",
+                Target::WinArm64 | Target::Wasm32 => "libapp.wasm",
+            };
+            let stub_lib: PathBuf = input_path.join(expected_stub_lib_name);
+            if !stub_lib.is_file() {
+                preprocess_host_err(format!(
+                    "Expected to find the app stub dynamic library, {:?}, at {}",
+                    &expected_stub_lib_name,
+                    stub_lib.display()
+                ));
+            }
 
-            // TODO: pipeline the executable location through here.
-            // Currently it is essentally hardcoded as platform_path/dynhost.
+            // the path/to/platform/main.roc
+            let platform_main_roc = input_path.join("main.roc");
+            if !platform_main_roc.is_file() {
+                preprocess_host_err(format!(
+                    "Expected to find the platform main.roc file at {}",
+                    &platform_main_roc.display()
+                ));
+            }
+
+            // the stubbed executable is hardcoded as "path/to/platform/dynhost"
+            let dynhost_path = input_path.join("dynhost");
+            if !dynhost_path.is_file() {
+                preprocess_host_err(format!(
+                    "Expected to find the host executable (built using the app stub dylib) at {}",
+                    dynhost_path.display()
+                ));
+            }
+
+            // the stub_dll_symbols are only used for Windows in roc_linker::preprocess_host
+            let stub_dll_symbols = &[];
+
+            #[cfg(target_os = "windows")]
+            {
+                internal_error!("TODO populate stub_dll_symbols for Windows");
+            }
+
             roc_linker::preprocess_host(
                 target,
-                &platform_path.with_file_name("main.roc"),
+                &platform_main_roc,
                 // The target triple string must be derived from the triple to convert from the generic
                 // `system` target to the exact specific target.
-                &platform_path.with_file_name(format!("{}.rh", target)),
-                &stub_lib,
-                &stub_dll_symbols,
+                &input_path.with_file_name(format!("{}.rh", target)),
+                stub_lib.as_path(),
+                stub_dll_symbols,
             );
+
             Ok(0)
         }
         Some((CMD_BUILD, matches)) => {

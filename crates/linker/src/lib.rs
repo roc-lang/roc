@@ -6,11 +6,8 @@
 use memmap2::{Mmap, MmapMut};
 use object::Object;
 use roc_error_macros::internal_error;
-use roc_load::{EntryPoint, ExecutionMode, ExposedToHost, LoadConfig, Threading};
+use roc_load::ExposedToHost;
 use roc_module::symbol::Interns;
-use roc_packaging::cache::RocCacheDir;
-use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use roc_solve::FunctionKind;
 use roc_target::{Architecture, OperatingSystem, Target};
 use std::cmp::Ordering;
 use std::mem;
@@ -62,73 +59,6 @@ pub fn link_preprocessed_host(
 ) {
     let metadata = platform_path.with_file_name(metadata_file_name(target));
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
-}
-
-// Exposed function to load a platform file and generate a stub lib for it.
-pub fn generate_stub_lib(
-    input_path: &Path,
-    roc_cache_dir: RocCacheDir<'_>,
-    target: Target,
-    function_kind: FunctionKind,
-) -> (PathBuf, PathBuf, Vec<String>) {
-    // Note: this should theoretically just be able to load the host, I think.
-    // Instead, I am loading an entire app because that was simpler and had example code.
-    // If this was expected to stay around for the the long term, we should change it.
-    // But hopefully it will be removable once we have surgical linking on all platforms.
-    let arena = &bumpalo::Bump::new();
-    let loaded = roc_load::load_and_monomorphize(
-        arena,
-        input_path.to_path_buf(),
-        roc_cache_dir,
-        LoadConfig {
-            target,
-            function_kind,
-            render: RenderTarget::Generic,
-            palette: DEFAULT_PALETTE,
-            threading: Threading::AllAvailable,
-            exec_mode: ExecutionMode::Executable,
-        },
-    )
-    .unwrap_or_else(|problem| todo!("{:?}", problem));
-
-    let exposed_to_host = loaded
-        .exposed_to_host
-        .top_level_values
-        .keys()
-        .map(|x| x.as_str(&loaded.interns).to_string())
-        .collect();
-
-    let exported_closure_types = loaded
-        .exposed_to_host
-        .closure_types
-        .iter()
-        .map(|x| {
-            format!(
-                "{}_{}",
-                x.module_string(&loaded.interns),
-                x.as_str(&loaded.interns)
-            )
-        })
-        .collect();
-
-    let exposed_symbols = ExposedSymbols {
-        top_level_values: exposed_to_host,
-        exported_closure_types,
-    };
-
-    if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
-        let stub_lib = if target.operating_system() == OperatingSystem::Windows {
-            platform_path.with_file_name("libapp.obj")
-        } else {
-            platform_path.with_file_name("libapp.so")
-        };
-
-        let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
-        generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
-        (platform_path.into(), stub_lib, stub_dll_symbols)
-    } else {
-        unreachable!();
-    }
 }
 
 pub fn generate_stub_lib_from_loaded(
