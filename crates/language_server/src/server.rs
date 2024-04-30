@@ -3,7 +3,7 @@ use analysis::HIGHLIGHT_TOKENS_LEGEND;
 use log::{debug, trace};
 use registry::{Registry, RegistryConfig};
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Duration;
 
 use tower_lsp::jsonrpc::{self, Result};
@@ -173,9 +173,24 @@ impl RocServerState {
                 return Err("Not latest version skipping analysis".to_string());
             }
 
-            let results = match tokio::task::spawn_blocking(|| global_analysis(doc_info)).await {
-                Err(e) => return Err(format!("Document analysis failed. reason:{:?}", e)),
-                Ok(a) => a,
+            let results = match tokio::time::timeout(
+                Duration::from_secs(60),
+                tokio::task::spawn_blocking(|| catch_unwind(|| global_analysis(doc_info))),
+            )
+            .await
+            {
+                Err(e) => {
+                    return Err(format!(
+                        "Document analysis thread timeout out after: {:?}",
+                        e
+                    ))
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("Document analysis thread failed. reason:{:?}", e))
+                }
+                Ok(Ok(res)) => {
+                    res.map_err(|err| format!("Document analysis panicked with: {:?}", err))?
+                }
             };
             let latest_version = inner_ref.registry.get_latest_version(fi).await;
 
@@ -230,8 +245,11 @@ impl LanguageServer for RocServer {
 
         // NOTE: We specify that we expect full-content syncs in the server capabilities,
         // so here we assume the only change passed is a change of the entire document's content.
-        let TextDocumentContentChangeEvent { text, .. } =
-            params.content_changes.into_iter().next().unwrap();
+        let TextDocumentContentChangeEvent { text, .. } = params
+            .content_changes
+            .into_iter()
+            .last()
+            .expect("textDocument change event had no changes ");
 
         self.change(uri, text, version).await;
     }
