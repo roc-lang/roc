@@ -185,6 +185,7 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                     List {
                         element_layout,
                         elements,
+                        opt_rest,
                         ..
                     } => {
                         let stack = elements
@@ -193,7 +194,11 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                             .rev()
                             .collect();
                         *self = Stack(stack);
-                        self.next()
+
+                        match opt_rest {
+                            Some((_, Some(rest_sym))) => (*rest_sym, layout).into(),
+                            _ => self.next(),
+                        }
                     }
                     IntLiteral(_, _)
                     | FloatLiteral(_, _)
@@ -236,11 +241,16 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                             List {
                                 element_layout,
                                 elements,
+                                opt_rest,
                                 ..
                             } => {
                                 stack.extend(
                                     elements.iter().map(|p| (Pat(p), *element_layout)).rev(),
                                 );
+
+                                if let Some((_, Some(rest_sym))) = opt_rest {
+                                    return (*rest_sym, layout).into();
+                                }
                             }
                             IntLiteral(_, _)
                             | FloatLiteral(_, _)

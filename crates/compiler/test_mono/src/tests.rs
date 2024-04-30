@@ -3500,3 +3500,37 @@ fn issue_6174() {
         "
     )
 }
+
+#[mono_test]
+fn issue_6606_1() {
+    indoc!(
+        r"
+        foo = \_ -> 0
+
+        f =
+            when [] is
+                [.. as rest] if Bool.false -> foo rest
+                [] -> 1
+                _ -> 2
+
+        f
+        "
+    )
+}
+
+#[mono_test]
+fn issue_6606_2() {
+    indoc!(
+        r"
+        foo = \_ -> 0
+
+        f =
+            when [] is
+                [[.. as rest]] if Bool.false -> foo rest
+                [[_]] -> 1
+                _ -> 2
+
+        f
+        "
+    )
+}
