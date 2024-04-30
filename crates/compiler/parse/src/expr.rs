@@ -264,22 +264,22 @@ fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     }
 }
 
-// avoids ownership issues
-#[allow(clippy::blocks_in_conditions)]
 fn loc_possibly_negative_or_negated_term<'a>(
     options: ExprParseOptions,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let parse_unary_negate = move |arena, state: State<'a>, min_indent: u32| {
+        let initial = state.clone();
+
+        let (_, (loc_op, loc_expr), state) =
+            and!(loc!(unary_negate()), loc_term(options)).parse(arena, state, min_indent)?;
+
+        let loc_expr = numeric_negate_expression(arena, initial, loc_op, loc_expr, &[]);
+
+        Ok((MadeProgress, loc_expr, state))
+    };
+
     one_of![
-        |arena, state: State<'a>, min_indent: u32| {
-            let initial = state.clone();
-
-            let (_, (loc_op, loc_expr), state) =
-                and!(loc!(unary_negate()), loc_term(options)).parse(arena, state, min_indent)?;
-
-            let loc_expr = numeric_negate_expression(arena, initial, loc_op, loc_expr, &[]);
-
-            Ok((MadeProgress, loc_expr, state))
-        },
+        parse_unary_negate,
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
         loc!(specialize_err(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(

@@ -335,7 +335,8 @@ pub fn helper<'a>(
     let (main_fn_name, delayed_errors, module) =
         create_llvm_module(arena, src, config, context, target, function_kind);
 
-    //module.print_to_file(std::path::Path::new("/home/username/gitrepos/roc4/roc/str_to_u128.ll")).unwrap();
+    // for debugging:
+    //module.print_to_file(std::path::Path::new("/home/username/roc/llvm_ir.ll")).unwrap();
 
     if !config.emit_debug_info {
         module.strip_debug_info();
