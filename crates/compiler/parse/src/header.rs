@@ -176,12 +176,18 @@ impl<'a> From<ModuleName<'a>> for roc_module::ident::ModuleName {
 }
 
 impl<'a> ModuleName<'a> {
+    const MODULE_SEPARATOR: char = '.';
+
     pub const fn new(name: &'a str) -> Self {
         ModuleName(name)
     }
 
     pub const fn as_str(&'a self) -> &'a str {
         self.0
+    }
+
+    pub fn parts(&'a self) -> impl DoubleEndedIterator<Item = &'a str> {
+        self.0.split(Self::MODULE_SEPARATOR)
     }
 }
 
