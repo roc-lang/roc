@@ -12,7 +12,6 @@ use crate::string_literal::StrLikeLiteral;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_error_macros::internal_error;
 use roc_region::all::{Loc, Region};
 
 /// Different patterns are supported in different circumstances.
@@ -46,17 +45,9 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
 
 pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state: State<'a>, min_indent| {
-        let (_, pattern, state) = loc_pattern_help_help().parse(arena, state, min_indent)?;
+        let (_, pattern, state) = loc_pattern_help_help(true).parse(arena, state, min_indent)?;
 
         let pattern_state = state.clone();
-
-        // Return early with the suffixed statement
-        match pattern.value {
-            Pattern::Identifier { suffixed, .. } if suffixed > 0 => {
-                return Ok((MadeProgress, pattern, pattern_state))
-            }
-            _ => {}
-        }
 
         let (pattern_spaces, state) =
             match space0_e(EPattern::AsKeyword).parse(arena, state, min_indent) {
@@ -82,11 +73,13 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
     }
 }
 
-fn loc_pattern_help_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+fn loc_pattern_help_help<'a>(
+    can_have_arguments: bool,
+) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
         loc!(underscore_pattern_help()),
-        loc_ident_pattern_help(true),
+        loc_ident_pattern_help(can_have_arguments),
         loc!(specialize_err(
             EPattern::Record,
             crate::pattern::record_pattern_help()
@@ -143,7 +136,8 @@ fn loc_tag_pattern_arg<'a>(
             min_indent,
         )?;
 
-        let (_, loc_pat, state) = loc_parse_tag_pattern_arg().parse(arena, state, min_indent)?;
+        // Cannot have arguments here, pass `false` to make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+        let (_, loc_pat, state) = loc_pattern_help_help(false).parse(arena, state, min_indent)?;
 
         let Loc { region, value } = loc_pat;
 
@@ -191,21 +185,6 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
                 Err((progress, EPattern::End(state.pos())))
             }
         },
-    )
-}
-
-fn loc_parse_tag_pattern_arg<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    one_of!(
-        specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
-        loc!(underscore_pattern_help()),
-        // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-        loc_ident_pattern_help(false),
-        loc!(specialize_err(
-            EPattern::Record,
-            crate::pattern::record_pattern_help()
-        )),
-        loc!(string_like_pattern_help()),
-        loc!(number_pattern_help())
     )
 }
 
@@ -405,46 +384,6 @@ fn loc_ident_pattern_help<'a>(
                     Ok((MadeProgress, loc_pat, state))
                 }
             }
-            // Parse a statement that begins with a suffixed identifier, e.g. `Stdout.line! "Hello"`
-            Ident::Access {
-                module_name,
-                parts,
-                suffixed,
-                ..
-            } if suffixed > 0 => {
-                if module_name.is_empty() && parts.len() == 1 {
-                    if let Accessor::RecordField(var) = &parts[0] {
-                        Ok((
-                            MadeProgress,
-                            Loc {
-                                region: loc_ident.region,
-                                value: Pattern::Identifier {
-                                    ident: var,
-                                    suffixed,
-                                },
-                            },
-                            state,
-                        ))
-                    } else {
-                        internal_error!("unexpected suffixed TupleIndex");
-                    }
-                } else if let Accessor::RecordField(var) = &parts[0] {
-                    return Ok((
-                        MadeProgress,
-                        Loc {
-                            region: loc_ident.region,
-                            value: Pattern::QualifiedIdentifier {
-                                module_name,
-                                ident: var,
-                                suffixed,
-                            },
-                        },
-                        state,
-                    ));
-                } else {
-                    internal_error!("unexpected suffixed TupleIndex");
-                }
-            }
             Ident::Access {
                 module_name, parts, ..
             } => {
@@ -463,10 +402,7 @@ fn loc_ident_pattern_help<'a>(
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Identifier {
-                                    ident: var,
-                                    suffixed: 0,
-                                },
+                                value: Pattern::Identifier { ident: var },
                             },
                             state,
                         ));
@@ -627,18 +563,9 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             None => {
                 let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    Pattern::SpaceAfter(
-                        arena.alloc(Pattern::Identifier {
-                            ident: value,
-                            suffixed: 0,
-                        }),
-                        spaces,
-                    )
+                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: value }), spaces)
                 } else {
-                    Pattern::Identifier {
-                        ident: value,
-                        suffixed: 0,
-                    }
+                    Pattern::Identifier { ident: value }
                 };
 
                 Ok((MadeProgress, Loc::at(region, value), state))

@@ -19,7 +19,6 @@ Defs(
                 @0-1 SpaceAfter(
                     Identifier {
                         ident: "w",
-                        suffixed: 0,
                     },
                     [
                         LineComment(

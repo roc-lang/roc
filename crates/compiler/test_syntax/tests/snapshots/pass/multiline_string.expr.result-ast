@@ -29,7 +29,6 @@ Defs(
             Body(
                 @0-1 Identifier {
                     ident: "a",
-                    suffixed: 0,
                 },
                 @4-22 Str(
                     Line(
@@ -53,7 +52,6 @@ Defs(
             Body(
                 @23-24 Identifier {
                     ident: "b",
-                    suffixed: 0,
                 },
                 @27-49 Str(
                     Block(
@@ -79,7 +77,6 @@ Defs(
             Body(
                 @50-51 Identifier {
                     ident: "c",
-                    suffixed: 0,
                 },
                 @58-92 SpaceBefore(
                     Str(

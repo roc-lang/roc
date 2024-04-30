@@ -1,11 +1,10 @@
 app "args"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [pf.Stdout, pf.Arg, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Task {} I32
 main =
-    args <- Arg.list |> Task.await
+    args = Arg.list!
     parser =
         divCmd =
             Arg.succeed (\dividend -> \divisor -> Div (Num.toF64 dividend) (Num.toF64 divisor))
@@ -55,9 +54,8 @@ main =
             |> Num.toStr
             |> Stdout.line
 
-        Err helpMenu ->
-            {} <- Stdout.line helpMenu |> Task.await
-            Task.err 1
+        Err helpMenuErr ->
+            Task.err (Exit 1 "unable to parse args: $(Inspect.toStr helpMenuErr)")
 
 runCmd = \cmd ->
     when cmd is

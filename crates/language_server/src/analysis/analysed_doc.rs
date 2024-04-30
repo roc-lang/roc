@@ -69,6 +69,7 @@ impl DocInfo {
         let end = Position::new(self.line_info.num_lines(), 0);
         Range::new(start, end)
     }
+
     pub fn get_prefix_at_position(&self, position: Position) -> String {
         let position = position.to_roc_position(&self.line_info);
         let offset = position.offset as usize;
@@ -82,6 +83,7 @@ impl DocInfo {
 
         String::from(symbol)
     }
+
     pub fn format(&self) -> Option<Vec<TextEdit>> {
         let source = &self.source;
         let arena = &Bump::new();
@@ -175,10 +177,12 @@ impl AnalyzedDocument {
 
         let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
 
-        //TODO:Can this be integrated into find closest type? is it even worth it?
-        let docs_opt = self
-            .symbol_at(position)
-            .and_then(|symb| modules_info.docs.get(module_id)?.get_doc_for_symbol(&symb));
+        //TODO: Can this be integrated into "find closest type"? Is it worth it?
+        let docs_opt = self.symbol_at(position).and_then(|symbol| {
+            modules_info
+                .get_docs(module_id)?
+                .get_doc_for_symbol(&symbol)
+        });
 
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 
@@ -238,7 +242,7 @@ impl AnalyzedDocument {
             subs,
             declarations,
             exposed_imports,
-            imports,
+            imports_by_module: imports,
             modules_info,
             ..
         } = self.module()?;
@@ -299,7 +303,7 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     module_id,
                     interns,
-                    modules_info.docs.get(module_id),
+                    modules_info.get_docs(module_id),
                     exposed_imports,
                 );
                 Some(completions)

@@ -547,11 +547,7 @@ fn canonicalize_claimed_ability_impl<'a>(
         }
         AssignedField::RequiredValue(label, _spaces, value) => {
             let impl_ident = match value.value {
-                ast::Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed: _,
-                } => {
+                ast::Expr::Var { module_name, ident } => {
                     if module_name.is_empty() {
                         ident
                     } else {
@@ -2574,10 +2570,9 @@ fn to_pending_alias_or_opaque<'a>(
 
             for loc_var in vars.iter() {
                 match loc_var.value {
-                    ast::Pattern::Identifier {
-                        ident: name,
-                        suffixed: _,
-                    } if name.chars().next().unwrap().is_lowercase() => {
+                    ast::Pattern::Identifier { ident: name, .. }
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
                         let lowercase = Lowercase::from(name);
                         can_rigids.push(Loc {
                             value: lowercase,

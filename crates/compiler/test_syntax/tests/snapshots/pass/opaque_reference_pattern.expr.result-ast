@@ -2,7 +2,6 @@ When(
     @5-6 Var {
         module_name: "",
         ident: "n",
-        suffixed: 0,
     },
     [
         WhenBranch {

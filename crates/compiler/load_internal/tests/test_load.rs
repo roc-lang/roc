@@ -989,8 +989,8 @@ fn issue_2863_module_type_does_not_exist() {
                         Did you mean one of these?
 
                             Decoding
-                            Dict
                             Result
+                            Dict
                             DecodeError
                         "
                       )
@@ -1280,7 +1280,7 @@ fn roc_file_no_extension() {
         indoc!(
             r#"
             app "helloWorld"
-                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
                 imports [pf.Stdout]
                 provides [main] to pf
 

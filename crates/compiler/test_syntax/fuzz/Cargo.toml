@@ -2,9 +2,9 @@
 name = "test_syntax-fuzz"
 publish = false
 
-authors.workspace = true
-edition.workspace = true
-version.workspace = true
+version = "0.0.0"
+authors = ["Automatically generated"]
+edition = "2021"
 
 [package.metadata]
 cargo-fuzz = true
@@ -12,8 +12,8 @@ cargo-fuzz = true
 [dependencies]
 test_syntax = { path = "../../test_syntax" }
 
-bumpalo.workspace = true
-libfuzzer-sys.workspace = true
+bumpalo = { version = "3.12.0", features = ["collections"] }
+libfuzzer-sys = "0.4"
 
 # Prevent this from interfering with workspaces
 [workspace]

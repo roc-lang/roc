@@ -26,7 +26,6 @@ When(
             value: @24-25 Var {
                 module_name: "",
                 ident: "n",
-                suffixed: 0,
             },
             guard: None,
         },

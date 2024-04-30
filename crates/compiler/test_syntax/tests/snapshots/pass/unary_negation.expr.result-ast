@@ -2,7 +2,6 @@ UnaryOp(
     @1-4 Var {
         module_name: "",
         ident: "foo",
-        suffixed: 0,
     },
     @0-1 Negate,
 )

@@ -19,7 +19,6 @@ Defs {
                 vars: [
                     @9-10 Identifier {
                         ident: "a",
-                        suffixed: 0,
                     },
                 ],
             },

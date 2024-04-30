@@ -1,21 +1,19 @@
 app "echo"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Task {} I32
 main =
     _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
 
     Task.loop {} tick
 
-tick : {} -> Task [Step {}, Done {}] *
+tick : {} -> Task [Step {}, Done {}] _
 tick = \{} ->
-    shout <- Task.await Stdin.line
-
-    when shout is
-        Input s -> Stdout.line (echo s) |> Task.map Step
-        End -> Stdout.line (echo "Received end of input (EOF).") |> Task.map Done
+    when Stdin.line |> Task.result! is
+        Ok str -> Stdout.line (echo str) |> Task.map Step
+        Err (StdinErr EndOfFile) -> Stdout.line (echo "Received end of input (EOF).") |> Task.map Done
+        Err (StdinErr err) -> Stdout.line (echo "Unable to read input $(Inspect.toStr err)") |> Task.map Done
 
 echo : Str -> Str
 echo = \shout ->

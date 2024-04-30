@@ -50,17 +50,17 @@ procedure Num.22 (#Attr.2, #Attr.3):
     let Num.275 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.275;
 
-procedure Result.5 (Result.12, Result.13):
-    let Result.39 : U8 = 1i64;
-    let Result.40 : U8 = GetTagId Result.12;
-    let Result.41 : Int1 = lowlevel Eq Result.39 Result.40;
-    if Result.41 then
-        dec Result.13;
-        let Result.14 : Str = UnionAtIndex (Id 1) (Index 0) Result.12;
-        ret Result.14;
+procedure Result.5 (Result.10, Result.11):
+    let Result.37 : U8 = 1i64;
+    let Result.38 : U8 = GetTagId Result.10;
+    let Result.39 : Int1 = lowlevel Eq Result.37 Result.38;
+    if Result.39 then
+        dec Result.11;
+        let Result.12 : Str = UnionAtIndex (Id 1) (Index 0) Result.10;
+        ret Result.12;
     else
-        dec Result.12;
-        ret Result.13;
+        dec Result.10;
+        ret Result.11;
 
 procedure Test.10 (Test.11):
     let Test.12 : Str = CallByName Test.2 Test.11;

@@ -2,23 +2,19 @@ Apply(
     @0-1 Var {
         module_name: "",
         ident: "a",
-        suffixed: 0,
     },
     [
         @2-3 Var {
             module_name: "",
             ident: "b",
-            suffixed: 0,
         },
         @4-5 Var {
             module_name: "",
             ident: "c",
-            suffixed: 0,
         },
         @6-7 Var {
             module_name: "",
             ident: "d",
-            suffixed: 0,
         },
     ],
     Space,

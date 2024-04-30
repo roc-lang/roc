@@ -3,7 +3,6 @@ SpaceBefore(
         [
             @18-19 Identifier {
                 ident: "x",
-                suffixed: 0,
             },
         ],
         @23-32 ParensAround(
@@ -11,13 +10,11 @@ SpaceBefore(
                 [
                     @25-26 Identifier {
                         ident: "y",
-                        suffixed: 0,
                     },
                 ],
                 @30-31 Var {
                     module_name: "",
                     ident: "y",
-                    suffixed: 0,
                 },
             ),
         ),
@@ -25,7 +22,6 @@ SpaceBefore(
             Var {
                 module_name: "",
                 ident: "x",
-                suffixed: 0,
             },
             [
                 Newline,
