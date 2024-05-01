@@ -11,9 +11,8 @@ use roc_parse::{
         WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
-        PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To,
-        TypedIdent,
+        AppHeader, ExposedName, HostedHeader, ImportsEntry, ModuleHeader, ModuleName, PackageEntry,
+        PackageHeader, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To, TypedIdent,
     },
     ident::{Accessor, UppercaseIdent},
 };
@@ -202,7 +201,7 @@ impl IterTokens for Module<'_> {
 impl IterTokens for Header<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
-            Header::Interface(ih) => ih.iter_tokens(arena),
+            Header::Module(mh) => mh.iter_tokens(arena),
             Header::App(app) => app.iter_tokens(arena),
             Header::Package(pkg) => pkg.iter_tokens(arena),
             Header::Platform(pf) => pf.iter_tokens(arena),
@@ -211,36 +210,33 @@ impl IterTokens for Header<'_> {
     }
 }
 
-impl IterTokens for InterfaceHeader<'_> {
+impl IterTokens for ModuleHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
+            before_exposes: _,
             exposes,
-            imports,
+            interface_imports: _,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(exposes.item.iter_tokens(arena))
-            .chain(imports.item.iter_tokens(arena))
-            .collect_in(arena)
+        exposes.iter_tokens(arena)
     }
 }
 
 impl IterTokens for AppHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
-            packages,
-            imports,
+            before_provides: _,
             provides,
+            before_packages: _,
+            packages,
+            old_imports,
+            old_provides_to_new_package: _,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(packages.iter().flat_map(|p| p.item.iter_tokens(arena)))
-            .chain(imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
+        (provides.iter_tokens(arena).into_iter())
+            .chain(packages.value.iter_tokens(arena))
             .chain(provides.iter_tokens(arena))
+            .chain(old_imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .collect_in(arena)
     }
 }
@@ -248,15 +244,14 @@ impl IterTokens for AppHeader<'_> {
 impl IterTokens for PackageHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
+            before_exposes: _,
             exposes,
+            before_packages: _,
             packages,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(exposes.item.iter_tokens(arena))
-            .chain(packages.item.iter_tokens(arena))
+        (exposes.iter_tokens(arena).into_iter())
+            .chain(packages.value.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -317,6 +312,7 @@ impl IterTokens for Loc<Spaced<'_, PackageEntry<'_>>> {
         let PackageEntry {
             shorthand: _,
             spaces_after_shorthand: _,
+            platform_marker: _,
             package_name,
         } = self.value.item();
 

@@ -1,6 +1,5 @@
-app "example-server"
-    packages { pf: "platform/server-side.roc" }
-    imports [ExampleApp.{ exampleApp }]
-    provides [app] to pf
+app [app] { pf: platform "platform/server-side.roc" }
+
+import ExampleApp exposing [exampleApp]
 
 app = exampleApp

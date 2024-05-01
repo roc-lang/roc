@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use crate::header::{
-    self, AppHeader, HostedHeader, InterfaceHeader, ModuleName, PackageHeader, PlatformHeader,
+    self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
 };
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
@@ -46,6 +46,18 @@ impl<'a, T> Spaced<'a, T> {
         match self {
             Spaced::Item(answer) => answer,
             Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
+        }
+    }
+
+    pub fn map<U, F: Fn(&T) -> U>(&self, arena: &'a Bump, f: F) -> Spaced<'a, U> {
+        match self {
+            Spaced::Item(item) => Spaced::Item(f(item)),
+            Spaced::SpaceBefore(next, spaces) => {
+                Spaced::SpaceBefore(arena.alloc(next.map(arena, f)), spaces)
+            }
+            Spaced::SpaceAfter(next, spaces) => {
+                Spaced::SpaceAfter(arena.alloc(next.map(arena, f)), spaces)
+            }
         }
     }
 }
@@ -99,6 +111,30 @@ pub struct Module<'a> {
 }
 
 impl<'a> Module<'a> {
+    pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
+        let (header, defs) = match self.header {
+            Header::Module(header) => (
+                Header::Module(ModuleHeader {
+                    interface_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.interface_imports),
+            ),
+            Header::App(header) => (
+                Header::App(AppHeader {
+                    old_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.old_imports),
+            ),
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => {
+                (self.header, Defs::default())
+            }
+        };
+
+        (Module { header, ..self }, defs)
+    }
+
     pub fn header_imports_to_defs(
         arena: &'a Bump,
         imports: Option<
@@ -159,6 +195,7 @@ impl<'a> Module<'a> {
                     },
                     if index == len - 1 {
                         let mut after = spaced.after.to_vec();
+                        after.extend_from_slice(imports.item.final_comments());
                         after.push(CommentOrNewline::Newline);
                         after.push(CommentOrNewline::Newline);
                         arena.alloc(after)
@@ -209,7 +246,7 @@ impl<'a> Module<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Header<'a> {
-    Interface(InterfaceHeader<'a>),
+    Module(ModuleHeader<'a>),
     App(AppHeader<'a>),
     Package(PackageHeader<'a>),
     Platform(PlatformHeader<'a>),
@@ -2272,7 +2309,7 @@ impl<'a> Malformed for Module<'a> {
 impl<'a> Malformed for Header<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            Header::Interface(header) => header.is_malformed(),
+            Header::Module(header) => header.is_malformed(),
             Header::App(header) => header.is_malformed(),
             Header::Package(header) => header.is_malformed(),
             Header::Platform(header) => header.is_malformed(),

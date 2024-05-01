@@ -5,12 +5,13 @@ use crate::spaces::RemoveSpaces;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
-use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
+use roc_parse::ast::{Collection, CommentOrNewline, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-    ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry, PackageHeader,
-    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
-    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    ImportsKeyword, Keyword, KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader,
+    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword,
+    PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
+    WithKeyword,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -18,8 +19,8 @@ use roc_region::all::Loc;
 pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
     fmt_comments_only(buf, module.comments.iter(), NewlineAt::Bottom, 0);
     match &module.header {
-        Header::Interface(header) => {
-            fmt_interface_header(buf, header);
+        Header::Module(header) => {
+            fmt_module_header(buf, header);
         }
         Header::App(header) => {
             fmt_app_header(buf, header);
@@ -75,6 +76,7 @@ keywords! {
     RequiresKeyword,
     ProvidesKeyword,
     ToKeyword,
+    PlatformKeyword,
 }
 
 impl<V: Formattable> Formattable for Option<V> {
@@ -171,20 +173,12 @@ impl<'a, K: Formattable, V: Formattable> Formattable for KeywordItem<'a, K, V> {
     }
 }
 
-pub fn fmt_interface_header<'a>(buf: &mut Buf, header: &'a InterfaceHeader<'a>) {
+pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
     buf.indent(0);
-    buf.push_str("interface");
-    let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
+    buf.push_str("module");
 
-    // module name
-    buf.indent(indent);
-    buf.push_str(header.name.value.as_str());
-
-    header.exposes.keyword.format(buf, indent);
-    fmt_exposes(buf, header.exposes.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
+    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, INDENT);
+    fmt_exposes(buf, header.exposes, indent);
 }
 
 pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
@@ -207,34 +201,33 @@ pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
 pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {
     buf.indent(0);
     buf.push_str("app");
-    let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
 
-    fmt_str_literal(buf, header.name.value, indent);
+    let indent = fmt_spaces_with_outdent(buf, header.before_provides, INDENT);
+    fmt_exposes(buf, header.provides, indent);
 
-    if let Some(packages) = &header.packages {
-        packages.keyword.format(buf, indent);
-        fmt_packages(buf, packages.item, indent);
+    let indent = fmt_spaces_with_outdent(buf, header.before_packages, INDENT);
+    fmt_packages(buf, header.packages.value, indent);
+}
+
+pub fn fmt_spaces_with_outdent(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) -> u16 {
+    if spaces.iter().all(|c| c.is_newline()) {
+        buf.spaces(1);
+        0
+    } else {
+        fmt_default_spaces(buf, spaces, indent);
+        indent
     }
-    if let Some(imports) = &header.imports {
-        imports.keyword.format(buf, indent);
-        fmt_imports(buf, imports.item, indent);
-    }
-    header.provides.format(buf, indent);
 }
 
 pub fn fmt_package_header<'a>(buf: &mut Buf, header: &'a PackageHeader<'a>) {
     buf.indent(0);
     buf.push_str("package");
-    let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
 
-    fmt_package_name(buf, header.name.value, indent);
+    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, INDENT);
+    fmt_exposes(buf, header.exposes, indent);
 
-    header.exposes.keyword.format(buf, indent);
-    fmt_exposes(buf, header.exposes.item, indent);
-    header.packages.keyword.format(buf, indent);
-    fmt_packages(buf, header.packages.item, indent);
+    let indent = fmt_spaces_with_outdent(buf, header.before_packages, INDENT);
+    fmt_packages(buf, header.packages.value, indent);
 }
 
 pub fn fmt_platform_header<'a>(buf: &mut Buf, header: &'a PlatformHeader<'a>) {
@@ -465,6 +458,15 @@ fn fmt_packages_entry(buf: &mut Buf, entry: &PackageEntry, indent: u16) {
     buf.push_str(entry.shorthand);
     buf.push(':');
     fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
+
+    let indent = indent + INDENT;
+
+    if let Some(spaces_after) = entry.platform_marker {
+        buf.indent(indent);
+        buf.push_str(roc_parse::keyword::PLATFORM);
+        fmt_default_spaces(buf, spaces_after, indent);
+    }
+
     fmt_package_name(buf, entry.package_name.value, indent);
 }
 

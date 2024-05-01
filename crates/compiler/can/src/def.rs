@@ -506,7 +506,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             // OPTION-1: The implementation identifier is the only identifier of that name in the
             //           scope. For example,
             //
-            //               interface F imports [] exposes []
+            //               module []
             //
             //               Hello := {} implements [Encoding.{ toEncoder }]
             //
@@ -518,7 +518,9 @@ fn canonicalize_claimed_ability_impl<'a>(
             // OPTION-2: The implementation identifier is a unique shadow of the ability member,
             //           which has also been explicitly imported. For example,
             //
-            //               interface F imports [Encoding.{ toEncoder }] exposes []
+            //               module []
+            //
+            //               import Encoding exposing [toEncoder]
             //
             //               Hello := {} implements [Encoding.{ toEncoder }]
             //

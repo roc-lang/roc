@@ -1,6 +1,4 @@
-interface Result
-    exposes [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
-    imports []
+module [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
 
 import Bool exposing [Bool]
 

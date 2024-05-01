@@ -1,6 +1,6 @@
-interface Elem
-    exposes [Elem, PressEvent, row, col, text, button, none, translate, list]
-    imports [Action.{ Action }]
+module [Elem, PressEvent, row, col, text, button, none, translate, list]
+
+import Action exposing [Action]
 
 Elem state : [
     # PERFORMANCE NOTE:

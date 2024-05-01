@@ -170,7 +170,9 @@ impl<'a> Input<'a> {
                     .parse(arena, state.clone(), min_indent)
                     .map_err(|(_, fail)| SyntaxError::Header(fail))?;
 
-                let module_defs = parse_module_defs(arena, state, Defs::default()).unwrap();
+                let (header, defs) = header.upgrade_header_imports(arena);
+
+                let module_defs = parse_module_defs(arena, state, defs).unwrap();
 
                 Ok(Output::Full {
                     header,

@@ -1,4 +1,1 @@
-app "quicksort"
-    packages { pf: "./platform" }
-    imports [foo.Bar.Baz]
-    provides [quicksort] to pf
+app [quicksort] { pf: platform "./platform" }

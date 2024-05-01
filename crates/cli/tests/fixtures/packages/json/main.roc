@@ -1,3 +1,1 @@
-package "json"
-    exposes [JsonParser]
-    packages {}
+package [JsonParser] {}

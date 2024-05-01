@@ -1,6 +1,8 @@
-interface Context
-    exposes [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
-    imports [pf.File, pf.Task.{ Task }, Variable.{ Variable }]
+module [Context, Data, with, getChar, Option, pushStack, popStack, toStr, inWhileScope]
+
+import pf.File
+import pf.Task exposing [Task]
+import Variable exposing [Variable]
 
 Option a : [Some a, None]
 

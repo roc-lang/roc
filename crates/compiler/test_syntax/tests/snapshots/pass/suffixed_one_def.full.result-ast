@@ -3,120 +3,83 @@ Full {
         comments: [],
         header: App(
             AppHeader {
-                before_name: [],
-                name: @4-18 PlainLine(
-                    "desugar-bang",
-                ),
-                packages: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: PackagesKeyword,
-                            after: [],
-                        },
-                        item: Collection {
-                            items: [
-                                @42-79 SpaceBefore(
-                                    PackageEntry {
-                                        shorthand: "cli",
-                                        spaces_after_shorthand: [],
-                                        package_name: @47-79 PackageName(
-                                            "../basic-cli/platform/main.roc",
-                                        ),
-                                    },
-                                    [
-                                        Newline,
-                                    ],
+                before_provides: [],
+                provides: [
+                    @5-9 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [],
+                packages: @11-55 Collection {
+                    items: [
+                        @15-52 SpaceBefore(
+                            PackageEntry {
+                                shorthand: "cli",
+                                spaces_after_shorthand: [],
+                                platform_marker: None,
+                                package_name: @20-52 PackageName(
+                                    "../basic-cli/platform/main.roc",
                                 ),
-                            ],
-                            final_comments: [
+                            },
+                            [
                                 Newline,
                             ],
-                        },
-                    },
-                ),
-                imports: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: ImportsKeyword,
-                            after: [],
-                        },
-                        item: Collection {
-                            items: [
-                                @109-119 SpaceBefore(
-                                    Package(
-                                        "cli",
-                                        ModuleName(
-                                            "Stdout",
-                                        ),
-                                        [],
-                                    ),
-                                    [
-                                        Newline,
-                                    ],
-                                ),
-                            ],
-                            final_comments: [
-                                Newline,
-                            ],
-                        },
-                    },
-                ),
-                provides: ProvidesTo {
-                    provides_keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ProvidesKeyword,
-                        after: [],
-                    },
-                    entries: [
-                        @141-145 ExposedName(
-                            "main",
                         ),
                     ],
-                    types: None,
-                    to_keyword: Spaces {
-                        before: [],
-                        item: ToKeyword,
-                        after: [],
-                    },
-                    to: @150-153 ExistingPackage(
-                        "cli",
-                    ),
+                    final_comments: [
+                        Newline,
+                    ],
                 },
+                old_imports: None,
+                old_provides_to_new_package: None,
             },
         ),
     },
     module_defs: Defs {
         tags: [
             Index(2147483648),
+            Index(2147483649),
         ],
         regions: [
-            @155-299,
+            @57-74,
+            @76-220,
         ],
         space_before: [
             Slice(start = 0, length = 2),
+            Slice(start = 2, length = 2),
         ],
         space_after: [
             Slice(start = 2, length = 0),
+            Slice(start = 4, length = 0),
         ],
         spaces: [
+            Newline,
+            Newline,
             Newline,
             Newline,
         ],
         type_defs: [],
         value_defs: [
+            ModuleImport(
+                ModuleImport {
+                    before_name: [],
+                    name: @64-74 ImportedModuleName {
+                        package: Some(
+                            "cli",
+                        ),
+                        name: ModuleName(
+                            "Stdout",
+                        ),
+                    },
+                    alias: None,
+                    exposed: None,
+                },
+            ),
             Body(
-                @155-159 Identifier {
+                @76-80 Identifier {
                     ident: "main",
                 },
-                @199-299 SpaceBefore(
+                @120-220 SpaceBefore(
                     Defs(
                         Defs {
                             tags: [
@@ -124,8 +87,8 @@ Full {
                                 Index(2147483649),
                             ],
                             regions: [
-                                @199-211,
-                                @241-284,
+                                @120-132,
+                                @162-205,
                             ],
                             space_before: [
                                 Slice(start = 0, length = 0),
@@ -139,18 +102,18 @@ Full {
                             type_defs: [],
                             value_defs: [
                                 Stmt(
-                                    @199-211 BinOps(
+                                    @120-132 BinOps(
                                         [
                                             (
-                                                @199-204 Str(
+                                                @120-125 Str(
                                                     PlainLine(
                                                         "Foo",
                                                     ),
                                                 ),
-                                                @205-207 Pizza,
+                                                @126-128 Pizza,
                                             ),
                                         ],
-                                        @208-211 TaskAwaitBang(
+                                        @129-132 TaskAwaitBang(
                                             Var {
                                                 module_name: "A",
                                                 ident: "x",
@@ -159,33 +122,33 @@ Full {
                                     ),
                                 ),
                                 Stmt(
-                                    @241-284 SpaceBefore(
+                                    @162-205 SpaceBefore(
                                         BinOps(
                                             [
                                                 (
-                                                    @241-246 Str(
+                                                    @162-167 Str(
                                                         PlainLine(
                                                             "Bar",
                                                         ),
                                                     ),
-                                                    @247-249 Pizza,
+                                                    @168-170 Pizza,
                                                 ),
                                             ],
-                                            @250-284 Apply(
-                                                @250-253 TaskAwaitBang(
+                                            @171-205 Apply(
+                                                @171-174 TaskAwaitBang(
                                                     Var {
                                                         module_name: "B",
                                                         ident: "y",
                                                     },
                                                 ),
                                                 [
-                                                    @264-284 SpaceBefore(
+                                                    @185-205 SpaceBefore(
                                                         Record(
                                                             [
-                                                                @266-282 RequiredValue(
-                                                                    @266-272 "config",
+                                                                @187-203 RequiredValue(
+                                                                    @187-193 "config",
                                                                     [],
-                                                                    @274-282 Str(
+                                                                    @195-203 Str(
                                                                         PlainLine(
                                                                             "config",
                                                                         ),
@@ -212,14 +175,14 @@ Full {
                                 ),
                             ],
                         },
-                        @290-299 SpaceBefore(
+                        @211-220 SpaceBefore(
                             Apply(
-                                @290-293 Var {
+                                @211-214 Var {
                                     module_name: "C",
                                     ident: "z",
                                 },
                                 [
-                                    @294-299 Str(
+                                    @215-220 Str(
                                         PlainLine(
                                             "Bar",
                                         ),
