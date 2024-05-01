@@ -294,27 +294,24 @@ fn stub_lib_is_up_to_date(target: Target, stub_lib_path: &Path, custom_names: &[
 
 pub fn preprocess_host(
     target: Target,
-    platform_main_roc: &Path,
-    preprocessed_path: &Path,
-    shared_lib: &Path,
-    stub_dll_symbols: &[String],
+    host_path: &PathBuf,
+    platform_path: &PathBuf,
+    dylib_path: &PathBuf,
+    verbose: bool,
+    time: bool,
 ) {
-    let metadata_path = platform_main_roc.with_file_name(metadata_file_name(target));
-    let host_exe_path = if target.operating_system() == OperatingSystem::Windows {
-        platform_main_roc.with_file_name("dynhost.exe")
-    } else {
-        platform_main_roc.with_file_name("dynhost")
-    };
+    let preprocessed_path = platform_path.with_file_name(format!("{}.rh", target));
+    let metadata_path = platform_path.with_file_name(metadata_file_name(target));
 
     preprocess(
         target,
-        &host_exe_path,
+        &host_path,
         &metadata_path,
-        preprocessed_path,
-        shared_lib,
-        stub_dll_symbols,
-        false,
-        false,
+        preprocessed_path.as_path(),
+        dylib_path.as_path(),
+        &[],
+        verbose,
+        time,
     )
 }
 

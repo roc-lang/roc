@@ -1174,13 +1174,14 @@ fn build_and_preprocess_host_lowlevel(
 
     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
-    roc_linker::preprocess_host(
-        target,
-        platform_main_roc,
-        preprocessed_host_path,
-        &stub_lib,
-        stub_dll_symbols,
-    )
+    todo!()
+    // roc_linker::preprocess_host(
+    //     target,
+    //     platform_main_roc,
+    //     preprocessed_host_path,
+    //     &stub_lib,
+    //     stub_dll_symbols,
+    // )
 }
 
 #[allow(clippy::too_many_arguments)]

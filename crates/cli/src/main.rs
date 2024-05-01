@@ -130,7 +130,7 @@ fn main() -> io::Result<()> {
             let host_path = matches.get_one::<PathBuf>(FLAG_PP_HOST).unwrap();
             if !host_path.is_file() {
                 preprocess_host_err(format!(
-                    "Expected to find the host static library file at {}",
+                    "Expected to find the host executable file at {}",
                     &host_path.display()
                 ));
             }
