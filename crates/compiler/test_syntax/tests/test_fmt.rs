@@ -7,9 +7,8 @@ mod test_fmt {
     use roc_fmt::def::fmt_defs;
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
-    use roc_parse::ast::Module;
-    use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::Parser;
+    use roc_parse::ast::{Defs, Module};
+    use roc_parse::module::{self, parse_module_defs};
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
@@ -39,8 +38,8 @@ mod test_fmt {
     ) {
         fmt_module(buf, module);
 
-        match module_defs().parse(arena, state, 0) {
-            Ok((_, loc_defs, _)) => {
+        match parse_module_defs(arena, state, Defs::default()) {
+            Ok(loc_defs) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
             Err(error) => panic!(

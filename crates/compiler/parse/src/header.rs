@@ -103,6 +103,19 @@ impl<'a> HeaderType<'a> {
             }
         }
     }
+
+    pub fn to_maybe_builtin(self, module_id: ModuleId) -> Self {
+        match self {
+            HeaderType::Interface { name, exposes } if module_id.is_builtin() => {
+                HeaderType::Builtin {
+                    name,
+                    exposes,
+                    generates_with: &[],
+                }
+            }
+            _ => self,
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -156,13 +169,25 @@ impl<'a> From<ModuleName<'a>> for &'a str {
     }
 }
 
+impl<'a> From<ModuleName<'a>> for roc_module::ident::ModuleName {
+    fn from(name: ModuleName<'a>) -> Self {
+        name.0.into()
+    }
+}
+
 impl<'a> ModuleName<'a> {
+    const MODULE_SEPARATOR: char = '.';
+
     pub const fn new(name: &'a str) -> Self {
         ModuleName(name)
     }
 
     pub const fn as_str(&'a self) -> &'a str {
         self.0
+    }
+
+    pub fn parts(&'a self) -> impl DoubleEndedIterator<Item = &'a str> {
+        self.0.split(Self::MODULE_SEPARATOR)
     }
 }
 
@@ -204,7 +229,6 @@ macro_rules! keywords {
 
 keywords! {
     ExposesKeyword => "exposes",
-    ImportsKeyword => "imports",
     WithKeyword => "with",
     GeneratesKeyword => "generates",
     PackageKeyword => "package",
@@ -212,9 +236,10 @@ keywords! {
     RequiresKeyword => "requires",
     ProvidesKeyword => "provides",
     ToKeyword => "to",
+    ImportsKeyword => "imports",
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct KeywordItem<'a, K, V> {
     pub keyword: Spaces<'a, K>,
     pub item: V,
@@ -228,6 +253,9 @@ pub struct InterfaceHeader<'a> {
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
     pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
 }
+
+pub type ImportsKeywordItem<'a> = KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>;
+pub type ImportsCollection<'a> = Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostedHeader<'a> {

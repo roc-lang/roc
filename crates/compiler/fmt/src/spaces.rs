@@ -4,9 +4,10 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
-        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Module,
-        Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileImport, Module,
+        ModuleImport, Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral,
+        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -567,8 +568,60 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.remove_spaces(arena)),
                 preceding_comment: Region::zero(),
             },
+            ModuleImport(module_import) => ModuleImport(module_import.remove_spaces(arena)),
+            IngestedFileImport(ingested_file_import) => {
+                IngestedFileImport(ingested_file_import.remove_spaces(arena))
+            }
             Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.remove_spaces(arena))),
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ModuleImport<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ModuleImport {
+            before_name: &[],
+            name: self.name.remove_spaces(arena),
+            alias: self.alias.remove_spaces(arena),
+            exposed: self.exposed.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for IngestedFileImport<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        IngestedFileImport {
+            before_path: &[],
+            path: self.path.remove_spaces(arena),
+            name: self.name.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportedModuleName<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ImportedModuleName {
+            package: self.package.remove_spaces(arena),
+            name: self.name.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportAlias<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportAsKeyword {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportExposingKeyword {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
     }
 }
 
@@ -682,7 +735,6 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
-            Expr::IngestedFile(a, b) => Expr::IngestedFile(a, b),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),

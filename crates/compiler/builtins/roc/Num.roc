@@ -157,10 +157,10 @@ interface Num
         f32FromParts,
         f64FromParts,
     ]
-    imports [
-        Bool.{ Bool },
-        Result.{ Result },
-    ]
+    imports []
+
+import Bool exposing [Bool]
+import Result exposing [Result]
 
 ## Represents a number that could be either an [Int] or a [Frac].
 ##

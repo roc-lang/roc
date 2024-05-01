@@ -200,6 +200,7 @@ mod test_snapshots {
         fail/if_guard_without_condition.expr,
         fail/if_missing_else.expr,
         fail/if_outdented_then.expr,
+        fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,
         fail/inline_hastype.expr,
         fail/invalid_operator.expr,
@@ -323,6 +324,14 @@ mod test_snapshots {
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/if_def.expr,
+        pass/import.moduledefs,
+        pass/import_from_package.moduledefs,
+        pass/import_with_alias.moduledefs,
+        pass/import_with_comments.moduledefs,
+        pass/import_with_exposed.moduledefs,
+        pass/ingested_file.moduledefs,
+        pass/inline_import.expr,
+        pass/inline_ingested_file.expr,
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,
         pass/lambda_in_chain.expr,
@@ -573,6 +582,8 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{err:?}")),
         };
+
+        println!("{:?}", result);
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);

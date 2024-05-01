@@ -1445,7 +1445,7 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^
@@ -1489,7 +1489,7 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^

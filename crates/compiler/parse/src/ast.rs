@@ -1,7 +1,8 @@
 use std::fmt::Debug;
-use std::path::Path;
 
-use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
+use crate::header::{
+    self, AppHeader, HostedHeader, InterfaceHeader, ModuleName, PackageHeader, PlatformHeader,
+};
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
@@ -9,9 +10,10 @@ use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
+use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
@@ -94,6 +96,115 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
 pub struct Module<'a> {
     pub comments: &'a [CommentOrNewline<'a>],
     pub header: Header<'a>,
+}
+
+impl<'a> Module<'a> {
+    pub fn header_imports_to_defs(
+        arena: &'a Bump,
+        imports: Option<
+            header::KeywordItem<'a, header::ImportsKeyword, header::ImportsCollection<'a>>,
+        >,
+    ) -> Defs<'a> {
+        let mut defs = Defs::default();
+
+        if let Some(imports) = imports {
+            let len = imports.item.len();
+
+            for (index, import) in imports.item.iter().enumerate() {
+                let spaced = import.extract_spaces();
+
+                let value_def = match spaced.item {
+                    header::ImportsEntry::Package(pkg_name, name, exposed) => {
+                        Self::header_import_to_value_def(
+                            Some(pkg_name),
+                            name,
+                            exposed,
+                            import.region,
+                        )
+                    }
+                    header::ImportsEntry::Module(name, exposed) => {
+                        Self::header_import_to_value_def(None, name, exposed, import.region)
+                    }
+                    header::ImportsEntry::IngestedFile(path, typed_ident) => {
+                        ValueDef::IngestedFileImport(IngestedFileImport {
+                            before_path: &[],
+                            path: Loc {
+                                value: path,
+                                region: import.region,
+                            },
+                            name: header::KeywordItem {
+                                keyword: Spaces {
+                                    before: &[],
+                                    item: ImportAsKeyword,
+                                    after: &[],
+                                },
+                                item: Loc {
+                                    value: typed_ident,
+                                    region: import.region,
+                                },
+                            },
+                        })
+                    }
+                };
+
+                defs.push_value_def(
+                    value_def,
+                    import.region,
+                    if index == 0 {
+                        let mut before = vec![CommentOrNewline::Newline, CommentOrNewline::Newline];
+                        before.extend(spaced.before);
+                        arena.alloc(before)
+                    } else {
+                        spaced.before
+                    },
+                    if index == len - 1 {
+                        let mut after = spaced.after.to_vec();
+                        after.push(CommentOrNewline::Newline);
+                        after.push(CommentOrNewline::Newline);
+                        arena.alloc(after)
+                    } else {
+                        spaced.after
+                    },
+                );
+            }
+        }
+        defs
+    }
+
+    fn header_import_to_value_def(
+        pkg_name: Option<&'a str>,
+        name: header::ModuleName<'a>,
+        exposed: Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        region: Region,
+    ) -> ValueDef<'a> {
+        use crate::header::KeywordItem;
+
+        let new_exposed = if exposed.is_empty() {
+            None
+        } else {
+            Some(KeywordItem {
+                keyword: Spaces {
+                    before: &[],
+                    item: ImportExposingKeyword,
+                    after: &[],
+                },
+                item: exposed,
+            })
+        };
+
+        ValueDef::ModuleImport(ModuleImport {
+            before_name: &[],
+            name: Loc {
+                region,
+                value: ImportedModuleName {
+                    package: pkg_name,
+                    name,
+                },
+            },
+            alias: None,
+            exposed: new_exposed,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -283,9 +394,6 @@ pub enum Expr<'a> {
     // Record Builders
     RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
 
-    // The name of a file to be ingested directly into a variable.
-    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
-
     // Lookups
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
@@ -456,7 +564,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::RecordBuilder(items) => items
             .iter()
             .any(|rbf| is_record_builder_field_suffixed(&rbf.value)),
-        Expr::IngestedFile(_, _) => false,
         Expr::Underscore(_) => false,
         Expr::Crash => false,
         Expr::Tag(_) => false,
@@ -622,16 +729,334 @@ pub enum ValueDef<'a> {
         preceding_comment: Region,
     },
 
+    /// e.g. `import InternalHttp as Http exposing [Req]`.
+    ModuleImport(ModuleImport<'a>),
+
+    /// e.g. `import "path/to/my/file.txt" as myFile : Str`
+    IngestedFileImport(IngestedFileImport<'a>),
+
     Stmt(&'a Loc<Expr<'a>>),
 }
 
 impl<'a> ValueDef<'a> {
+    pub fn expr(&self) -> Option<&'a Expr<'a>> {
+        match self {
+            ValueDef::Body(_, body) => Some(&body.value),
+
+            ValueDef::AnnotatedBody {
+                ann_pattern: _,
+                ann_type: _,
+                comment: _,
+                body_pattern: _,
+                body_expr,
+            } => Some(&body_expr.value),
+
+            ValueDef::Dbg {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::Expect {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::ExpectFx {
+                condition,
+                preceding_comment: _,
+            } => Some(&condition.value),
+
+            ValueDef::Annotation(_, _)
+            | ValueDef::ModuleImport(ModuleImport {
+                before_name: _,
+                name: _,
+                alias: _,
+                exposed: _,
+            })
+            | ValueDef::IngestedFileImport(_) => None,
+            ValueDef::Stmt(loc_expr) => Some(&loc_expr.value),
+        }
+    }
+
     pub fn replace_expr(&mut self, new_expr: &'a Loc<Expr<'a>>) {
         match self {
             ValueDef::Body(_, expr) => *expr = new_expr,
             ValueDef::AnnotatedBody { body_expr, .. } => *body_expr = new_expr,
             _ => internal_error!("replacing expr in unsupported ValueDef"),
         }
+    }
+}
+
+pub struct RecursiveValueDefIter<'a, 'b> {
+    current: &'b Defs<'a>,
+    index: usize,
+    pending: std::vec::Vec<&'b Defs<'a>>,
+}
+
+impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
+    pub fn new(defs: &'b Defs<'a>) -> Self {
+        Self {
+            current: defs,
+            index: 0,
+            pending: vec![],
+        }
+    }
+
+    fn push_pending_from_expr(&mut self, expr: &'b Expr<'a>) {
+        let mut expr_stack = vec![expr];
+
+        use Expr::*;
+
+        macro_rules! push_stack_from_record_fields {
+            ($fields:expr) => {
+                for field in $fields.items {
+                    let mut current = field.value;
+
+                    loop {
+                        use AssignedField::*;
+
+                        match current {
+                            RequiredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            OptionalValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            SpaceBefore(next, _) => current = *next,
+                            SpaceAfter(next, _) => current = *next,
+                            LabelOnly(_) | Malformed(_) => break,
+                        }
+                    }
+                }
+            };
+        }
+
+        while let Some(next) = expr_stack.pop() {
+            match next {
+                Defs(defs, cont) => {
+                    self.pending.push(defs);
+                    // We purposefully don't push the exprs inside defs here
+                    // because they will be traversed when the iterator
+                    // gets to their parent def.
+                    expr_stack.push(&cont.value);
+                }
+                List(list) => {
+                    expr_stack.reserve(list.len());
+                    for loc_expr in list.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordUpdate { update, fields } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&update.value);
+                    push_stack_from_record_fields!(fields);
+                }
+                Record(fields) => {
+                    expr_stack.reserve(fields.len());
+                    push_stack_from_record_fields!(fields);
+                }
+                Tuple(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_expr in fields.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordBuilder(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_record_builder_field in fields.items {
+                        let mut current_field = loc_record_builder_field.value;
+
+                        loop {
+                            use RecordBuilderField::*;
+
+                            match current_field {
+                                Value(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                                ApplyValue(_, _, _, loc_val) => {
+                                    break expr_stack.push(&loc_val.value)
+                                }
+                                SpaceBefore(next_field, _) => current_field = *next_field,
+                                SpaceAfter(next_field, _) => current_field = *next_field,
+                                LabelOnly(_) | Malformed(_) => break,
+                            }
+                        }
+                    }
+                }
+                Closure(_, body) => expr_stack.push(&body.value),
+                Backpassing(_, a, b) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&a.value);
+                    expr_stack.push(&b.value);
+                }
+                Expect(condition, cont)
+                | Dbg(condition, cont)
+                | LowLevelDbg(_, condition, cont) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
+                }
+                Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                BinOps(ops, expr) => {
+                    expr_stack.reserve(ops.len() + 1);
+
+                    for (a, _) in ops.iter() {
+                        expr_stack.push(&a.value);
+                    }
+                    expr_stack.push(&expr.value);
+                }
+                UnaryOp(expr, _) => expr_stack.push(&expr.value),
+                If(ifs, alternate) => {
+                    expr_stack.reserve(ifs.len() * 2 + 1);
+
+                    for (condition, consequent) in ifs.iter() {
+                        expr_stack.push(&condition.value);
+                        expr_stack.push(&consequent.value);
+                    }
+                    expr_stack.push(&alternate.value);
+                }
+                When(condition, branches) => {
+                    expr_stack.reserve(branches.len() + 1);
+                    expr_stack.push(&condition.value);
+
+                    for WhenBranch {
+                        patterns: _,
+                        value,
+                        guard,
+                    } in branches.iter()
+                    {
+                        expr_stack.push(&value.value);
+
+                        match guard {
+                            None => {}
+                            Some(guard) => expr_stack.push(&guard.value),
+                        }
+                    }
+                }
+                RecordAccess(expr, _)
+                | TupleAccess(expr, _)
+                | TaskAwaitBang(expr)
+                | SpaceBefore(expr, _)
+                | SpaceAfter(expr, _)
+                | ParensAround(expr) => expr_stack.push(expr),
+
+                MultipleRecordBuilders(loc_expr) | UnappliedRecordBuilder(loc_expr) => {
+                    expr_stack.push(&loc_expr.value)
+                }
+
+                Float(_)
+                | Num(_)
+                | NonBase10Int { .. }
+                | Str(_)
+                | SingleQuote(_)
+                | AccessorFunction(_)
+                | Var { .. }
+                | Underscore(_)
+                | Crash
+                | Tag(_)
+                | OpaqueRef(_)
+                | MalformedIdent(_, _)
+                | MalformedClosure
+                | PrecedenceConflict(_)
+                | MalformedSuffixed(_)
+                | EmptyDefsFinal => { /* terminal */ }
+            }
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
+    type Item = (&'b ValueDef<'a>, &'b Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current.tags.get(self.index) {
+            Some(tag) => {
+                if let Err(def_index) = tag.split() {
+                    let def = &self.current.value_defs[def_index.index()];
+                    let region = &self.current.regions[self.index];
+
+                    if let Some(expr) = def.expr() {
+                        self.push_pending_from_expr(expr);
+                    }
+
+                    self.index += 1;
+
+                    Some((def, region))
+                } else {
+                    // Not a value def, try next
+                    self.index += 1;
+                    self.next()
+                }
+            }
+
+            None => {
+                self.current = self.pending.pop()?;
+                self.index = 0;
+                self.next()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImport<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
+    pub name: Loc<ImportedModuleName<'a>>,
+    pub alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
+    pub exposed: Option<
+        header::KeywordItem<
+            'a,
+            ImportExposingKeyword,
+            Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        >,
+    >,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileImport<'a> {
+    pub before_path: &'a [CommentOrNewline<'a>],
+    pub path: Loc<StrLiteral<'a>>,
+    pub name: header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportAsKeyword;
+
+impl header::Keyword for ImportAsKeyword {
+    const KEYWORD: &'static str = "as";
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportExposingKeyword;
+
+impl header::Keyword for ImportExposingKeyword {
+    const KEYWORD: &'static str = "exposing";
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportedModuleName<'a> {
+    pub package: Option<&'a str>,
+    pub name: ModuleName<'a>,
+}
+
+impl<'a> From<ImportedModuleName<'a>> for QualifiedModuleName<'a> {
+    fn from(imported: ImportedModuleName<'a>) -> Self {
+        Self {
+            opt_package: imported.package,
+            module: imported.name.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportAlias<'a>(&'a str);
+
+impl<'a> ImportAlias<'a> {
+    pub const fn new(name: &'a str) -> Self {
+        ImportAlias(name)
+    }
+
+    pub const fn as_str(&'a self) -> &'a str {
+        self.0
     }
 }
 
@@ -1876,7 +2301,6 @@ impl<'a> Malformed for Expr<'a> {
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
-            IngestedFile(_, _) |
             EmptyDefsFinal |
             Crash => false,
 
@@ -2150,6 +2574,17 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
+            ValueDef::ModuleImport(ModuleImport {
+                before_name: _,
+                name: _,
+                alias: _,
+                exposed: _,
+            }) => false,
+            ValueDef::IngestedFileImport(IngestedFileImport {
+                before_path: _,
+                path,
+                name: _,
+            }) => path.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
         }
     }

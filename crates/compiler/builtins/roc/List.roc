@@ -71,11 +71,11 @@ interface List
         countIf,
         chunksOf,
     ]
-    imports [
-        Bool.{ Bool, Eq },
-        Result.{ Result },
-        Num.{ U64, Num, Int },
-    ]
+    imports []
+
+import Bool exposing [Bool, Eq]
+import Result exposing [Result]
+import Num exposing [U64, Num]
 
 ## ## Types
 ##

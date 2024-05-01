@@ -369,12 +369,12 @@ interface Str
         withPrefix,
         contains,
     ]
-    imports [
-        Bool.{ Bool, Eq },
-        Result.{ Result },
-        List,
-        Num.{ Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
-    ]
+    imports []
+
+import Bool exposing [Bool]
+import Result exposing [Result]
+import List
+import Num exposing [Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec]
 
 Utf8ByteProblem : [
     InvalidStartByte,

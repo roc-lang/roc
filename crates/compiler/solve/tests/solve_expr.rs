@@ -3448,7 +3448,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" imports [Result.{ Result }] provides [main] to "./platform"
+                app "test" imports [] provides [main] to "./platform"
 
                 boom = \_ -> boom {}
 

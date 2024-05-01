@@ -275,6 +275,12 @@ fn generate_entry_docs(
                 ValueDef::ExpectFx { .. } => {
                     // Don't generate docs for `expect-fx`s
                 }
+                ValueDef::ModuleImport { .. } => {
+                    // Don't generate docs for module imports
+                }
+                ValueDef::IngestedFileImport { .. } => {
+                    // Don't generate docs for ingested file imports
+                }
 
                 ValueDef::Stmt(loc_expr) => {
                     if let roc_parse::ast::Expr::Var {

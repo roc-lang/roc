@@ -1,5 +1,11 @@
 interface IngestedFile
-    exposes [str]
-    imports ["IngestedFile.roc" as foo : Str]
+    exposes [str, nested]
+    imports []
+
+import "IngestedFile.roc" as foo : Str
 
 str = foo
+
+nested =
+    import "Dep1.roc" as dep1 : Str
+    dep1

@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::DERIVABLE_ABILITIES;
+use roc_module::symbol::{ScopeModuleSource, DERIVABLE_ABILITIES};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
@@ -20,6 +20,8 @@ const NAMING_PROBLEM: &str = "NAMING PROBLEM";
 const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
+const IMPORT_NAME_CONFLICT: &str = "IMPORT NAME CONFLICT";
+const EXPLICIT_BUILTIN_IMPORT: &str = "EXPLICIT BUILTIN IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
 const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
@@ -32,6 +34,7 @@ pub const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
+const INGESTED_FILE_ERROR: &str = "INGESTED FILE ERROR";
 const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
@@ -107,9 +110,8 @@ pub fn can_problem<'b>(
         Problem::UnusedModuleImport(module_id, region) => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("Nothing from "),
                     alloc.module(module_id),
-                    alloc.reflow(" is used in this module."),
+                    alloc.reflow(" is imported but not used."),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
@@ -121,6 +123,127 @@ pub fn can_problem<'b>(
 
             title = UNUSED_IMPORT.to_string();
         }
+        Problem::ImportNameConflict {
+            name,
+            is_alias,
+            new_module_id,
+            new_import_region,
+            existing_import,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.module(new_module_id),
+                    if is_alias {
+                        alloc.concat([
+                            alloc.reflow(" was imported as "),
+                            alloc.module_name(name.clone()),
+                            alloc.reflow(":"),
+                        ])
+                    } else {
+                        alloc.reflow(" was imported here: ")
+                    },
+                ]),
+                alloc.region(lines.convert_region(new_import_region)),
+
+                match existing_import {
+                    ScopeModuleSource::Import(exsting_import_region) => {
+                        alloc.stack([
+                            alloc.concat([
+                                alloc.reflow("but "),
+                                alloc.module_name(name.clone()),
+                                alloc.reflow(" is already used by a previous import:"),
+                            ]),
+                            alloc.region(lines.convert_region(exsting_import_region)),
+                        ])
+                    }
+                    ScopeModuleSource::Builtin => {
+                        alloc.concat([
+                            alloc.reflow("but "),
+                            alloc.module_name(name),
+                            alloc.reflow(" is also the name of a builtin."),
+                        ])
+                    }
+                    ScopeModuleSource::Current => {
+                        alloc.concat([
+                            alloc.reflow("but "),
+                            alloc.module_name(name),
+                            alloc.reflow(" is also the name of the current module."),
+                        ])
+                    }
+                },
+                alloc.reflow("Using the same name for both can make it hard to tell which module you are referring to."),
+                if is_alias {
+                    alloc.reflow("Make sure each import has a unique alias or none at all.")
+                } else {
+                    alloc.stack([
+                        alloc.reflow("You can assign a different name to a module like this:"),
+                        alloc.reflow("import JsonDecode as JD").indent(4),
+                    ])
+                },
+            ]);
+            title = IMPORT_NAME_CONFLICT.to_string();
+        }
+
+        Problem::ExplicitBuiltinImport(module_id, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The builtin "),
+                    alloc.module(module_id),
+                    alloc.reflow(" was imported here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Builtins are imported automatically, so you can remove this import."),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+            ]);
+
+            title = EXPLICIT_BUILTIN_IMPORT.to_string();
+        }
+
+        Problem::ExplicitBuiltinTypeImport(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" was imported here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("All types from builtins are automatically exposed, so you can remove "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" from the exposing list.")
+                ]),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+            ]);
+
+            title = EXPLICIT_BUILTIN_IMPORT.to_string();
+        }
+
+        Problem::ImportShadowsSymbol {
+            region,
+            new_symbol,
+            existing_symbol_region,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This import exposes "),
+                    alloc.symbol_qualified(new_symbol),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("However, the name "),
+                    alloc.symbol_unqualified(new_symbol),
+                    alloc.reflow(" was already used here:"),
+                ]),
+                alloc.region(lines.convert_region(existing_symbol_region)),
+                alloc.concat([
+                    alloc.reflow("You can rename it, or use the qualified name: "),
+                    alloc.symbol_qualified(new_symbol),
+                ]),
+            ]);
+
+            title = DUPLICATE_NAME.to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),
@@ -1740,6 +1863,16 @@ fn pretty_runtime_error<'b>(
             );
 
             title = MODULE_NOT_IMPORTED;
+        }
+        RuntimeError::ReadIngestedFileError {
+            filename,
+            error,
+            region: _,
+        } => {
+            let report = to_file_problem_report(alloc, filename, error);
+
+            doc = report.doc;
+            title = INGESTED_FILE_ERROR;
         }
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem

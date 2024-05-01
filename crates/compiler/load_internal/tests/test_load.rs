@@ -219,10 +219,21 @@ fn load_fixture(
 
     let home = loaded_module.module_id;
 
-    assert_eq!(
-        loaded_module.can_problems.remove(&home).unwrap_or_default(),
-        Vec::new()
-    );
+    let (filepath, src) = loaded_module.sources.get(&home).unwrap();
+    let can_problems = loaded_module.can_problems.remove(&home).unwrap_or_default();
+    if !can_problems.is_empty() {
+        panic!(
+            "{}",
+            format_can_problems(
+                can_problems,
+                home,
+                &loaded_module.interns,
+                filepath.clone(),
+                src,
+            )
+        );
+    }
+
     assert!(loaded_module
         .type_problems
         .remove(&home)
@@ -346,7 +357,9 @@ fn import_transitive_alias() {
             "Other.roc",
             indoc!(
                 r"
-                        interface Other exposes [empty] imports [RBTree]
+                        interface Other exposes [empty] imports []
+
+                        import RBTree
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
@@ -486,6 +499,42 @@ fn import_alias() {
 }
 
 #[test]
+fn import_inside_def() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("interface_with_deps", "ImportInsideDef", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "dep1Str" => "Str",
+            "dep2TwoDobuled" => "Frac *",
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "UNRECOGNIZED NAME")]
+fn exposed_used_outside_scope() {
+    let subs_by_module = Default::default();
+    load_fixture(
+        "interface_with_deps",
+        "ExposedUsedOutsideScope",
+        subs_by_module,
+    );
+}
+
+#[test]
+#[should_panic(expected = "MODULE NOT IMPORTED")]
+fn import_used_outside_scope() {
+    let subs_by_module = Default::default();
+    load_fixture(
+        "interface_with_deps",
+        "ImportUsedOutsideScope",
+        subs_by_module,
+    );
+}
+
+#[test]
 fn test_load_and_typecheck() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("interface_with_deps", "WithBuiltins", subs_by_module);
@@ -510,39 +559,6 @@ fn test_load_and_typecheck() {
 fn iface_quicksort() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("interface_with_deps", "Quicksort", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "swap" => "U64, U64, List a -> List a",
-            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
-            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
-        },
-    );
-}
-
-#[test]
-fn quicksort_one_def() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "QuicksortMultiDef", subs_by_module);
-
-    expect_types(
-        loaded_module,
-        hashmap! {
-            "swap" => "U64, U64, List a -> List a",
-            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
-            "quicksortHelp" => "List (Num a), U64, U64 -> List (Num a)",
-            "quicksort" => "List (Num a) -> List (Num a)",
-        },
-    );
-}
-
-#[test]
-fn app_quicksort() {
-    let subs_by_module = Default::default();
-    let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module);
 
     expect_types(
         loaded_module,
@@ -654,6 +670,7 @@ fn ingested_file() {
         hashmap! {
             "foo" => "Str",
             "str" => "Str",
+            "nested" => "Str",
         },
     );
 }
@@ -880,7 +897,9 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Main.roc",
             indoc!(
                 r"
-                    interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                    interface Main exposes [twenty, readAge] imports []
+
+                    import Age exposing [Age]
 
                     twenty = @Age 20
 
@@ -900,13 +919,13 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 The unwrapped opaque type Age referenced here:
 
-                3│  twenty = @Age 20
+                5│  twenty = @Age 20
                              ^^^^
 
                 is imported from another module:
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                            ^^^
+                3│  import Age exposing [Age]
+                                         ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
@@ -914,22 +933,22 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 The unwrapped opaque type Age referenced here:
 
-                5│  readAge = \@Age n -> n
+                7│  readAge = \@Age n -> n
                                ^^^^
 
                 is imported from another module:
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                            ^^^
+                3│  import Age exposing [Age]
+                                         ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
                 ── UNUSED IMPORT in ...aque_wrapped_unwrapped_outside_defining_module/Main.roc ─
 
-                Nothing from Age is used in this module.
+                Age is imported but not used.
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                      ^^^^^^^^^^^
+                3│  import Age exposing [Age]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Age isn't used, you don't need to import it.
                 "
@@ -937,6 +956,611 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         "\n{}",
         err
     );
+}
+
+#[test]
+fn unused_imports() {
+    let modules = vec![
+        (
+            "Dep1.roc",
+            indoc!(
+                r#"
+                interface Dep1 exposes [one] imports []
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Dep2.roc",
+            indoc!(
+                r#"
+                interface Dep2 exposes [two] imports []
+                two = 2
+                "#
+            ),
+        ),
+        (
+            "Dep3.roc",
+            indoc!(
+                r#"
+                interface Dep3 exposes [Three, three] imports []
+
+                Three : [Three]
+
+                three = Three
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+            interface Main exposes [usedModule, unusedModule, unusedExposed, unusedWithAlias, usingThreeValue] imports []
+
+            import Dep1
+            import Dep3 exposing [Three]
+
+            usedModule =
+                import Dep2
+                Dep2.two
+
+            unusedModule =
+                import Dep2
+                2
+
+            unusedExposed =
+                import Dep2 exposing [two]
+                2
+
+            usingThreeValue =
+                Dep3.three
+
+            unusedWithAlias =
+                import Dep2 as D2
+                2
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("unused_imports", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
+
+            Dep2 is imported but not used.
+
+            11│      import Dep2
+                     ^^^^^^^^^^^
+
+            Since Dep2 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
+
+            Dep2 is imported but not used.
+
+            15│      import Dep2 exposing [two]
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            Since Dep2 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
+
+            Dep2 is imported but not used.
+
+            22│      import Dep2 as D2
+                     ^^^^^^^^^^^^^^^^^
+
+            Since Dep2 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
+
+            Dep1 is imported but not used.
+
+            3│  import Dep1
+                ^^^^^^^^^^^
+
+            Since Dep1 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main.roc ────────────────────────────────
+
+            `Dep3.Three` is not used in this module.
+
+            4│  import Dep3 exposing [Three]
+                                      ^^^^^
+
+            Since `Dep3.Three` isn't used, you don't need to import it.
+            "
+        ),
+        "\n{}",
+        err
+    )
+}
+
+#[test]
+fn used_exposed_and_qualified() {
+    let modules = vec![
+        (
+            "Dep.roc",
+            indoc!(
+                r#"
+            interface Dep exposes [one] imports []
+
+            one = 1
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        interface Main exposes [qualified, exposed] imports []
+
+        import Dep exposing [one]
+
+        qualified = Dep.one
+        exposed = one
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("used_exposed_and_qualified", modules);
+    assert!(result.is_ok())
+}
+
+#[test]
+fn explicit_builtin_import() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                interface Main exposes [main] imports []
+
+                import Bool
+
+                main = Bool.true
+                "#
+        ),
+    )];
+    let err = multiple_modules("explicit_builtin_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_import/Main.roc ─────────────
+            
+            The builtin Bool was imported here:
+            
+            3│  import Bool
+                ^^^^^^^^^^^
+            
+            Builtins are imported automatically, so you can remove this import.
+            
+            Tip: Learn more about builtins in the tutorial: 
+            <https://www.roc-lang.org/tutorial#builtin-modules>
+            "
+        )
+    );
+}
+
+#[test]
+fn explicit_builtin_import_empty_exposing() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                interface Main exposes [main] imports []
+
+                import Bool exposing []
+
+                main = Bool.true
+                "#
+        ),
+    )];
+    let err = multiple_modules("empty_exposing_builtin_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── EXPLICIT BUILTIN IMPORT in tmp/empty_exposing_builtin_import/Main.roc ───────
+            
+            The builtin Bool was imported here:
+            
+            3│  import Bool exposing []
+                ^^^^^^^^^^^^^^^^^^^^^^^
+            
+            Builtins are imported automatically, so you can remove this import.
+            
+            Tip: Learn more about builtins in the tutorial: 
+            <https://www.roc-lang.org/tutorial#builtin-modules>
+            "
+        )
+    );
+}
+
+#[test]
+fn explicit_builtin_type_import() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                interface Main exposes [main] imports []
+
+                import Dict exposing [Dict, isEmpty]
+
+                myDict : Dict * *
+                myDict =
+                    Dict.empty {}
+
+                main = isEmpty myDict
+                "#
+        ),
+    )];
+    let err = multiple_modules("explicit_builtin_type_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── EXPLICIT BUILTIN IMPORT in tmp/explicit_builtin_type_import/Main.roc ────────
+            
+            `Dict.Dict` was imported here:
+            
+            3│  import Dict exposing [Dict, isEmpty]
+                                      ^^^^
+            
+            All types from builtins are automatically exposed, so you can remove
+            `Dict` from the exposing list.
+            
+            Tip: Learn more about builtins in the tutorial: 
+            <https://www.roc-lang.org/tutorial#builtin-modules>
+            "
+        )
+    );
+}
+
+#[test]
+fn import_shadows_symbol() {
+    let modules = vec![
+        (
+            "One.roc",
+            indoc!(
+                r#"
+                interface One exposes [one] imports []
+
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                one = 1
+
+                import One exposing [one]
+
+                main = one
+                "#
+            ),
+        ),
+    ];
+    let err = multiple_modules("import_shadows_symbol", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── DUPLICATE NAME in tmp/import_shadows_symbol/Main.roc ────────────────────────
+
+            This import exposes `One.one`:
+
+            5│  import One exposing [one]
+                                     ^^^
+
+            However, the name `one` was already used here:
+
+            3│  one = 1
+                ^^^
+
+            You can rename it, or use the qualified name: `One.one`
+
+            ── UNUSED IMPORT in tmp/import_shadows_symbol/Main.roc ─────────────────────────
+
+            One is imported but not used.
+
+            5│  import One exposing [one]
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            Since One isn't used, you don't need to import it.
+            "
+        )
+    );
+}
+
+#[test]
+fn ingested_file_import_shadows_symbol() {
+    let modules = vec![(
+        "Main.roc",
+        indoc!(
+            r#"
+                interface Main exposes [main] imports []
+
+                name = "Joe"
+
+                import "name.txt" as name : Str
+
+                main = name
+                "#
+        ),
+    )];
+    let err = multiple_modules("ingested_import_shadows_symbol", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── DUPLICATE NAME in tmp/ingested_import_shadows_symbol/Main.roc ───────────────
+
+            The `name` name is first defined here:
+
+            3│  name = "Joe"
+                ^^^^
+
+            But then it's defined a second time here:
+
+            5│  import "name.txt" as name : Str
+                                     ^^^^
+
+            Since these variables have the same name, it's easy to use the wrong
+            one by accident. Give one of them a new name.
+            "#
+        )
+    );
+}
+
+#[test]
+fn import_with_alias() {
+    let modules = vec![
+        (
+            "Dep.roc",
+            indoc!(
+                r#"
+                interface Dep exposes [hello] imports []
+
+                hello = "Hello, World!\n"
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import Dep as D
+
+                main = D.hello
+                "#
+            ),
+        ),
+    ];
+    let loaded_module = multiple_modules("import_with_alias", modules);
+    assert!(loaded_module.is_ok(), "should check");
+}
+
+#[test]
+fn duplicate_alias() {
+    let modules = vec![
+        (
+            "One.roc",
+            indoc!(
+                r#"
+                interface One exposes [one] imports []
+
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Two.roc",
+            indoc!(
+                r#"
+                interface Two exposes [two] imports []
+
+                two = 2
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import One as D
+                import Two as D
+
+                main = D.one
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("duplicate_alias", modules).unwrap_err();
+
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── IMPORT NAME CONFLICT in tmp/duplicate_alias/Main.roc ────────────────────────
+
+            Two was imported as D:
+
+            4│  import Two as D
+                ^^^^^^^^^^^^^^^
+
+            but D is already used by a previous import:
+
+            3│  import One as D
+                ^^^^^^^^^^^^^^^
+
+            Using the same name for both can make it hard to tell which module you
+            are referring to.
+
+            Make sure each import has a unique alias or none at all.
+            "
+        )
+    );
+}
+
+#[test]
+fn alias_using_module_name() {
+    let modules = vec![
+        (
+            "One.roc",
+            indoc!(
+                r#"
+                interface One exposes [one] imports []
+
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Two.roc",
+            indoc!(
+                r#"
+                interface Two exposes [two] imports []
+
+                two = 2
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import One
+                import Two as One
+
+                main = [One.one]
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("alias_using_module_name", modules).unwrap_err();
+
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── IMPORT NAME CONFLICT in tmp/alias_using_module_name/Main.roc ────────────────
+
+            Two was imported as One:
+
+            4│  import Two as One
+                ^^^^^^^^^^^^^^^^^
+
+            but One is already used by a previous import:
+
+            3│  import One
+                ^^^^^^^^^^
+
+            Using the same name for both can make it hard to tell which module you
+            are referring to.
+
+            Make sure each import has a unique alias or none at all.
+            "
+        )
+    );
+}
+
+#[test]
+fn alias_using_builtin_name() {
+    let modules = vec![
+        (
+            "BoolExtra.roc",
+            indoc!(
+                r"
+                interface BoolExtra exposes [toNum] imports []
+
+                toNum = \value ->
+                    if value then 1 else 0
+                "
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import BoolExtra as Bool
+
+                main = Bool.true
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("alias_using_builtin_name", modules).unwrap_err();
+
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── IMPORT NAME CONFLICT in tmp/alias_using_builtin_name/Main.roc ───────────────
+
+            BoolExtra was imported as Bool:
+
+            3│  import BoolExtra as Bool
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+            but Bool is also the name of a builtin.
+
+            Using the same name for both can make it hard to tell which module you
+            are referring to.
+
+            Make sure each import has a unique alias or none at all.
+            "
+        )
+    )
+}
+
+#[test]
+fn cannot_use_original_name_if_imported_with_alias() {
+    let modules = vec![
+        (
+            "Dep.roc",
+            indoc!(
+                r#"
+                interface Dep exposes [hello] imports []
+
+                hello = "Hello, World!\n"
+                "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+                interface Main exposes [main] imports []
+
+                import Dep as D
+
+                main = Dep.hello
+                "#
+            ),
+        ),
+    ];
+
+    multiple_modules("cannot_use_original_name_if_imported_with_alias", modules).unwrap_err();
 }
 
 #[test]
@@ -1011,8 +1635,10 @@ fn import_builtin_in_platform_and_check_app() {
                         requires {} { main : Str }
                         exposes []
                         packages {}
-                        imports [Str]
+                        imports []
                         provides [mainForHost]
+
+                    import Str
 
                     mainForHost : Str
                     mainForHost = main
@@ -1078,7 +1704,9 @@ fn module_cyclic_import_itself() {
         "Age.roc",
         indoc!(
             r"
-            interface Age exposes [] imports [Age]
+            interface Age exposes [] imports []
+
+            import Age
             "
         ),
     )];
@@ -1114,7 +1742,8 @@ fn module_cyclic_import_transitive() {
             "Age.roc",
             indoc!(
                 r"
-                interface Age exposes [] imports [Person]
+                interface Age exposes [] imports []
+                import Person
                 "
             ),
         ),
@@ -1122,7 +1751,8 @@ fn module_cyclic_import_transitive() {
             "Person.roc",
             indoc!(
                 r"
-                interface Person exposes [] imports [Age]
+                interface Person exposes [] imports []
+                import Age
                 "
             ),
         ),
@@ -1149,100 +1779,6 @@ fn module_cyclic_import_transitive() {
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
             itself?"
-        ),
-        "\n{}",
-        err
-    );
-}
-
-#[test]
-fn nested_module_has_incorrect_name() {
-    let modules = vec![
-        (
-            "Dep/Foo.roc",
-            indoc!(
-                r"
-                interface Foo exposes [] imports []
-                "
-            ),
-        ),
-        (
-            "I.roc",
-            indoc!(
-                r"
-                interface I exposes [] imports [Dep.Foo]
-                "
-            ),
-        ),
-    ];
-
-    let err = multiple_modules("nested_module_has_incorrect_name", modules).unwrap_err();
-    assert_eq!(
-        err,
-        indoc!(
-            r"
-            ── INCORRECT MODULE NAME in tmp/nested_module_has_incorrect_name/Dep/Foo.roc ───
-
-            This module has a different name than I expected:
-
-            1│  interface Foo exposes [] imports []
-                          ^^^
-
-            Based on the nesting and use of this module, I expect it to have name
-
-                Dep.Foo"
-        ),
-        "\n{}",
-        err
-    );
-}
-#[test]
-fn module_interface_with_qualified_import() {
-    let modules = vec![(
-        "A.roc",
-        indoc!(
-            r"
-            interface A exposes [] imports [b.T]
-            "
-        ),
-    )];
-
-    let err = multiple_modules("module_interface_with_qualified_import", modules).unwrap_err();
-    assert_eq!(
-        err,
-        indoc!(
-            r#"
-            The package shorthand 'b' that you are using in the 'imports' section of the header of module 'tmp/module_interface_with_qualified_import/A.roc' doesn't exist.
-            Check that package shorthand is correct or reference the package in an 'app' or 'package' header.
-            This module is an interface, because of a bug in the compiler we are unable to directly typecheck interface modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file."#
-        ),
-        "\n{}",
-        err
-    );
-}
-#[test]
-fn app_missing_package_import() {
-    let modules = vec![(
-        "main.roc",
-        indoc!(
-            r#"
-                app "example"
-                    packages { pack: "./package/main.roc" }
-                    imports [notpack.Mod]
-                    provides [] to pack
-
-                main = ""
-                "#
-        ),
-    )];
-
-    let err = multiple_modules("app_missing_package_import", modules).unwrap_err();
-    assert_eq!(
-        err,
-        indoc!(
-            r#"
-            The package shorthand 'notpack' that you are using in the 'imports' section of the header of module 'tmp/app_missing_package_import/main.roc' doesn't exist.
-            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
         ),
         "\n{}",
         err

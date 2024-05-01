@@ -1,4 +1,7 @@
-interface Base64 exposes [fromBytes, fromStr, toBytes, toStr] imports [Base64.Decode, Base64.Encode]
+interface Base64 exposes [fromBytes, fromStr, toBytes, toStr] imports []
+
+import Base64.Decode
+import Base64.Encode
 
 # base 64 encoding from a sequence of bytes
 fromBytes : List U8 -> Result Str [InvalidInput]

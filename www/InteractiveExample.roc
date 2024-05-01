@@ -1,6 +1,6 @@
 interface InteractiveExample
     exposes [view]
-    imports [pf.Html.{ pre, samp, div, text, a, class, p }, pf.Html.Attributes.{ class, role, href, id }]
+    imports [pf.Html.{ pre, samp, div, text, a, p }, pf.Html.Attributes.{ class, role, href, id }]
 
 Section : [Desc (List Token) Str, Indent, Outdent, Newline]
 Token : [
@@ -64,8 +64,8 @@ view =
             text "!",
         ],
         p [id "final-tutorial-link"] [
-            a [class "btn-small", href "/tutorial"] [text "Start Tutorial"]
-        ]
+            a [class "btn-small", href "/tutorial"] [text "Start Tutorial"],
+        ],
     ]
 
 tokensToStr : List Token -> Str

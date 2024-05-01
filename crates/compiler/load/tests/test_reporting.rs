@@ -4561,7 +4561,7 @@ mod test_reporting {
     test_report!(
         comment_with_control_character,
         "# comment with a \x07\n",
-        @r"
+        @r###"
     ── ASCII CONTROL CHARACTER in tmp/comment_with_control_character/Test.roc ──────
 
     I encountered an ASCII control character:
@@ -4570,7 +4570,7 @@ mod test_reporting {
                              ^
 
     ASCII control characters are not allowed.
-    "
+    "###
     );
 
     test_report!(
@@ -4919,20 +4919,20 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
+            app "dict" imports [] provides [main] to "./platform"
 
-            myDict : Dict.Dict Num.I64 Str
+            myDict : Dict Num.I64 Str
             myDict = Dict.insert (Dict.empty {}) "foo" 42
 
             main = myDict
             "#
         ),
-        @r#"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `myDict` definition:
 
-    3│  myDict : Dict.Dict Num.I64 Str
+    3│  myDict : Dict Num.I64 Str
     4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -4943,14 +4943,14 @@ mod test_reporting {
     But the type annotation on `myDict` says it should be:
 
         Dict I64 Str
-    "#
+    "###
     );
 
     test_report!(
         alias_type_diff,
         indoc!(
             r#"
-            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             HSet a : Set a
 
@@ -9310,7 +9310,7 @@ In roc, functions are always written as a lambda, like{}
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" imports [Set] provides [go] to "./platform"
+            app "test" imports [] provides [go] to "./platform"
 
             S a : { set : Set.Set a }
 
@@ -10898,7 +10898,9 @@ In roc, functions are always written as a lambda, like{}
         function_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
@@ -10907,12 +10909,12 @@ In roc, functions are always written as a lambda, like{}
                 myDecoder
             "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -10920,14 +10922,16 @@ In roc, functions are always written as a lambda, like{}
         a -> a
 
     Note: `Decoding` cannot be generated for functions.
-    "
+    "###
     );
 
     test_report!(
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             A := {}
 
@@ -10938,12 +10942,12 @@ In roc, functions are always written as a lambda, like{}
                 myDecoder
             "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      myDecoder = decoder
+    9│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -10958,7 +10962,7 @@ In roc, functions are always written as a lambda, like{}
 
     Tip: `A` does not implement `Decoding`. Consider adding a custom
     implementation or `implements Decode.Decoding` to the definition of `A`.
-    "
+    "###
     );
 
     test_report!(
@@ -11119,7 +11123,9 @@ In roc, functions are always written as a lambda, like{}
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import TotallyNotJson
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
@@ -11128,12 +11134,12 @@ In roc, functions are always written as a lambda, like{}
                     _ -> "something went wrong"
             "#
         ),
-    @r"
+    @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    6│          Ok rcd -> rcd.first rcd.second
+    8│          Ok rcd -> rcd.first rcd.second
                           ^^^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11141,14 +11147,16 @@ In roc, functions are always written as a lambda, like{}
         * -> *
 
     Note: `Decoding` cannot be generated for functions.
-    "
+    "###
     );
 
     test_report!(
         record_with_optional_field_types_cannot_derive_decoding,
         indoc!(
             r#"
-             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+             app "test" imports [] provides [main] to "./platform"
+
+             import Decode exposing [decoder]
 
              main =
                  myDecoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
@@ -11157,12 +11165,12 @@ In roc, functions are always written as a lambda, like{}
                  myDecoder
              "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11177,7 +11185,7 @@ In roc, functions are always written as a lambda, like{}
     over records that may or may not contain them at compile time, but are
     not a concept that extends to runtime!
     Maybe you wanted to use a `Result`?
-    "
+    "###
     );
 
     test_report!(
@@ -11359,21 +11367,23 @@ In roc, functions are always written as a lambda, like{}
         unused_value_import,
         indoc!(
             r#"
-            app "test" imports [List.{ concat }] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import List exposing [concat]
 
             main = ""
             "#
         ),
-    @r#"
+    @r###"
     ── UNUSED IMPORT in /code/proj/Main.roc ────────────────────────────────────────
 
-    `List.concat` is not used in this module.
+    List is imported but not used.
 
-    1│  app "test" imports [List.{ concat }] provides [main] to "./platform"
-                                   ^^^^^^
+    3│  import List exposing [concat]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since `List.concat` isn't used, you don't need to import it.
-    "#
+    Since List isn't used, you don't need to import it.
+    "###
     );
 
     test_report!(
@@ -11395,7 +11405,9 @@ In roc, functions are always written as a lambda, like{}
         unnecessary_builtin_type_import,
         indoc!(
             r#"
-            app "test" imports [Decode.{ DecodeError }] provides [main, E] to "./platform"
+            app "test" imports [] provides [main, E] to "./platform"
+
+            import Decode exposing [DecodeError]
 
             E : DecodeError
 
@@ -13664,7 +13676,9 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_tuple,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
@@ -13679,7 +13693,9 @@ In roc, functions are always written as a lambda, like{}
         cannot_decode_tuple_with_non_decode_element,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
@@ -13688,12 +13704,12 @@ In roc, functions are always written as a lambda, like{}
                 myDecoder
             "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -13701,7 +13717,7 @@ In roc, functions are always written as a lambda, like{}
         U32, {} -> {}
 
     Note: `Decoding` cannot be generated for functions.
-    "
+    "###
     );
 
     test_no_problem!(

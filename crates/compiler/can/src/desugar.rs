@@ -130,6 +130,13 @@ fn desugar_value_def<'a>(
                 preceding_comment: *preceding_comment,
             }
         }
+        ModuleImport(roc_parse::ast::ModuleImport {
+            before_name: _,
+            name: _,
+            alias: _,
+            exposed: _,
+        }) => *def,
+        IngestedFileImport(_) => *def,
 
         Stmt(stmt_expr) => {
             // desugar into a Body({}, stmt_expr)
@@ -247,6 +254,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
 
         // TODO support desugaring of Dbg, Expect, and ExpectFx
         Dbg { .. } | Expect { .. } | ExpectFx { .. } => value_def,
+        ModuleImport { .. } | IngestedFileImport(_) => value_def,
 
         Stmt(..) => {
             internal_error!(
@@ -281,7 +289,6 @@ pub fn desugar_expr<'a>(
         | UnappliedRecordBuilder { .. }
         | Tag(_)
         | OpaqueRef(_)
-        | IngestedFile(_, _)
         | Crash => loc_expr,
 
         Str(str_literal) => match str_literal {

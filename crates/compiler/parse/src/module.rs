@@ -28,12 +28,19 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     }
 }
 
-#[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
-    skip_second!(
-        specialize_err(SyntaxError::Expr, crate::expr::toplevel_defs(),),
-        end_of_file()
-    )
+pub fn parse_module_defs<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    defs: Defs<'a>,
+) -> Result<Defs<'a>, SyntaxError<'a>> {
+    let min_indent = 0;
+    match crate::expr::parse_top_level_defs(arena, state.clone(), defs) {
+        Ok((_, defs, state)) => match end_of_file().parse(arena, state, min_indent) {
+            Ok(_) => Ok(defs),
+            Err((_, fail)) => Err(fail),
+        },
+        Err((_, fail)) => Err(SyntaxError::Expr(fail, state.pos())),
+    }
 }
 
 pub fn parse_header<'a>(
@@ -403,7 +410,7 @@ fn exposes_values<'a>() -> impl Parser<
     })
 }
 
-fn spaces_around_keyword<'a, K: Keyword, E>(
+pub fn spaces_around_keyword<'a, K: Keyword, E>(
     keyword_item: K,
     expectation: fn(Position) -> E,
     indent_problem1: fn(Position) -> E,
@@ -552,7 +559,7 @@ fn imports<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
+pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
     // e.g.
     //
     // printLine : Str -> Effect {}
@@ -590,7 +597,7 @@ fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
     specialize_err(|_, pos| EImports::Shorthand(pos), lowercase_ident())
 }
 
-fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
+pub fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
 where
     F: Fn(Position) -> E,
     E: 'a,

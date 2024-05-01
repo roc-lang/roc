@@ -1,11 +1,15 @@
-use crate::annotation::{Formattable, Newlines, Parens};
+use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
+use crate::collection::{fmt_collection, Braces};
+use crate::expr::fmt_str_literal;
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_default_newline, fmt_spaces, INDENT};
+use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef,
-    TypeHeader, ValueDef,
+    AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, Spaces, StrLiteral,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
+use roc_parse::header::Keyword;
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -183,6 +187,180 @@ impl<'a> Formattable for TypeHeader<'a> {
     }
 }
 
+impl<'a> Formattable for ModuleImport<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_name,
+            name,
+            alias,
+            exposed,
+        } = self;
+
+        !before_name.is_empty()
+            || name.is_multiline()
+            || alias.is_multiline()
+            || match exposed {
+                Some(a) => a.keyword.is_multiline() || is_collection_multiline(&a.item),
+                None => false,
+            }
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_name,
+            name,
+            alias,
+            exposed,
+        } = self;
+
+        buf.indent(indent);
+        buf.push_str("import");
+
+        let indent = indent + INDENT;
+
+        fmt_default_spaces(buf, before_name, indent);
+
+        buf.indent(indent);
+        name.format(buf, indent);
+
+        if let Some(alias) = alias {
+            alias.format(buf, indent);
+        }
+
+        if let Some(exposed) = exposed {
+            exposed.keyword.format(buf, indent);
+
+            let list_indent = if !before_name.is_empty()
+                || alias.is_multiline()
+                || exposed.keyword.is_multiline()
+            {
+                indent
+            } else {
+                // Align list with import keyword
+                indent - INDENT
+            };
+
+            fmt_collection(buf, list_indent, Braces::Square, exposed.item, Newlines::No);
+        }
+    }
+}
+
+impl<'a> Formattable for IngestedFileImport<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_path,
+            path: _,
+            name,
+        } = self;
+        !before_path.is_empty() || name.is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_path,
+            path,
+            name,
+        } = self;
+
+        buf.indent(indent);
+        buf.push_str("import");
+
+        let indent = indent + INDENT;
+
+        fmt_default_spaces(buf, before_path, indent);
+        fmt_str_literal(buf, path.value, indent);
+        name.format(buf, indent);
+    }
+}
+
+impl<'a> Formattable for ImportedModuleName<'a> {
+    fn is_multiline(&self) -> bool {
+        // No newlines in module name itself.
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+
+        if let Some(package_shorthand) = self.package {
+            buf.push_str(package_shorthand);
+            buf.push_str(".");
+        }
+
+        self.name.format(buf, indent);
+    }
+}
+
+impl<'a> Formattable for ImportAlias<'a> {
+    fn is_multiline(&self) -> bool {
+        // No newlines in alias itself.
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(self.as_str());
+    }
+}
+
+impl Formattable for ImportAsKeyword {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf<'_>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(ImportAsKeyword::KEYWORD);
+    }
+}
+
+impl Formattable for ImportExposingKeyword {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf<'_>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(ImportExposingKeyword::KEYWORD);
+    }
+}
+
 impl<'a> Formattable for ValueDef<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::ValueDef::*;
@@ -196,6 +374,8 @@ impl<'a> Formattable for ValueDef<'a> {
             Expect { condition, .. } => condition.is_multiline(),
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
+            ModuleImport(module_import) => module_import.is_multiline(),
+            IngestedFileImport(ingested_file_import) => ingested_file_import.is_multiline(),
             Stmt(loc_expr) => loc_expr.is_multiline(),
         }
     }
@@ -239,6 +419,8 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
+            ModuleImport(module_import) => module_import.format(buf, indent),
+            IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
             Stmt(loc_expr) => loc_expr.format_with_options(buf, parens, newlines, indent),
         }
     }

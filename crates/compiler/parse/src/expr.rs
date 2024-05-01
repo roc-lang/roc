@@ -1,24 +1,29 @@
 use crate::ast::{
     is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaces,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, RecordBuilderField, Spaceable,
+    Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
-use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident, Suffix};
-use crate::keyword;
+use crate::ident::{
+    integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
+    Ident, Suffix,
+};
+use crate::module::module_name_help;
 use crate::parser::{
     self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
     reset_min_indent, sep_by1, sep_by1_e, set_min_indent, specialize_err, specialize_err_ref, then,
-    two_bytes, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord,
-    EString, EType, EWhen, Either, ParseResult, Parser,
+    two_bytes, EClosure, EExpect, EExpr, EIf, EImport, EInParens, EList, ENumber, EPattern,
+    ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
-use crate::string_literal::StrLikeLiteral;
-use crate::type_annotation;
+use crate::string_literal::{self, StrLikeLiteral};
+use crate::{header, keyword};
+use crate::{module, type_annotation};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
@@ -345,6 +350,7 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
         loc!(specialize_err(EExpr::When, when::expr_help(options))),
         loc!(specialize_err(EExpr::Expect, expect_help(options))),
         loc!(specialize_err(EExpr::Dbg, dbg_help(options))),
+        loc!(import_help(options)),
         loc!(specialize_err(EExpr::Closure, closure_help(options))),
         loc!(expr_operator_chain(options)),
         fail_expr_start_e()
@@ -648,30 +654,43 @@ pub fn parse_single_def<'a>(
         min_indent,
     ) {
         Err((NoProgress, _)) => {
-            match parse_expect.parse(arena, state.clone(), min_indent) {
+            match loc!(import()).parse(arena, state.clone(), min_indent) {
                 Err((_, _)) => {
-                    // a hacky way to get expression-based error messages. TODO fix this
-                    Ok((NoProgress, None, initial))
+                    match parse_expect.parse(arena, state.clone(), min_indent) {
+                        Err((_, _)) => {
+                            // a hacky way to get expression-based error messages. TODO fix this
+                            Ok((NoProgress, None, initial))
+                        }
+                        Ok((_, expect_flavor, state)) => parse_statement_inside_def(
+                            arena,
+                            state,
+                            min_indent,
+                            options,
+                            start,
+                            spaces_before_current_start,
+                            spaces_before_current,
+                            |preceding_comment, loc_def_expr| match expect_flavor {
+                                Either::Second(_) => ValueDef::Expect {
+                                    condition: arena.alloc(loc_def_expr),
+                                    preceding_comment,
+                                },
+                                Either::First(_) => ValueDef::ExpectFx {
+                                    condition: arena.alloc(loc_def_expr),
+                                    preceding_comment,
+                                },
+                            },
+                        ),
+                    }
                 }
-                Ok((_, expect_flavor, state)) => parse_statement_inside_def(
-                    arena,
+                Ok((_, loc_import, state)) => Ok((
+                    MadeProgress,
+                    Some(SingleDef {
+                        type_or_value: Either::Second(loc_import.value),
+                        region: loc_import.region,
+                        spaces_before: spaces_before_current,
+                    }),
                     state,
-                    min_indent,
-                    options,
-                    start,
-                    spaces_before_current_start,
-                    spaces_before_current,
-                    |preceding_comment, loc_def_expr| match expect_flavor {
-                        Either::Second(_) => ValueDef::Expect {
-                            condition: arena.alloc(loc_def_expr),
-                            preceding_comment,
-                        },
-                        Either::First(_) => ValueDef::ExpectFx {
-                            condition: arena.alloc(loc_def_expr),
-                            preceding_comment,
-                        },
-                    },
-                ),
+                )),
             }
         }
         Err((MadeProgress, _)) => {
@@ -934,6 +953,121 @@ pub fn parse_single_def<'a>(
             }
         }
     }
+}
+
+fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
+    skip_first!(
+        parser::keyword(keyword::IMPORT, EImport::Import),
+        increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
+    )
+}
+
+fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
+    map!(
+        record!(ModuleImport {
+            before_name: space0_e(EImport::IndentStart),
+            name: loc!(imported_module_name()),
+            alias: optional(backtrackable(import_as())),
+            exposed: optional(backtrackable(import_exposing()))
+        }),
+        ValueDef::ModuleImport
+    )
+}
+
+#[inline(always)]
+fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport<'a>> {
+    record!(ImportedModuleName {
+        package: optional(skip_second!(
+            specialize_err(|_, pos| EImport::PackageShorthand(pos), lowercase_ident()),
+            byte(b'.', EImport::PackageShorthandDot)
+        )),
+        name: module_name_help(EImport::ModuleName)
+    })
+}
+
+#[inline(always)]
+fn import_as<'a>(
+) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport<'a>> {
+    record!(header::KeywordItem {
+        keyword: module::spaces_around_keyword(
+            ImportAsKeyword,
+            EImport::As,
+            EImport::IndentAs,
+            EImport::IndentAlias
+        ),
+        item: loc!(map!(
+            specialize_err(|_, pos| EImport::Alias(pos), uppercase_ident()),
+            ImportAlias::new
+        ))
+    })
+}
+
+#[inline(always)]
+fn import_exposing<'a>() -> impl Parser<
+    'a,
+    header::KeywordItem<
+        'a,
+        ImportExposingKeyword,
+        Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+    >,
+    EImport<'a>,
+> {
+    record!(header::KeywordItem {
+        keyword: module::spaces_around_keyword(
+            ImportExposingKeyword,
+            EImport::Exposing,
+            EImport::IndentExposing,
+            EImport::ExposingListStart,
+        ),
+        item: collection_trailing_sep_e!(
+            byte(b'[', EImport::ExposingListStart),
+            loc!(import_exposed_name()),
+            byte(b',', EImport::ExposingListEnd),
+            byte(b']', EImport::ExposingListEnd),
+            Spaced::SpaceBefore
+        )
+    })
+}
+
+#[inline(always)]
+fn import_exposed_name<'a>(
+) -> impl Parser<'a, crate::ast::Spaced<'a, crate::header::ExposedName<'a>>, EImport<'a>> {
+    map!(
+        specialize_err(|_, pos| EImport::ExposedName(pos), unqualified_ident()),
+        |n| Spaced::Item(crate::header::ExposedName::new(n))
+    )
+}
+
+#[inline(always)]
+fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
+    map!(
+        record!(IngestedFileImport {
+            before_path: space0_e(EImport::IndentStart),
+            path: loc!(specialize_err(
+                |_, pos| EImport::IngestedPath(pos),
+                string_literal::parse_str_literal()
+            )),
+            name: import_ingested_file_as(),
+        }),
+        ValueDef::IngestedFileImport
+    )
+}
+
+#[inline(always)]
+fn import_ingested_file_as<'a>() -> impl Parser<
+    'a,
+    header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
+    EImport<'a>,
+> {
+    record!(header::KeywordItem {
+        keyword: module::spaces_around_keyword(
+            ImportAsKeyword,
+            EImport::As,
+            EImport::IndentAs,
+            EImport::IndentIngestedName
+        ),
+        item: specialize_err(EImport::IngestedName, loc!(module::typed_ident()))
+    })
 }
 
 pub fn parse_single_def_assignment<'a>(
@@ -2243,8 +2377,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             is_negative,
         },
         // These would not have parsed as patterns
-        Expr::IngestedFile(_, _)
-        | Expr::AccessorFunction(_)
+        Expr::AccessorFunction(_)
         | Expr::RecordAccess(_, _)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
@@ -2332,41 +2465,42 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| {
-        let (_, initial_space, state) =
-            space0_e(EExpr::IndentEnd).parse(arena, state, min_indent)?;
+pub fn parse_top_level_defs<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    mut output: Defs<'a>,
+) -> ParseResult<'a, Defs<'a>, EExpr<'a>> {
+    let (_, initial_space, state) = space0_e(EExpr::IndentEnd).parse(arena, state, 0)?;
 
-        let start_column = state.column();
+    let start_column = state.column();
 
-        let options = ExprParseOptions {
-            accept_multi_backpassing: true,
-            check_for_arrow: true,
-            suffixed_found: false,
-        };
+    let options = ExprParseOptions {
+        accept_multi_backpassing: true,
+        check_for_arrow: true,
+        suffixed_found: false,
+    };
 
-        let mut output = Defs::default();
-        let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
+    let existing_len = output.tags.len();
 
-        let (_, mut output, state) = parse_defs_end(options, start_column, output, arena, state)?;
+    let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
 
-        let (_, final_space, state) =
-            space0_e(EExpr::IndentEnd).parse(arena, state, start_column)?;
+    let (_, mut output, state) = parse_defs_end(options, start_column, output, arena, state)?;
 
-        if !output.tags.is_empty() {
-            // add surrounding whitespace
-            let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
+    let (_, final_space, state) = space0_e(EExpr::IndentEnd).parse(arena, state, start_column)?;
 
-            debug_assert!(output.space_before[0].is_empty());
-            output.space_before[0] = before;
+    if output.tags.len() > existing_len {
+        // add surrounding whitespace
+        let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
 
-            let last = output.tags.len() - 1;
-            debug_assert!(output.space_after[last].is_empty() || after.is_empty());
-            output.space_after[last] = after;
-        }
+        debug_assert!(output.space_before[existing_len].is_empty());
+        output.space_before[existing_len] = before;
 
-        Ok((MadeProgress, output, state))
+        let last = output.tags.len() - 1;
+        debug_assert!(output.space_after[last].is_empty() || after.is_empty());
+        output.space_after[last] = after;
     }
+
+    Ok((MadeProgress, output, state))
 }
 
 // PARSER HELPERS
@@ -2375,7 +2509,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
     // closure_help_help(options)
     map_with_arena!(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq!(
+        indented_seq_skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             byte_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
@@ -2419,7 +2553,7 @@ mod when {
     pub fn expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
         map_with_arena!(
             and!(
-                indented_seq!(
+                indented_seq_skip_first!(
                     parser::keyword(keyword::WHEN, EWhen::When),
                     space0_around_e_no_after_indent_check(
                         specialize_err_ref(EWhen::Condition, expr_start(options)),
@@ -2430,7 +2564,7 @@ mod when {
                 // ambiguity. The formatter will fix it up.
                 //
                 // We require that branches are indented relative to the line containing the `is`.
-                indented_seq!(
+                indented_seq_skip_first!(
                     parser::keyword(keyword::IS, EWhen::Is),
                     branches(options)
                 )
@@ -2719,6 +2853,18 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
         let expr = Expr::Dbg(arena.alloc(condition), arena.alloc(loc_cont));
 
         Ok((MadeProgress, expr, state))
+    }
+}
+
+fn import_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, import_def, state) =
+            loc!(specialize_err(EExpr::Import, import())).parse(arena, state, min_indent)?;
+
+        let mut defs = Defs::default();
+        defs.push_value_def(import_def.value, import_def.region, &[], &[]);
+
+        parse_defs_expr(options, min_indent, defs, arena, state)
     }
 }
 

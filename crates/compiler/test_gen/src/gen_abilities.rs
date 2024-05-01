@@ -355,7 +355,7 @@ fn encode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := {} implements [Encoding {toEncoder}]
@@ -383,7 +383,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := {} implements [Encoding {toEncoder}]
@@ -433,7 +433,7 @@ fn to_encoder_encode_custom_has_capture() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := Str implements [Encoding {toEncoder}]
@@ -473,7 +473,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
                     when Str.fromUtf8 (Encode.toBytes "foo" TotallyNotJson.json) is
@@ -492,7 +492,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
                     when Str.fromUtf8 (Encode.toBytes [1, 2, 3] TotallyNotJson.json) is
@@ -511,7 +511,7 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
                     when Str.fromUtf8 (Encode.toBytes Bool.false TotallyNotJson.json) is
@@ -532,7 +532,7 @@ mod encode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
+                        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                         main =
                             when Str.fromUtf8 (Encode.toBytes {}{} TotallyNotJson.json) is
@@ -572,7 +572,7 @@ fn encode_derived_record_one_field_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -595,7 +595,7 @@ fn encode_derived_record_two_fields_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -619,7 +619,7 @@ fn encode_derived_nested_record_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -643,7 +643,7 @@ fn encode_derived_tag_one_payload_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -666,7 +666,7 @@ fn encode_derived_tag_two_payloads_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -689,7 +689,7 @@ fn encode_derived_nested_tag_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -714,7 +714,7 @@ fn encode_derived_nested_record_tag_record() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -738,7 +738,7 @@ fn encode_derived_list_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -763,7 +763,7 @@ fn encode_derived_list_of_records() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -787,7 +787,7 @@ fn encode_derived_list_of_lists_of_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -812,7 +812,7 @@ fn encode_derived_record_with_many_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -839,7 +839,7 @@ fn encode_derived_tuple_two_fields() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -862,7 +862,7 @@ fn encode_derived_tuple_of_tuples() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
@@ -886,7 +886,7 @@ fn encode_derived_generic_record_with_different_field_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             Q a b := {a: a, b: b} implements [Encoding]
@@ -912,7 +912,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             Q a b := [A a, B b] implements [Encoding]
@@ -940,7 +940,7 @@ fn specialize_unique_newtype_records() {
             indoc!(
                 r#"
             app "test"
-                imports [Encode, TotallyNotJson]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
