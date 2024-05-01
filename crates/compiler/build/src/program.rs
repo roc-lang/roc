@@ -1,6 +1,4 @@
-use crate::link::{
-    legacy_host_file, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
-};
+use crate::link::{legacy_host_file, link, LinkType, LinkingStrategy};
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
@@ -22,7 +20,6 @@ use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
     path::{Path, PathBuf},
-    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -726,7 +723,6 @@ pub fn build_file<'a>(
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    prebuilt_requested: bool,
     wasm_dev_stack_bytes: Option<u32>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
@@ -747,7 +743,6 @@ pub fn build_file<'a>(
         emit_timings,
         link_type,
         linking_strategy,
-        prebuilt_requested,
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
@@ -764,7 +759,6 @@ fn build_loaded_file<'a>(
     emit_timings: bool,
     link_type: LinkType,
     mut linking_strategy: LinkingStrategy,
-    prebuilt_requested: bool,
     wasm_dev_stack_bytes: Option<u32>,
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
@@ -775,32 +769,49 @@ fn build_loaded_file<'a>(
         _ => unreachable!(),
     };
 
-    // For example, if we're loading the platform from a URL, it's automatically prebuilt
-    // even if the --prebuilt-platform CLI flag wasn't set.
-    let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
-
-    if is_platform_prebuilt && linking_strategy == LinkingStrategy::Surgical {
-        // Fallback to legacy linking if the preprocessed host file does not exist, but a legacy host does exist.
-        let preprocessed_host_path =
-            platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target));
-        let legacy_host_path = legacy_host_file(target, &platform_main_roc);
-        if !preprocessed_host_path.exists() && legacy_host_path.exists() {
-            linking_strategy = LinkingStrategy::Legacy;
+    let preprocessed_host_path = match linking_strategy {
+        LinkingStrategy::Legacy => {
+            if target == Target::Wasm32 {
+                // when compiling a wasm application, we implicitly assume here that the host is in zig
+                // and has a file called "host.zig"
+                platform_main_roc.with_file_name("host.zig")
+            } else {
+                legacy_host_file(target, &platform_main_roc)
+            }
         }
-    }
+        LinkingStrategy::Surgical => {
+            let preprocessed_host_path =
+                platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target));
+            let legacy_host_path = legacy_host_file(target, &platform_main_roc);
 
-    // the preprocessed host is stored beside the platform's main.roc
-    let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
-        if target == Target::Wasm32 {
-            // when compiling a wasm application, we implicitly assume here that the host is in zig
-            // and has a file called "host.zig"
-            platform_main_roc.with_file_name("host.zig")
-        } else {
-            legacy_host_file(target, &platform_main_roc)
+            // Fallback to legacy linking if the preprocessed host file does not exist, but a legacy host does exist.
+            if !preprocessed_host_path.exists() && legacy_host_path.exists() {
+                linking_strategy = LinkingStrategy::Legacy;
+            }
+
+            preprocessed_host_path
         }
-    } else {
-        platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target))
+        _ => platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target)),
     };
+
+    if !preprocessed_host_path.exists() {
+        eprintln!(
+            indoc::indoc!(
+                r#"
+                I was expecting to find the following pre-built platform file to exist:
+    
+                    {}
+    
+                However, it was not there!
+    
+                If you are using a local platform and not from a URL release, then you should generate this first.
+                "#
+            ),
+            preprocessed_host_path.to_string_lossy(),
+        );
+
+        std::process::exit(1);
+    }
 
     let output_exe_path = match out_path {
         Some(path) => {
@@ -838,46 +849,11 @@ fn build_loaded_file<'a>(
         None => with_output_extension(&app_module_path, target, linking_strategy, link_type),
     };
 
-    // We don't need to spawn a rebuild thread when using a prebuilt host.
-    let rebuild_thread = if matches!(link_type, LinkType::Dylib | LinkType::None) {
-        None
-    } else if is_platform_prebuilt {
-        if !preprocessed_host_path.exists() {
-            invalid_prebuilt_platform(prebuilt_requested, preprocessed_host_path);
-
-            std::process::exit(1);
-        }
-
-        if linking_strategy == LinkingStrategy::Surgical {
-            // Copy preprocessed host to executable location.
-            // The surgical linker will modify that copy in-place.
-            std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
-        }
-
-        None
-    } else {
-        // TODO this should probably be moved before load_and_monomorphize.
-        // To do this we will need to preprocess files just for their exported symbols.
-        // Also, we should no longer need to do this once we have platforms on
-        // a package repository, as we can then get prebuilt platforms from there.
-
-        let dll_stub_symbols = roc_linker::ExposedSymbols::from_exposed_to_host(
-            &loaded.interns,
-            &loaded.exposed_to_host,
-        );
-
-        let join_handle = spawn_rebuild_thread(
-            code_gen_options.opt_level,
-            linking_strategy,
-            platform_main_roc.clone(),
-            preprocessed_host_path.clone(),
-            output_exe_path.clone(),
-            target,
-            dll_stub_symbols,
-        );
-
-        Some(join_handle)
-    };
+    if linking_strategy == LinkingStrategy::Surgical {
+        // Copy preprocessed host to executable location.
+        // The surgical linker will modify that copy in-place.
+        std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
+    }
 
     let buf = &mut String::with_capacity(1024);
 
@@ -909,29 +885,6 @@ fn build_loaded_file<'a>(
     let mut loaded = loaded;
     let problems = report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
-
-    enum HostRebuildTiming {
-        BeforeApp(u128),
-        ConcurrentWithApp(JoinHandle<u128>),
-    }
-
-    let opt_rebuild_timing = if let Some(rebuild_thread) = rebuild_thread {
-        if linking_strategy == LinkingStrategy::Additive {
-            let rebuild_duration = rebuild_thread
-                .join()
-                .expect("Failed to (re)build platform.");
-
-            if emit_timings && !is_platform_prebuilt {
-                println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
-            }
-
-            Some(HostRebuildTiming::BeforeApp(rebuild_duration))
-        } else {
-            Some(HostRebuildTiming::ConcurrentWithApp(rebuild_thread))
-        }
-    } else {
-        None
-    };
 
     let (roc_app_bytes, code_gen_timing, expect_metadata) = gen_from_mono_module(
         arena,
@@ -970,14 +923,6 @@ fn build_loaded_file<'a>(
             compilation_end.as_millis(),
             size,
         );
-    }
-
-    if let Some(HostRebuildTiming::ConcurrentWithApp(thread)) = opt_rebuild_timing {
-        let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
-
-        if emit_timings && !is_platform_prebuilt {
-            println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
-        }
     }
 
     // Step 2: link the prebuilt platform and compiled app
@@ -1020,7 +965,6 @@ fn build_loaded_file<'a>(
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
             if !matches!(link_type, LinkType::Dylib | LinkType::None) {
-                // the host has been compiled into a .o or .obj file
                 inputs.push(preprocessed_host_path.as_path().to_str().unwrap());
             }
 
@@ -1064,125 +1008,93 @@ fn build_loaded_file<'a>(
     })
 }
 
-fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: PathBuf) {
-    let prefix = if prebuilt_requested {
-        "Because I was run with --prebuilt-platform, "
-    } else {
-        ""
-    };
+// #[allow(clippy::too_many_arguments)]
+// fn spawn_rebuild_thread(
+//     opt_level: OptLevel,
+//     linking_strategy: LinkingStrategy,
+//     platform_main_roc: PathBuf,
+//     preprocessed_host_path: PathBuf,
+//     output_exe_path: PathBuf,
+//     target: Target,
+//     dll_stub_symbols: Vec<String>,
+// ) -> std::thread::JoinHandle<u128> {
+//     std::thread::spawn(move || {
+//         // Printing to stderr because we want stdout to contain only the output of the roc program.
+//         // We are aware of the trade-offs.
+//         // `cargo run` follows the same approach
+//         eprintln!("🔨 Rebuilding platform...");
 
-    let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
-    let extra_err_msg = if preprocessed_host_path_str.ends_with(".rh") {
-        "\n\n\tNote: If the platform does have an .rh1 file but no .rh file, it's because it's been built with an older version of roc. Contact the author to release a new build of the platform using a roc release newer than March 21 2023.\n"
-    } else {
-        ""
-    };
+//         let rebuild_host_start = Instant::now();
 
-    eprintln!(
-        indoc::indoc!(
-            r#"
-            {}I was expecting this file to exist:
+//         match linking_strategy {
+//             LinkingStrategy::Additive => {
+//                 let host_dest = rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
 
-                {}
+//                 preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
+//             }
+//             LinkingStrategy::Surgical => {
+//                 build_and_preprocess_host_lowlevel(
+//                     opt_level,
+//                     target,
+//                     platform_main_roc.as_path(),
+//                     preprocessed_host_path.as_path(),
+//                     &dll_stub_symbols,
+//                 );
 
-            However, it was not there!{}
+//                 // Copy preprocessed host to executable location.
+//                 // The surgical linker will modify that copy in-place.
+//                 std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
+//             }
+//             LinkingStrategy::Legacy => {
+//                 rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
+//             }
+//         }
 
-            If you have the platform's source code locally, you may be able to generate it by re-running this command omitting --prebuilt-platform
-            "#
-        ),
-        prefix,
-        preprocessed_host_path.to_string_lossy(),
-        extra_err_msg
-    );
-}
+//         rebuild_host_start.elapsed().as_millis()
+//     })
+// }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_rebuild_thread(
-    opt_level: OptLevel,
-    linking_strategy: LinkingStrategy,
-    platform_main_roc: PathBuf,
-    preprocessed_host_path: PathBuf,
-    output_exe_path: PathBuf,
-    target: Target,
-    dll_stub_symbols: Vec<String>,
-) -> std::thread::JoinHandle<u128> {
-    std::thread::spawn(move || {
-        // Printing to stderr because we want stdout to contain only the output of the roc program.
-        // We are aware of the trade-offs.
-        // `cargo run` follows the same approach
-        eprintln!("🔨 Rebuilding platform...");
+// pub fn build_and_preprocess_host(
+//     opt_level: OptLevel,
+//     target: Target,
+//     platform_main_roc: &Path,
+//     preprocessed_host_path: &Path,
+//     exposed_symbols: roc_linker::ExposedSymbols,
+// ) {
+//     let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
 
-        let rebuild_host_start = Instant::now();
+//     build_and_preprocess_host_lowlevel(
+//         opt_level,
+//         target,
+//         platform_main_roc,
+//         preprocessed_host_path,
+//         &stub_dll_symbols,
+//     )
+// }
 
-        match linking_strategy {
-            LinkingStrategy::Additive => {
-                let host_dest = rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
+// fn build_and_preprocess_host_lowlevel(
+//     opt_level: OptLevel,
+//     target: Target,
+//     platform_main_roc: &Path,
+//     preprocessed_host_path: &Path,
+//     stub_dll_symbols: &[String],
+// ) {
+//     let stub_lib =
+//         roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
 
-                preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
-            }
-            LinkingStrategy::Surgical => {
-                build_and_preprocess_host_lowlevel(
-                    opt_level,
-                    target,
-                    platform_main_roc.as_path(),
-                    preprocessed_host_path.as_path(),
-                    &dll_stub_symbols,
-                );
+//     debug_assert!(stub_lib.exists());
 
-                // Copy preprocessed host to executable location.
-                // The surgical linker will modify that copy in-place.
-                std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
-            }
-            LinkingStrategy::Legacy => {
-                rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
-            }
-        }
+//     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
-        rebuild_host_start.elapsed().as_millis()
-    })
-}
-
-pub fn build_and_preprocess_host(
-    opt_level: OptLevel,
-    target: Target,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    exposed_symbols: roc_linker::ExposedSymbols,
-) {
-    let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
-
-    build_and_preprocess_host_lowlevel(
-        opt_level,
-        target,
-        platform_main_roc,
-        preprocessed_host_path,
-        &stub_dll_symbols,
-    )
-}
-
-fn build_and_preprocess_host_lowlevel(
-    opt_level: OptLevel,
-    target: Target,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    stub_dll_symbols: &[String],
-) {
-    let stub_lib =
-        roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
-
-    debug_assert!(stub_lib.exists());
-
-    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
-
-    todo!()
-    // roc_linker::preprocess_host(
-    //     target,
-    //     platform_main_roc,
-    //     preprocessed_host_path,
-    //     &stub_lib,
-    //     stub_dll_symbols,
-    // )
-}
+//     todo!()
+//     // roc_linker::preprocess_host(
+//     //     target,
+//     //     platform_main_roc,
+//     //     preprocessed_host_path,
+//     //     &stub_lib,
+//     //     stub_dll_symbols,
+//     // )
+// }
 
 #[allow(clippy::too_many_arguments)]
 pub fn check_file<'a>(
@@ -1262,7 +1174,6 @@ pub fn build_str_test<'a>(
     arena: &'a Bump,
     app_module_path: &Path,
     app_module_source: &'a str,
-    assume_prebuild: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let target = target_lexicon::Triple::host().into();
 
@@ -1306,7 +1217,6 @@ pub fn build_str_test<'a>(
         emit_timings,
         link_type,
         linking_strategy,
-        assume_prebuild,
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,

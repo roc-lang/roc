@@ -6,12 +6,12 @@ use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use roc_target::{Architecture, OperatingSystem, Target};
 use std::collections::HashMap;
+use std::env;
 use std::ffi::OsString;
 use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
-use std::{env, fs};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 pub use roc_linker::LinkType;
@@ -429,6 +429,7 @@ pub fn build_swift_host_native(
     command
 }
 
+/// IMPORTANT: Platforms are responsible for building themselves, this is only used for tests internally
 pub fn rebuild_host(
     opt_level: OptLevel,
     target: Target,
@@ -756,7 +757,7 @@ fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> P
 fn find_in_folder_or_subfolders(path: &PathBuf, folder_to_find: &str) -> Vec<DirEntry> {
     let mut matching_dirs = vec![];
 
-    if let Ok(entries) = fs::read_dir(path) {
+    if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             if entry.file_type().unwrap().is_dir() {
                 let dir_name = entry
