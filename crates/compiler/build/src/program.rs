@@ -798,7 +798,7 @@ fn build_loaded_file<'a>(
         eprintln!(
             indoc::indoc!(
                 r#"
-                I was expecting to find the following pre-built platform file to exist:
+                I was expecting to find the following pre-built platform file:
     
                     {}
     

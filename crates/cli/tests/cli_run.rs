@@ -369,8 +369,16 @@ mod cli_run {
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
-        let file_name = file_path_from_root(dir_name, roc_filename);
+        
+        let file_name = dbg!(file_path_from_root(dir_name, roc_filename));
         let mut roc_app_args: Vec<String> = Vec::new();
+
+        // re-build the platform, expect a build.roc to be next to the test file
+        let build_script_path = std::path::PathBuf::from(file_name).with_file_name("build.roc");
+
+        dbg!(&build_script_path, build_script_path.is_file());
+        
+        todo!();
 
         for arg in args {
             match arg {

@@ -1,4 +1,4 @@
-platform "fibonacci"
+platform ""
     requires {} { main : I64 -> I64 }
     exposes []
     packages {}
