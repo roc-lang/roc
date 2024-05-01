@@ -7,7 +7,7 @@ use roc_cli::{
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
     CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_OUTPUT,
     FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME,
-    GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    FLAG_VERBOSE, GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 
@@ -156,6 +156,8 @@ fn main() -> io::Result<()> {
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
 
+            let verbose_and_time = matches.get_one::<bool>(FLAG_VERBOSE).unwrap();
+
             #[cfg(target_os = "windows")]
             {
                 internal_error!("TODO populate stub_dll_symbols for Windows");
@@ -166,8 +168,8 @@ fn main() -> io::Result<()> {
                 host_path,
                 platform_path,
                 dylib_path,
-                true, // TODO pipe these as optional flags
-                true, // TODO pipe these as optional flags
+                *verbose_and_time,
+                *verbose_and_time,
             );
 
             Ok(0)

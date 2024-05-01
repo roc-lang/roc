@@ -402,6 +402,13 @@ pub fn build_app() -> Command {
                     .value_parser(build_target_values_parser)
                     .required(false),
             )
+            .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while pre-processing host")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
+            )
         )
         .arg(flag_optimize)
         .arg(flag_max_threads)
