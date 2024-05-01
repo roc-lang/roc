@@ -245,7 +245,7 @@ fn start_phase<'a>(
                 let mut aliases = MutMap::default();
                 let mut abilities_store = PendingAbilitiesStore::default();
 
-                for imported in parsed.imported_modules.keys() {
+                for imported in parsed.available_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
                         None => unreachable!(
                             r"imported module {:?} did not register its aliases, so {:?} cannot use them",
@@ -316,7 +316,7 @@ fn start_phase<'a>(
                     constraints,
                     constraint,
                     var_store,
-                    imported_modules,
+                    available_modules,
                     declarations,
                     dep_idents,
                     pending_derives,
@@ -343,7 +343,7 @@ fn start_phase<'a>(
                     state.function_kind,
                     pending_derives,
                     var_store,
-                    imported_modules,
+                    available_modules,
                     &state.exposed_types,
                     dep_idents,
                     declarations,
@@ -2141,10 +2141,10 @@ macro_rules! debug_check_ir {
 
 fn extend_module_with_builtin_import(module: &mut ParsedModule, module_id: ModuleId) {
     module
-        .package_qualified_imported_modules
+        .package_qualified_available_modules
         .insert(PackageQualified::Unqualified(module_id));
 
-    module.imported_modules.insert(module_id, Region::zero());
+    module.available_modules.insert(module_id, Region::zero());
 
     let types = Symbol::builtin_types_in_scope(module_id)
         .iter()
@@ -2394,14 +2394,14 @@ fn update<'a>(
                 .or_default()
                 .extend(
                     parsed
-                        .package_qualified_imported_modules
+                        .package_qualified_available_modules
                         .iter()
                         .map(|x| *x.as_inner()),
                 );
 
             let added_deps_result = state.dependencies.add_module(
                 module_id,
-                &parsed.package_qualified_imported_modules,
+                &parsed.package_qualified_available_modules,
                 state.exec_mode.goal_phase(),
             );
 
@@ -4956,7 +4956,7 @@ fn canonicalize_and_constrain<'a>(
         exposed_ident_ids,
         parsed_defs,
         initial_scope,
-        imported_modules,
+        available_modules,
         mut module_timing,
         symbols_from_requires,
         opt_shorthand,
@@ -5102,7 +5102,7 @@ fn canonicalize_and_constrain<'a>(
     let constrained_module = ConstrainedModule {
         module,
         declarations: module_output.declarations,
-        imported_modules,
+        available_modules,
         var_store,
         constraints,
         constraint,
@@ -5149,7 +5149,7 @@ fn parse<'a>(
 
     module_timing.parse_body = parse_end.duration_since(parse_start);
 
-    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
+    let mut available_modules: MutMap<ModuleId, Region> = MutMap::default();
     let exposed_values = header.header_type.exposed_or_provided_values();
     let num_exposes = exposed_values.len();
     let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
@@ -5163,7 +5163,7 @@ fn parse<'a>(
             // (There might not be, e.g. when running `roc check myplatform.roc` or
             // when generating bindings.)
             if let Some(app_module_id) = opt_app_module_id {
-                imported_modules.insert(*app_module_id, Region::zero());
+                available_modules.insert(*app_module_id, Region::zero());
                 deps_by_name.insert(
                     PQModuleName::Unqualified(ModuleName::APP.into()),
                     *app_module_id,
@@ -5209,7 +5209,7 @@ fn parse<'a>(
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
 
-            imported_modules.insert(module_id, region);
+            available_modules.insert(module_id, region);
 
             deps_by_name.insert(pq_module_name, module_id);
         }
@@ -5351,7 +5351,7 @@ fn parse<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let package_qualified_imported_modules = deps_by_name
+    let package_qualified_available_modules = deps_by_name
         .iter()
         .map(|(pq_module_name, module_id)| pq_module_name.map_module(|_| *module_id))
         .collect();
@@ -5375,9 +5375,9 @@ fn parse<'a>(
         src,
         module_timing,
         deps_by_name,
-        imported_modules,
+        available_modules,
         packages: header.packages,
-        package_qualified_imported_modules,
+        package_qualified_available_modules,
         exposed_ident_ids: ident_ids,
         initial_scope: scope,
         exposes: exposed,
