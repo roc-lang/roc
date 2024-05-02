@@ -11,7 +11,7 @@ extern crate roc_module;
 mod cli_run {
     use cli_utils::helpers::{
         extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        known_bad_file, rebuild_host, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
@@ -156,6 +156,7 @@ mod cli_run {
     #[allow(clippy::too_many_arguments)]
     fn check_output_with_stdin(
         file: &Path,
+        dir_name: &PathBuf,
         stdin: &[&str],
         flags: &[&str],
         roc_app_args: &[String],
@@ -164,6 +165,8 @@ mod cli_run {
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
+        rebuild_host(dir_name, &file.to_path_buf());
+
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -329,6 +332,7 @@ mod cli_run {
         let path = file_path_from_root(dir_name, roc_filename);
         check_output_with_stdin(
             &path,
+            &PathBuf::from(dir_name),
             &[],
             flags,
             &[],
@@ -434,6 +438,7 @@ mod cli_run {
         // Check with and without optimizations
         check_output_with_stdin(
             &file_name,
+            &PathBuf::from(dir_name),
             stdin,
             &custom_flags,
             &roc_app_args,
@@ -463,6 +468,7 @@ mod cli_run {
         if TEST_LEGACY_LINKER {
             check_output_with_stdin(
                 &file_name,
+                &PathBuf::from(dir_name),
                 stdin,
                 &[LINKER_FLAG, "legacy"],
                 &roc_app_args,
@@ -1005,6 +1011,7 @@ mod cli_run {
 
         fn test_benchmark(
             roc_filename: &str,
+            dir_name: &std::path::PathBuf,
             stdin: &[&str],
             expected_ending: &str,
             _use_valgrind: UseValgrind,
@@ -1033,7 +1040,7 @@ mod cli_run {
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            check_output_regular(&file_name, stdin, expected_ending, _use_valgrind);
+            check_output_regular(&file_name, dir_name, stdin, expected_ending, _use_valgrind);
 
             #[cfg(feature = "wasm32-cli-run")]
             check_output_wasm(&file_name, stdin, expected_ending);
@@ -1048,6 +1055,7 @@ mod cli_run {
         #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
         fn check_output_regular(
             file_name: &Path,
+            dir_name: &std::path::PathBuf,
             stdin: &[&str],
             expected_ending: &str,
             use_valgrind: UseValgrind,
@@ -1058,6 +1066,7 @@ mod cli_run {
                 // Check with and without optimizations
                 check_output_with_stdin(
                     file_name,
+                    dir_name,
                     stdin,
                     &[],
                     &[],
@@ -1077,6 +1086,7 @@ mod cli_run {
                 // Check with and without optimizations
                 check_output_with_stdin(
                     file_name,
+                    dir_name,
                     stdin,
                     &[],
                     &[],
@@ -1089,6 +1099,7 @@ mod cli_run {
 
             check_output_with_stdin(
                 file_name,
+                dir_name,
                 stdin,
                 &[OPTIMIZE_FLAG],
                 &[],
@@ -1179,13 +1190,19 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark(
+                "nQueens.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
+                &["6"],
+                "4\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("cFold.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -1193,6 +1210,7 @@ mod cli_run {
         fn deriv() {
             test_benchmark(
                 "deriv.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
@@ -1202,7 +1220,7 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
+            test_benchmark("rBTreeCk.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -1210,6 +1228,7 @@ mod cli_run {
         fn rbtree_insert() {
             test_benchmark(
                 "rBTreeInsert.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
                 &[],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
@@ -1232,7 +1251,7 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
+            test_benchmark("testAStar.roc",&cli_utils::helpers::cli_testing_dir("benchmarks"), &[], "True\n", UseValgrind::No)
         }
 
         #[test]
@@ -1240,6 +1259,7 @@ mod cli_run {
         fn base64() {
             test_benchmark(
                 "testBase64.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,
@@ -1249,19 +1269,20 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("closure.roc", &[], "", UseValgrind::No)
+            test_benchmark("closure.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark("issue2279.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&[], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
                 "quicksortApp.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
                 &[],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,
@@ -1275,6 +1296,7 @@ mod cli_run {
     fn run_multi_dep_str_unoptimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
+            &cli_utils::helpers::cli_testing_dir("fixtures").join("multi-dep-str"),
             &[],
             &[],
             &[],
@@ -1291,6 +1313,7 @@ mod cli_run {
     fn run_multi_dep_str_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
+            &cli_utils::helpers::cli_testing_dir("fixtures").join("multi-dep-str"),
             &[],
             &[OPTIMIZE_FLAG],
             &[],
@@ -1307,6 +1330,7 @@ mod cli_run {
     fn run_multi_dep_thunk_unoptimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
+            &cli_utils::helpers::cli_testing_dir("fixtures").join("multi-dep-thunk"),
             &[],
             &[],
             &[],
@@ -1326,6 +1350,7 @@ mod cli_run {
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
+            &cli_utils::helpers::cli_testing_dir("fixtures").join("multi-dep-thunk"),
             &[],
             &[OPTIMIZE_FLAG],
             &[],
@@ -1342,6 +1367,7 @@ mod cli_run {
     fn run_packages_unoptimized() {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
+            &cli_utils::helpers::cli_testing_dir("fixtures").join("packages"),
             &[],
             &[],
             &[],
@@ -1358,6 +1384,7 @@ mod cli_run {
     fn run_packages_optimized() {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
+            &cli_utils::helpers::cli_testing_dir("fixtures").join("packages"),
             &[],
             &[OPTIMIZE_FLAG],
             &[],

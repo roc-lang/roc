@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("glue").str;
+const str = @import("glue/str.zig");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -12,9 +12,9 @@ const Allocator = mem.Allocator;
 extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
 
 const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.C) ?*anyopaque;
-extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*anyopaque;
-extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 

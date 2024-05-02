@@ -1,5 +1,5 @@
-platform "multi-dep-thunk"
-    requires {}{ main : Str }
+platform "echo-in-zig"
+    requires {} { main : Str }
     exposes []
     packages {}
     imports []
