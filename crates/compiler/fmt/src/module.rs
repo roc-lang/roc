@@ -1,3 +1,5 @@
+use std::cmp::max;
+
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
@@ -177,7 +179,20 @@ pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
     buf.indent(0);
     buf.push_str("module");
 
-    let indent = fmt_spaces_with_outdent(buf, header.after_keyword, INDENT);
+    let mut indent = fmt_spaces_with_outdent(buf, header.after_keyword, 0);
+
+    if let Some(params) = &header.params {
+        if is_collection_multiline(&params.params) {
+            indent = INDENT;
+        }
+
+        fmt_collection(buf, indent, Braces::Curly, params.params, Newlines::Yes);
+
+        indent = fmt_spaces_with_outdent(buf, params.before_arrow, indent);
+        buf.push_str("->");
+        indent = fmt_spaces_with_outdent(buf, params.after_arrow, indent);
+    }
+
     fmt_exposes(buf, header.exposes, indent);
 }
 
@@ -202,18 +217,19 @@ pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {
     buf.indent(0);
     buf.push_str("app");
 
-    let indent = fmt_spaces_with_outdent(buf, header.before_provides, INDENT);
+    let indent = fmt_spaces_with_outdent(buf, header.before_provides, 0);
     fmt_exposes(buf, header.provides, indent);
 
-    let indent = fmt_spaces_with_outdent(buf, header.before_packages, INDENT);
+    let indent = fmt_spaces_with_outdent(buf, header.before_packages, indent);
     fmt_packages(buf, header.packages.value, indent);
 }
 
 pub fn fmt_spaces_with_outdent(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) -> u16 {
     if spaces.iter().all(|c| c.is_newline()) {
         buf.spaces(1);
-        0
+        indent
     } else {
+        let indent = max(INDENT, indent + INDENT);
         fmt_default_spaces(buf, spaces, indent);
         indent
     }
@@ -223,10 +239,10 @@ pub fn fmt_package_header<'a>(buf: &mut Buf, header: &'a PackageHeader<'a>) {
     buf.indent(0);
     buf.push_str("package");
 
-    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, INDENT);
+    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, 0);
     fmt_exposes(buf, header.exposes, indent);
 
-    let indent = fmt_spaces_with_outdent(buf, header.before_packages, INDENT);
+    let indent = fmt_spaces_with_outdent(buf, header.before_packages, indent);
     fmt_packages(buf, header.packages.value, indent);
 }
 
