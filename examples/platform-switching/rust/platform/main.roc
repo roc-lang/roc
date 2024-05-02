@@ -1,4 +1,4 @@
-platform "echo-in-c"
+platform ""
     requires {} { main : Str }
     exposes []
     packages {}

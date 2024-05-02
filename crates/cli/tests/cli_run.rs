@@ -500,11 +500,11 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     // uses C platform
-    fn platform_switching_main() {
+    fn platform_switching_c() {
         test_roc_app_slim(
-            "examples/platform-switching",
-            "main.roc",
-            &("Which platform am I running on now?".to_string() + LINE_ENDING),
+            "examples/platform-switching/c",
+            "rocLovesC.roc",
+            &("Roc <3 C!".to_string() + LINE_ENDING),
             UseValgrind::Yes,
         )
     }
@@ -517,7 +517,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
         test_roc_app_slim(
-            "examples/platform-switching",
+            "examples/platform-switching/rust",
             "rocLovesRust.roc",
             "Roc <3 Rust!\n",
             UseValgrind::Yes,

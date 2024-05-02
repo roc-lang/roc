@@ -2,9 +2,7 @@
 
 use core::ffi::c_void;
 use roc_std::RocStr;
-use std::ffi::CStr;
 use std::io::Write;
-use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -85,14 +83,11 @@ pub unsafe extern "C" fn roc_shm_open(
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn main() {
     let mut roc_str = RocStr::default();
     unsafe { roc_main(&mut roc_str) };
 
     if let Err(e) = std::io::stdout().write_all(roc_str.as_bytes()) {
         panic!("Writing to stdout failed! {:?}", e);
     }
-
-    // Exit code
-    0
 }

@@ -1,4 +1,4 @@
-platform "echo-in-rust"
+platform ""
     requires {} { main : Str }
     exposes []
     packages {}
