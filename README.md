@@ -14,6 +14,7 @@ If you'd like to contribute, check out [good first issues](https://github.com/ro
 ## Sponsors
 
 You can 💜 **sponsor** 💜 Roc on:
+
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
@@ -33,24 +34,25 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
-* [Angelo Ceccato](https://github.com/AngeloChecked)
-* [Niclas Overby](https://github.com/noverby)
-* [Krzysztof G.](https://github.com/krzysztofgb)
-* [Sam Mohr](https://github.com/smores56)
-* [Steven Chen](https://github.com/megakilo)
-* [Drew Lazzeri](https://github.com/asteroidb612)
-* [Alex Binaei](https://github.com/mrmizz)
-* [Jono Mallanyk](https://github.com/jonomallanyk)
-* [Chris Packett](https://github.com/chris-packett)
-* [James Birtles](https://github.com/jamesbirtles)
-* [Ivo Balbaert](https://github.com/Ivo-Balbaert)
-* [Lucas Rosa](https://github.com/rvcas)
-* [Jonas Schell](https://github.com/Ocupe)
-* [Christopher Dolan](https://github.com/cdolan)
-* [Nick Gravgaard](https://github.com/nick-gravgaard)
-* [Zeljko Nesic](https://github.com/popara)
-* [Shritesh Bhattarai](https://github.com/shritesh)
-* [Richard Feldman](https://github.com/rtfeldman)
-* [Ayaz Hafiz](https://github.com/ayazhafiz)
+- [Agus Zubiaga](https://github.com/agu-z)
+- [Angelo Ceccato](https://github.com/AngeloChecked)
+- [Niclas Overby](https://github.com/noverby)
+- [Krzysztof G.](https://github.com/krzysztofgb)
+- [Sam Mohr](https://github.com/smores56)
+- [Steven Chen](https://github.com/megakilo)
+- [Drew Lazzeri](https://github.com/asteroidb612)
+- [Alex Binaei](https://github.com/mrmizz)
+- [Jono Mallanyk](https://github.com/jonomallanyk)
+- [Chris Packett](https://github.com/chris-packett)
+- [James Birtles](https://github.com/jamesbirtles)
+- [Ivo Balbaert](https://github.com/Ivo-Balbaert)
+- [Lucas Rosa](https://github.com/rvcas)
+- [Jonas Schell](https://github.com/Ocupe)
+- [Christopher Dolan](https://github.com/cdolan)
+- [Nick Gravgaard](https://github.com/nick-gravgaard)
+- [Zeljko Nesic](https://github.com/popara)
+- [Shritesh Bhattarai](https://github.com/shritesh)
+- [Richard Feldman](https://github.com/rtfeldman)
+- [Ayaz Hafiz](https://github.com/ayazhafiz)
 
 Thank you all so much for helping Roc progress!

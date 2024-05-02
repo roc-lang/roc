@@ -98,17 +98,19 @@ log(<span class="string">`Roc says </span><span class="kw">${</span>fn()<span cl
 </div>
 
 ### [Other Examples](#other-examples) {#other-examples}
-You can find more use cases and examples on the [examples page](/examples)!
-</section>
 
+You can find more use cases and examples on the [examples page](/examples)!
+
+</section>
 
 ## [Code Sample with Explanations](#code-sample) {#code-sample}
 
 Here's a code sample that shows a few different aspects of Roc:
-* File I/O and HTTP requests
-* Pattern matching for error handling
-* JSON deserialization via type inference
-* Common syntax sugar: string interpolation, pipelines, and backpassing
+
+- File I/O and HTTP requests
+- Pattern matching for error handling
+- JSON deserialization via type inference
+- Common syntax sugar: string interpolation, pipelines, and backpassing
 
 The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives a brief overview.
 
@@ -146,6 +148,7 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
+    <li><a href="https://github.com/agu-z">Agus Zubiaga</a></li>
     <li><a href="https://github.com/AngeloChecked">Angelo Ceccato</a></li>
     <li><a href="https://github.com/noverby">Niclas Overby</a></li>
     <li><a href="https://github.com/krzysztofgb">Krzysztof G.</a></li>
@@ -170,6 +173,7 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 Thank you all for your contributions! Roc would not be what it is without your generosity. 💜
 
 We are currently trying to raise $4,000 USD/month in donations to fund one longtime Roc contributor to continue his work on Roc full-time. We are a small group trying to do big things, and every donation helps! You can donate using:
+
 - [GitHub Sponsors](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
