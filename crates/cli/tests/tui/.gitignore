@@ -1,0 +1,5 @@
+glue/
+zig-cache/
+zig-out/
+build
+*.a

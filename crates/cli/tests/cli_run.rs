@@ -854,8 +854,8 @@ mod cli_run {
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         test_roc_app(
-            "examples/cli",
-            "tui.roc",
+            "crates/cli/tests/tui",
+            "app.roc",
             &["foo\n"], // NOTE: adding more lines leads to memory leaks
             &[],
             &[],

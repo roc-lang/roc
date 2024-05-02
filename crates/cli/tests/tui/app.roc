@@ -1,4 +1,4 @@
-app [main, Model] { pf: platform "tui-platform/main.roc" }
+app [main, Model] { pf: platform "platform.roc" }
 
 import pf.Program exposing [Program]
 
