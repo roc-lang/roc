@@ -5,6 +5,7 @@ extern crate roc_module;
 extern crate tempfile;
 
 use roc_command_utils::{cargo, pretty_command_string, root_dir};
+use roc_error_macros::internal_error;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -471,4 +472,39 @@ pub fn known_bad_file(file_name: &str) -> PathBuf {
     path.push(file_name);
 
     path
+}
+
+/// Rebuild the host for a test platform
+pub fn rebuild_host(dir_name: &PathBuf, file_name: &PathBuf) {
+    // find the workspace directory so we can give roc build script absolute paths
+    let workspace_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+
+    // check glue spec is available
+    let zig_glue_path = workspace_dir
+        .join("..")
+        .join("glue")
+        .join("src")
+        .join("ZigGlue.roc");
+    if !zig_glue_path.is_file() {
+        internal_error!("expected ZigGlue.roc at {}", zig_glue_path.display());
+    }
+
+    // check platform folder is available
+    let platform_path = workspace_dir.join("..").join("..").join(dir_name);
+    if !platform_path.is_dir() {
+        internal_error!("expected platform path at {}", platform_path.display());
+    }
+
+    // re-build the platform, expect a build.roc to be next to the test file
+    // set the working directory to the platform folder
+    let build_script_path = std::path::PathBuf::from(&file_name).with_file_name("build.roc");
+    std::process::Command::new("roc")
+        .current_dir(&platform_path)
+        .arg(&build_script_path)
+        .envs(vec![
+            ("ROC", "roc"),
+            ("ZIG_GLUE", zig_glue_path.display().to_string().as_str()),
+        ])
+        .status()
+        .expect(format!("unable to run build script {}", build_script_path.display()).as_str());
 }

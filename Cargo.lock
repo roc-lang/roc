@@ -471,6 +471,7 @@ dependencies = [
  "rlimit",
  "roc_collections",
  "roc_command_utils",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_reporting",
