@@ -3392,7 +3392,7 @@ fn to_header_report<'a>(
             to_provides_report(alloc, lines, filename, provides, *pos)
         }
 
-        EHeader::Params(_params, _pos) => todo!(),
+        EHeader::Params(params, pos) => to_params_report(alloc, lines, filename, params, *pos),
 
         EHeader::Exposes(exposes, pos) => to_exposes_report(alloc, lines, filename, exposes, *pos),
 
@@ -3785,6 +3785,48 @@ fn to_provides_report<'a>(
         }
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_params_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EParams<'a>,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EParams;
+
+    match parse_problem {
+        EParams::Pattern(error, pos) => to_precord_report(alloc, lines, filename, error, *pos),
+
+        EParams::BeforeArrow(pos) | EParams::Arrow(pos) | EParams::AfterArrow(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I am partway through parsing a module header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting "),
+                    alloc.keyword("->"),
+                    alloc.reflow(" next, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("module { echo, read } -> [menu]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EParams::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
     }
 }
 

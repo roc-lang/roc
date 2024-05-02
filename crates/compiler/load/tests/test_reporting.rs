@@ -6211,6 +6211,31 @@ In roc, functions are always written as a lambda, like{}
     }
 
     #[test]
+    fn module_params_with_missing_arrow() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                module {echo, read} [menu]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE PARAMS in /code/proj/Main.roc ──────────────────────────────────
+
+                I am partway through parsing a module header, but I got stuck here:
+
+                1│  module {echo, read} [menu]
+                                        ^
+
+                I am expecting `->` next, like:
+
+                    module { echo, read } -> [menu]
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
