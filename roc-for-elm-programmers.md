@@ -38,10 +38,8 @@ The Elm equivalent would be:
 "Hi, my name is " ++ name ++ "!"
 ```
 
-This interpolation syntax comes from [Swift](https://swift.org/). Only a single
-identifier can go inside the parentheses (like `(name)` here), and the identifier
-needs to be a string already. Arbitrary expressions are not allowed, which means
-weird situations like string literals inside string literals don't come up.
+Any expression of string type can go inside the parentheses, as long as it is contained
+in a single line of code.
 
 Roc strings also have the type `Str` rather than Elm's `String`. This is to make
 common qualified operations like `Str.join` more concise; the idea is that you'll use the
