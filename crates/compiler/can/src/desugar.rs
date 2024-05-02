@@ -9,8 +9,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral, StrSegment, ValueDef,
-    WhenBranch,
+    AssignedField, Collection, ModuleImportParams, Pattern, RecordBuilderField, StrLiteral,
+    StrSegment, ValueDef, WhenBranch,
 };
 use roc_region::all::{LineInfo, Loc, Region};
 
@@ -131,13 +131,26 @@ fn desugar_value_def<'a>(
             }
         }
         ModuleImport(roc_parse::ast::ModuleImport {
-            before_name: _,
-            name: _,
-            // TODO: Desugar params
+            before_name,
+            name,
             params,
-            alias: _,
-            exposed: _,
-        }) => *def,
+            alias,
+            exposed,
+        }) => {
+            let desugared_params =
+                params.map(|ModuleImportParams { before, params }| ModuleImportParams {
+                    before,
+                    params: desugar_field_collection(arena, params, src, line_info, module_path),
+                });
+
+            ModuleImport(roc_parse::ast::ModuleImport {
+                before_name,
+                name: *name,
+                params: desugared_params,
+                alias: *alias,
+                exposed: *exposed,
+            })
+        }
         IngestedFileImport(_) => *def,
 
         Stmt(stmt_expr) => {
@@ -385,15 +398,7 @@ pub fn desugar_expr<'a>(
             })
         }
         Record(fields) => {
-            let mut allocated = Vec::with_capacity_in(fields.len(), arena);
-            for field in fields.iter() {
-                let value = desugar_field(arena, &field.value, src, line_info, module_path);
-                allocated.push(Loc {
-                    value,
-                    region: field.region,
-                });
-            }
-            let fields = fields.replace_items(allocated.into_bump_slice());
+            let fields = desugar_field_collection(arena, *fields, src, line_info, module_path);
             arena.alloc(Loc {
                 region: loc_expr.region,
                 value: Record(fields),
@@ -825,6 +830,24 @@ fn desugar_str_segments<'a>(
         arena,
     )
     .into_bump_slice()
+}
+
+fn desugar_field_collection<'a>(
+    arena: &'a Bump,
+    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> Collection<'a, Loc<AssignedField<'a, Expr<'a>>>> {
+    let mut allocated = Vec::with_capacity_in(fields.len(), arena);
+
+    for field in fields.iter() {
+        let value = desugar_field(arena, &field.value, src, line_info, module_path);
+
+        allocated.push(Loc::at(field.region, value));
+    }
+
+    fields.replace_items(allocated.into_bump_slice())
 }
 
 fn desugar_field<'a>(
