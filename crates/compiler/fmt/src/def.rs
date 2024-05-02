@@ -6,8 +6,8 @@ use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT}
 use crate::Buf;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, Pattern, Spaces,
-    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::header::Keyword;
 use roc_region::all::Loc;
@@ -192,12 +192,19 @@ impl<'a> Formattable for ModuleImport<'a> {
         let Self {
             before_name,
             name,
+            params,
             alias,
             exposed,
         } = self;
 
         !before_name.is_empty()
             || name.is_multiline()
+            || match params {
+                Some(ModuleImportParams { before, params }) => {
+                    !before.is_empty() || is_collection_multiline(params)
+                }
+                None => false,
+            }
             || alias.is_multiline()
             || match exposed {
                 Some(a) => a.keyword.is_multiline() || is_collection_multiline(&a.item),
@@ -215,6 +222,7 @@ impl<'a> Formattable for ModuleImport<'a> {
         let Self {
             before_name,
             name,
+            params,
             alias,
             exposed,
         } = self;
@@ -228,6 +236,10 @@ impl<'a> Formattable for ModuleImport<'a> {
 
         buf.indent(indent);
         name.format(buf, indent);
+
+        if let Some(params) = params {
+            // TODO: Format import params
+        }
 
         if let Some(alias) = alias {
             alias.format(buf, indent);

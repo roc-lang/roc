@@ -81,6 +81,7 @@ Full {
                             "Stdout",
                         ),
                     },
+                    params: None,
                     alias: None,
                     exposed: None,
                 },

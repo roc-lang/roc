@@ -540,22 +540,8 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Record(_erecord, pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([alloc.reflow("TODO provide more context.")]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "RECORD PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
-            }
+        EExpr::Record(erecord, pos) => {
+            to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
         EExpr::OptionalValueInRecordBuilder(region) => {
@@ -708,6 +694,31 @@ fn to_expr_report<'a>(
             }
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_record_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    _parse_problem: &roc_parse::parser::ERecord<'a>,
+    pos: Position,
+    start: Position,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.concat([alloc.reflow("TODO provide more context.")]),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "RECORD PARSE PROBLEM".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -1450,6 +1461,7 @@ fn to_import_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EImport::*;
+    use roc_parse::parser::EImportParams;
 
     match parse_problem {
         Import(_pos) => unreachable!("another branch would be taken"),
@@ -1502,6 +1514,10 @@ fn to_import_report<'a>(
                 ]),
             )
         }
+        Params(EImportParams::Record(problem, pos), _) => {
+            to_record_report(alloc, lines, filename, problem, *pos, start)
+        }
+        Params(_, _) => todo!("Report param errors"),
         IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
             alloc,
             lines,
@@ -1593,7 +1609,9 @@ fn to_import_report<'a>(
                     .indent(4),
             ]),
         ),
-        Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
+        Space(problem, pos) | Params(EImportParams::Space(problem, pos), _) => {
+            to_space_report(alloc, lines, filename, problem, *pos)
+        }
     }
 }
 

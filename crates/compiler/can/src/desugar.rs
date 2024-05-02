@@ -133,6 +133,8 @@ fn desugar_value_def<'a>(
         ModuleImport(roc_parse::ast::ModuleImport {
             before_name: _,
             name: _,
+            // TODO: Desugar params
+            params,
             alias: _,
             exposed: _,
         }) => *def,

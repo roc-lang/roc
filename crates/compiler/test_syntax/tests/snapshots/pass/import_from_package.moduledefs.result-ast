@@ -41,6 +41,7 @@ Defs {
                         "Decode",
                     ),
                 },
+                params: None,
                 alias: None,
                 exposed: None,
             },
@@ -56,6 +57,7 @@ Defs {
                         "Decode",
                     ),
                 },
+                params: None,
                 alias: Some(
                     KeywordItem {
                         keyword: Spaces {
@@ -82,6 +84,7 @@ Defs {
                         "Decode",
                     ),
                 },
+                params: None,
                 alias: None,
                 exposed: Some(
                     KeywordItem {
@@ -118,6 +121,7 @@ Defs {
                         "Decode",
                     ),
                 },
+                params: None,
                 alias: Some(
                     KeywordItem {
                         keyword: Spaces {
