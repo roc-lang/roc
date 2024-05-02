@@ -1,5 +1,5 @@
 use crate::ast::{
-    Collection, CommentOrNewline, Malformed, Spaced, Spaces, StrLiteral, TypeAnnotation,
+    Collection, CommentOrNewline, Malformed, Pattern, Spaced, Spaces, StrLiteral, TypeAnnotation,
 };
 use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
@@ -242,11 +242,19 @@ pub struct KeywordItem<'a, K, V> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModuleHeader<'a> {
-    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub after_keyword: &'a [CommentOrNewline<'a>],
+    pub params: Option<ModuleParams<'a>>,
     pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
 
     // Keeping this so we can format old interface header into module headers
     pub interface_imports: Option<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModuleParams<'a> {
+    pub params: Collection<'a, Loc<Pattern<'a>>>,
+    pub before_arrow: &'a [CommentOrNewline<'a>],
+    pub after_arrow: &'a [CommentOrNewline<'a>],
 }
 
 pub type ImportsKeywordItem<'a> = KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>;

@@ -88,6 +88,7 @@ impl_space_problem! {
     EHeader<'a>,
     EIf<'a>,
     EImport<'a>,
+    EParams<'a>,
     EImports,
     EInParens<'a>,
     EClosure<'a>,
@@ -115,6 +116,7 @@ impl_space_problem! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EHeader<'a> {
     Provides(EProvides<'a>, Position),
+    Params(EParams<'a>, Position),
     Exposes(EExposes, Position),
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
@@ -146,6 +148,15 @@ pub enum EProvides<'a> {
     ListEnd(Position),
     Identifier(Position),
     Package(EPackageName<'a>, Position),
+    Space(BadInputError, Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EParams<'a> {
+    Pattern(PRecord<'a>, Position),
+    BeforeArrow(Position),
+    Arrow(Position),
+    AfterArrow(Position),
     Space(BadInputError, Position),
 }
 

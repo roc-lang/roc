@@ -177,7 +177,7 @@ pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
     buf.indent(0);
     buf.push_str("module");
 
-    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, INDENT);
+    let indent = fmt_spaces_with_outdent(buf, header.after_keyword, INDENT);
     fmt_exposes(buf, header.exposes, indent);
 }
 

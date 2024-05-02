@@ -3392,6 +3392,8 @@ fn to_header_report<'a>(
             to_provides_report(alloc, lines, filename, provides, *pos)
         }
 
+        EHeader::Params(_params, _pos) => todo!(),
+
         EHeader::Exposes(exposes, pos) => to_exposes_report(alloc, lines, filename, exposes, *pos),
 
         EHeader::Imports(imports, pos) => to_imports_report(alloc, lines, filename, imports, *pos),

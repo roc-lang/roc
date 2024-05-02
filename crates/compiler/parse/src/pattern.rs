@@ -1,4 +1,4 @@
-use crate::ast::{Implements, Pattern, PatternAs, Spaceable};
+use crate::ast::{Collection, Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -468,15 +468,17 @@ fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
 
 #[inline(always)]
 fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
-    map!(
-        collection_trailing_sep_e!(
-            byte(b'{', PRecord::Open),
-            record_pattern_field(),
-            byte(b',', PRecord::End),
-            byte(b'}', PRecord::End),
-            Pattern::SpaceBefore
-        ),
-        Pattern::RecordDestructure
+    map!(record_pattern_fields(), Pattern::RecordDestructure)
+}
+
+pub fn record_pattern_fields<'a>() -> impl Parser<'a, Collection<'a, Loc<Pattern<'a>>>, PRecord<'a>>
+{
+    collection_trailing_sep_e!(
+        byte(b'{', PRecord::Open),
+        record_pattern_field(),
+        byte(b',', PRecord::End),
+        byte(b'}', PRecord::End),
+        Pattern::SpaceBefore
     )
 }
 

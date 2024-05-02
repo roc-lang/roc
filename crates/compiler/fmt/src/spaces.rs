@@ -12,8 +12,8 @@ use roc_parse::{
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, KeywordItem, ModuleHeader, ModuleName,
-        PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To,
-        TypedIdent,
+        ModuleParams, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
+        ProvidesTo, To, TypedIdent,
     },
     ident::{BadIdent, UppercaseIdent},
 };
@@ -285,7 +285,8 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let header = match &self.header {
             Header::Module(header) => Header::Module(ModuleHeader {
-                before_exposes: &[],
+                after_keyword: &[],
+                params: header.params.remove_spaces(arena),
                 exposes: header.exposes.remove_spaces(arena),
                 interface_imports: header.interface_imports.remove_spaces(arena),
             }),
@@ -326,6 +327,16 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
         Module {
             comments: &[],
             header,
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ModuleParams<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ModuleParams {
+            params: self.params.remove_spaces(arena),
+            before_arrow: &[],
+            after_arrow: &[],
         }
     }
 }
