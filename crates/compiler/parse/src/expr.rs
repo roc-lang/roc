@@ -1018,7 +1018,7 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
 
             let params = record.fields.map_items_result(arena, |loc_field| {
                 match loc_field.value.to_assigned_field(arena) {
-                    Ok(field) => Ok(loc_field.map(|_| field)),
+                    Ok(field) => Ok(Loc::at(loc_field.region, field)),
                     Err(FoundApplyValue) => Err((
                         MadeProgress,
                         EImportParams::RecordApplyFound(loc_field.region),
