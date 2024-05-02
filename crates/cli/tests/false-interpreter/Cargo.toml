@@ -5,16 +5,10 @@ edition = "2021"
 license = "UPL-1.0"
 version = "0.0.1"
 
-links = "app"
-
 [lib]
 name = "host"
-path = "src/lib.rs"
+path = "host/lib.rs"
 crate-type = ["staticlib", "lib"]
-
-[[bin]]
-name = "host"
-path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"

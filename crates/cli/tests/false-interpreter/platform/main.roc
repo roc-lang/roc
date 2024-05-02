@@ -1,6 +1,6 @@
 platform "false-interpreter"
     requires {} { main : Str -> Task {} [] }
-    exposes []
+    exposes [Context, Variable]
     packages {}
     imports [Task.{ Task }]
     provides [mainForHost]

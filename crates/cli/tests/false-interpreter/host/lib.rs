@@ -5,10 +5,8 @@ use core::mem::MaybeUninit;
 use libc;
 use roc_std::{RocList, RocStr};
 use std::env;
-use std::ffi::CStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -102,7 +100,7 @@ pub unsafe extern "C" fn roc_shm_open(
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn main() {
     let arg = env::args()
         .nth(1)
         .expect("Please pass a .false file as a command-line argument to the false interpreter!");
@@ -126,8 +124,7 @@ pub extern "C" fn rust_main() -> i32 {
         result
     };
 
-    // Exit code
-    0
+    std::process::exit(0);
 }
 
 unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {

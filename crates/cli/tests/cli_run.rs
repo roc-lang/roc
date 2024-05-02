@@ -868,11 +868,13 @@ mod cli_run {
     #[test]
     #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
+        let arg = file_path_from_root("crates/cli/tests/false-interpreter/examples", "sqrt.false");
+
         test_roc_app(
-            "examples/cli/false-interpreter",
-            "False.roc",
+            "crates/cli/tests/false-interpreter/",
+            "app.roc",
             &[],
-            &[Arg::ExamplePath("examples/sqrt.false")],
+            &[Arg::ExamplePath(arg.display().to_string().as_str())],
             &[],
             "1414",
             UseValgrind::Yes,

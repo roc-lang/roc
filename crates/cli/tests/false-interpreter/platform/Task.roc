@@ -1,6 +1,6 @@
-module [Task, succeed, fail, await, map, onFail, attempt, fromResult, loop]
-
-import pf.Effect
+interface Task
+    exposes [Task, succeed, fail, await, map, onFail, attempt, fromResult, loop]
+    imports [Effect]
 
 Task ok err : Effect.Effect (Result ok err)
 

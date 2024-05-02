@@ -1,10 +1,7 @@
-app [main] { pf: platform "platform/main.roc" }
-
-import pf.Task exposing [Task]
-import pf.Stdout
-import pf.Stdin
-import Context exposing [Context]
-import Variable exposing [Variable]
+app "false"
+    packages { pf: "platform/main.roc" }
+    imports [pf.Task.{ Task }, pf.Stdout, pf.Stdin, pf.Context.{ Context }, pf.Variable.{ Variable }]
+    provides [main] to pf
 
 # An interpreter for the False programming language: https://strlen.com/false-language/
 # This is just a silly example to test this variety of program.

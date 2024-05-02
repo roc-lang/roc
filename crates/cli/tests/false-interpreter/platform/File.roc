@@ -1,7 +1,6 @@
-module [line, Handle, withOpen, chunk]
-
-import pf.Effect
-import Task exposing [Task]
+interface File
+    exposes [line, Handle, withOpen, chunk]
+    imports [Effect, Task.{ Task }]
 
 Handle := U64
 

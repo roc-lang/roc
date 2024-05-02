@@ -1,7 +1,6 @@
-module [line, raw]
-
-import pf.Effect
-import Task exposing [Task]
+interface Stdout
+    exposes [line, raw]
+    imports [Effect, Task.{ Task }]
 
 line : Str -> Task {} *
 line = \str -> Effect.map (Effect.putLine str) (\_ -> Ok {})

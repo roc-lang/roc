@@ -1,7 +1,6 @@
-module [char]
-
-import pf.Effect
-import Task
+interface Stdin
+    exposes [char]
+    imports [Effect, Task]
 
 # line : Task.Task Str *
 # line = Effect.after Effect.getLine Task.succeed # TODO FIXME Effect.getLine should suffice
