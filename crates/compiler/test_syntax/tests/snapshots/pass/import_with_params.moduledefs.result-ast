@@ -2,20 +2,30 @@ Defs {
     tags: [
         Index(2147483648),
         Index(2147483649),
+        Index(2147483650),
+        Index(2147483651),
     ],
     regions: [
         @0-29,
         @30-60,
+        @61-96,
+        @97-157,
     ],
     space_before: [
         Slice(start = 0, length = 0),
         Slice(start = 0, length = 1),
+        Slice(start = 1, length = 1),
+        Slice(start = 2, length = 1),
     ],
     space_after: [
         Slice(start = 0, length = 0),
         Slice(start = 1, length = 0),
+        Slice(start = 2, length = 0),
+        Slice(start = 3, length = 0),
     ],
     spaces: [
+        Newline,
+        Newline,
         Newline,
     ],
     type_defs: [],
@@ -77,6 +87,106 @@ Defs {
                 ),
                 alias: None,
                 exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @68-72 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Menu",
+                    ),
+                },
+                params: Some(
+                    ModuleImportParams {
+                        before: [],
+                        params: [
+                            @75-79 LabelOnly(
+                                @75-79 "echo",
+                            ),
+                            @85-90 SpaceBefore(
+                                LabelOnly(
+                                    @85-89 "read",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @95-96 ImportAlias(
+                            "M",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @104-108 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Menu",
+                    ),
+                },
+                params: Some(
+                    ModuleImportParams {
+                        before: [],
+                        params: [
+                            @111-115 LabelOnly(
+                                @111-115 "echo",
+                            ),
+                            @117-122 LabelOnly(
+                                @117-121 "read",
+                            ),
+                        ],
+                    },
+                ),
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @127-128 ImportAlias(
+                            "M",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @140-144 ExposedName(
+                                "main",
+                            ),
+                            @148-155 SpaceBefore(
+                                ExposedName(
+                                    "credits",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
             },
         ),
     ],
