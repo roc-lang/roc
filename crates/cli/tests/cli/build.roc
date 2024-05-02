@@ -1,7 +1,7 @@
-app "type-error"
+app ""
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Task.{ Task }]
+    imports [pf.Task]
     provides [main] to pf
 
-main = \_ ->
-    "this is a string, not a Task {} [] function like the platform expects."
+# does nothing, but here to satisfy the test runner
+main = Task.ok {}

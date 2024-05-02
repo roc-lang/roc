@@ -100,6 +100,8 @@ mod cli_run {
         // consistency with typewriters, very important
         let err = err.replace('\r', "");
 
+        dbg!(format!("{:?}", err.as_str()));
+
         assert_multiline_str_eq!(err.as_str(), expected);
     }
 
@@ -485,7 +487,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
-            "examples",
+            "crates/cli/tests/cli",
             "helloWorld.roc",
             "Hello, World!\n",
             UseValgrind::Yes,
@@ -1438,31 +1440,50 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
-
-                Something is off with the body of the main definition:
-
-                6│  main : Str -> Task {} []
-                7│  main = /_ ->
-                8│      "this is a string, not a Task {} [] function like the platform expects."
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                The body is a string of type:
-
-                    Str
-
+                ── TYPE MISMATCH in ....0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY/main.roc ─
+                
+                Something is off with the type annotation of the main required symbol:
+                
+                2│      requires {} { main : Task {} [Exit I32 Str]_ }
+                                             ^^^^^^^^^^^^^^^^^^^^^^^
+                
+                This #UserApp.main value is a:
+                
+                    (* -> Str)
+                
                 But the type annotation on main says it should be:
-
-                    Effect.Effect (Result {} [])
-
+                
+                    InternalTask.Task {} [Exit I32 Str]
+                
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque
                 type by wrapping it? If I have an opaque type Age := U32 I can create
                 an instance of this opaque type by doing @Age 23.
-
+                
+                
+                ── TYPE MISMATCH in ....0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY/main.roc ─
+                
+                This 1st argument to attempt has an unexpected type:
+                
+                28│      Task.attempt main /res ->
+                                      ^^^^
+                
+                This #UserApp.main value is a:
+                
+                    (* -> Str)
+                
+                But attempt needs its 1st argument to be:
+                
+                    InternalTask.Task a b
+                
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                
                 ────────────────────────────────────────────────────────────────────────────────
-
-                1 error and 0 warnings found in <ignored for test> ms."#
+                
+                2 errors and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
