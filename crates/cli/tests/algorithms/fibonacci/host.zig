@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("crates/compiler/builtins/bitcode/src/glue.zig");
-// const str = @import("../../../../compiler/builtins/bitcode/src/glue.zig");
+const str = @import("glue/str.zig");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;

@@ -794,7 +794,9 @@ fn build_loaded_file<'a>(
         _ => platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target)),
     };
 
-    if !preprocessed_host_path.exists() {
+    // for static and dynamic libraries we don't need the prebuilt host
+    // this is only required for LinkType::Executable
+    if !preprocessed_host_path.exists() && link_type == LinkType::Executable {
         eprintln!(
             indoc::indoc!(
                 r#"

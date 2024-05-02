@@ -18,11 +18,12 @@ mod cli_run {
     use indoc::indoc;
     use regex::Regex;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_error_macros::internal_error;
     use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
@@ -369,16 +370,40 @@ mod cli_run {
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
-        
         let file_name = dbg!(file_path_from_root(dir_name, roc_filename));
         let mut roc_app_args: Vec<String> = Vec::new();
 
-        // re-build the platform, expect a build.roc to be next to the test file
-        let build_script_path = std::path::PathBuf::from(file_name).with_file_name("build.roc");
+        // find the workspace directory so we can give roc build script absolute paths
+        let workspace_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
 
-        dbg!(&build_script_path, build_script_path.is_file());
-        
-        todo!();
+        // check glue spec is available
+        let zig_glue_path = workspace_dir
+            .join("..")
+            .join("glue")
+            .join("src")
+            .join("ZigGlue.roc");
+        if !zig_glue_path.is_file() {
+            internal_error!("expected ZigGlue.roc at {}", zig_glue_path.display());
+        }
+
+        // check platform folder is available
+        let platform_path = workspace_dir.join("..").join("..").join(dir_name);
+        if !platform_path.is_dir() {
+            internal_error!("expected platform path at {}", platform_path.display());
+        }
+
+        // re-build the platform, expect a build.roc to be next to the test file
+        // set the working directory to the platform folder
+        let build_script_path = std::path::PathBuf::from(&file_name).with_file_name("build.roc");
+        dbg!(std::process::Command::new("roc")
+            .current_dir(&platform_path)
+            .arg(&build_script_path)
+            .envs(vec![
+                ("ROC", "roc"),
+                ("ZIG_GLUE", zig_glue_path.display().to_string().as_str())
+            ])
+            .status())
+        .expect(format!("unable to run build script {}", build_script_path.display()).as_str());
 
         for arg in args {
             match arg {
@@ -711,8 +736,8 @@ mod cli_run {
     )]
     fn fibonacci() {
         test_roc_app_slim(
-            "crates/cli/tests/algorithms",
-            "fibonacci.roc",
+            "crates/cli/tests/algorithms/fibonacci/",
+            "app.roc",
             "",
             UseValgrind::Yes,
         )
