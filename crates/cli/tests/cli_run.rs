@@ -100,8 +100,6 @@ mod cli_run {
         // consistency with typewriters, very important
         let err = err.replace('\r', "");
 
-        dbg!(format!("{:?}", err.as_str()));
-
         assert_multiline_str_eq!(err.as_str(), expected);
     }
 
@@ -742,7 +740,7 @@ mod cli_run {
     #[serial(cli_platform)]
     fn cli_args() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "argsBROKEN.roc",
             &[],
             &[
