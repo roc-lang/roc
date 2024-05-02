@@ -355,6 +355,7 @@ mod test_snapshots {
         pass/module_with_newline.header,
         pass/module_with_params.header,
         pass/module_with_params_and_multiline_exposes.header,
+        pass/module_with_optional_param.header,
         pass/module_with_multiline_params_and_exposes.header,
         pass/multi_backpassing.expr,
         pass/multi_backpassing_in_def.moduledefs,
