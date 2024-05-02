@@ -19,8 +19,12 @@ If you have a specific question, the [FAQ](../www/content/faq.md) might have an 
 
 ## Editor
 
-- Visual Studio Code: install the Plugin [Roc VSCode Plugin](https://marketplace.visualstudio.com/items?itemName=IvanDemchenko.roc-lang-unofficial)
-- [Zed](https://zed.dev/download) (since Version 0.133.5, Mac only at the momment) search and install roc extension (action `zed: extensions`), in case of errors look into the Zed log (action `zed: open log`)
+- [Visual Studio Code](https://visualstudio.microsoft.com/#vscode-section)
+  - syntax highlighting, completion, type hints 
+  - install the [Roc Plugin](https://marketplace.visualstudio.com/items?itemName=IvanDemchenko.roc-lang-unofficial)
+- [Zed](https://zed.dev/download), since Version 0.133.5, 🍏Mac only at the momment
+  - search and install roc extension (action `zed: extensions`)
+  - in case of errors look into the Zed log (action `zed: open log`)
 - For other editors like Vim, Helix or Emacs [see](https://github.com/faldor20/tree-sitter-roc)
 
 ## Running Examples
