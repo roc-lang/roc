@@ -10,9 +10,9 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, rebuild_host, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
-        ValgrindErrorXWhat,
+        dir_path_from_root, extract_valgrind_errors, file_path_from_root, fixture_file,
+        fixtures_dir, has_error, known_bad_file, rebuild_host, run_cmd, run_roc, run_with_valgrind,
+        Out, ValgrindError, ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
@@ -833,9 +833,13 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
+        rebuild_host(
+            &dir_path_from_root("crates/cli/tests/effects"),
+            &file_path_from_root("crates/cli/tests/effects", "app.roc"),
+        );
         test_roc_app(
-            "examples/cli",
-            "effects.roc",
+            "crates/cli/tests/effects",
+            "app.roc",
             &["hi there!"],
             &[],
             &[],
@@ -1202,7 +1206,13 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("cFold.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark(
+                "cFold.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
+                &["3"],
+                "11 & 11\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
@@ -1220,7 +1230,13 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("rBTreeCk.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&["100"], "10\n", UseValgrind::Yes)
+            test_benchmark(
+                "rBTreeCk.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
+                &["100"],
+                "10\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
@@ -1251,7 +1267,13 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("testAStar.roc",&cli_utils::helpers::cli_testing_dir("benchmarks"), &[], "True\n", UseValgrind::No)
+            test_benchmark(
+                "testAStar.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
+                &[],
+                "True\n",
+                UseValgrind::No,
+            )
         }
 
         #[test]
@@ -1269,13 +1291,25 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("closure.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&[], "", UseValgrind::No)
+            test_benchmark(
+                "closure.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
+                &[],
+                "",
+                UseValgrind::No,
+            )
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("issue2279.roc", &cli_utils::helpers::cli_testing_dir("benchmarks"),&[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark(
+                "issue2279.roc",
+                &cli_utils::helpers::cli_testing_dir("benchmarks"),
+                &[],
+                "Hello, world!\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
