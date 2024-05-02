@@ -370,7 +370,7 @@ mod cli_run {
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
-        let file_name = dbg!(file_path_from_root(dir_name, roc_filename));
+        let file_name = file_path_from_root(dir_name, roc_filename);
         let mut roc_app_args: Vec<String> = Vec::new();
 
         // find the workspace directory so we can give roc build script absolute paths
@@ -395,15 +395,15 @@ mod cli_run {
         // re-build the platform, expect a build.roc to be next to the test file
         // set the working directory to the platform folder
         let build_script_path = std::path::PathBuf::from(&file_name).with_file_name("build.roc");
-        dbg!(std::process::Command::new("roc")
+        std::process::Command::new("roc")
             .current_dir(&platform_path)
             .arg(&build_script_path)
             .envs(vec![
                 ("ROC", "roc"),
-                ("ZIG_GLUE", zig_glue_path.display().to_string().as_str())
+                ("ZIG_GLUE", zig_glue_path.display().to_string().as_str()),
             ])
-            .status())
-        .expect(format!("unable to run build script {}", build_script_path.display()).as_str());
+            .status()
+            .expect(format!("unable to run build script {}", build_script_path.display()).as_str());
 
         for arg in args {
             match arg {
@@ -752,8 +752,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
-            "crates/cli/tests/algorithms",
-            "quicksort.roc",
+            "crates/cli/tests/algorithms/quicksort",
+            "app.roc",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
         )
