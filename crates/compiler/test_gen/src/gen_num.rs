@@ -3901,3 +3901,43 @@ fn f64_from_parts() {
         f64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn nan_f32() {
+    assert_evals_to!(
+        r"Num.nanF32",
+        f32::NAN,
+        f32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn nan_f64() {
+    assert_evals_to!(
+        r"Num.nanF64",
+        f64::NAN,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn infinity_f32() {
+    assert_evals_to!(
+        r"Num.infinityF32",
+        f32::INFINITY,
+        f32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn infinity_f64() {
+    assert_evals_to!(
+        r"Num.infinityF64",
+        f64::INFINITY,
+        f64
+    );
+}
