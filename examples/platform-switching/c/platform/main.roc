@@ -1,4 +1,4 @@
-platform "echo-in-zig"
+platform ""
     requires {} { main : Str }
     exposes []
     packages {}

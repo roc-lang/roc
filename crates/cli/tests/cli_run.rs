@@ -530,7 +530,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
-            "examples/platform-switching",
+            "examples/platform-switching/zig",
             "rocLovesZig.roc",
             "Roc <3 Zig!\n",
             UseValgrind::Yes,

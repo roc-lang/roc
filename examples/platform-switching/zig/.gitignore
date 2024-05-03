@@ -1,0 +1,6 @@
+host/glue/*
+platform/*.a
+zig-cache/
+zig-out/
+build
+rocLovesZig
