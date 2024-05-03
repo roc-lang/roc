@@ -542,7 +542,11 @@ pub enum EImport<'a> {
     IndentIngestedPath(Position),
     IngestedPath(Position),
     IndentIngestedName(Position),
-    IngestedName(ETypedIdent<'a>, Position),
+    IngestedName(Position),
+    IndentColon(Position),
+    Colon(Position),
+    IndentAnnotation(Position),
+    Annotation(EType<'a>, Position),
     Space(BadInputError, Position),
 }
 
