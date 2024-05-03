@@ -155,6 +155,10 @@ module [
     f64ToParts,
     f32FromParts,
     f64FromParts,
+    nanF32,
+    nanF64,
+    infinityF32,
+    infinityF64,
 ]
 
 import Bool exposing [Bool]
@@ -1433,3 +1437,19 @@ f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 ## The fraction should not be bigger than 0x000F_FFFF_FFFF_FFFF, any bigger value will be truncated.
 ## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
 f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
+
+## The value for not-a-number for a [F32] according to the IEEE 754 standard.
+nanF32 : F32
+nanF32 = 0.0f32 / 0.0
+
+## The value for not-a-number for a [F64] according to the IEEE 754 standard.
+nanF64 : F64
+nanF64 = 0.0f64 / 0.0
+
+## The value for infinity for a [F32] according to the IEEE 754 standard.
+infinityF32 : F32
+infinityF32 = 1.0f32 / 0.0
+
+## The value for infinity for a [F64] according to the IEEE 754 standard.
+infinityF64 : F64
+infinityF64 = 1.0f64 / 0.0
