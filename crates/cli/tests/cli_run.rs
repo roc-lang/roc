@@ -454,6 +454,7 @@ mod cli_run {
         #[cfg(not(debug_assertions))]
         check_output_with_stdin(
             &file_name,
+            &PathBuf::from(dir_name),
             stdin,
             &custom_flags,
             &roc_app_args,
