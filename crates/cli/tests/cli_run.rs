@@ -690,6 +690,7 @@ mod cli_run {
         );
     }
 
+    #[ignore = "TODO - review or restore this test, write a script that builds the platform files"]
     #[test]
     #[cfg_attr(
         windows,
@@ -882,6 +883,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "TODO - review or restore this test, write a script that builds the platform files"]
     #[test]
     fn swift_ui() {
         test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
