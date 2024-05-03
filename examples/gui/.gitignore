@@ -1,0 +1,11 @@
+platform/*.a
+platform/*.dylib
+platform/*.so
+platform/*.rh
+platform/*.rm
+
+target/
+
+build
+
+hello-gui

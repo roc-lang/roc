@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "roc_host",
+    "roc_host_lib",
+]
+

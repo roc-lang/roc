@@ -11,11 +11,8 @@ extern "C" {
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() {
     let root_elem = unsafe { roc_render() };
 
     gui::render("test title".into(), root_elem);
-
-    // Exit code
-    0
 }

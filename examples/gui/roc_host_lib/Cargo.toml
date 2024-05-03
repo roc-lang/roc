@@ -1,0 +1,19 @@
+[package]
+name = "host"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[profile.release]
+lto = true
+strip = "debuginfo"
+codegen-units = 1
+
+[lib]
+name = "host"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+roc_host = { path = "../roc_host" }

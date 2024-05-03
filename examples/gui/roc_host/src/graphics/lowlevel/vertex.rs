@@ -11,7 +11,6 @@
 // Thank you Héctor Ramón and Iced contributors!
 use bytemuck::{Pod, Zeroable};
 
-
 #[repr(C)]
 #[derive(Copy, Clone, Zeroable, Pod)]
 pub struct Vertex {

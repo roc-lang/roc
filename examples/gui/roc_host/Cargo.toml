@@ -1,15 +1,16 @@
 [package]
-name = "host"
-authors = ["The Roc Contributors"]
-edition = "2021"
-license = "UPL-1.0"
-links = "app"
+name = "roc_host"
 version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+links = "app"
 
 [lib]
-name = "host"
+name = "roc_host"
 path = "src/lib.rs"
-crate-type = ["staticlib", "lib"]
+crate-type = ["lib"]
 
 [[bin]]
 name = "host"
@@ -44,8 +45,6 @@ default = []
 [dependencies.bytemuck]
 features = ["derive"]
 version = "1.7.2"
-
-[workspace]
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]

@@ -720,7 +720,7 @@ mod cli_run {
 
     #[test]
     fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
+        test_roc_app_slim("examples/gui", "hello-gui.roc", "", UseValgrind::No)
     }
 
     #[test]

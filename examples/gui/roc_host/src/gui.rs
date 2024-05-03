@@ -55,11 +55,13 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
                 force_fallback_adapter: false,
             })
             .await
-            .expect(r#"Request adapter
+            .expect(
+                r#"Request adapter
             If you're running this from inside nix, run with:
                 `nixVulkanIntel <your previous command that generated this error>`.
                 See extra docs here: github.com/guibou/nixGL
-            "#);
+            "#,
+            );
 
         adapter
             .request_device(
@@ -294,7 +296,9 @@ fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
         }
     });
 
-    Ok(())
+    // Done, let's just exit... and don't bother cleaning anything up
+    // for this simple example
+    std::process::exit(0);
 }
 
 fn draw_rects(

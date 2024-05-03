@@ -7,6 +7,7 @@ interface Help
         osFromStr,
         rocTarget,
         prebuiltBinaryName,
+        dynamicLibraryExtension,
     ]
     imports []
 
@@ -66,3 +67,10 @@ prebuiltBinaryName = \target ->
         LinuxX64 -> "linux-x64.a"
         WindowsArm64 -> "windows-arm64.a"
         WindowsX64 -> "windows-x64"
+
+dynamicLibraryExtension : RocTarget -> Str 
+dynamicLibraryExtension = \target -> 
+    when target is 
+        MacosArm64 | MacosX64 -> ".dylib"
+        LinuxArm64 | LinuxX64 -> ".so"
+        WindowsArm64 | WindowsX64 -> "windows-arm64.obj"
