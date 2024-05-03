@@ -452,7 +452,7 @@ enum Match {
 }
 
 fn check_for_match(branches: &[Branch]) -> Match {
-    match branches.get(0) {
+    match branches.first() {
         Some(Branch {
             goal,
             patterns,

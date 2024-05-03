@@ -377,10 +377,6 @@ impl RocDec {
         }
     }
 
-    pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
-        Self::from_str(val).unwrap().as_i128()
-    }
-
     /// This is private because RocDec being an i128 is an implementation detail
     #[inline(always)]
     fn as_i128(&self) -> i128 {

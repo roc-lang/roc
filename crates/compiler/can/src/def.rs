@@ -978,7 +978,7 @@ pub(crate) fn canonicalize_defs<'a>(
     // there are opaques that implement an ability using a value symbol). But, value symbols might
     // shadow symbols defined in a local ability def.
 
-    for (_, either_index) in loc_defs.tags.iter().enumerate() {
+    for either_index in loc_defs.tags.iter() {
         if let Ok(type_index) = either_index.split() {
             let type_def = &loc_defs.type_defs[type_index.index()];
             let pending_type_def = to_pending_type_def(env, type_def, scope, pattern_type);

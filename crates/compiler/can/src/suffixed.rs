@@ -225,7 +225,7 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
 
             // Any suffixed arguments will be innermost, therefore we unwrap those first
             let local_args = arena.alloc_slice_copy(apply_args);
-            for (_, arg) in local_args.iter_mut().enumerate() {
+            for arg in local_args.iter_mut() {
                 match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
                     Ok(new_arg) => {
                         *arg = new_arg;

@@ -2284,7 +2284,7 @@ fn tag_to_type<'a, D: Display>(
             // this isn't recursive and there's 1 payload item, so it doesn't
             // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
             // can have payloads of plain old Str, no struct wrapper needed.
-            let payload_var = payload_vars.get(0).unwrap();
+            let payload_var = payload_vars.first().unwrap();
             let payload_layout = env
                 .layout_cache
                 .from_var(env.arena, *payload_var, env.subs)

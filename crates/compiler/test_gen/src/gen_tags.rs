@@ -15,7 +15,7 @@ use indoc::indoc;
 
 use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
-use roc_std::{RocList, RocStr, U128};
+use roc_std::{RocList, RocStr, I128, U128};
 
 #[test]
 fn width_and_alignment_u8_u8() {
@@ -1779,7 +1779,24 @@ fn alignment_i128() {
                 x
                 #"
         ),
-        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
+        // NOTE: roc_std::I128 is always aligned to 16, unlike rust's i128
+        ((I128::from(42), true), 1),
+        ((I128, bool), u8)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn alignment_u128() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One U128 Bool, Empty]
+                x = One 42 (1 == 1)
+                x
+                #"
+        ),
+        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's i128
         ((U128::from(42), true), 1),
         ((U128, bool), u8)
     );

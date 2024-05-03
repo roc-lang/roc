@@ -108,9 +108,7 @@ impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RocDict ")?;
 
-        f.debug_map()
-            .entries(self.iter().map(|(k, v)| (k, v)))
-            .finish()
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 

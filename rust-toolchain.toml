@@ -12,9 +12,9 @@
 #     - update nightly-OLD_DATE in .github/workflows/windows_release_build.yml
 #     - update nightly-OLD_DATE in crates/compiler/build/src/link.rs
 
-channel = "1.73.0" # check ^^^ when changing this
+channel = "1.76.0" # check ^^^ when changing this
 # 
-# channel = "nightly-2023-08-20" # 1.73.0 nightly to be able to use unstable features
+# channel = "nightly-2023-12-21" # 1.76.0 nightly to be able to use unstable features
 profile = "default"
 components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`

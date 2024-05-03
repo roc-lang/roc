@@ -1056,7 +1056,7 @@ mod decode_immediate {
     use indoc::indoc;
 
     #[cfg(all(test, feature = "gen-llvm"))]
-    use roc_std::RocStr;
+    use roc_std::{RocStr, I128, U128};
 
     #[test]
     #[cfg(feature = "gen-llvm")]
@@ -1121,7 +1121,7 @@ mod decode_immediate {
     }
 
     macro_rules! num_immediate {
-        ($($num:expr, $typ:ident)*) => {$(
+        ($($num:expr, $typ:ident, $expected_type:ident)*) => {$(
             #[test]
             #[cfg(feature = "gen-llvm")]
             fn $typ() {
@@ -1137,25 +1137,25 @@ mod decode_immediate {
                         "#
                     ), $num, stringify!($typ), stringify!($typ)),
                     $num,
-                    $typ
+                    $expected_type
                 )
             }
         )*}
     }
 
     num_immediate! {
-        17, i8
-        17, i16
-        17, i32
-        17, i64
-        17, i128
-        17, u8
-        17, u16
-        17, u32
-        17, u64
-        17, u128
-        17.23, f32
-        17.23, f64
+        17, i8, i8
+        17, i16, i16
+        17, i32, i32
+        17, i64, i64
+        I128::from(17), i128, I128
+        17, u8, u8
+        17, u16, u16
+        17, u32, u32
+        17, u64, u64
+        U128::from(17), u128, U128
+        17.23, f32, f32
+        17.23, f64, f64
     }
 
     #[test]

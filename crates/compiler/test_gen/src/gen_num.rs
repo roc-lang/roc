@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocDec, RocOrder, RocResult};
+use roc_std::{RocDec, RocOrder, RocResult, I128, U128};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -42,8 +42,8 @@ fn i128_signed_int_alias() {
             i
             "
         ),
-        128,
-        i128
+        I128::from(128),
+        I128
     );
 }
 #[test]
@@ -126,8 +126,8 @@ fn i128_hex_int_alias() {
                     f
                 "
         ),
-        0x123,
-        i128
+        I128::from(0x123),
+        I128
     );
 }
 #[test]
@@ -207,8 +207,8 @@ fn u128_signed_int_alias() {
                     i
                 "
         ),
-        128,
-        u128
+        U128::from(128),
+        U128
     );
 }
 #[test]
@@ -288,8 +288,8 @@ fn u128_hex_int_alias() {
                     f
                 "
         ),
-        0x123,
-        i128
+        I128::from(0x123),
+        I128
     );
 }
 #[test]
@@ -429,8 +429,8 @@ fn dec_float_alias() {
                     x
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("2.1"),
-        i128
+        RocDec::from_str("2.1").unwrap(),
+        RocDec
     );
 }
 
@@ -568,14 +568,14 @@ fn various_sized_abs() {
     assert_evals_to!("Num.abs -6i32", 6, i32);
     assert_evals_to!("Num.abs -6i64", 6, i64);
     if !cfg!(feature = "gen-wasm") {
-        assert_evals_to!("Num.abs -6i128", 6, i128);
+        assert_evals_to!("Num.abs -6i128", I128::from(6), I128);
     }
     assert_evals_to!("Num.abs 6u8", 6, u8);
     assert_evals_to!("Num.abs 6u16", 6, u16);
     assert_evals_to!("Num.abs 6u32", 6, u32);
     assert_evals_to!("Num.abs 6u64", 6, u64);
     if !cfg!(feature = "gen-wasm") {
-        assert_evals_to!("Num.abs 6u128", 6, u128);
+        assert_evals_to!("Num.abs 6u128", U128::from(6), U128);
     }
 }
 
@@ -652,8 +652,8 @@ fn gen_add_dec() {
                     z
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("5.2"),
-        i128
+        RocDec::from_str("5.2").unwrap(),
+        RocDec
     );
 }
 #[test]
@@ -742,8 +742,8 @@ fn gen_div_dec() {
                     x / y
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
-        i128
+        RocDec::from_str("3.333333333333333333").unwrap(),
+        RocDec
     );
 }
 
@@ -764,8 +764,8 @@ fn gen_div_checked_dec() {
                         Err _ -> -1
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
-        i128
+        RocDec::from_str("3.333333333333333333").unwrap(),
+        RocDec
     );
 }
 #[test]
@@ -785,8 +785,8 @@ fn gen_div_checked_by_zero_dec() {
                         Err _ -> -1
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("-1"),
-        i128
+        RocDec::from_str("-1").unwrap(),
+        RocDec
     );
 }
 
@@ -794,7 +794,7 @@ fn gen_div_checked_by_zero_dec() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic(expected = r#"Roc failed with message: "Decimal division by 0!"#)]
 fn gen_div_dec_by_zero() {
-    assert_evals_to!("1dec / 0", RocDec::from_str_to_i128_unsafe("-1"), i128);
+    assert_evals_to!("1dec / 0", RocDec::from_str("-1").unwrap(), RocDec);
 }
 
 #[test]
@@ -1030,8 +1030,8 @@ fn gen_sub_dec() {
                     (x - y) - z
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("-3.9"),
-        i128
+        RocDec::from_str("-3.9").unwrap(),
+        RocDec
     );
 }
 
@@ -1053,8 +1053,8 @@ fn gen_mul_dec() {
                     x * y * z
                 "
         ),
-        RocDec::from_str_to_i128_unsafe("48.0"),
-        i128
+        RocDec::from_str("48.0").unwrap(),
+        RocDec
     );
 }
 
@@ -2064,7 +2064,7 @@ fn int_mul_wrap_i64() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_mul_wrap_i128() {
-    assert_evals_to!("Num.mulWrap Num.maxI128 2", -2, i128);
+    assert_evals_to!("Num.mulWrap Num.maxI128 2", I128::from(-2), I128);
 }
 
 #[test]
@@ -2195,13 +2195,13 @@ fn shift_right_cast_i8() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn min_i128() {
-    assert_evals_to!("Num.minI128", i128::MIN, i128);
+    assert_evals_to!("Num.minI128", I128::from(i128::MIN), I128);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn max_i128() {
-    assert_evals_to!("Num.maxI128", i128::MAX, i128);
+    assert_evals_to!("Num.maxI128", I128::from(i128::MAX), I128);
 }
 
 #[test]
@@ -2498,13 +2498,6 @@ to_int_checked_tests! {
         to_i64_checked_larger_width_unsigned_fits_pos,   "15u128",     15
         to_i64_checked_larger_width_unsigned_oob_pos,    "9223372036854775808u128",  None
     )
-    "Num.toI128Checked", i128, (
-        to_i128_checked_smaller_width_pos,                "15i8",      15
-        to_i128_checked_smaller_width_neg,                "-15i8",     -15
-        to_i128_checked_same,                             "15i128",     15
-        to_i128_checked_same_width_unsigned_fits,         "15u128",     15
-        to_i128_checked_same_width_unsigned_oob,          "170141183460469231731687303715884105728u128",  None
-    )
     "Num.toU8Checked", u8, (
         to_u8_checked_same,                           "15u8",   15
         to_u8_checked_same_width_signed_fits,         "15i8",   15
@@ -2551,13 +2544,81 @@ to_int_checked_tests! {
         to_u64_checked_larger_width_unsigned_fits_pos, "15u128",   15
         to_u64_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
     )
-    "Num.toU128Checked", u128, (
-        to_u128_checked_smaller_width_pos,             "15i8",     15
-        to_u128_checked_smaller_width_neg_oob,         "-15i8",    None
-        to_u128_checked_same,                          "15u128",   15
-        to_u128_checked_same_width_signed_fits,        "15i128",   15
-        to_u128_checked_same_width_signed_oob,         "-1i128",   None
-    )
+}
+
+fn wrap_with_default(test_roc_code: &str) -> String {
+    format!("Result.withDefault ({}) 123454321", test_roc_code)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128_checked_smaller_width_pos() {
+    let test_roc_code = wrap_with_default("Num.toI128Checked 15i8");
+    assert_evals_to!(&test_roc_code, I128::from(15), I128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128_checked_smaller_width_neg() {
+    let test_roc_code = wrap_with_default("Num.toI128Checked -15i8");
+    assert_evals_to!(&test_roc_code, I128::from(-15), I128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128_checked_same() {
+    let test_roc_code = wrap_with_default("Num.toI128Checked 15i128");
+    assert_evals_to!(&test_roc_code, I128::from(15), I128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128_checked_same_width_unsigned_fits() {
+    let test_roc_code = wrap_with_default("Num.toI128Checked 15u128");
+    assert_evals_to!(&test_roc_code, I128::from(15), I128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_i128_checked_same_width_unsigned_oob() {
+    let test_roc_code =
+        "Result.isErr (Num.toI128Checked 170141183460469231731687303715884105728u128)";
+    assert_evals_to!(&test_roc_code, true, bool)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128_checked_smaller_width_pos() {
+    let test_roc_code = wrap_with_default("Num.toU128Checked 15i8");
+    assert_evals_to!(&test_roc_code, U128::from(15), U128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128_checked_smaller_width_neg_oob() {
+    let test_roc_code = "Result.isErr (Num.toU128Checked -15i8)";
+    assert_evals_to!(&test_roc_code, true, bool)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128_checked_same() {
+    let test_roc_code = wrap_with_default("Num.toU128Checked 15u128");
+    assert_evals_to!(&test_roc_code, U128::from(15), U128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128_checked_same_width_signed_fits() {
+    let test_roc_code = wrap_with_default("Num.toU128Checked 15i128");
+    assert_evals_to!(&test_roc_code, U128::from(15), U128)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn to_u128_checked_same_width_signed_oob() {
+    let test_roc_code = "Result.isErr (Num.toU128Checked -1i128)";
+    assert_evals_to!(&test_roc_code, true, bool)
 }
 
 #[test]
@@ -3263,8 +3324,8 @@ fn dec_float_suffix() {
             123.0dec
             "
         ),
-        RocDec::from_str_to_i128_unsafe("123.0"),
-        i128
+        RocDec::from_str("123.0").unwrap(),
+        RocDec
     );
 }
 
@@ -3277,8 +3338,8 @@ fn dec_no_decimal() {
             3dec
             "
         ),
-        RocDec::from_str_to_i128_unsafe("3.0"),
-        i128
+        RocDec::from_str("3.0").unwrap(),
+        RocDec
     );
 }
 
@@ -3356,8 +3417,11 @@ fn promote_i128_number_layout() {
             }
             "
         ),
-        (18446744073709551617, -9223372036854775808),
-        (i128, i128)
+        (
+            I128::from(18446744073709551617),
+            I128::from(-9223372036854775808)
+        ),
+        (I128, I128)
     );
 }
 
@@ -3370,8 +3434,8 @@ fn promote_u128_number_layout() {
             170141183460469231731687303715884105728 + 1
             "
         ),
-        170141183460469231731687303715884105729,
-        u128
+        U128::from(170141183460469231731687303715884105729),
+        U128
     );
 }
 
@@ -3498,10 +3562,14 @@ fn num_abs_diff_int() {
 #[test]
 #[cfg(feature = "gen-llvm")]
 fn num_abs_diff_large_bits() {
-    assert_evals_to!(r"Num.absDiff 0u128 0u128", 0, u128);
-    assert_evals_to!(r"Num.absDiff 1u128 2u128", 1, u128);
-    assert_evals_to!(r"Num.absDiff -1i128 1i128", 2, i128);
-    assert_evals_to!(r"Num.absDiff Num.minI128 -1i128", i128::MAX, i128);
+    assert_evals_to!(r"Num.absDiff 0u128 0u128", U128::from(0), U128);
+    assert_evals_to!(r"Num.absDiff 1u128 2u128", U128::from(1), U128);
+    assert_evals_to!(r"Num.absDiff -1i128 1i128", I128::from(2), I128);
+    assert_evals_to!(
+        r"Num.absDiff Num.minI128 -1i128",
+        I128::from(i128::MAX),
+        I128
+    );
 }
 
 #[test]
@@ -3532,7 +3600,7 @@ fn num_abs_int_min_overflow() {
 #[cfg(feature = "gen-llvm")]
 #[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_large_bits_min_overflow() {
-    assert_evals_to!(r"Num.absDiff Num.minI128 0", 0, i128);
+    assert_evals_to!(r"Num.absDiff Num.minI128 0", I128::from(0), I128);
 }
 
 #[test]
@@ -3619,8 +3687,8 @@ fn mul_checked_u128() {
             x
             "
         ),
-        RocResult::ok(5u128 * 2u128),
-        RocResult<u128, ()>
+        RocResult::ok(U128::from(5u128 * 2u128)),
+        RocResult<U128, ()>
     );
 }
 
@@ -3636,8 +3704,8 @@ fn sub_checked_u128() {
             x
             "
         ),
-        RocResult::ok(5u128 - 2u128),
-        RocResult<u128, ()>
+        RocResult::ok(U128::from(5u128 - 2u128)),
+        RocResult<U128, ()>
     );
 }
 
@@ -3653,8 +3721,8 @@ fn add_checked_u128() {
             x
             "
         ),
-        RocResult::ok(5u128 + 2u128),
-        RocResult<u128, ()>
+        RocResult::ok(U128::from(5u128 + 2u128)),
+        RocResult<U128, ()>
     );
 }
 
@@ -3717,18 +3785,18 @@ fn without_decimal_point() {
     );
     assert_evals_to!(
         r"Num.withoutDecimalPoint 123.000000000000000000",
-        123000000000000000000,
-        i128
+        I128::from(123000000000000000000),
+        I128
     );
     assert_evals_to!(
         r"Num.withoutDecimalPoint 170141183460469231731.687303715884105727",
-        i128::MAX,
-        i128
+        I128::from(i128::MAX),
+        I128
     );
     assert_evals_to!(
         r"Num.withoutDecimalPoint -170141183460469231731.687303715884105728",
-        i128::MIN,
-        i128
+        I128::from(i128::MIN),
+        I128
     );
 }
 
