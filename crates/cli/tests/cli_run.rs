@@ -550,7 +550,7 @@ mod cli_run {
     #[test]
     fn platform_switching_swift() {
         test_roc_app_slim(
-            "examples/platform-switching",
+            "examples/platform-switching/swift",
             "rocLovesSwift.roc",
             "Roc <3 Swift!\n",
             UseValgrind::Yes,

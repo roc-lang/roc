@@ -1,4 +1,5 @@
 import Foundation
+import Roc
 
 @_cdecl("roc_alloc")
 func rocAlloc(size: Int, _alignment: UInt) -> UInt  {
