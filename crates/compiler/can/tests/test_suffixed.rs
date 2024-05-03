@@ -775,6 +775,35 @@ mod suffixed_tests {
             r#"Defs { tags: [Index(2147483648)], regions: [@0-226], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @32-43 Apply(@32-43 Var { module_name: "Task", ident: "await" }, [@32-43 Var { module_name: "Stdin", ident: "line" }, @32-43 Closure([@23-29 Identifier { ident: "result" }], @61-226 When(@66-72 Var { module_name: "", ident: "result" }, [WhenBranch { patterns: [@96-99 Tag("End")], value: @127-137 Apply(@127-134 Var { module_name: "Task", ident: "ok" }, [@135-137 Record([])], Space), guard: None }, WhenBranch { patterns: [@159-169 Apply(@159-164 Tag("Input"), [@165-169 Identifier { ident: "name" }])], value: @197-226 Apply(@197-226 Var { module_name: "Stdout", ident: "line" }, [@210-226 Str(Line([Plaintext("Hello, "), Interpolated(@220-224 Var { module_name: "", ident: "name" })]))], Space), guard: None }]))], BangSuffix))] }"#,
         );
     }
+
+    /*
+    main =
+        foo = getFoo!
+        dbg foo
+        bar foo
+
+    main =
+        Task.await getFoo \foo ->
+            dbg foo
+            bar! foo
+
+    main =
+        Task.await getFoo \foo ->
+            dbg foo
+            bar foo
+     */
+    #[test]
+    fn dbg_simple() {
+        run_test(
+            r#"
+            main =
+                foo = getFoo!
+                dbg foo
+                bar! foo
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-85], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @29-36 Apply(@29-36 Var { module_name: "Task", ident: "await" }, [@29-36 Var { module_name: "", ident: "getFoo" }, @29-36 Closure([@23-26 Identifier { ident: "foo" }], @53-85 LowLevelDbg(("test.roc:4", "   "), @57-60 Apply(@57-60 Var { module_name: "Inspect", ident: "toStr" }, [@57-60 Var { module_name: "", ident: "foo" }], Space), @77-85 Apply(@77-85 Var { module_name: "", ident: "bar" }, [@82-85 Var { module_name: "", ident: "foo" }], Space)))], BangSuffix))] }"#,
+        );
+    }
 }
 
 #[cfg(test)]

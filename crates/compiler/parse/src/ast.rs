@@ -610,7 +610,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Expect(a, b) | Expr::Dbg(a, b) => {
             is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value)
         }
-        Expr::LowLevelDbg(_, _, _) => todo!(),
+        Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
         Expr::When(a, _) => is_expr_suffixed(&a.value),
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
