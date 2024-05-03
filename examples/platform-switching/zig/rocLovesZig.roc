@@ -1,3 +1,3 @@
-app [main] { pf: platform "zig-platform/main.roc" }
+app [main] { pf: platform "platform/main.roc" }
 
 main = "Roc <3 Zig!\n"
