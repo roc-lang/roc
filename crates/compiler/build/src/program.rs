@@ -771,13 +771,13 @@ fn build_loaded_file<'a>(
 
     let preprocessed_host_path = match linking_strategy {
         LinkingStrategy::Legacy => {
-            if target == Target::Wasm32 {
-                // when compiling a wasm application, we implicitly assume here that the host is in zig
-                // and has a file called "host.zig"
-                platform_main_roc.with_file_name("host.zig")
-            } else {
-                legacy_host_file(target, &platform_main_roc)
-            }
+            // if target == Target::Wasm32 {
+            //     // when compiling a wasm application, we implicitly assume here that the host is in zig
+            //     // and has a file called "host.zig"
+            //     platform_main_roc.with_file_name("host.zig")
+            // } else {
+            // }
+            legacy_host_file(target, &platform_main_roc)
         }
         LinkingStrategy::Surgical => {
             let preprocessed_host_path =

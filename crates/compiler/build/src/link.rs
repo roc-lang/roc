@@ -34,7 +34,7 @@ pub fn link(
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     match target.arch_os() {
-        (Architecture::Wasm32, _) => link_wasm32(target, output_path, input_paths, link_type),
+        (Architecture::Wasm32, _) => dbg!(link_wasm32(target, output_path, input_paths, link_type)),
         (_, OperatingSystem::Linux) => link_linux(target, output_path, input_paths, link_type),
         (_, OperatingSystem::Mac) => link_macos(target, output_path, input_paths, link_type),
         (_, OperatingSystem::Windows) => link_windows(output_path, input_paths, link_type),

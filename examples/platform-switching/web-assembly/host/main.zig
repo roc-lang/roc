@@ -1,4 +1,4 @@
-const str = @import("glue").str;
+const str = @import("glue/str.zig");
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
 
