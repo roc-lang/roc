@@ -3907,8 +3907,9 @@ fn f64_from_parts() {
 fn nan_f32() {
     assert_evals_to!(
         r"Num.nanF32",
-        f32::NAN,
-        f32
+        true,
+        f32,
+        |f: f32| f.is_nan()
     );
 }
 
@@ -3917,8 +3918,9 @@ fn nan_f32() {
 fn nan_f64() {
     assert_evals_to!(
         r"Num.nanF64",
-        f64::NAN,
-        f64
+        true,
+        f64,
+        |f: f64| f.is_nan()
     );
 }
 
