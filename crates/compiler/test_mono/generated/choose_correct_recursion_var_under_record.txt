@@ -47,8 +47,8 @@ procedure List.9 (List.334):
         ret List.574;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.275 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.275;
+    let Num.279 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.279;
 
 procedure Result.5 (Result.10, Result.11):
     let Result.37 : U8 = 1i64;

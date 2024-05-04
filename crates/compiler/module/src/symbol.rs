@@ -1370,6 +1370,10 @@ define_builtins! {
         162 NUM_F64_TO_PARTS: "f64ToParts"
         163 NUM_F32_FROM_PARTS: "f32FromParts"
         164 NUM_F64_FROM_PARTS: "f64FromParts"
+        165 NUM_NAN_F32: "nanF32"
+        166 NUM_NAN_F64: "nanF64"
+        167 NUM_INFINITY_F32: "infinityF32"
+        168 NUM_INFINITY_F64: "infinityF64"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
