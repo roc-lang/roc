@@ -82,16 +82,16 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
     jump List.588 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.275 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.275;
+    let Num.279 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.279;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.278 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.278;
+    let Num.282 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.282;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.277 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.277;
+    let Num.281 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.281;
 
 procedure Test.1 (#Derived_gen.0):
     joinpoint Test.26 Test.6:
