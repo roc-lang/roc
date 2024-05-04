@@ -55,6 +55,7 @@ use crate::llvm::{
         LLVM_SUB_WITH_OVERFLOW,
     },
     refcounting::PointerToRefcount,
+    sort::generic_compare,
 };
 
 use super::{build::Env, convert::zig_dec_type};
@@ -1270,7 +1271,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             BasicValueEnum::IntValue(bool_val)
         }
         Compare => {
-            panic!("TODO: implement this")
+            // Sort.compare : elem, elem -> [LessThan, Equal, GreaterThan]
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
+
+            generic_compare(
+                env,
+                layout_interner,
+                layout_ids,
+                lhs_arg,
+                rhs_arg,
+                lhs_layout,
+                rhs_layout,
+            )
         }
         Hash => {
             unimplemented!()
