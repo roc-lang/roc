@@ -9,6 +9,7 @@ pub mod externs;
 mod intrinsics;
 mod lowlevel;
 pub mod refcounting;
+pub mod sort;
 
 mod align;
 mod erased;
