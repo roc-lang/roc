@@ -122,11 +122,52 @@ pub fn unwrap_suffixed_expression<'a>(
             Expr::SpaceBefore(..) | Expr::SpaceAfter(..) => {
                 internal_error!(
                     "SpaceBefore and SpaceAfter should have been removed in desugar_expr"
-                )
+                );
             }
 
             Expr::BinOps(..) => {
-                internal_error!("BinOps should have been desugared in desugar_expr")
+                internal_error!("BinOps should have been desugared in desugar_expr");
+            }
+
+            Expr::LowLevelDbg(moduel, arg, rest) => {
+                if is_expr_suffixed(&arg.value) {
+                    // we cannot unwrap a suffixed expression within dbg
+                    // e.g. dbg (foo! "bar")
+                    return Err(EUnwrapped::Malformed);
+                }
+
+                match unwrap_suffixed_expression(arena, rest, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                        ));
+                        return Ok(new_dbg);
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                        ));
+                        Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: unwrapped_expr,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                        ));
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg: new_dbg,
+                            sub_pat,
+                            sub_new,
+                        })
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                }
             }
 
             // we only need to unwrap some expressions, leave the rest as is
