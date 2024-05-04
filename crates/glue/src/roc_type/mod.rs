@@ -14,7 +14,7 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::incorrect_partial_ord_impl_on_ord_type)]
+#![allow(clippy::non_canonical_partial_ord_impl)]
 
 #[cfg(any(
     target_arch = "arm",

@@ -12,7 +12,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocStr, I128, U128};
 
 #[test]
 fn str_split_empty_delimiter() {
@@ -998,8 +998,8 @@ fn str_to_i128() {
                  Err _ -> 0
                 "#
         ),
-        1,
-        i128
+        I128::from(1),
+        I128
     );
 }
 
@@ -1013,8 +1013,8 @@ fn str_to_u128() {
                  Err _ -> 0
                 "#
         ),
-        1,
-        u128
+        U128::from(1),
+        U128
     );
 }
 

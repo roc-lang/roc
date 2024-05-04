@@ -1,6 +1,4 @@
-interface Action
-    exposes [Action, none, update, map]
-    imports []
+module [Action, none, update, map]
 
 Action state : [None, Update state]
 

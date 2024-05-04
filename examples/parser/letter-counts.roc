@@ -1,16 +1,12 @@
-app "example"
-    packages {
-        cli: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
-        parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5.2/9VrPjwfQQ1QeSL3CfmWr2Pr9DESdDIXy97pwpuq84Ck.tar.br",
-    }
-    imports [
-        cli.Stdout,
-        cli.Stderr,
-        cli.Task,
-        parser.Core.{ Parser, buildPrimitiveParser, many },
-        parser.String.{ parseStr },
-    ]
-    provides [main] to cli
+app [main] {
+    cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
+    parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5.2/9VrPjwfQQ1QeSL3CfmWr2Pr9DESdDIXy97pwpuq84Ck.tar.br",
+}
+
+import cli.Stdout
+import cli.Stderr
+import parser.Core exposing [Parser, buildPrimitiveParser, many]
+import parser.String exposing [parseStr]
 
 main =
     lettersInput = "AAAiBByAABBwBtCCCiAyArBBx"

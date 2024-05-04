@@ -1,44 +1,18 @@
 ## THIS MODULE IS DEPRECATED AND CURRENTLY IN THE PROCESS OF BEING REMOVED
 ## FROM STD LIBRARY
-interface TotallyNotJson
-    exposes [
-        Json,
-        json,
-        jsonWithOptions,
-    ]
-    imports [
-        List,
-        Str,
-        Result.{ Result },
-        Encode,
-        Encode.{
-            Encoder,
-            EncoderFormatting,
-            appendWith,
-        },
-        Decode,
-        Decode.{
-            DecoderFormatting,
-            DecodeResult,
-        },
-        Num.{
-            U8,
-            U16,
-            U32,
-            U64,
-            U128,
-            I8,
-            I16,
-            I32,
-            I64,
-            I128,
-            F32,
-            F64,
-            Dec,
-        },
-        Bool.{ Bool, Eq },
-        Result,
-    ]
+module [
+    Json,
+    json,
+    jsonWithOptions,
+]
+
+import List
+import Str
+import Result
+import Encode exposing [EncoderFormatting, appendWith]
+import Decode exposing [DecoderFormatting, DecodeResult]
+import Num exposing [U8, U16, U64, F32, F64, Dec]
+import Bool exposing [Bool]
 
 ## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.

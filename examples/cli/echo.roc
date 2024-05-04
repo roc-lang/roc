@@ -1,7 +1,8 @@
-app "echo"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }]
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+import pf.Stdin
+import pf.Stdout
+import pf.Task exposing [Task]
 
 main =
     _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")

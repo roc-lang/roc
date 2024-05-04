@@ -1,37 +1,35 @@
-interface Set
-    exposes [
-        Set,
-        empty,
-        withCapacity,
-        reserve,
-        releaseExcessCapacity,
-        single,
-        walk,
-        walkUntil,
-        keepIf,
-        dropIf,
-        insert,
-        len,
-        isEmpty,
-        capacity,
-        remove,
-        contains,
-        toList,
-        fromList,
-        union,
-        intersection,
-        difference,
-        map,
-        joinMap,
-    ]
-    imports [
-        List,
-        Bool.{ Bool, Eq },
-        Dict.{ Dict },
-        Num.{ U64 },
-        Hash.{ Hash, Hasher },
-        Inspect.{ Inspect, Inspector, InspectFormatter },
-    ]
+module [
+    Set,
+    empty,
+    withCapacity,
+    reserve,
+    releaseExcessCapacity,
+    single,
+    walk,
+    walkUntil,
+    keepIf,
+    dropIf,
+    insert,
+    len,
+    isEmpty,
+    capacity,
+    remove,
+    contains,
+    toList,
+    fromList,
+    union,
+    intersection,
+    difference,
+    map,
+    joinMap,
+]
+
+import List
+import Bool exposing [Bool, Eq]
+import Dict
+import Num exposing [U64]
+import Hash exposing [Hash, Hasher]
+import Inspect exposing [Inspect, Inspector, InspectFormatter]
 
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering

@@ -225,7 +225,7 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
 
             // Any suffixed arguments will be innermost, therefore we unwrap those first
             let local_args = arena.alloc_slice_copy(apply_args);
-            for (_, arg) in local_args.iter_mut().enumerate() {
+            for arg in local_args.iter_mut() {
                 match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
                     Ok(new_arg) => {
                         *arg = new_arg;
@@ -562,7 +562,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                 };
 
                 let maybe_suffixed_value_def = match current_value_def {
-                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) => None,
+                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
                     AnnotatedBody { body_pattern, body_expr, .. } => Some((body_pattern, body_expr)),
                     Body (def_pattern, def_expr, .. ) => Some((def_pattern, def_expr)),
                 };

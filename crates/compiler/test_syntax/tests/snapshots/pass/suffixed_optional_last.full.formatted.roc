@@ -1,9 +1,6 @@
-app ""
-    packages {
-        cli: "",
-    }
-    imports []
-    provides [main] to cli
+app [main] {
+    cli: platform "",
+}
 
 main =
     "jq --version"

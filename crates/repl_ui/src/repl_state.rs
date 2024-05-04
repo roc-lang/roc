@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+use std::{fs, io};
+
 use bumpalo::Bump;
 use roc_collections::MutSet;
 use roc_load::MonomorphizedModule;
-use roc_parse::ast::{Expr, Pattern, TypeDef, TypeHeader, ValueDef};
+use roc_parse::ast::{Expr, Pattern, StrLiteral, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
 use roc_parse::parser::Parser;
 use roc_parse::parser::{EClosure, EExpr, EPattern};
@@ -14,9 +17,9 @@ use roc_reporting::report::Palette;
 use roc_target::Target;
 
 #[derive(Debug, Clone, PartialEq)]
-struct PastDef {
-    ident: String,
-    src: String,
+enum PastDef {
+    Def { ident: String, src: String },
+    Import(String),
 }
 
 pub struct ReplState {
@@ -39,6 +42,10 @@ pub enum ReplAction<'a> {
     },
     Exit,
     Help,
+    FileProblem {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
     Nothing,
 }
 
@@ -134,6 +141,49 @@ impl ReplState {
                     ValueDef::ExpectFx { .. } => {
                         todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                     }
+                    ValueDef::ModuleImport(import) => match import.name.value.package {
+                        Some(_) => {
+                            todo!("handle importing a module from a package")
+                        }
+                        None => {
+                            let mut filename = PathBuf::new();
+
+                            for part in import.name.value.name.parts() {
+                                filename.push(part);
+                            }
+
+                            filename.set_extension("roc");
+
+                            // Check we can read the file before we add it to past defs.
+                            // If we didn't do this, the bad import would remain in past_defs
+                            // and we'd report it on every subsequent evaluation.
+                            if let Err(err) = fs::metadata(&filename) {
+                                return ReplAction::FileProblem {
+                                    filename,
+                                    error: err.kind(),
+                                };
+                            }
+
+                            self.past_defs.push(PastDef::Import(line.to_string()));
+
+                            return ReplAction::Nothing;
+                        }
+                    },
+                    ValueDef::IngestedFileImport(file) => {
+                        if let StrLiteral::PlainLine(path) = file.path.value {
+                            let filename = PathBuf::from(path);
+                            if let Err(err) = fs::metadata(&filename) {
+                                return ReplAction::FileProblem {
+                                    filename,
+                                    error: err.kind(),
+                                };
+                            }
+                        }
+
+                        self.past_defs.push(PastDef::Import(line.to_string()));
+
+                        return ReplAction::Nothing;
+                    }
                     ValueDef::Stmt(_) => todo!(),
                 }
             }
@@ -172,7 +222,10 @@ impl ReplState {
 
         let (opt_mono, problems) = compile_to_mono(
             arena,
-            self.past_defs.iter().map(|def| def.src.as_str()),
+            self.past_defs.iter().map(|past_def| match past_def {
+                PastDef::Def { ident: _, src } => src.as_str(),
+                PastDef::Import(src) => src.as_str(),
+            }),
             src,
             target,
             palette,
@@ -190,7 +243,7 @@ impl ReplState {
 
         existing_idents.insert(ident.clone());
 
-        self.past_defs.push(PastDef { ident, src });
+        self.past_defs.push(PastDef::Def { ident, src });
     }
 }
 

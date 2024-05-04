@@ -1,11 +1,8 @@
-app "desugar-bang"
-    packages {
-        cli: "../basic-cli/platform/main.roc",
-    }
-    imports [
-        cli.Stdout,
-    ]
-    provides [main] to cli
+app [main] {
+    cli: "../basic-cli/platform/main.roc",
+}
+
+import cli.Stdout
 
 main =
     # is this a valid statement?

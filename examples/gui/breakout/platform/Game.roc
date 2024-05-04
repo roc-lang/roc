@@ -1,6 +1,4 @@
-interface Game
-    exposes [Bounds, Elem, Event]
-    imports []
+module [Bounds, Elem, Event]
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }
 

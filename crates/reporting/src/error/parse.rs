@@ -3621,7 +3621,7 @@ fn to_exposes_report<'a>(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
-                    .parser_suggestion("exposes [Animal, default, tame]")
+                    .parser_suggestion("[Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3646,7 +3646,7 @@ fn to_exposes_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("exposes [Animal, default, tame]")
+                    .parser_suggestion("[Animal, default, tame]")
                     .indent(4),
             ]);
 

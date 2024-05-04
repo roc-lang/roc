@@ -7,9 +7,8 @@ mod test_fmt {
     use roc_fmt::def::fmt_defs;
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
-    use roc_parse::ast::Module;
-    use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::Parser;
+    use roc_parse::ast::{Defs, Module};
+    use roc_parse::module::{self, parse_module_defs};
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
@@ -39,8 +38,8 @@ mod test_fmt {
     ) {
         fmt_module(buf, module);
 
-        match module_defs().parse(arena, state, 0) {
-            Ok((_, loc_defs, _)) => {
+        match parse_module_defs(arena, state, Defs::default()) {
+            Ok(loc_defs) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
             Err(error) => panic!(
@@ -4769,10 +4768,10 @@ mod test_fmt {
     // MODULES
 
     #[test]
-    fn single_line_interface() {
+    fn single_line_module() {
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []"
+                module []"
         ));
     }
 
@@ -4782,12 +4781,14 @@ mod test_fmt {
         module_formats_to(
             indoc!(
                 r"
-            interface Foo exposes [] imports []
+            module []
+
             a = 42 # Yay greetings"
             ),
             indoc!(
                 r"
-            interface Foo exposes [] imports []
+            module []
+
             a = 42 # Yay greetings
             "
             ),
@@ -4795,57 +4796,77 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_interface() {
+    fn module_exposing() {
         module_formats_same(indoc!(
             r"
-                interface Foo
-                    exposes []
-                    imports []"
+                module [Bar, Baz, a, b]"
         ));
     }
 
     #[test]
-    fn interface_exposing() {
+    fn module_exposing_multiline() {
         module_formats_same(indoc!(
             r"
-                interface Foo
-                    exposes [Bar, Baz, a, b]
-                    imports []"
+                module [
+                    Stuff,
+                    Things,
+                    somethingElse,
+                ]
+
+                import Blah
+                import Baz exposing [stuff, things]"
         ));
     }
 
     #[test]
-    fn interface_importing() {
-        module_formats_same(indoc!(
-            r"
-                interface Foo
-                    exposes [Bar, Baz, a, b]
-                    imports [Blah, Thing.{ foo, bar }, Stuff]"
-        ));
+    fn old_style_app_header_is_upgraded() {
+        module_formats_to(
+            indoc!(
+                "
+                app \"test\"
+                    packages {
+                        pf: \"platform/main.roc\"
+                    }
+                    provides [main] to pf
+                "
+            ),
+            indoc!(
+                "
+                app [main] {
+                    pf: platform \"platform/main.roc\",
+                }
+                "
+            ),
+        );
     }
 
     #[test]
-    fn multi_line_interface() {
-        module_formats_same(indoc!(
-            r"
-                interface Foo
-                    exposes [
-                        Stuff,
-                        Things,
-                        somethingElse,
-                    ]
-                    imports [
-                        Blah,
-                        Baz.{ stuff, things },
-                    ]"
-        ));
+    fn old_style_package_header_is_upgraded() {
+        module_formats_to(
+            indoc!(
+                "
+                package \"csv\"
+                    exposes [Csv]
+                    packages {
+                        parser: \"parser/main.roc\"
+                    }
+                "
+            ),
+            indoc!(
+                "
+                package [Csv] {
+                    parser: \"parser/main.roc\",
+                }
+                "
+            ),
+        );
     }
 
     #[test]
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform/main.roc" } imports [] provides [main] to pf"#
+                app [main] { pf: platform "platform/main.roc" }"#
         ));
     }
 
@@ -4867,9 +4888,7 @@ mod test_fmt {
             &format!(
                 indoc!(
                     r#"
-                    interface Foo
-                        exposes []
-                        imports []
+                    module []
 
                     # comment 1{space}
                     def = "" # comment 2{space}
@@ -4880,9 +4899,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                    interface Foo
-                        exposes []
-                        imports []
+                    module []
 
                     # comment 1
                     def = "" # comment 2
@@ -5701,7 +5718,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []
+                module []
 
                 expect x == y
 
@@ -5728,7 +5745,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []
+                module []
 
                 expect
                     foo bar
@@ -5832,7 +5849,7 @@ mod test_fmt {
     fn ability_member_doc_comments() {
         module_formats_same(indoc!(
             r"
-            interface Foo exposes [] imports []
+            module []
 
             A implements
                 ## This is member ab
@@ -5851,16 +5868,14 @@ mod test_fmt {
         module_formats_same(indoc!(
             r"
             # hello world
-            interface Foo
-                exposes []
-                imports []
+            module []
             "
         ));
 
         module_formats_same(indoc!(
             r#"
             # hello world
-            app "test" packages {} imports [] provides [] to "./platform"
+            app [] { pf: platform "./platform" }
             "#
         ));
 
@@ -5874,6 +5889,17 @@ mod test_fmt {
                 imports []
                 provides [mainForHost]
             "#
+        ));
+    }
+
+    #[test]
+    fn comments_before_exposes_preserved() {
+        module_formats_same(indoc!(
+            r"
+            module
+                # comment
+                [a, b]
+            "
         ));
     }
 

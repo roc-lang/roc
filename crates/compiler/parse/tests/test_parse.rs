@@ -22,8 +22,8 @@ mod test_parse {
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
     use roc_parse::ast::{CommentOrNewline, StrLiteral::*};
-    use roc_parse::module::module_defs;
-    use roc_parse::parser::{Parser, SyntaxError};
+    use roc_parse::module::parse_module_defs;
+    use roc_parse::parser::SyntaxError;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Loc, Region};
@@ -345,9 +345,7 @@ mod test_parse {
                     List.map list isTest
             "
         );
-        let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()), 0)
-            .map(|tuple| tuple.1);
+        let actual = parse_module_defs(&arena, State::new(src.as_bytes()), ast::Defs::default());
 
         // It should occur twice in the debug output - once for the pattern,
         // and then again for the lookup.
@@ -371,13 +369,12 @@ mod test_parse {
         );
 
         let state = State::new(src.as_bytes());
-        let parser = module_defs();
-        let parsed = parser.parse(arena, state, 0);
+        let parsed = parse_module_defs(arena, state, ast::Defs::default());
         match parsed {
-            Ok((_, _, _state)) => {
+            Ok(_) => {
                 // dbg!(_state);
             }
-            Err((_, _fail)) => {
+            Err(_) => {
                 // dbg!(_fail, _state);
                 panic!("Failed to parse!");
             }

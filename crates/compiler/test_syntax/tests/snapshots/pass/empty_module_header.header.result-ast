@@ -1,0 +1,10 @@
+Module {
+    comments: [],
+    header: Module(
+        ModuleHeader {
+            before_exposes: [],
+            exposes: [],
+            interface_imports: None,
+        },
+    ),
+}

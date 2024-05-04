@@ -3682,7 +3682,7 @@ fn constraint_recursive_function(
                     signature_closure_type,
                     ret_type,
                 ),
-                _ => todo!("TODO {:?}", (loc_symbol, &signature)),
+                _ => todo!("TODO {:?}", (loc_symbol, types[signature])),
             };
 
             let region = loc_function_def.region;

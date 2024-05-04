@@ -1,0 +1,63 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-33,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            IngestedFileImport(
+                IngestedFileImport {
+                    before_path: [],
+                    path: @7-19 PlainLine(
+                        "users.json",
+                    ),
+                    name: KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @23-33 TypedIdent {
+                            ident: @23-27 "data",
+                            spaces_before_colon: [],
+                            ann: @30-33 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+    },
+    @35-49 SpaceBefore(
+        Apply(
+            @35-44 Var {
+                module_name: "",
+                ident: "parseJson",
+            },
+            [
+                @45-49 Var {
+                    module_name: "",
+                    ident: "data",
+                },
+            ],
+            Space,
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

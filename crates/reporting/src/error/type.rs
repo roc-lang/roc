@@ -2999,14 +2999,14 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
                 }
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
@@ -3019,7 +3019,7 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -3027,7 +3027,7 @@ fn to_diff<'b>(
 
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -4360,7 +4360,7 @@ fn type_problem_to_pretty<'b>(
         (FieldTypo(typo, possibilities), _) => {
             let suggestions = suggest::sort(typo.as_str(), possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let typo_str = format!("{typo}");
@@ -4412,7 +4412,7 @@ fn type_problem_to_pretty<'b>(
             let typo_str = format!("{}", typo.as_ident_str());
             let suggestions = suggest::sort(&typo_str, possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let nearest_str = format!("{nearest}");

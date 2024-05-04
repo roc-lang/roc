@@ -1,0 +1,72 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+    ],
+    regions: [
+        @0-23,
+        @24-50,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @7-17 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "JsonEncode",
+                    ),
+                },
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @21-23 ImportAlias(
+                            "JE",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @31-43 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Bytes.Decode",
+                    ),
+                },
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @48-50 ImportAlias(
+                            "BD",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
+    ],
+}

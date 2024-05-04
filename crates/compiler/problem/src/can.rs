@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::{ModuleId, ScopeModuleSource, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
@@ -40,6 +40,20 @@ pub enum Problem {
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
     UnknownGeneratesWith(Loc<Ident>),
+    ImportNameConflict {
+        name: ModuleName,
+        is_alias: bool,
+        new_module_id: ModuleId,
+        new_import_region: Region,
+        existing_import: ScopeModuleSource,
+    },
+    ExplicitBuiltinImport(ModuleId, Region),
+    ExplicitBuiltinTypeImport(Symbol, Region),
+    ImportShadowsSymbol {
+        region: Region,
+        new_symbol: Symbol,
+        existing_symbol_region: Region,
+    },
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -221,6 +235,10 @@ impl Problem {
             Problem::UnusedDef(_, _) => Warning,
             Problem::UnusedImport(_, _) => Warning,
             Problem::UnusedModuleImport(_, _) => Warning,
+            Problem::ImportNameConflict { .. } => RuntimeError,
+            Problem::ExplicitBuiltinImport(_, _) => Warning,
+            Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
+            Problem::ImportShadowsSymbol { .. } => RuntimeError,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
@@ -295,6 +313,13 @@ impl Problem {
             }
             | Problem::UnusedImport(_, region)
             | Problem::UnusedModuleImport(_, region)
+            | Problem::ImportNameConflict {
+                new_import_region: region,
+                ..
+            }
+            | Problem::ExplicitBuiltinImport(_, region)
+            | Problem::ExplicitBuiltinTypeImport(_, region)
+            | Problem::ImportShadowsSymbol { region, .. }
             | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
@@ -368,6 +393,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
             | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
             | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -576,6 +602,11 @@ pub enum RuntimeError {
         /// If unsure, this should be set to `false`
         module_exists: bool,
     },
+    ReadIngestedFileError {
+        filename: PathBuf,
+        error: io::ErrorKind,
+        region: Region,
+    },
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
     MalformedTypeName(Box<str>, Region),
@@ -659,7 +690,8 @@ impl RuntimeError {
             | RuntimeError::InvalidHexadecimal(region)
             | RuntimeError::MultipleRecordBuilders(region)
             | RuntimeError::UnappliedRecordBuilder(region)
-            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
+            | RuntimeError::ReadIngestedFileError { region, .. } => *region,
+            RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
             RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,

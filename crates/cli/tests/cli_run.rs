@@ -944,24 +944,11 @@ mod cli_run {
             &[],
             &[],
             &[],
-            indoc!(
-                r#"
-                This roc file can print its own source code. The source is:
-
-                app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-                    imports [
-                        pf.Stdout,
-                        pf.Task,
-                        "ingested-file.roc" as ownCode : Str,
-                    ]
-                    provides [main] to pf
-
-                main =
-                    Stdout.line! "\nThis roc file can print its own source code. The source is:\n\n$(ownCode)"
-
-                "#
-            ),
+            format!(
+                "\nThis roc file can print its own source code. The source is:\n\n{}\n",
+                include_str!("../../../examples/cli/ingested-file.roc")
+            )
+            .as_str(),
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1445,7 +1432,7 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^
@@ -1489,7 +1476,7 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^
