@@ -3905,41 +3905,23 @@ fn f64_from_parts() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn nan_f32() {
-    assert_evals_to!(
-        r"Num.nanF32",
-        true,
-        f32,
-        |f: f32| f.is_nan()
-    );
+    assert_evals_to!(r"Num.nanF32", true, f32, |f: f32| f.is_nan());
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn nan_f64() {
-    assert_evals_to!(
-        r"Num.nanF64",
-        true,
-        f64,
-        |f: f64| f.is_nan()
-    );
+    assert_evals_to!(r"Num.nanF64", true, f64, |f: f64| f.is_nan());
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn infinity_f32() {
-    assert_evals_to!(
-        r"Num.infinityF32",
-        f32::INFINITY,
-        f32
-    );
+    assert_evals_to!(r"Num.infinityF32", f32::INFINITY, f32);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn infinity_f64() {
-    assert_evals_to!(
-        r"Num.infinityF64",
-        f64::INFINITY,
-        f64
-    );
+    assert_evals_to!(r"Num.infinityF64", f64::INFINITY, f64);
 }
