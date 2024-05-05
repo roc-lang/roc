@@ -6,8 +6,8 @@ use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT}
 use crate::Buf;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, Spaces, StrLiteral,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, Pattern, Spaces,
+    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::header::Keyword;
 use roc_region::all::Loc;
@@ -257,8 +257,9 @@ impl<'a> Formattable for IngestedFileImport<'a> {
             before_path,
             path: _,
             name,
+            annotation,
         } = self;
-        !before_path.is_empty() || name.is_multiline()
+        !before_path.is_empty() || name.keyword.is_multiline() || annotation.is_multiline()
     }
 
     fn format_with_options(
@@ -272,6 +273,7 @@ impl<'a> Formattable for IngestedFileImport<'a> {
             before_path,
             path,
             name,
+            annotation,
         } = self;
 
         buf.indent(indent);
@@ -281,7 +283,11 @@ impl<'a> Formattable for IngestedFileImport<'a> {
 
         fmt_default_spaces(buf, before_path, indent);
         fmt_str_literal(buf, path.value, indent);
-        name.format(buf, indent);
+
+        name.keyword.format(buf, indent);
+        buf.push_str(&name.item.value);
+
+        annotation.format(buf, indent);
     }
 }
 
@@ -358,6 +364,34 @@ impl Formattable for ImportExposingKeyword {
     ) {
         buf.indent(indent);
         buf.push_str(ImportExposingKeyword::KEYWORD);
+    }
+}
+
+impl<'a> Formattable for IngestedFileAnnotation<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_colon,
+            annotation,
+        } = self;
+        !before_colon.is_empty() || annotation.is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_colon,
+            annotation,
+        } = self;
+
+        fmt_default_spaces(buf, before_colon, indent);
+        buf.push_str(":");
+        buf.spaces(1);
+        annotation.format(buf, indent);
     }
 }
 
