@@ -670,6 +670,9 @@ fn to_expr_report<'a>(
         EExpr::Dbg(e_expect, _position) => {
             to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
         }
+        EExpr::Import(e_import, position) => {
+            to_import_report(alloc, lines, filename, e_import, *position)
+        }
         EExpr::TrailingOperator(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
@@ -1436,6 +1439,21 @@ fn to_dbg_or_expect_report<'a>(
         }
 
         roc_parse::parser::EExpect::IndentCondition(_) => todo!(),
+    }
+}
+
+fn to_import_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EImport<'a>,
+    _start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EImport::*;
+
+    match parse_problem {
+        Annotation(ann_problem, pos) => to_type_report(alloc, lines, filename, ann_problem, *pos),
+        _ => todo!(),
     }
 }
 

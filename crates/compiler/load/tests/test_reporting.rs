@@ -4913,6 +4913,25 @@ mod test_reporting {
     Note: I may be confused by indentation
     "
     );
+    
+    test_report!(
+        ingested_file_import_ann_syntax_err,
+        indoc!(
+            r#"
+            import "example.json" as example : List U8, U32
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TYPE in tmp/ingested_file_import_ann_syntax_err/Test.roc ─────────
+
+    I am partway through parsing a type, but I got stuck here:
+
+    4│      import "example.json" as example : List U8, U32
+                                                           ^
+
+    Note: I may be confused by indentation
+    "###
+    );
 
     // TODO could do better by pointing out we're parsing a function type
     test_report!(
