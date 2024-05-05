@@ -1050,7 +1050,7 @@ fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>>
                 string_literal::parse_str_literal()
             )),
             name: import_ingested_file_as(),
-            annotation: optional(backtrackable(import_ingested_file_annotation()))
+            annotation: optional(import_ingested_file_annotation())
         }),
         ValueDef::IngestedFileImport
     )
@@ -1077,7 +1077,10 @@ fn import_ingested_file_as<'a>(
 fn import_ingested_file_annotation<'a>() -> impl Parser<'a, IngestedFileAnnotation<'a>, EImport<'a>>
 {
     record!(IngestedFileAnnotation {
-        before_colon: skip_second!(space0_e(EImport::IndentColon), byte(b':', EImport::Colon)),
+        before_colon: skip_second!(
+            backtrackable(space0_e(EImport::IndentColon)),
+            byte(b':', EImport::Colon)
+        ),
         annotation: specialize_err(EImport::Annotation, type_annotation::located(false))
     })
 }
