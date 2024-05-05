@@ -285,7 +285,7 @@ impl<'a> Formattable for IngestedFileImport<'a> {
         fmt_str_literal(buf, path.value, indent);
 
         name.keyword.format(buf, indent);
-        buf.push_str(&name.item.value);
+        buf.push_str(name.item.value);
 
         annotation.format(buf, indent);
     }
