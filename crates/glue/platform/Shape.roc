@@ -1,6 +1,6 @@
-interface Shape
-    exposes [Shape, RocNum, RocTagUnion, RocStructFields, RocFn, RocSingleTagPayload]
-    imports [TypeId.{ TypeId }]
+module [Shape, RocNum, RocTagUnion, RocStructFields, RocFn, RocSingleTagPayload]
+
+import TypeId exposing [TypeId]
 
 Shape : [
     RocStr,
