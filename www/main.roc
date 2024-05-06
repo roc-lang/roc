@@ -9,12 +9,21 @@ app "roc-website"
 
 pageData =
     Dict.empty {}
+    |> Dict.insert "abilities.html" { title: "Abilities in Roc", description: "Learn about the concept of abilities in the Roc programming language" }
+    |> Dict.insert "bdfn.html" { title: "Roc's Benevolent Dictator For Now", description: "Learn about Roc's governance model" }
     |> Dict.insert "community.html" { title: "Roc Community", description: "Connect with the Roc programming language community" }
     |> Dict.insert "docs.html" { title: "Roc Docs", description: "Documentation for the Roc programming language, including builtins" }
+    |> Dict.insert "donate.html" { title: "Donate to Roc", description: "Support the Roc programming language by donating or sponsoring" }
+    |> Dict.insert "faq.html" { title: "Frequently Asked Questions about Roc", description: "Frequently asked questions about the Roc programming language" }
+    |> Dict.insert "fast.html" { title: "Roc is Fast", description: "What does it mean that the Roc programming language is fast?" }
+    |> Dict.insert "friendly.html" { title: "Roc is Friendly", description: "What does it mean that the Roc programming language is friendly?" }
+    |> Dict.insert "functional.html" { title: "Roc is Functional", description: "What does it mean that the Roc programming language is functional?" }
     |> Dict.insert "index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language" }
     |> Dict.insert "install.html" { title: "Install Roc", description: "Install the Roc programming language" }
-    |> Dict.insert "donate.html" { title: "Donate to Roc", description: "Support the Roc programming language by donating or sponsoring" }
+    |> Dict.insert "plans.html" { title: "Planned Changes in Roc", description: "Planned changes in the Roc programming language" }
+    |> Dict.insert "platforms.html" { title: "Roc's Platforms and Applications", description: "Learn about the platforms and applications architecture" }
     |> Dict.insert "tutorial.html" { title: "Roc Tutorial", description: "Learn the Roc programming language" }
+    |> Dict.insert "repl/index.html" { title: "Roc REPL", description: "Try the Roc programming language in an online REPL" }
 
 getPage : Str -> { title : Str, description : Str }
 getPage = \current ->
