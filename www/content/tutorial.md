@@ -461,7 +461,7 @@ Like records, tuples are fixed-length and can't be iterated over. Also, they can
 
 ### [Accessing values in tuples](#tuple-access) {#tuple-access}
 
-Just like how there are two ways to access a record's fields (namely, the `.` operator and [record destructuring(#record-destructuring)), there are also two similar ways to access tuple fields:
+Just like how there are two ways to access a record's fields (namely, the `.` operator and [record destructuring](#record-destructuring)), there are also two similar ways to access tuple fields:
 
 ```roc
 # tuple field access
@@ -1285,7 +1285,7 @@ the type `Str`. This means you can choose to omit the `title`, `description`, or
 when calling the function…but if you provide them, they must have the type `Str`.
 
 This is also the type that would have been inferred for `table` if it had no annotation.
-Roc's compiler can tell from the destructuring syntax `title ? ""` that `title` is a field with a default,
+Roc's compiler can tell from the destructuring syntax `title ? "oak"` that `title` is a field with a default,
 and that it has the type `Str`.
 
 Destructuring is the only way to implement a record with default value fields! For example,
@@ -1794,7 +1794,7 @@ Task.await (Stdout.line "Type in something and press Enter:") \_ ->
         Stdout.line "Your input was: $(input)"
 ```
 
-Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the programa does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
+Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
 If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylsitic convention in the Roc ecosystem to use `!` instead.
 
