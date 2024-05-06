@@ -40,6 +40,7 @@
     --header-link-hover: #222;
     --h1-color: #8055e4;
     --tutorial-h3-color: #8c5ce3; /* Slightly darker than --primary-1, which looks washed-out in <h3>s */
+    --repl-prompt: #0064ff;
 }
 
 html {
@@ -1573,4 +1574,9 @@ code .dim {
 #gh-link-text {
     margin-left: 8px;
     vertical-align: middle;
+}
+
+.repl-prompt:before {
+    color: var(--repl-prompt);
+    content: "» ";
 }
