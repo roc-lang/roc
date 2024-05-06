@@ -1,6 +1,4 @@
-interface TypeId
-    exposes [TypeId, typeIDfromU64, typeIDtoU64]
-    imports []
+module [TypeId, typeIDfromU64, typeIDtoU64]
 
 TypeId := U64 implements [Eq, Hash, Inspect, Encoding]
 
