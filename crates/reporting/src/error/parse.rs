@@ -1452,7 +1452,9 @@ fn to_import_report<'a>(
     use roc_parse::parser::EImport::*;
 
     match parse_problem {
-        Annotation(ann_problem, pos) => to_type_report(alloc, lines, filename, ann_problem, *pos),
+        Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
+
+        Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
         _ => todo!(),
     }
 }
