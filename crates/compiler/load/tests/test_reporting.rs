@@ -5025,6 +5025,26 @@ mod test_reporting {
     "###);
 
     test_report!(
+        unfinished_import_exposing_name,
+        indoc!(
+            r"
+            import svg.Path exposing [3
+            "
+        ),
+        @r###"
+    ── WEIRD EXPOSING in tmp/unfinished_import_exposing_name/Test.roc ──────────────
+
+    I'm partway through parsing an exposing list, but I got stuck here:
+
+    4│      import svg.Path exposing [3
+                                      ^
+
+    I was expecting a type, value, or function name next, like:
+
+        import Svg exposing [Path, arc, rx]
+    "###);
+
+    test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
             r#"

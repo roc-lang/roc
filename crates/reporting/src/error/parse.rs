@@ -1545,8 +1545,27 @@ fn to_import_report<'a>(
                 alloc.reflow(" next."),
             ]),
         ),
-        ExposedName(_) => todo!(),
-        ExposingListEnd(_) => todo!(),
+        ExposedName(pos) | ExposingListEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I'm partway through parsing an exposing list, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"I was expecting a type, value, or function name next, like:"),
+                alloc
+                    .parser_suggestion("import Svg exposing [Path, arc, rx]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSING".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         IndentIngestedName(_) => todo!(),
         IngestedName(_) => todo!(),
         IndentAnnotation(_) => todo!(),
