@@ -296,6 +296,9 @@ main =
                 &file_path.as_path().to_str().unwrap()
             )
         );
+        //ensure tmp files are cleaned up
+        let result = dir.close();
+        assert!(result.is_ok(), "Failed to delete temp directory");
     }
 
     #[test]
@@ -308,6 +311,9 @@ main =
         assert!(result.is_err());
         let error_message = result.unwrap_err();
         assert!(error_message.contains("test1.roc") && error_message.contains("test2.roc"));
+        //ensure tmp files are cleaned up
+        let result = dir.close();
+        assert!(result.is_ok(), "Failed to delete temp directory");
     }
 
     #[test]
@@ -317,6 +323,9 @@ main =
 
         let result = format_files(vec![file_path], FormatMode::CheckOnly);
         assert!(result.is_ok());
+        //ensure tmp files are cleaned up
+        let result = dir.close();
+        assert!(result.is_ok(), "Failed to delete temp directory");
     }
 
     #[test]
@@ -334,5 +343,8 @@ main =
         let error_message = result.unwrap_err();
         assert!(error_message.contains("test1.roc") && error_message.contains("test2.roc"));
         assert!(!error_message.contains("formatted.roc"));
+        //ensure tmp files are cleaned up
+        let result = dir.close();
+        assert!(result.is_ok(), "Failed to delete temp directory");
     }
 }
