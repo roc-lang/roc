@@ -1531,16 +1531,29 @@ fn to_import_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
-        Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
-        ExposingListStart(_) => todo!(),
+        ExposingListStart(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat([
+                alloc.reflow("I just saw the "),
+                alloc.keyword("exposing"),
+                alloc.reflow(" keyword, so I was expecting to see "),
+                alloc.keyword("["),
+                alloc.reflow(" next."),
+            ]),
+        ),
         ExposedName(_) => todo!(),
         ExposingListEnd(_) => todo!(),
         IndentIngestedName(_) => todo!(),
         IngestedName(_) => todo!(),
+        IndentAnnotation(_) => todo!(),
+        Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
         IndentColon(_) => todo!(),
         Colon(_) => todo!(),
-        IndentAnnotation(_) => todo!(),
+        Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
     }
 }
 

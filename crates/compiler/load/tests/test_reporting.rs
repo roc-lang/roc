@@ -5007,6 +5007,24 @@ mod test_reporting {
     );
 
     test_report!(
+        unfinished_import_exposing,
+        indoc!(
+            r"
+            import svg.Path exposing
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_exposing/Test.roc ────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path exposing
+                                    ^
+
+    I just saw the `exposing` keyword, so I was expecting to see `[` next.
+    "###);
+
+    test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
             r#"
