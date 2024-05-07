@@ -1579,10 +1579,20 @@ fn to_import_report<'a>(
                     .indent(4),
             ]),
         ),
-        IndentAnnotation(_) => todo!(),
         Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
-        IndentColon(_) => todo!(),
-        Colon(_) => todo!(),
+        IndentAnnotation(pos) | IndentColon(pos) | Colon(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see an annotation next, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
         Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
     }
 }
