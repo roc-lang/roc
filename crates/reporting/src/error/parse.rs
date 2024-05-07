@@ -1502,10 +1502,21 @@ fn to_import_report<'a>(
                 ]),
             )
         }
+        IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat([
+                alloc.reflow("I just saw the "),
+                alloc.keyword("as"),
+                alloc.reflow(" keyword, so I was expecting to see an alias next."),
+            ]),
+        ),
+
         Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
         Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
-        IndentAlias(_) => todo!(),
-        Alias(_) => todo!(),
         ExposingListStart(_) => todo!(),
         ExposedName(_) => todo!(),
         ExposingListEnd(_) => todo!(),

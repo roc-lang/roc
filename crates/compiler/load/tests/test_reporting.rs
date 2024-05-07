@@ -4969,6 +4969,25 @@ mod test_reporting {
     );
 
     test_report!(
+        unfinished_import_alias,
+        indoc!(
+            r"
+            import svg.Path as
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_alias/Test.roc ───────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path as
+                              ^
+
+    I just saw the `as` keyword, so I was expecting to see an alias next.
+    "###
+    );
+
+    test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
             r#"
