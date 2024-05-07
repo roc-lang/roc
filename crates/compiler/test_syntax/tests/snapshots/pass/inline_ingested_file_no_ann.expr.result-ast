@@ -10,9 +10,12 @@ Defs(
             Slice(start = 0, length = 0),
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice(start = 0, length = 2),
         ],
-        spaces: [],
+        spaces: [
+            Newline,
+            Newline,
+        ],
         type_defs: [],
         value_defs: [
             IngestedFileImport(
@@ -34,23 +37,17 @@ Defs(
             ),
         ],
     },
-    @29-43 SpaceBefore(
-        Apply(
-            @29-38 Var {
-                module_name: "",
-                ident: "parseJson",
-            },
-            [
-                @39-43 Var {
-                    module_name: "",
-                    ident: "data",
-                },
-            ],
-            Space,
-        ),
+    @29-43 Apply(
+        @29-38 Var {
+            module_name: "",
+            ident: "parseJson",
+        },
         [
-            Newline,
-            Newline,
+            @39-43 Var {
+                module_name: "",
+                ident: "data",
+            },
         ],
+        Space,
     ),
 )

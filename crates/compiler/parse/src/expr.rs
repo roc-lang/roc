@@ -969,8 +969,8 @@ fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
         record!(ModuleImport {
             before_name: space0_e(EImport::IndentStart),
             name: loc!(imported_module_name()),
-            alias: optional(backtrackable(import_as())),
-            exposed: optional(backtrackable(import_exposing()))
+            alias: optional(import_as()),
+            exposed: optional(import_exposing())
         }),
         ValueDef::ModuleImport
     )
@@ -2873,11 +2873,28 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
 
 fn import_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let original_pos = state.pos();
+
         let (_, import_def, state) =
             loc!(specialize_err(EExpr::Import, import())).parse(arena, state, min_indent)?;
 
+        let (_, spaces_after_import, state) =
+            space0_e(EExpr::IndentEnd).parse(arena, state, min_indent)?;
+
+        if !spaces_after_import.iter().any(|s| s.is_newline()) {
+            return Err((
+                MadeProgress,
+                EExpr::Import(EImport::EndNewline(state.pos()), original_pos),
+            ));
+        }
+
         let mut defs = Defs::default();
-        defs.push_value_def(import_def.value, import_def.region, &[], &[]);
+        defs.push_value_def(
+            import_def.value,
+            import_def.region,
+            &[],
+            spaces_after_import,
+        );
 
         parse_defs_expr(options, min_indent, defs, arena, state)
     }

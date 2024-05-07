@@ -10,10 +10,10 @@ Defs(
         ],
         space_before: [
             Slice(start = 0, length = 0),
-            Slice(start = 0, length = 1),
+            Slice(start = 1, length = 0),
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice(start = 0, length = 1),
             Slice(start = 1, length = 0),
         ],
         spaces: [
