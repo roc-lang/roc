@@ -1475,14 +1475,37 @@ fn to_import_report<'a>(
                     .indent(4),
             ]),
         ),
+        IndentAs(pos) | As(pos) | IndentExposing(pos) | Exposing(pos) | EndNewline(pos) => {
+            to_unfinished_import_report(
+                alloc,
+                lines,
+                filename,
+                *pos,
+                start,
+                alloc.stack([
+                    alloc.concat([
+                        alloc.reflow("I was expecting to see the "),
+                        alloc.keyword("as"),
+                        alloc.reflow(" keyword, like:"),
+                    ]),
+                    alloc
+                        .parser_suggestion("import svg.Path as SvgPath")
+                        .indent(4),
+                    alloc.concat([
+                        alloc.reflow("Or the "),
+                        alloc.keyword("exposing"),
+                        alloc.reflow(" keyword, like:"),
+                    ]),
+                    alloc
+                        .parser_suggestion("import svg.Path exposing [arc, rx]")
+                        .indent(4),
+                ]),
+            )
+        }
         Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
         Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
-        IndentAs(_) => todo!(),
-        As(_) => todo!(),
         IndentAlias(_) => todo!(),
         Alias(_) => todo!(),
-        IndentExposing(_) => todo!(),
-        Exposing(_) => todo!(),
         ExposingListStart(_) => todo!(),
         ExposedName(_) => todo!(),
         ExposingListEnd(_) => todo!(),

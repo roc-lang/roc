@@ -4944,6 +4944,31 @@ mod test_reporting {
     );
 
     test_report!(
+        unfinished_import_as_or_exposing,
+        indoc!(
+            r"
+            import svg.Path a
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_as_or_exposing/Test.roc ──────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path a
+                            ^
+
+    I was expecting to see the `as` keyword, like:
+
+        import svg.Path as SvgPath
+
+    Or the `exposing` keyword, like:
+
+        import svg.Path exposing [arc, rx]
+    "###
+    );
+
+    test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
             r#"
