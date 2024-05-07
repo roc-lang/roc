@@ -5045,6 +5045,27 @@ mod test_reporting {
     "###);
 
     test_report!(
+        unfinished_ingested_file_name,
+        indoc!(
+            r#"
+            import "example.json" as
+            "#
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_ingested_file_name/Test.roc ─────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import "example.json" as
+                                    ^
+
+    I was expecting to see a name next, like:
+
+        import "users.json" as users : Str
+    "###
+    );
+
+    test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
             r#"

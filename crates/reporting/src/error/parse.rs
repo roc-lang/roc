@@ -1566,8 +1566,19 @@ fn to_import_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        IndentIngestedName(_) => todo!(),
-        IngestedName(_) => todo!(),
+        IndentIngestedName(pos) | IngestedName(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see a name next, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
         IndentAnnotation(_) => todo!(),
         Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
         IndentColon(_) => todo!(),
