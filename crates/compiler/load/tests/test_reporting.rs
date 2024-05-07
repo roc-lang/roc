@@ -4988,6 +4988,25 @@ mod test_reporting {
     );
 
     test_report!(
+        lowercase_import_alias,
+        indoc!(
+            r"
+            import svg.Path as path
+            "
+        ),
+        @r###"
+    ── LOWERCASE ALIAS in tmp/lowercase_import_alias/Test.roc ──────────────────────
+
+    This import is using a lowercase alias:
+
+    4│      import svg.Path as path
+                               ^^^^
+
+    Module names and aliases must start with an uppercase letter.
+    "###
+    );
+
+    test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
             r#"

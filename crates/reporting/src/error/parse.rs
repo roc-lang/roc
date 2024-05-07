@@ -1514,7 +1514,23 @@ fn to_import_report<'a>(
                 alloc.reflow(" keyword, so I was expecting to see an alias next."),
             ]),
         ),
+        LowercaseAlias(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
 
+            let doc = alloc.stack([
+                alloc.reflow(r"This import is using a lowercase alias:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"Module names and aliases must start with an uppercase letter."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "LOWERCASE ALIAS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
         Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
         ExposingListStart(_) => todo!(),

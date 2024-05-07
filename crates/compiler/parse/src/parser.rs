@@ -534,6 +534,7 @@ pub enum EImport<'a> {
     As(Position),
     IndentAlias(Position),
     Alias(Position),
+    LowercaseAlias(Region),
     IndentExposing(Position),
     Exposing(Position),
     ExposingListStart(Position),

@@ -9,8 +9,7 @@ use crate::blankspace::{
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{
-    integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
-    Ident, Suffix,
+    integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident, Suffix,
 };
 use crate::module::module_name_help;
 use crate::parser::{
@@ -997,10 +996,20 @@ fn import_as<'a>(
             EImport::IndentAs,
             EImport::IndentAlias
         ),
-        item: loc!(map!(
-            specialize_err(|_, pos| EImport::Alias(pos), uppercase_ident()),
-            ImportAlias::new
-        ))
+        item: then(
+            specialize_err(|_, pos| EImport::Alias(pos), loc!(unqualified_ident())),
+            |_arena, state, _progress, loc_ident| {
+                match loc_ident.value.chars().next() {
+                    Some(first) if first.is_uppercase() => Ok((
+                        MadeProgress,
+                        loc_ident.map(|ident| ImportAlias::new(ident)),
+                        state,
+                    )),
+                    Some(_) => Err((MadeProgress, EImport::LowercaseAlias(loc_ident.region))),
+                    None => Err((MadeProgress, EImport::Alias(state.pos()))),
+                }
+            }
+        )
     })
 }
 
