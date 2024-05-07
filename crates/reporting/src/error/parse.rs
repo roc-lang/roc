@@ -1447,15 +1447,79 @@ fn to_import_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     parse_problem: &roc_parse::parser::EImport<'a>,
-    _start: Position,
+    start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EImport::*;
 
     match parse_problem {
+        Import(_pos) => unreachable!("another branch would be taken"),
+        IndentStart(pos)
+        | PackageShorthand(pos)
+        | PackageShorthandDot(pos)
+        | ModuleName(pos)
+        | IndentIngestedPath(pos)
+        | IngestedPath(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see a module name, like:"),
+                alloc.parser_suggestion("import BigNum").indent(4),
+                alloc.reflow("Or a package module name, like:"),
+                alloc.parser_suggestion("import pf.Stdout").indent(4),
+                alloc.reflow("Or a file path to ingest, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
         Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
-
         Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
-        _ => todo!(),
+        IndentAs(_) => todo!(),
+        As(_) => todo!(),
+        IndentAlias(_) => todo!(),
+        Alias(_) => todo!(),
+        IndentExposing(_) => todo!(),
+        Exposing(_) => todo!(),
+        ExposingListStart(_) => todo!(),
+        ExposedName(_) => todo!(),
+        ExposingListEnd(_) => todo!(),
+        IndentIngestedName(_) => todo!(),
+        IngestedName(_) => todo!(),
+        IndentColon(_) => todo!(),
+        Colon(_) => todo!(),
+        IndentAnnotation(_) => todo!(),
+    }
+}
+
+fn to_unfinished_import_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    pos: Position,
+    start: Position,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow(r"I was partway through parsing an "),
+            alloc.keyword("import"),
+            alloc.reflow(r", but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED IMPORT".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 

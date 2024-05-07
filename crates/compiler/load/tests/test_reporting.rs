@@ -4913,7 +4913,36 @@ mod test_reporting {
     Note: I may be confused by indentation
     "
     );
-    
+
+    test_report!(
+        unfinished_import,
+        indoc!(
+            r"
+            import [
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import/Test.roc ─────────────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import [
+                   ^
+
+    I was expecting to see a module name, like:
+
+        import BigNum
+
+    Or a package module name, like:
+
+        import pf.Stdout
+
+    Or a file path to ingest, like:
+
+        import "users.json" as users : Str
+    "###
+    );
+
     test_report!(
         ingested_file_import_ann_syntax_err,
         indoc!(
