@@ -176,6 +176,17 @@ impl<'b> Report<'b> {
         }
     }
 
+    /// Render report for the language server, where the window is narrower.
+    pub fn render_ls(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
+        let err_msg = "<buffer is not a utf-8 encoded string>";
+
+        alloc
+            .stack([alloc.text(self.title), self.doc])
+            .1
+            .render_raw(60, &mut CiWrite::new(buf))
+            .expect(err_msg)
+    }
+
     pub fn horizontal_rule(palette: &'b Palette) -> String {
         format!("{}{}", palette.header, "─".repeat(80))
     }
