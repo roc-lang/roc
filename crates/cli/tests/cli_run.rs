@@ -969,6 +969,21 @@ mod cli_run {
             TestCliCommands::Run,
         )
     }
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes_no_ann() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file-bytes-no-ann.roc",
+            &[],
+            &[],
+            &[],
+            "162088\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
 
     #[test]
     #[serial(zig_platform_parser_package_basic_cli_url)]

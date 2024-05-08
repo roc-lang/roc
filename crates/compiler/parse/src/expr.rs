@@ -1,8 +1,8 @@
 use crate::ast::{
     is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, RecordBuilderField, Spaceable,
-    Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, Pattern,
+    RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -1050,17 +1050,15 @@ fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>>
                 string_literal::parse_str_literal()
             )),
             name: import_ingested_file_as(),
+            annotation: optional(import_ingested_file_annotation())
         }),
         ValueDef::IngestedFileImport
     )
 }
 
 #[inline(always)]
-fn import_ingested_file_as<'a>() -> impl Parser<
-    'a,
-    header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
-    EImport<'a>,
-> {
+fn import_ingested_file_as<'a>(
+) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
     record!(header::KeywordItem {
         keyword: module::spaces_around_keyword(
             ImportAsKeyword,
@@ -1068,7 +1066,22 @@ fn import_ingested_file_as<'a>() -> impl Parser<
             EImport::IndentAs,
             EImport::IndentIngestedName
         ),
-        item: specialize_err(EImport::IngestedName, loc!(module::typed_ident()))
+        item: specialize_err(
+            |(), pos| EImport::IngestedName(pos),
+            loc!(lowercase_ident())
+        )
+    })
+}
+
+#[inline(always)]
+fn import_ingested_file_annotation<'a>() -> impl Parser<'a, IngestedFileAnnotation<'a>, EImport<'a>>
+{
+    record!(IngestedFileAnnotation {
+        before_colon: skip_second!(
+            backtrackable(space0_e(EImport::IndentColon)),
+            byte(b':', EImport::Colon)
+        ),
+        annotation: specialize_err(EImport::Annotation, type_annotation::located(false))
     })
 }
 

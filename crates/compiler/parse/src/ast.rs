@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use crate::expr::merge_spaces;
 use crate::header::{
     self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
 };
@@ -162,6 +163,8 @@ impl<'a> Module<'a> {
                         Self::header_import_to_value_def(None, name, exposed, import.region)
                     }
                     header::ImportsEntry::IngestedFile(path, typed_ident) => {
+                        let typed_ident = typed_ident.extract_spaces();
+
                         ValueDef::IngestedFileImport(IngestedFileImport {
                             before_path: &[],
                             path: Loc {
@@ -174,11 +177,16 @@ impl<'a> Module<'a> {
                                     item: ImportAsKeyword,
                                     after: &[],
                                 },
-                                item: Loc {
-                                    value: typed_ident,
-                                    region: import.region,
-                                },
+                                item: typed_ident.item.ident,
                             },
+                            annotation: Some(IngestedFileAnnotation {
+                                before_colon: merge_spaces(
+                                    arena,
+                                    typed_ident.before,
+                                    typed_ident.item.spaces_before_colon,
+                                ),
+                                annotation: typed_ident.item.ann,
+                            }),
                         })
                     }
                 };
@@ -1052,7 +1060,20 @@ pub struct ModuleImport<'a> {
 pub struct IngestedFileImport<'a> {
     pub before_path: &'a [CommentOrNewline<'a>],
     pub path: Loc<StrLiteral<'a>>,
-    pub name: header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
+    pub name: header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>,
+    pub annotation: Option<IngestedFileAnnotation<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileAnnotation<'a> {
+    pub before_colon: &'a [CommentOrNewline<'a>],
+    pub annotation: Loc<TypeAnnotation<'a>>,
+}
+
+impl<'a> Malformed for IngestedFileAnnotation<'a> {
+    fn is_malformed(&self) -> bool {
+        self.annotation.value.is_malformed()
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -2621,7 +2642,8 @@ impl<'a> Malformed for ValueDef<'a> {
                 before_path: _,
                 path,
                 name: _,
-            }) => path.is_malformed(),
+                annotation,
+            }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
         }
     }
