@@ -4914,6 +4914,176 @@ mod test_reporting {
     "
     );
 
+    test_report!(
+        unfinished_import,
+        indoc!(
+            r"
+            import [
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import/Test.roc ─────────────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import [
+                   ^
+
+    I was expecting to see a module name, like:
+
+        import BigNum
+
+    Or a package module name, like:
+
+        import pf.Stdout
+
+    Or a file path to ingest, like:
+
+        import "users.json" as users : Str
+    "###
+    );
+
+    test_report!(
+        unfinished_import_as_or_exposing,
+        indoc!(
+            r"
+            import svg.Path a
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_as_or_exposing/Test.roc ──────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path a
+                            ^
+
+    I was expecting to see the `as` keyword, like:
+
+        import svg.Path as SvgPath
+
+    Or the `exposing` keyword, like:
+
+        import svg.Path exposing [arc, rx]
+    "###
+    );
+
+    test_report!(
+        unfinished_import_alias,
+        indoc!(
+            r"
+            import svg.Path as
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_alias/Test.roc ───────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path as
+                              ^
+
+    I just saw the `as` keyword, so I was expecting to see an alias next.
+    "###
+    );
+
+    test_report!(
+        lowercase_import_alias,
+        indoc!(
+            r"
+            import svg.Path as path
+            "
+        ),
+        @r###"
+    ── LOWERCASE ALIAS in tmp/lowercase_import_alias/Test.roc ──────────────────────
+
+    This import is using a lowercase alias:
+
+    4│      import svg.Path as path
+                               ^^^^
+
+    Module names and aliases must start with an uppercase letter.
+    "###
+    );
+
+    test_report!(
+        unfinished_import_exposing,
+        indoc!(
+            r"
+            import svg.Path exposing
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_exposing/Test.roc ────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path exposing
+                                    ^
+
+    I just saw the `exposing` keyword, so I was expecting to see `[` next.
+    "###);
+
+    test_report!(
+        unfinished_import_exposing_name,
+        indoc!(
+            r"
+            import svg.Path exposing [3
+            "
+        ),
+        @r###"
+    ── WEIRD EXPOSING in tmp/unfinished_import_exposing_name/Test.roc ──────────────
+
+    I'm partway through parsing an exposing list, but I got stuck here:
+
+    4│      import svg.Path exposing [3
+                                      ^
+
+    I was expecting a type, value, or function name next, like:
+
+        import Svg exposing [Path, arc, rx]
+    "###);
+
+    test_report!(
+        unfinished_ingested_file_name,
+        indoc!(
+            r#"
+            import "example.json" as
+            "#
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_ingested_file_name/Test.roc ─────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import "example.json" as
+                                    ^
+
+    I was expecting to see a name next, like:
+
+        import "users.json" as users : Str
+    "###
+    );
+
+    test_report!(
+        ingested_file_import_ann_syntax_err,
+        indoc!(
+            r#"
+            import "example.json" as example : List U8, U32
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TYPE in tmp/ingested_file_import_ann_syntax_err/Test.roc ─────────
+
+    I am partway through parsing a type, but I got stuck here:
+
+    4│      import "example.json" as example : List U8, U32
+                                                           ^
+
+    Note: I may be confused by indentation
+    "###
+    );
+
     // TODO could do better by pointing out we're parsing a function type
     test_report!(
         dict_type_formatting,
