@@ -655,8 +655,9 @@ pub fn parse_single_def<'a>(
         min_indent,
     ) {
         Err((NoProgress, _)) => {
-            match loc!(import()).parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => {
+            let pos_before_import = state.pos();
+            match import().parse(arena, state.clone(), min_indent) {
+                Err((NoProgress, _)) => {
                     match parse_expect.parse(arena, state.clone(), min_indent) {
                         Err((_, _)) => {
                             // a hacky way to get expression-based error messages. TODO fix this
@@ -683,12 +684,16 @@ pub fn parse_single_def<'a>(
                         ),
                     }
                 }
-                Ok((_, loc_import, state)) => Ok((
+                Err((MadeProgress, err)) => {
+                    Err((MadeProgress, EExpr::Import(err, pos_before_import)))
+                }
+                Ok((_, (loc_import, spaces_after), state)) => Ok((
                     MadeProgress,
                     Some(SingleDef {
                         type_or_value: Either::Second(loc_import.value),
                         region: loc_import.region,
                         spaces_before: spaces_before_current,
+                        spaces_after,
                     }),
                     state,
                 )),
@@ -752,6 +757,7 @@ pub fn parse_single_def<'a>(
                             type_or_value: Either::First(type_def),
                             region: def_region,
                             spaces_before: spaces_before_current,
+                            spaces_after: &[],
                         }),
                         state,
                     ));
@@ -812,6 +818,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -835,6 +842,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -848,6 +856,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::Second(value_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -886,6 +895,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -910,6 +920,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -923,6 +934,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::Second(value_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -956,10 +968,23 @@ pub fn parse_single_def<'a>(
     }
 }
 
-fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    skip_first!(
-        parser::keyword(keyword::IMPORT, EImport::Import),
-        increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
+fn import<'a>() -> impl Parser<'a, (Loc<ValueDef<'a>>, &'a [CommentOrNewline<'a>]), EImport<'a>> {
+    then(
+        and!(
+            loc!(skip_first!(
+                parser::keyword(keyword::IMPORT, EImport::Import),
+                increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
+            )),
+            space0_e(EImport::EndNewline)
+        ),
+        |_arena, state, progress, (import, spaces_after)| {
+            if !spaces_after.is_empty() || state.has_reached_end() {
+                Ok((progress, (import, spaces_after), state))
+            } else {
+                // We require EOF, comment, or newline after import
+                Err((progress, EImport::EndNewline(state.pos())))
+            }
+        },
     )
 }
 
@@ -1142,6 +1167,7 @@ pub fn parse_single_def_assignment<'a>(
                         type_or_value: Either::Second(value_def),
                         region,
                         spaces_before: spaces_before_current,
+                        spaces_after: &[],
                     }),
                     state_after_rest_of_def,
                 ));
@@ -1163,6 +1189,7 @@ pub fn parse_single_def_assignment<'a>(
                         type_or_value: Either::Second(value_def),
                         region,
                         spaces_before: spaces_before_current,
+                        spaces_after: &[],
                     }),
                     state_after_first_expression,
                 ));
@@ -1178,6 +1205,7 @@ pub fn parse_single_def_assignment<'a>(
             type_or_value: Either::Second(value_def),
             region,
             spaces_before: spaces_before_current,
+            spaces_after: &[],
         }),
         state_after_first_expression,
     ))
@@ -1225,6 +1253,7 @@ fn parse_statement_inside_def<'a>(
             type_or_value: Either::Second(value_def),
             region,
             spaces_before: spaces_before_current,
+            spaces_after: &[],
         }),
         state,
     ))
@@ -1308,10 +1337,16 @@ fn parse_defs_end<'a>(
             Ok((_, Some(single_def), next_state)) => {
                 let region = single_def.region;
                 let spaces_before_current = single_def.spaces_before;
+                let spaces_after_current = single_def.spaces_after;
 
                 match single_def.type_or_value {
                     Either::First(type_def) => {
-                        defs.push_type_def(type_def, region, spaces_before_current, &[]);
+                        defs.push_type_def(
+                            type_def,
+                            region,
+                            spaces_before_current,
+                            spaces_after_current,
+                        );
                     }
                     Either::Second(value_def) => {
                         // If we got a ValueDef::Body, check if a type annotation preceded it.
@@ -1373,7 +1408,12 @@ fn parse_defs_end<'a>(
 
                         if !joined {
                             // the previous and current def can't be joined up
-                            defs.push_value_def(value_def, region, spaces_before_current, &[]);
+                            defs.push_value_def(
+                                value_def,
+                                region,
+                                spaces_before_current,
+                                spaces_after_current,
+                            );
                         }
                     }
                 }
@@ -1395,6 +1435,7 @@ pub struct SingleDef<'a> {
     pub type_or_value: Either<TypeDef<'a>, ValueDef<'a>>,
     pub region: Region,
     pub spaces_before: &'a [CommentOrNewline<'a>],
+    pub spaces_after: &'a [CommentOrNewline<'a>],
 }
 
 fn parse_defs_expr<'a>(
@@ -2882,28 +2923,11 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
 
 fn import_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let original_pos = state.pos();
-
-        let (_, import_def, state) =
-            loc!(specialize_err(EExpr::Import, import())).parse(arena, state, min_indent)?;
-
-        let (_, spaces_after_import, state) =
-            space0_e(EExpr::IndentEnd).parse(arena, state, min_indent)?;
-
-        if !spaces_after_import.iter().any(|s| s.is_newline()) {
-            return Err((
-                MadeProgress,
-                EExpr::Import(EImport::EndNewline(state.pos()), original_pos),
-            ));
-        }
+        let (_, (import_def, spaces_after), state) =
+            specialize_err(EExpr::Import, import()).parse(arena, state, min_indent)?;
 
         let mut defs = Defs::default();
-        defs.push_value_def(
-            import_def.value,
-            import_def.region,
-            &[],
-            spaces_after_import,
-        );
+        defs.push_value_def(import_def.value, import_def.region, &[], spaces_after);
 
         parse_defs_expr(options, min_indent, defs, arena, state)
     }

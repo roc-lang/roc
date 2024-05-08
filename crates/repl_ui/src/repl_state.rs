@@ -324,6 +324,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                             Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
                                         region,
                                         spaces_before,
+                                        spaces_after: _,
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {
@@ -373,6 +374,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                             Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
                                         region,
                                         spaces_before,
+                                        spaces_after: _,
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {

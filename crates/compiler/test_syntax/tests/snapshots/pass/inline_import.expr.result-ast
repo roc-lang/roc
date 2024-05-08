@@ -14,9 +14,11 @@ Defs(
         ],
         space_after: [
             Slice(start = 0, length = 1),
-            Slice(start = 1, length = 0),
+            Slice(start = 1, length = 2),
         ],
         spaces: [
+            Newline,
+            Newline,
             Newline,
         ],
         type_defs: [],
@@ -73,33 +75,27 @@ Defs(
             ),
         ],
     },
-    @53-71 SpaceBefore(
-        Apply(
-            @53-62 Var {
-                module_name: "JE",
-                ident: "encode",
-            },
-            [
-                @64-70 ParensAround(
-                    Apply(
-                        @64-67 Var {
-                            module_name: "",
-                            ident: "int",
-                        },
-                        [
-                            @68-70 Num(
-                                "42",
-                            ),
-                        ],
-                        Space,
-                    ),
-                ),
-            ],
-            Space,
-        ),
+    @53-71 Apply(
+        @53-62 Var {
+            module_name: "JE",
+            ident: "encode",
+        },
         [
-            Newline,
-            Newline,
+            @64-70 ParensAround(
+                Apply(
+                    @64-67 Var {
+                        module_name: "",
+                        ident: "int",
+                    },
+                    [
+                        @68-70 Num(
+                            "42",
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
         ],
+        Space,
     ),
 )
