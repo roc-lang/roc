@@ -112,6 +112,7 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
 pub enum RenderTarget {
     ColorTerminal,
     Generic,
+    LanguageServer,
 }
 
 /// A textual report.
@@ -133,6 +134,7 @@ impl<'b> Report<'b> {
         match target {
             RenderTarget::Generic => self.render_ci(buf, alloc),
             RenderTarget::ColorTerminal => self.render_color_terminal(buf, alloc, palette),
+            RenderTarget::LanguageServer => self.render_language_server(buf, alloc),
         }
     }
 
@@ -177,7 +179,7 @@ impl<'b> Report<'b> {
     }
 
     /// Render report for the language server, where the window is narrower.
-    pub fn render_ls(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
+    pub fn render_language_server(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
         alloc

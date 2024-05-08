@@ -203,7 +203,7 @@ pub(crate) mod diag {
 
             let severity = report.severity.into_lsp_severity();
             let mut msg = String::new();
-            report.render_ls(&mut msg, fmt.alloc);
+            report.render_language_server(&mut msg, fmt.alloc);
 
             Some(Diagnostic {
                 range,
@@ -238,7 +238,7 @@ pub(crate) mod diag {
             let severity = report.severity.into_lsp_severity();
 
             let mut msg = String::new();
-            report.render_ls(&mut msg, fmt.alloc);
+            report.render_language_server(&mut msg, fmt.alloc);
 
             Some(Diagnostic {
                 range,
