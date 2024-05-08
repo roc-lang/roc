@@ -179,6 +179,7 @@ impl<'b> Report<'b> {
     }
 
     /// Render report for the language server, where the window is narrower.
+    /// Path is not included, and the header is not emphasized with "─".
     pub fn render_language_server(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
