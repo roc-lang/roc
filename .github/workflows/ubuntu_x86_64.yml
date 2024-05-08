@@ -43,7 +43,9 @@ jobs:
 
       - name: Valgrind on failure
         if: ${{ failure() }}
-        run: valgrind --leak-check=full ./examples/static-site-gen/static-site examples/static-site-gen/input/ examples/static-site-gen/output
+        run: |
+          valgrind --leak-check=full ./examples/static-site-gen/static-site examples/static-site-gen/input/ examples/static-site-gen/output
+          cp ./examples/static-site-gen/static-site /home/big-ci-user/Desktop/
 
       - name: tests examples in docs
         run:  cargo test --doc --release
