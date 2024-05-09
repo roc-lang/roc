@@ -632,33 +632,8 @@ pub fn canonicalize_expr<'a>(
             (answer, Output::default())
         }
         ast::Expr::Record(fields) => {
-            if fields.is_empty() {
-                (EmptyRecord, Output::default())
-            } else {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
-                    Ok((can_fields, output)) => (
-                        Record {
-                            record_var: var_store.fresh(),
-                            fields: can_fields,
-                        },
-                        output,
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
-            }
+            canonicalize_record(env, var_store, scope, region, *fields)
         }
-
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -1422,6 +1397,42 @@ pub fn canonicalize_expr<'a>(
         },
         output,
     )
+}
+
+pub fn canonicalize_record<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    fields: ast::Collection<'a, Loc<ast::AssignedField<'a, ast::Expr<'a>>>>,
+) -> (Expr, Output) {
+    use Expr::*;
+
+    if fields.is_empty() {
+        (EmptyRecord, Output::default())
+    } else {
+        match canonicalize_fields(env, var_store, scope, region, fields.items) {
+            Ok((can_fields, output)) => (
+                Record {
+                    record_var: var_store.fresh(),
+                    fields: can_fields,
+                },
+                output,
+            ),
+            Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+        }
+    }
 }
 
 pub fn canonicalize_closure<'a>(

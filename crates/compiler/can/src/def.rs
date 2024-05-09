@@ -10,6 +10,7 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
+use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
@@ -2373,8 +2374,27 @@ fn canonicalize_pending_value_def<'a>(
                 None,
             )
         }
-        ImportParams(_, _) => {
-            todo!("agus: handle import params def")
+        ImportParams(loc_pattern, params) => {
+            let (expr, can_output) =
+                canonicalize_record(env, var_store, scope, loc_pattern.region, params);
+
+            output.union(can_output);
+
+            let loc_expr = Loc::at(loc_pattern.region, expr);
+
+            let def = single_can_def(
+                loc_pattern,
+                loc_expr,
+                var_store.fresh(),
+                None,
+                SendMap::default(),
+            );
+
+            DefOutput {
+                output,
+                references: DefReferences::Value(References::new()),
+                def,
+            }
         }
         IngestedFile(loc_pattern, opt_loc_ann, path_literal) => {
             let relative_path =
