@@ -1524,7 +1524,24 @@ fn to_import_report<'a>(
         Params(EImportParams::Record(problem, pos), _) => {
             to_record_report(alloc, lines, filename, problem, *pos, start)
         }
-        Params(_, _) => todo!("Report param errors"),
+        Params(EImportParams::RecordApplyFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("This looks like a record builder field, but those are not allowed in module params."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        Params(EImportParams::RecordUpdateFound(_), _) => todo!(),
         IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
             alloc,
             lines,

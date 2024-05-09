@@ -4962,6 +4962,30 @@ mod test_reporting {
     );
 
     test_report!(
+        record_builder_in_module_params,
+        indoc!(
+            r"
+            import Menu {
+                echo,
+                name: <- applyName
+            }
+            "
+        ),@r###"
+    ── RECORD BUILDER IN MODULE PARAMS in ...ord_builder_in_module_params/Test.roc ─
+
+    I was partway through parsing module params, but I got stuck here:
+
+    4│      import Menu {
+    5│          echo,
+    6│          name: <- applyName
+                ^^^^^^^^^^^^^^^^^^
+
+    This looks like a record builder field, but those are not allowed in
+    module params.
+    "###
+    );
+
+    test_report!(
         unfinished_import_as_or_exposing,
         indoc!(
             r"
