@@ -76,7 +76,7 @@ If you're using coc.nvim and want to use the configuration above, be sure to als
 
 #### [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig)
 
-Add the follwoing to your lspconfig setup:
+Add the following to your lspconfig setup:
 
 ```lua
 local lspconfig = require('lspconfig')
