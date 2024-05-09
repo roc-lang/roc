@@ -1487,33 +1487,40 @@ fn to_import_report<'a>(
                     .indent(4),
             ]),
         ),
-        IndentAs(pos) | As(pos) | IndentExposing(pos) | Exposing(pos) | EndNewline(pos) => {
-            to_unfinished_import_report(
-                alloc,
-                lines,
-                filename,
-                *pos,
-                start,
-                alloc.stack([
-                    alloc.concat([
-                        alloc.reflow("I was expecting to see the "),
-                        alloc.keyword("as"),
-                        alloc.reflow(" keyword, like:"),
-                    ]),
-                    alloc
-                        .parser_suggestion("import svg.Path as SvgPath")
-                        .indent(4),
-                    alloc.concat([
-                        alloc.reflow("Or the "),
-                        alloc.keyword("exposing"),
-                        alloc.reflow(" keyword, like:"),
-                    ]),
-                    alloc
-                        .parser_suggestion("import svg.Path exposing [arc, rx]")
-                        .indent(4),
+        Params(EImportParams::Indent(pos), _)
+        | IndentAs(pos)
+        | As(pos)
+        | IndentExposing(pos)
+        | Exposing(pos)
+        | EndNewline(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.concat([
+                    alloc.reflow("I was expecting to see the "),
+                    alloc.keyword("as"),
+                    alloc.reflow(" keyword, like:"),
                 ]),
-            )
-        }
+                alloc
+                    .parser_suggestion("import svg.Path as SvgPath")
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow("Or the "),
+                    alloc.keyword("exposing"),
+                    alloc.reflow(" keyword, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("import svg.Path exposing [arc, rx]")
+                    .indent(4),
+                alloc.reflow("Or module params, like:"),
+                alloc
+                    .parser_suggestion("import Menu { echo, read }")
+                    .indent(4),
+            ]),
+        ),
         Params(EImportParams::Record(problem, pos), _) => {
             to_record_report(alloc, lines, filename, problem, *pos, start)
         }

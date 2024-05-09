@@ -4983,6 +4983,10 @@ mod test_reporting {
     Or the `exposing` keyword, like:
 
         import svg.Path exposing [arc, rx]
+
+    Or module params, like:
+
+        import Menu { echo, read }
     "###
     );
 
