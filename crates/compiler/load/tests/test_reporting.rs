@@ -4986,6 +4986,25 @@ mod test_reporting {
     );
 
     test_report!(
+        record_update_in_module_params,
+        indoc!(
+            r"
+            import Menu { myParams & echo: echoFn }
+            "
+        ),@r###"
+    ── RECORD UPDATE IN MODULE PARAMS in ...ecord_update_in_module_params/Test.roc ─
+
+    I was partway through parsing module params, but I got stuck here:
+
+    4│      import Menu { myParams & echo: echoFn }
+                          ^^^^^^^^
+
+    It looks like you're trying to update a record, but module params
+    require a standalone record literal.
+    "###
+    );
+
+    test_report!(
         unfinished_import_as_or_exposing,
         indoc!(
             r"

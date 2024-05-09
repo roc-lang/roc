@@ -1541,7 +1541,23 @@ fn to_import_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        Params(EImportParams::RecordUpdateFound(_), _) => todo!(),
+        Params(EImportParams::RecordUpdateFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("It looks like you're trying to update a record, but module params require a standalone record literal."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD UPDATE IN MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
             alloc,
             lines,
