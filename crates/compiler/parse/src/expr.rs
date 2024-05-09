@@ -71,20 +71,6 @@ pub struct ExprParseOptions {
     ///
     /// > Just foo if foo == 2 -> ...
     pub check_for_arrow: bool,
-
-    /// Check for a suffixed expression, if we find one then
-    /// subsequent parsing for this expression should have an increased
-    /// indent, this is so we can distinguish between the end of the
-    /// statement and the next expression.
-    pub suffixed_found: bool,
-}
-
-impl ExprParseOptions {
-    pub fn set_suffixed_found(&self) -> Self {
-        let mut new = *self;
-        new.suffixed_found = true;
-        new
-    }
 }
 
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -367,10 +353,10 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
-        let new_options = if is_expr_suffixed(&expr.value) {
-            options.set_suffixed_found()
+        let new_min_indent = if is_expr_suffixed(&expr.value) {
+            min_indent + 1
         } else {
-            options
+            min_indent
         };
 
         match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
@@ -385,8 +371,8 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                 };
 
                 match parse_expr_end(
-                    min_indent,
-                    new_options,
+                    new_min_indent,
+                    options,
                     expr_state,
                     arena,
                     state,
@@ -2056,15 +2042,15 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        let new_options = if is_expr_suffixed(&new_expr.value) {
-                            options.set_suffixed_found()
+                        let new_min_indent = if is_expr_suffixed(&new_expr.value) {
+                            min_indent + 1
                         } else {
-                            options
+                            min_indent
                         };
 
                         match parse_expr_end(
-                            min_indent,
-                            new_options,
+                            new_min_indent,
+                            options,
                             expr_state,
                             arena,
                             state,
@@ -2119,18 +2105,12 @@ fn parse_expr_end<'a>(
     state: State<'a>,
     initial_state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let inner_min_indent = if options.suffixed_found {
-        min_indent + 1
-    } else {
-        min_indent
-    };
-
     let parser = skip_first!(
         crate::blankspace::check_indent(EExpr::IndentEnd),
         loc_term_or_underscore(options)
     );
 
-    match parser.parse(arena, state.clone(), inner_min_indent) {
+    match parser.parse(arena, state.clone(), min_indent) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((
             _,
@@ -2188,10 +2168,10 @@ fn parse_expr_end<'a>(
         Ok((_, mut arg, state)) => {
             let new_end = state.pos();
 
-            let new_options = if is_expr_suffixed(&arg.value) {
-                options.set_suffixed_found()
+            let min_indent = if is_expr_suffixed(&arg.value) {
+                min_indent + 1
             } else {
-                options
+                min_indent
             };
 
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
@@ -2218,14 +2198,7 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
-                    parse_expr_end(
-                        min_indent,
-                        new_options,
-                        expr_state,
-                        arena,
-                        state,
-                        initial_state,
-                    )
+                    parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
                 }
             }
         }
@@ -2343,7 +2316,6 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
     expr_start(ExprParseOptions {
         accept_multi_backpassing,
         check_for_arrow: true,
-        suffixed_found: false,
     })
 }
 
@@ -2542,7 +2514,6 @@ pub fn parse_top_level_defs<'a>(
     let options = ExprParseOptions {
         accept_multi_backpassing: true,
         check_for_arrow: true,
-        suffixed_found: false,
     };
 
     let existing_len = output.tags.len();
