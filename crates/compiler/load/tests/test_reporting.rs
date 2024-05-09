@@ -4944,6 +4944,24 @@ mod test_reporting {
     );
 
     test_report!(
+        weird_import_params_record,
+        indoc!(
+            r"
+            import Menu { x = 4 }
+            "
+        ),@r###"
+    ── RECORD PARSE PROBLEM in tmp/weird_import_params_record/Test.roc ─────────────
+
+    I am partway through parsing a record, but I got stuck here:
+
+    4│      import Menu { x = 4 }
+                        ^
+
+    TODO provide more context.
+    "###
+    );
+
+    test_report!(
         unfinished_import_as_or_exposing,
         indoc!(
             r"
