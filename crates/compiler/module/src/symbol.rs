@@ -625,7 +625,8 @@ impl ModuleIds {
 #[derive(Debug, Clone)]
 pub struct ScopeModules {
     modules: VecMap<ModuleName, ModuleId>,
-    sources: VecMap<ModuleId, ScopeModuleSource>,
+    sources: VecMap<ModuleId, ScopeModuleSource>, // todo(agus): why not Vec?
+    params: Vec<Option<Symbol>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -652,6 +653,7 @@ impl ScopeModules {
         &mut self,
         module_name: ModuleName,
         module_id: ModuleId,
+        params_symbol: Option<Symbol>,
         region: Region,
     ) -> Result<(), ScopeModuleSource> {
         if let Some(existing_module_id) = self.modules.get(&module_name) {
@@ -665,22 +667,26 @@ impl ScopeModules {
         self.modules.insert(module_name, module_id);
         self.sources
             .insert(module_id, ScopeModuleSource::Import(region));
+        self.params.push(params_symbol);
         Ok(())
     }
 
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.modules.len(), self.sources.len());
+        debug_assert_eq!(self.modules.len(), self.params.len());
         self.modules.len()
     }
 
     pub fn is_empty(&self) -> bool {
         debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
+        debug_assert_eq!(self.modules.is_empty(), self.params.is_empty());
         self.modules.is_empty()
     }
 
     pub fn truncate(&mut self, len: usize) {
         self.modules.truncate(len);
         self.sources.truncate(len);
+        self.params.truncate(len);
     }
 }
 
@@ -1031,22 +1037,29 @@ macro_rules! define_builtins {
 
                 let mut modules = VecMap::with_capacity(capacity);
                 let mut sources = VecMap::with_capacity(capacity);
+                let mut params = Vec::with_capacity(capacity);
 
-                modules.insert(home_name, home_id);
-                sources.insert(home_id, ScopeModuleSource::Current);
+                // todo(agus): Use insert
+
+                if !home_id.is_builtin() {
+                    modules.insert(home_name, home_id);
+                    sources.insert(home_id, ScopeModuleSource::Current);
+                    params.push(None);
+                }
 
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
                     let name: ModuleName = name_str.into();
 
                     modules.insert(name, id);
                     sources.insert(id, ScopeModuleSource::Builtin);
+                    params.push(None);
                 };
 
                 $(
                     insert_both(ModuleId::$module_const, $module_name);
                 )+
 
-                ScopeModules { modules, sources }
+                ScopeModules { modules, sources, params }
             }
         }
 
