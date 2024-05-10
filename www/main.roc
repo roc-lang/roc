@@ -1,33 +1,57 @@
-app "roc-website"
-    packages { pf: "../examples/static-site-gen/platform/main.roc" }
-    imports [
-        pf.Html.{ Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script, br },
-        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type },
-        InteractiveExample,
-    ]
-    provides [transformFileContent] to pf
+app [transformFileContent] { pf: platform "../examples/static-site-gen/platform/main.roc" }
+
+import pf.Html exposing [Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script, br]
+import pf.Html.Attributes exposing [attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type]
+import InteractiveExample
 
 pageData =
     Dict.empty {}
-    |> Dict.insert "community.html" { title: "Roc Community", description: "Connect with the Roc programming language community" }
-    |> Dict.insert "docs.html" { title: "Roc Docs", description: "Documentation for the Roc programming language, including builtins" }
-    |> Dict.insert "index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language" }
-    |> Dict.insert "install.html" { title: "Install Roc", description: "Install the Roc programming language" }
-    |> Dict.insert "donate.html" { title: "Donate to Roc", description: "Support the Roc programming language by donating or sponsoring" }
-    |> Dict.insert "tutorial.html" { title: "Roc Tutorial", description: "Learn the Roc programming language" }
+    |> Dict.insert "abilities.html" { title: "Abilities | Roc", description: "Learn about abilities in the Roc programming language." }
+    |> Dict.insert "bdfn.html" { title: "Governance | Roc", description: "Learn about the governance model of the Roc programming language." }
+    |> Dict.insert "community.html" { title: "Community | Roc", description: "Connect with the community of the Roc programming language." }
+    |> Dict.insert "docs.html" { title: "Docs | Roc", description: "Documentation for the Roc programming language, including builtins." }
+    |> Dict.insert "donate.html" { title: "Donate | Roc", description: "Support the Roc programming language by donating or sponsoring." }
+    |> Dict.insert "faq.html" { title: "FAQ | Roc", description: "Frequently asked questions about the Roc programming language." }
+    |> Dict.insert "fast.html" { title: "Fast | Roc", description: "What does it mean that the Roc programming language is fast?" }
+    |> Dict.insert "friendly.html" { title: "Friendly | Roc", description: "What does it mean that the Roc programming language is friendly?" }
+    |> Dict.insert "functional.html" { title: "Functional | Roc", description: "What does it mean that the Roc programming language is functional?" }
+    |> Dict.insert "index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language." }
+    |> Dict.insert "install.html" { title: "Install | Roc", description: "How to install the Roc programming language." }
+    |> Dict.insert "plans.html" { title: "Planned Changes | Roc", description: "Planned changes to the Roc programming language." }
+    |> Dict.insert "platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
+    |> Dict.insert "tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
+    |> Dict.insert "repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
 
-getPage : Str -> { title : Str, description : Str }
-getPage = \current ->
-    Dict.get pageData current
-    |> Result.withDefault { title: "", description: "" }
+getPageInfo : Str -> { title : Str, description : Str }
+getPageInfo = \pagePathStr ->
+
+    when Dict.get pageData pagePathStr is
+        Ok pageInfo -> pageInfo
+        Err KeyNotFound ->
+            if Str.contains pagePathStr "examples/" then
+                Str.splitLast pagePathStr "/"
+                |> unwrapOrCrash "This splitLast should never fail. pagePathStr ($(pagePathStr)) did not contain any `/`."
+                |> .after # get part after last /
+                |> (\pageTitle -> { title: pageTitle, description: "Example of $(pageTitle) in the Roc programming language." })
+            else
+                crash "Web page $(pagePathStr) did not have a title and description specified in the pageData Dict. Please add one."
+
+unwrapOrCrash : Result a b, Str -> a where b implements Inspect
+unwrapOrCrash = \result, errorMsg ->
+    when result is
+        Ok val ->
+            val
+
+        Err err ->
+            crash "$(Inspect.toStr err): $(errorMsg)"
 
 getTitle : Str -> Str
 getTitle = \current ->
-    getPage current |> .title
+    getPageInfo current |> .title
 
 getDescription : Str -> Str
 getDescription = \current ->
-    getPage current |> .description
+    getPageInfo current |> .description
 
 transformFileContent : Str, Str -> Str
 transformFileContent = \page, htmlContent ->
