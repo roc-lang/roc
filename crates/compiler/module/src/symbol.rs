@@ -623,10 +623,42 @@ impl ModuleIds {
 }
 
 #[derive(Debug, Clone)]
+pub struct LookedupSymbol {
+    pub symbol: Symbol,
+    pub params: Option<Symbol>,
+}
+
+impl LookedupSymbol {
+    pub fn new(symbol: Symbol, params: Option<Symbol>) -> Self {
+        Self { symbol, params }
+    }
+
+    pub fn no_params(symbol: Symbol) -> Self {
+        Self::new(symbol, None)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ScopeModules {
     modules: VecMap<ModuleName, ModuleId>,
     sources: VecMap<ModuleId, ScopeModuleSource>, // todo(agus): why not Vec?
     params: Vec<Option<Symbol>>,
+}
+
+pub struct LookedupModule {
+    pub id: ModuleId,
+    pub params: Option<Symbol>,
+}
+
+impl LookedupModule {
+    pub fn into_symbol(&self, symbol: Symbol) -> LookedupSymbol {
+        debug_assert_eq!(symbol.module_id(), self.id);
+
+        LookedupSymbol {
+            symbol,
+            params: self.params,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,12 +669,22 @@ pub enum ScopeModuleSource {
 }
 
 impl ScopeModules {
-    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
-        self.modules.get(module_name).copied()
+    pub fn lookup(&self, module_name: &ModuleName) -> Option<LookedupModule> {
+        self.modules
+            .get_with_index(module_name)
+            .map(|(index, module_id)| LookedupModule {
+                id: *module_id,
+                params: self.params.get(index).copied().unwrap(),
+            })
     }
 
-    pub fn has_id(&self, module_id: ModuleId) -> bool {
-        self.sources.contains_key(&module_id)
+    pub fn lookup_by_id(&self, module_id: &ModuleId) -> Option<LookedupModule> {
+        self.modules
+            .get_index_by_value(module_id)
+            .map(|index| LookedupModule {
+                id: *module_id,
+                params: self.params.get(index).copied().unwrap(),
+            })
     }
 
     pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {

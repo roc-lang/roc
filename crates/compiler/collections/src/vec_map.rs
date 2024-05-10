@@ -84,6 +84,13 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
+    pub fn get_with_index(&self, key: &K) -> Option<(usize, &V)> {
+        self.keys
+            .iter()
+            .position(|x| x == key)
+            .map(|index| (index, &self.values[index]))
+    }
+
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         match self.keys.iter().position(|x| x == key) {
             None => None,
@@ -149,6 +156,12 @@ impl<K: PartialEq, V> VecMap<K, V> {
     pub fn clear(&mut self) {
         self.keys.clear();
         self.values.clear();
+    }
+}
+
+impl<K, V: PartialEq> VecMap<K, V> {
+    pub fn get_index_by_value(&self, value: &V) -> Option<usize> {
+        self.values.iter().position(|x| x == value)
     }
 }
 

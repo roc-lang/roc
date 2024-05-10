@@ -32,6 +32,7 @@ use roc_module::ident::Lowercase;
 use roc_module::ident::ModuleName;
 use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::IdentId;
+use roc_module::symbol::LookedupSymbol;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -512,19 +513,21 @@ fn canonicalize_claimed_ability_impl<'a>(
             let label_str = label.value;
             let region = label.region;
 
-            let member_symbol =
-                match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
-                    Ok(symbol) => symbol,
-                    Err(_) => {
-                        env.problem(Problem::NotAnAbilityMember {
-                            ability,
-                            name: label_str.to_owned(),
-                            region,
-                        });
+            let LookedupSymbol {
+                symbol: member_symbol,
+                params: _,
+            } = match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
+                Ok(symbol) => symbol,
+                Err(_) => {
+                    env.problem(Problem::NotAnAbilityMember {
+                        ability,
+                        name: label_str.to_owned(),
+                        region,
+                    });
 
-                        return Err(());
-                    }
-                };
+                    return Err(());
+                }
+            };
 
             // There are two options for how the implementation symbol is defined.
             //
@@ -604,7 +607,10 @@ fn canonicalize_claimed_ability_impl<'a>(
             };
             let impl_region = value.region;
 
-            let member_symbol = match env.qualified_lookup_with_module_id(
+            let LookedupSymbol {
+                symbol: member_symbol,
+                params: _,
+            } = match env.qualified_lookup_with_module_id(
                 scope,
                 ability_home,
                 label.value,
