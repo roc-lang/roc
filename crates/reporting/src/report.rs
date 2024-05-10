@@ -112,6 +112,7 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
 pub enum RenderTarget {
     ColorTerminal,
     Generic,
+    LanguageServer,
 }
 
 /// A textual report.
@@ -133,6 +134,7 @@ impl<'b> Report<'b> {
         match target {
             RenderTarget::Generic => self.render_ci(buf, alloc),
             RenderTarget::ColorTerminal => self.render_color_terminal(buf, alloc, palette),
+            RenderTarget::LanguageServer => self.render_language_server(buf, alloc),
         }
     }
 
@@ -174,6 +176,18 @@ impl<'b> Report<'b> {
 
             alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
+    }
+
+    /// Render report for the language server, where the window is narrower.
+    /// Path is not included, and the header is not emphasized with "─".
+    pub fn render_language_server(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
+        let err_msg = "<buffer is not a utf-8 encoded string>";
+
+        alloc
+            .stack([alloc.text(self.title), self.doc])
+            .1
+            .render_raw(60, &mut CiWrite::new(buf))
+            .expect(err_msg)
     }
 
     pub fn horizontal_rule(palette: &'b Palette) -> String {
