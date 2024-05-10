@@ -5,9 +5,10 @@ use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
         Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
-        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileImport, Module,
-        ModuleImport, Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral,
-        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
+        IngestedFileImport, Module, ModuleImport, Pattern, PatternAs, RecordBuilderField, Spaced,
+        Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, KeywordItem, ModuleHeader, ModuleName,
@@ -600,6 +601,7 @@ impl<'a> RemoveSpaces<'a> for IngestedFileImport<'a> {
             before_path: &[],
             path: self.path.remove_spaces(arena),
             name: self.name.remove_spaces(arena),
+            annotation: self.annotation.remove_spaces(arena),
         }
     }
 }
@@ -628,6 +630,15 @@ impl<'a> RemoveSpaces<'a> for ImportAsKeyword {
 impl<'a> RemoveSpaces<'a> for ImportExposingKeyword {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for IngestedFileAnnotation<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        IngestedFileAnnotation {
+            before_colon: &[],
+            annotation: self.annotation.remove_spaces(arena),
+        }
     }
 }
 

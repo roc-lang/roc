@@ -286,7 +286,6 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                         ExprParseOptions {
                             accept_multi_backpassing: true,
                             check_for_arrow: true,
-                            suffixed_found: false,
                         },
                         0,
                         arena,
@@ -311,7 +310,6 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
-                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,
@@ -324,6 +322,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                             Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
                                         region,
                                         spaces_before,
+                                        spaces_after: _,
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {
@@ -360,7 +359,6 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                 ExprParseOptions {
                                     accept_multi_backpassing: true,
                                     check_for_arrow: true,
-                                    suffixed_found: false,
                                 },
                                 0,
                                 arena,
@@ -373,6 +371,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                             Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
                                         region,
                                         spaces_before,
+                                        spaces_after: _,
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {

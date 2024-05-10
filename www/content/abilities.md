@@ -178,8 +178,8 @@ The `toInspector` function takes a value and returns an `Inspector` which descri
 
 Example formatters:
 
-- A [LogFormatter](https://github.com/roc-lang/roc/blob/main/examples/LogFormatter.roc) which creates a string representation of Roc values, for use e.g. debug printing to the console.
-- A [GuiFormatter](https://github.com/roc-lang/roc/blob/main/examples/GuiFormatter.roc) which creates a GUI representation of Roc values for use e.g. debug visualization in a graphical application.
+- A [DbgFormatter](https://github.com/roc-lang/roc/blob/16db390d5f95516c95c9676797f85b5b2a75cda9/crates/compiler/builtins/roc/Inspect.roc#L106) which creates a string representation of Roc values, for e.g. debug printing to the console.
+- A [GuiFormatter](https://github.com/roc-lang/roc/blob/main/examples/GuiFormatter.roc) which creates a GUI representation of Roc values for e.g. debug visualization in a graphical application.
 
 ## [Opaque Types](#opaque-types) {#opaque-types}
 

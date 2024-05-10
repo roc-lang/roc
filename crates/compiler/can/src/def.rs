@@ -167,7 +167,7 @@ enum PendingValueDef<'a> {
     /// Ingested file
     IngestedFile(
         Loc<Pattern>,
-        Loc<ast::TypeAnnotation<'a>>,
+        Option<Loc<ast::TypeAnnotation<'a>>>,
         Loc<ast::StrLiteral<'a>>,
     ),
 }
@@ -2336,7 +2336,7 @@ fn canonicalize_pending_value_def<'a>(
                 None,
             )
         }
-        IngestedFile(loc_pattern, loc_ann, path_literal) => {
+        IngestedFile(loc_pattern, opt_loc_ann, path_literal) => {
             let relative_path =
                 if let ast::StrLiteral::PlainLine(ingested_path) = path_literal.value {
                     ingested_path
@@ -2373,23 +2373,29 @@ fn canonicalize_pending_value_def<'a>(
 
             let loc_expr = Loc::at(path_literal.region, expr);
 
-            let can_ann = canonicalize_annotation(
-                env,
-                scope,
-                &loc_ann.value,
-                loc_ann.region,
-                var_store,
-                pending_abilities_in_scope,
-                AnnotationFor::Value,
-            );
+            let opt_loc_can_ann = if let Some(loc_ann) = opt_loc_ann {
+                let can_ann = canonicalize_annotation(
+                    env,
+                    scope,
+                    &loc_ann.value,
+                    loc_ann.region,
+                    var_store,
+                    pending_abilities_in_scope,
+                    AnnotationFor::Value,
+                );
 
-            output.references.union_mut(&can_ann.references);
+                output.references.union_mut(&can_ann.references);
+
+                Some(Loc::at(loc_ann.region, can_ann))
+            } else {
+                None
+            };
 
             let def = single_can_def(
                 loc_pattern,
                 loc_expr,
                 var_store.fresh(),
-                Some(Loc::at(loc_ann.region, can_ann)),
+                opt_loc_can_ann,
                 SendMap::default(),
             );
 
@@ -3108,9 +3114,9 @@ fn to_pending_value_def<'a>(
             })
         }
         IngestedFileImport(ingested_file) => {
-            let typed_ident = ingested_file.name.item.extract_spaces().item;
+            let loc_name = ingested_file.name.item;
 
-            let symbol = match scope.introduce(typed_ident.ident.value.into(), typed_ident.ident.region) {
+            let symbol = match scope.introduce(loc_name.value.into(), loc_name.region) {
                 Ok(symbol ) => symbol,
                 Err((original, shadow, _)) => {
                     env.problem(Problem::Shadowing {
@@ -3123,9 +3129,9 @@ fn to_pending_value_def<'a>(
                 }
             };
 
-            let loc_pattern = Loc::at(typed_ident.ident.region, Pattern::Identifier(symbol));
+            let loc_pattern = Loc::at(loc_name.region, Pattern::Identifier(symbol));
 
-            PendingValue::Def(PendingValueDef::IngestedFile(loc_pattern, typed_ident.ann, ingested_file.path))
+            PendingValue::Def(PendingValueDef::IngestedFile(loc_pattern, ingested_file.annotation.map(|ann| ann.annotation), ingested_file.path))
         }
         Stmt(_) => internal_error!("a Stmt was not desugared correctly, should have been converted to a Body(...) in desguar"),
     }

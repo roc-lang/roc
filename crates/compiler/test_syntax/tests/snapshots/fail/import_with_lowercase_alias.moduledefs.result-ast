@@ -1,1 +1,1 @@
-NotEndOfFile(@12)
+Expr(Import(LowercaseAlias(@15-19), @0), @0)

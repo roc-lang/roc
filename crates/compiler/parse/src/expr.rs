@@ -1,16 +1,15 @@
 use crate::ast::{
     is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, RecordBuilderField, Spaceable,
-    Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, Pattern,
+    RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{
-    integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
-    Ident, Suffix,
+    integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident, Suffix,
 };
 use crate::module::module_name_help;
 use crate::parser::{
@@ -72,20 +71,6 @@ pub struct ExprParseOptions {
     ///
     /// > Just foo if foo == 2 -> ...
     pub check_for_arrow: bool,
-
-    /// Check for a suffixed expression, if we find one then
-    /// subsequent parsing for this expression should have an increased
-    /// indent, this is so we can distinguish between the end of the
-    /// statement and the next expression.
-    pub suffixed_found: bool,
-}
-
-impl ExprParseOptions {
-    pub fn set_suffixed_found(&self) -> Self {
-        let mut new = *self;
-        new.suffixed_found = true;
-        new
-    }
 }
 
 pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
@@ -368,10 +353,10 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
         let initial_state = state.clone();
         let end = state.pos();
 
-        let new_options = if is_expr_suffixed(&expr.value) {
-            options.set_suffixed_found()
+        let new_min_indent = if is_expr_suffixed(&expr.value) {
+            min_indent + 1
         } else {
-            options
+            min_indent
         };
 
         match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
@@ -386,8 +371,8 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                 };
 
                 match parse_expr_end(
-                    min_indent,
-                    new_options,
+                    new_min_indent,
+                    options,
                     expr_state,
                     arena,
                     state,
@@ -656,8 +641,9 @@ pub fn parse_single_def<'a>(
         min_indent,
     ) {
         Err((NoProgress, _)) => {
-            match loc!(import()).parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => {
+            let pos_before_import = state.pos();
+            match import().parse(arena, state.clone(), min_indent) {
+                Err((NoProgress, _)) => {
                     match parse_expect.parse(arena, state.clone(), min_indent) {
                         Err((_, _)) => {
                             // a hacky way to get expression-based error messages. TODO fix this
@@ -684,12 +670,16 @@ pub fn parse_single_def<'a>(
                         ),
                     }
                 }
-                Ok((_, loc_import, state)) => Ok((
+                Err((MadeProgress, err)) => {
+                    Err((MadeProgress, EExpr::Import(err, pos_before_import)))
+                }
+                Ok((_, (loc_import, spaces_after), state)) => Ok((
                     MadeProgress,
                     Some(SingleDef {
                         type_or_value: Either::Second(loc_import.value),
                         region: loc_import.region,
                         spaces_before: spaces_before_current,
+                        spaces_after,
                     }),
                     state,
                 )),
@@ -753,6 +743,7 @@ pub fn parse_single_def<'a>(
                             type_or_value: Either::First(type_def),
                             region: def_region,
                             spaces_before: spaces_before_current,
+                            spaces_after: &[],
                         }),
                         state,
                     ));
@@ -813,6 +804,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -836,6 +828,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -849,6 +842,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::Second(value_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -887,6 +881,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -911,6 +906,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::First(type_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -924,6 +920,7 @@ pub fn parse_single_def<'a>(
                                 type_or_value: Either::Second(value_def),
                                 region,
                                 spaces_before: spaces_before_current,
+                                spaces_after: &[],
                             }),
                             state,
                         ));
@@ -957,10 +954,23 @@ pub fn parse_single_def<'a>(
     }
 }
 
-fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    skip_first!(
-        parser::keyword(keyword::IMPORT, EImport::Import),
-        increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
+fn import<'a>() -> impl Parser<'a, (Loc<ValueDef<'a>>, &'a [CommentOrNewline<'a>]), EImport<'a>> {
+    then(
+        and!(
+            loc!(skip_first!(
+                parser::keyword(keyword::IMPORT, EImport::Import),
+                increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
+            )),
+            space0_e(EImport::EndNewline)
+        ),
+        |_arena, state, progress, (import, spaces_after)| {
+            if !spaces_after.is_empty() || state.has_reached_end() {
+                Ok((progress, (import, spaces_after), state))
+            } else {
+                // We require EOF, comment, or newline after import
+                Err((progress, EImport::EndNewline(state.pos())))
+            }
+        },
     )
 }
 
@@ -969,8 +979,8 @@ fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
         record!(ModuleImport {
             before_name: space0_e(EImport::IndentStart),
             name: loc!(imported_module_name()),
-            alias: optional(backtrackable(import_as())),
-            exposed: optional(backtrackable(import_exposing()))
+            alias: optional(import_as()),
+            exposed: optional(import_exposing())
         }),
         ValueDef::ModuleImport
     )
@@ -997,10 +1007,20 @@ fn import_as<'a>(
             EImport::IndentAs,
             EImport::IndentAlias
         ),
-        item: loc!(map!(
-            specialize_err(|_, pos| EImport::Alias(pos), uppercase_ident()),
-            ImportAlias::new
-        ))
+        item: then(
+            specialize_err(|_, pos| EImport::Alias(pos), loc!(unqualified_ident())),
+            |_arena, state, _progress, loc_ident| {
+                match loc_ident.value.chars().next() {
+                    Some(first) if first.is_uppercase() => Ok((
+                        MadeProgress,
+                        loc_ident.map(|ident| ImportAlias::new(ident)),
+                        state,
+                    )),
+                    Some(_) => Err((MadeProgress, EImport::LowercaseAlias(loc_ident.region))),
+                    None => Err((MadeProgress, EImport::Alias(state.pos()))),
+                }
+            }
+        )
     })
 }
 
@@ -1050,17 +1070,15 @@ fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>>
                 string_literal::parse_str_literal()
             )),
             name: import_ingested_file_as(),
+            annotation: optional(import_ingested_file_annotation())
         }),
         ValueDef::IngestedFileImport
     )
 }
 
 #[inline(always)]
-fn import_ingested_file_as<'a>() -> impl Parser<
-    'a,
-    header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
-    EImport<'a>,
-> {
+fn import_ingested_file_as<'a>(
+) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
     record!(header::KeywordItem {
         keyword: module::spaces_around_keyword(
             ImportAsKeyword,
@@ -1068,7 +1086,22 @@ fn import_ingested_file_as<'a>() -> impl Parser<
             EImport::IndentAs,
             EImport::IndentIngestedName
         ),
-        item: specialize_err(EImport::IngestedName, loc!(module::typed_ident()))
+        item: specialize_err(
+            |(), pos| EImport::IngestedName(pos),
+            loc!(lowercase_ident())
+        )
+    })
+}
+
+#[inline(always)]
+fn import_ingested_file_annotation<'a>() -> impl Parser<'a, IngestedFileAnnotation<'a>, EImport<'a>>
+{
+    record!(IngestedFileAnnotation {
+        before_colon: skip_second!(
+            backtrackable(space0_e(EImport::IndentColon)),
+            byte(b':', EImport::Colon)
+        ),
+        annotation: specialize_err(EImport::Annotation, type_annotation::located(false))
     })
 }
 
@@ -1120,6 +1153,7 @@ pub fn parse_single_def_assignment<'a>(
                         type_or_value: Either::Second(value_def),
                         region,
                         spaces_before: spaces_before_current,
+                        spaces_after: &[],
                     }),
                     state_after_rest_of_def,
                 ));
@@ -1141,6 +1175,7 @@ pub fn parse_single_def_assignment<'a>(
                         type_or_value: Either::Second(value_def),
                         region,
                         spaces_before: spaces_before_current,
+                        spaces_after: &[],
                     }),
                     state_after_first_expression,
                 ));
@@ -1156,6 +1191,7 @@ pub fn parse_single_def_assignment<'a>(
             type_or_value: Either::Second(value_def),
             region,
             spaces_before: spaces_before_current,
+            spaces_after: &[],
         }),
         state_after_first_expression,
     ))
@@ -1203,6 +1239,7 @@ fn parse_statement_inside_def<'a>(
             type_or_value: Either::Second(value_def),
             region,
             spaces_before: spaces_before_current,
+            spaces_after: &[],
         }),
         state,
     ))
@@ -1286,10 +1323,16 @@ fn parse_defs_end<'a>(
             Ok((_, Some(single_def), next_state)) => {
                 let region = single_def.region;
                 let spaces_before_current = single_def.spaces_before;
+                let spaces_after_current = single_def.spaces_after;
 
                 match single_def.type_or_value {
                     Either::First(type_def) => {
-                        defs.push_type_def(type_def, region, spaces_before_current, &[]);
+                        defs.push_type_def(
+                            type_def,
+                            region,
+                            spaces_before_current,
+                            spaces_after_current,
+                        );
                     }
                     Either::Second(value_def) => {
                         // If we got a ValueDef::Body, check if a type annotation preceded it.
@@ -1351,7 +1394,12 @@ fn parse_defs_end<'a>(
 
                         if !joined {
                             // the previous and current def can't be joined up
-                            defs.push_value_def(value_def, region, spaces_before_current, &[]);
+                            defs.push_value_def(
+                                value_def,
+                                region,
+                                spaces_before_current,
+                                spaces_after_current,
+                            );
                         }
                     }
                 }
@@ -1373,6 +1421,7 @@ pub struct SingleDef<'a> {
     pub type_or_value: Either<TypeDef<'a>, ValueDef<'a>>,
     pub region: Region,
     pub spaces_before: &'a [CommentOrNewline<'a>],
+    pub spaces_after: &'a [CommentOrNewline<'a>],
 }
 
 fn parse_defs_expr<'a>(
@@ -1993,15 +2042,15 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        let new_options = if is_expr_suffixed(&new_expr.value) {
-                            options.set_suffixed_found()
+                        let new_min_indent = if is_expr_suffixed(&new_expr.value) {
+                            min_indent + 1
                         } else {
-                            options
+                            min_indent
                         };
 
                         match parse_expr_end(
-                            min_indent,
-                            new_options,
+                            new_min_indent,
+                            options,
                             expr_state,
                             arena,
                             state,
@@ -2056,18 +2105,12 @@ fn parse_expr_end<'a>(
     state: State<'a>,
     initial_state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let inner_min_indent = if options.suffixed_found {
-        min_indent + 1
-    } else {
-        min_indent
-    };
-
     let parser = skip_first!(
         crate::blankspace::check_indent(EExpr::IndentEnd),
         loc_term_or_underscore(options)
     );
 
-    match parser.parse(arena, state.clone(), inner_min_indent) {
+    match parser.parse(arena, state.clone(), min_indent) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((
             _,
@@ -2125,10 +2168,10 @@ fn parse_expr_end<'a>(
         Ok((_, mut arg, state)) => {
             let new_end = state.pos();
 
-            let new_options = if is_expr_suffixed(&arg.value) {
-                options.set_suffixed_found()
+            let min_indent = if is_expr_suffixed(&arg.value) {
+                min_indent + 1
             } else {
-                options
+                min_indent
             };
 
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
@@ -2155,14 +2198,7 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
-                    parse_expr_end(
-                        min_indent,
-                        new_options,
-                        expr_state,
-                        arena,
-                        state,
-                        initial_state,
-                    )
+                    parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
                 }
             }
         }
@@ -2280,7 +2316,6 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
     expr_start(ExprParseOptions {
         accept_multi_backpassing,
         check_for_arrow: true,
-        suffixed_found: false,
     })
 }
 
@@ -2479,7 +2514,6 @@ pub fn parse_top_level_defs<'a>(
     let options = ExprParseOptions {
         accept_multi_backpassing: true,
         check_for_arrow: true,
-        suffixed_found: false,
     };
 
     let existing_len = output.tags.len();
@@ -2860,11 +2894,11 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
 
 fn import_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let (_, import_def, state) =
-            loc!(specialize_err(EExpr::Import, import())).parse(arena, state, min_indent)?;
+        let (_, (import_def, spaces_after), state) =
+            specialize_err(EExpr::Import, import()).parse(arena, state, min_indent)?;
 
         let mut defs = Defs::default();
-        defs.push_value_def(import_def.value, import_def.region, &[], &[]);
+        defs.push_value_def(import_def.value, import_def.region, &[], spaces_after);
 
         parse_defs_expr(options, min_indent, defs, arena, state)
     }
