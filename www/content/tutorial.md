@@ -48,7 +48,7 @@ So far, so good!
 
 Try typing this in the REPL and pressing Enter:
 
-<samp class="repl-prompt">"Hello, World!"</samp>
+<pre><samp class="repl-prompt">"Hello, World!"</samp></pre>
 
 The REPL should cheerfully display the following:
 
