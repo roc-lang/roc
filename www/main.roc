@@ -28,7 +28,7 @@ pageData =
 getPage : Str -> { title : Str, description : Str }
 getPage = \current ->
     Dict.get pageData current
-    |> Result.withDefault { title: "", description: "" }
+    |> Result.withDefault (crash "Web page $(current) did not have a title and description specified in the pageData Dict. Please add one.")
 
 getTitle : Str -> Str
 getTitle = \current ->
