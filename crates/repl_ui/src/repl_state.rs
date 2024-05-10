@@ -130,7 +130,9 @@ impl ReplState {
                     ValueDef::Annotation(_, _)
                     | ValueDef::Body(_, _)
                     | ValueDef::AnnotatedBody { .. } => {
-                        todo!("handle pattern other than identifier (which repl doesn't support)")
+                        todo!("handle pattern other than identifier (which repl doesn't support).\
+                              \nTip: this error can be triggered when trying to define a variable with a character that is not allowed,\
+                              like starting with an uppercase character.")
                     }
                     ValueDef::Dbg { .. } => {
                         todo!("handle receiving a `dbg` - what should the repl do for that?")
