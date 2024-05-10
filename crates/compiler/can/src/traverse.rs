@@ -266,6 +266,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             walk_list(visitor, *elem_var, loc_elems);
         }
         Expr::Var(..) => { /* terminal */ }
+        Expr::ParamsVar { .. } => { /* terminal */ }
         Expr::AbilityMember(..) => { /* terminal */ }
         Expr::If {
             cond_var,

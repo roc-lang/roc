@@ -575,6 +575,22 @@ pub fn constrain_expr(
 
             constraints.and_constraint([store_expected, lookup_constr])
         }
+        ParamsVar {
+            symbol,
+            params,
+            var,
+        } => {
+            // Save the expectation in the variable, then lookup the symbol's type in the environment
+            let expected_type = *constraints[expected].get_type_ref();
+            let store_expected = constraints.store(expected_type, *var, file!(), line!());
+
+            let lookup_constr = constraints.lookup(*symbol, expected, region);
+
+            // todo(agus): check params
+            // let params_constr = constraints.lookup(*params, expected, region);
+
+            constraints.and_constraint([store_expected, lookup_constr])
+        }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
             // lookup the member in the environment.
@@ -4115,7 +4131,8 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ZeroArgumentTag { .. }
             | Tag { .. }
             | AbilityMember(..)
-            | Var(..) => return false,
+            | Var(..)
+            | ParamsVar { .. } => return false,
         }
     }
 }

@@ -17,7 +17,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{LookedupSymbol, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
@@ -107,6 +107,12 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol, Variable),
+    /// Like Var, but from a module with params
+    ParamsVar {
+        symbol: Symbol,
+        params: Symbol,
+        var: Variable,
+    },
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -308,6 +314,11 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
+            &Self::ParamsVar {
+                symbol,
+                params: _,
+                var: _,
+            } => Category::Lookup(symbol),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -1872,7 +1883,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    Var(lookup, var_store.fresh())
+                    lookup_to_expr(lookup, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1898,7 +1909,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    Var(lookup, var_store.fresh())
+                    lookup_to_expr(lookup, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1914,6 +1925,18 @@ fn canonicalize_var_lookup(
     // If it's valid, this ident should be in scope already.
 
     (can_expr, output)
+}
+
+fn lookup_to_expr(LookedupSymbol { symbol, params }: LookedupSymbol, var: Variable) -> Expr {
+    if let Some(params) = params {
+        Expr::ParamsVar {
+            symbol,
+            params,
+            var,
+        }
+    } else {
+        Expr::Var(symbol, var)
+    }
 }
 
 /// Currently uses the heuristic of "only inline if it's a builtin"
@@ -1934,6 +1957,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RecordAccessor { .. }
         | other @ RecordUpdate { .. }
         | other @ Var(..)
+        | other @ ParamsVar { .. }
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
@@ -3100,6 +3124,11 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Var(symbol, var)
+            | Expr::ParamsVar {
+                symbol,
+                params: _,
+                var,
+            }
             | Expr::RecordUpdate {
                 symbol,
                 record_var: var,

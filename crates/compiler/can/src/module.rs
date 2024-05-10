@@ -1105,6 +1105,7 @@ fn fix_values_captured_in_closure_expr(
         | SingleQuote(..)
         | IngestedFile(..)
         | Var(..)
+        | ParamsVar { .. }
         | AbilityMember(..)
         | EmptyRecord
         | TypedHole { .. }

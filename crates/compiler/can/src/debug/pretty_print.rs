@@ -206,7 +206,9 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .append("]")
                     .group(),
             ),
-        Var(sym, _) | AbilityMember(sym, _, _) => pp_sym(c, f, *sym),
+        Var(sym, _) | ParamsVar { symbol: sym, .. } | AbilityMember(sym, _, _) => {
+            pp_sym(c, f, *sym)
+        }
         When {
             loc_cond, branches, ..
         } => maybe_paren!(
