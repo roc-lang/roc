@@ -64,6 +64,7 @@ fn is_roc_file(path: &Path) -> bool {
 
 pub fn format_files(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
     let arena = Bump::new();
+    let mut files_to_reformat = Vec::new(); // to track which files failed `roc format --check`
 
     for file in flatten_directories(files) {
         let src = std::fs::read_to_string(&file).unwrap();
@@ -72,9 +73,10 @@ pub fn format_files(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(
             Ok(buf) => {
                 match mode {
                     FormatMode::CheckOnly => {
-                        // If we notice that this file needs to be formatted, return early
+                        // If a file fails `format --check`, add it to the file
+                        // list for reporting afterwards.
                         if buf.as_str() != src {
-                            return Err("One or more files need to be reformatted.".to_string());
+                            files_to_reformat.push(file.display().to_string());
                         }
                     }
                     FormatMode::WriteToFile => {
@@ -152,7 +154,14 @@ pub fn format_files(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(
             },
         }
     }
-
+    // After processing all files, check if any files failed `format --check`
+    if !files_to_reformat.is_empty() {
+        let file_list = files_to_reformat.join(", ");
+        return Err(format!(
+            "The following file(s) failed `roc format --check`:\n\t{}\nYou can fix this with `roc format filename.roc`.",
+            file_list
+        ));
+    }
     Ok(())
 }
 
@@ -238,4 +247,106 @@ fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
     fmt_defs(buf, &ast.defs, 0);
 
     buf.fmt_end_of_file();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::{tempdir, TempDir};
+
+    const FORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+import pf.Stdout
+import pf.Task
+
+main =
+    Stdout.line! "I'm a Roc application!""#;
+
+    const UNFORMATTED_ROC: &str = r#"app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+
+import pf.Stdout
+
+import pf.Task
+
+main =
+    Stdout.line! "I'm a Roc application!"
+"#;
+
+    fn setup_test_file(dir: &Path, file_name: &str, contents: &str) -> PathBuf {
+        let file_path = dir.join(file_name);
+        let mut file = File::create(&file_path).unwrap();
+        writeln!(file, "{}", contents).unwrap();
+        file.flush().unwrap();
+        file_path
+    }
+
+    fn cleanup_temp_dir(dir: TempDir) {
+        let result = dir.close();
+        assert!(result.is_ok(), "Failed to delete temp directory");
+    }
+
+    #[test]
+    fn test_single_file_needs_reformatting() {
+        let dir = tempdir().unwrap();
+        let file_path = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
+
+        let result = format_files(vec![file_path.clone()], FormatMode::CheckOnly);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            format!(
+                "The following file(s) failed `roc format --check`:\n\t{}\nYou can fix this with `roc format filename.roc`.",
+                &file_path.as_path().to_str().unwrap()
+            )
+        );
+
+        cleanup_temp_dir(dir);
+    }
+
+    #[test]
+    fn test_multiple_files_needs_reformatting() {
+        let dir = tempdir().unwrap();
+        let file1 = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
+        let file2 = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
+
+        let result = format_files(vec![file1, file2], FormatMode::CheckOnly);
+        assert!(result.is_err());
+        let error_message = result.unwrap_err();
+        assert!(error_message.contains("test1.roc") && error_message.contains("test2.roc"));
+
+        cleanup_temp_dir(dir);
+    }
+
+    #[test]
+    fn test_no_files_need_reformatting() {
+        let dir = tempdir().unwrap();
+        let file_path = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
+
+        let result = format_files(vec![file_path], FormatMode::CheckOnly);
+        assert!(result.is_ok());
+
+        cleanup_temp_dir(dir);
+    }
+
+    #[test]
+    fn test_some_files_need_reformatting() {
+        let dir = tempdir().unwrap();
+        let file_formatted = setup_test_file(dir.path(), "formatted.roc", FORMATTED_ROC);
+        let file1_unformated = setup_test_file(dir.path(), "test1.roc", UNFORMATTED_ROC);
+        let file2_unformated = setup_test_file(dir.path(), "test2.roc", UNFORMATTED_ROC);
+
+        let result = format_files(
+            vec![file_formatted, file1_unformated, file2_unformated],
+            FormatMode::CheckOnly,
+        );
+        assert!(result.is_err());
+        let error_message = result.unwrap_err();
+        assert!(error_message.contains("test1.roc") && error_message.contains("test2.roc"));
+        assert!(!error_message.contains("formatted.roc"));
+
+        cleanup_temp_dir(dir);
+    }
 }
