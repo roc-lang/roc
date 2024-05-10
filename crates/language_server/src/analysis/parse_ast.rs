@@ -26,7 +26,9 @@ impl<'a> Ast<'a> {
         let (module, state) = parse_header(arena, State::new(src.as_bytes()))
             .map_err(|e| SyntaxError::Header(e.problem))?;
 
-        let defs = parse_module_defs(arena, state, Defs::default())?;
+        let (module, defs) = module.upgrade_header_imports(arena);
+
+        let defs = parse_module_defs(arena, state, defs)?;
 
         Ok(Ast {
             module,
