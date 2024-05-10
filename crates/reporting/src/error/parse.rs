@@ -670,6 +670,9 @@ fn to_expr_report<'a>(
         EExpr::Dbg(e_expect, _position) => {
             to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
         }
+        EExpr::Import(e_import, position) => {
+            to_import_report(alloc, lines, filename, e_import, *position)
+        }
         EExpr::TrailingOperator(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
@@ -1436,6 +1439,190 @@ fn to_dbg_or_expect_report<'a>(
         }
 
         roc_parse::parser::EExpect::IndentCondition(_) => todo!(),
+    }
+}
+
+fn to_import_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EImport<'a>,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EImport::*;
+
+    match parse_problem {
+        Import(_pos) => unreachable!("another branch would be taken"),
+        IndentStart(pos)
+        | PackageShorthand(pos)
+        | PackageShorthandDot(pos)
+        | ModuleName(pos)
+        | IndentIngestedPath(pos)
+        | IngestedPath(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see a module name, like:"),
+                alloc.parser_suggestion("import BigNum").indent(4),
+                alloc.reflow("Or a package module name, like:"),
+                alloc.parser_suggestion("import pf.Stdout").indent(4),
+                alloc.reflow("Or a file path to ingest, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
+        IndentAs(pos) | As(pos) | IndentExposing(pos) | Exposing(pos) | EndNewline(pos) => {
+            to_unfinished_import_report(
+                alloc,
+                lines,
+                filename,
+                *pos,
+                start,
+                alloc.stack([
+                    alloc.concat([
+                        alloc.reflow("I was expecting to see the "),
+                        alloc.keyword("as"),
+                        alloc.reflow(" keyword, like:"),
+                    ]),
+                    alloc
+                        .parser_suggestion("import svg.Path as SvgPath")
+                        .indent(4),
+                    alloc.concat([
+                        alloc.reflow("Or the "),
+                        alloc.keyword("exposing"),
+                        alloc.reflow(" keyword, like:"),
+                    ]),
+                    alloc
+                        .parser_suggestion("import svg.Path exposing [arc, rx]")
+                        .indent(4),
+                ]),
+            )
+        }
+        IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat([
+                alloc.reflow("I just saw the "),
+                alloc.keyword("as"),
+                alloc.reflow(" keyword, so I was expecting to see an alias next."),
+            ]),
+        ),
+        LowercaseAlias(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow(r"This import is using a lowercase alias:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"Module names and aliases must start with an uppercase letter."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "LOWERCASE ALIAS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        ExposingListStart(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat([
+                alloc.reflow("I just saw the "),
+                alloc.keyword("exposing"),
+                alloc.reflow(" keyword, so I was expecting to see "),
+                alloc.keyword("["),
+                alloc.reflow(" next."),
+            ]),
+        ),
+        ExposedName(pos) | ExposingListEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I'm partway through parsing an exposing list, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"I was expecting a type, value, or function name next, like:"),
+                alloc
+                    .parser_suggestion("import Svg exposing [Path, arc, rx]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSING".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        IndentIngestedName(pos) | IngestedName(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see a name next, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
+        Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
+        IndentAnnotation(pos) | IndentColon(pos) | Colon(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see an annotation next, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
+        Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
+    }
+}
+
+fn to_unfinished_import_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    pos: Position,
+    start: Position,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow(r"I was partway through parsing an "),
+            alloc.keyword("import"),
+            alloc.reflow(r", but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED IMPORT".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
