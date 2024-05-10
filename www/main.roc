@@ -9,7 +9,7 @@ app "roc-website"
 
 pageData =
     Dict.empty {}
-    |> Dict.insert "abilities.html" { title: "Abilities | Roc", description: "Learn about abilities in the Roc." }
+    |> Dict.insert "abilities.html" { title: "Abilities | Roc", description: "Learn about abilities in Roc." }
     |> Dict.insert "bdfn.html" { title: "Governance | Roc", description: "Learn about Roc's governance model." }
     |> Dict.insert "community.html" { title: "Community | Roc", description: "Connect with the Roc community." }
     |> Dict.insert "docs.html" { title: "Docs | Roc", description: "Documentation for Roc, including builtins." }
