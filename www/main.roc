@@ -15,7 +15,7 @@ pageData =
     |> Dict.insert "docs.html" { title: "Docs | Roc", description: "Documentation for Roc, including builtins." }
     |> Dict.insert "donate.html" { title: "Donate | Roc", description: "Support Roc by donating or sponsoring." }
     |> Dict.insert "faq.html" { title: "FAQ | Roc", description: "Frequently asked questions about Roc." }
-    |> Dict.insert "fast.html" { title: "Fast | Roc", description: "What does it mean that the Roc programming languag is fast?" }
+    |> Dict.insert "fast.html" { title: "Fast | Roc", description: "What does it mean that the Roc programming language is fast?" }
     |> Dict.insert "friendly.html" { title: "Friendly | Roc", description: "What does it mean that the Roc programming language is friendly?" }
     |> Dict.insert "functional.html" { title: "Functional | Roc", description: "What does it mean that the Roc programming language is functional?" }
     |> Dict.insert "index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language." }
