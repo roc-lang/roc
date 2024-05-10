@@ -515,6 +515,7 @@ fn canonicalize_claimed_ability_impl<'a>(
 
             let LookedupSymbol {
                 symbol: member_symbol,
+                // todo(agus): params in abilities?
                 params: _,
             } = match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
                 Ok(symbol) => symbol,
@@ -561,7 +562,8 @@ fn canonicalize_claimed_ability_impl<'a>(
             // reference. We want to check for a direct reference second so that if there is a
             // shadow, we won't accidentally grab the imported symbol.
             let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
-                .or_else(|| scope.lookup_str(label_str, region).ok());
+                // todo(agus): params in abilities?
+                .or_else(|| scope.lookup_str(label_str, region).map(|s| s.symbol).ok());
 
             match opt_impl_symbol {
                 // It's possible that even if we find a symbol it is still only the member
@@ -609,6 +611,7 @@ fn canonicalize_claimed_ability_impl<'a>(
 
             let LookedupSymbol {
                 symbol: member_symbol,
+                // todo(agus): params in abilities?
                 params: _,
             } = match env.qualified_lookup_with_module_id(
                 scope,
@@ -627,7 +630,11 @@ fn canonicalize_claimed_ability_impl<'a>(
                 }
             };
 
-            let impl_symbol = match scope.lookup(&impl_ident.into(), impl_region) {
+            let LookedupSymbol {
+                symbol: impl_symbol,
+                // todo(agus): params in abilities?
+                params: _,
+            } = match scope.lookup(&impl_ident.into(), impl_region) {
                 Ok(symbol) => symbol,
                 Err(err) => {
                     env.problem(Problem::RuntimeError(err));

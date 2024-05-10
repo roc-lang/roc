@@ -1,7 +1,7 @@
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName};
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, ScopeModules, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, LookedupSymbol, ModuleId, ScopeModules, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -33,6 +33,7 @@ pub struct Scope {
     pub modules: ScopeModules,
 
     /// Identifiers that are imported
+    // todo(agus): move to ScopeModules?
     imported_symbols: Vec<(Ident, Symbol, Region)>,
 
     /// Shadows of an ability member, for example a local specialization of `eq` for the ability
@@ -76,7 +77,7 @@ impl Scope {
         }
     }
 
-    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<LookedupSymbol, RuntimeError> {
         self.lookup_str(ident.as_str(), region)
     }
 
@@ -91,7 +92,7 @@ impl Scope {
             .push(("Set".into(), Symbol::SET_SET, Region::zero()));
     }
 
-    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<Symbol, RuntimeError> {
+    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<LookedupSymbol, RuntimeError> {
         use ContainsIdent::*;
 
         match self.scope_contains_ident(ident) {
@@ -205,14 +206,19 @@ impl Scope {
         }
     }
 
-    fn has_imported_symbol(&self, ident: &str) -> Option<(Symbol, Region)> {
-        for (import, shadow, original_region) in self.imported_symbols.iter() {
-            if ident == import.as_str() {
-                return Some((*shadow, *original_region));
-            }
-        }
-
-        None
+    fn has_imported_symbol(&self, ident: &str) -> Option<(LookedupSymbol, Region)> {
+        self.imported_symbols
+            .iter()
+            .find_map(|(import, symbol, original_region)| {
+                if ident == import.as_str() {
+                    match self.modules.lookup_by_id(&symbol.module_id()) {
+                        Some(module) => Some((module.into_symbol(*symbol), *original_region)),
+                        None => Some((LookedupSymbol::no_params(*symbol), *original_region)),
+                    }
+                } else {
+                    None
+                }
+            })
     }
 
     /// Is an identifier in scope, either in the locals or imports
@@ -229,7 +235,7 @@ impl Scope {
             ContainsIdent::InScope(original_symbol, original_region) => {
                 // the ident is already in scope; up to the caller how to handle that
                 // (usually it's shadowing, but it is valid to shadow ability members)
-                Err((original_symbol, original_region))
+                Err((original_symbol.symbol, original_region))
             }
             ContainsIdent::NotPresent => {
                 // We know nothing about this ident yet; introduce it to the scope
@@ -389,7 +395,9 @@ impl Scope {
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
         match self.scope_contains_ident(ident.as_str()) {
-            ContainsIdent::InScope(symbol, region) => Err((symbol, region)),
+            ContainsIdent::InScope(LookedupSymbol { symbol, params: _ }, region) => {
+                Err((symbol, region))
+            }
             ContainsIdent::NotPresent | ContainsIdent::NotInScope(_) => {
                 self.imported_symbols.push((ident, symbol, region));
                 Ok(())
@@ -534,7 +542,7 @@ pub fn create_alias(
 
 #[derive(Debug)]
 enum ContainsIdent {
-    InScope(Symbol, Region),
+    InScope(LookedupSymbol, Region),
     NotInScope(IdentId),
     NotPresent,
 }
@@ -561,7 +569,7 @@ impl ScopedIdentIds {
 
     fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
         match self.contains_ident(ident.as_str()) {
-            ContainsIdent::InScope(symbol, region) => Some((symbol, region)),
+            ContainsIdent::InScope(symbol, region) => Some((symbol.symbol, region)),
             ContainsIdent::NotInScope(_) | ContainsIdent::NotPresent => None,
         }
     }
@@ -574,7 +582,10 @@ impl ScopedIdentIds {
         for ident_id in self.ident_ids.get_id_many(ident) {
             let index = ident_id.index();
             if self.in_scope[index] {
-                return InScope(Symbol::new(self.home, ident_id), self.regions[index]);
+                return InScope(
+                    LookedupSymbol::no_params(Symbol::new(self.home, ident_id)),
+                    self.regions[index],
+                );
             } else {
                 result = NotInScope(ident_id)
             }
@@ -701,7 +712,7 @@ mod test {
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
-        assert_eq!(first, lookup);
+        assert_eq!(first, lookup.symbol);
     }
 
     #[test]
@@ -857,6 +868,6 @@ mod test {
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
-        assert_eq!(symbol, lookup);
+        assert_eq!(symbol, lookup.symbol);
     }
 }

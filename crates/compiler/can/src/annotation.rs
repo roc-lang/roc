@@ -386,7 +386,7 @@ pub(crate) fn make_apply_symbol(
         // Look it up in scope!
 
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(LookedupSymbol { symbol, params: _ }) => {
                 references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
                 Ok(symbol)
             }

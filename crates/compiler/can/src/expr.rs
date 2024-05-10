@@ -1859,19 +1859,20 @@ fn canonicalize_var_lookup(
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Unqualified);
+                    .insert_value_lookup(lookup.symbol, QualifiedReference::Unqualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        // todo(agus): params for abilities?
+                        lookup.symbol,
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    Var(lookup, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1884,23 +1885,20 @@ fn canonicalize_var_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(lookedup_symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(lookedup_symbol.symbol, QualifiedReference::Qualified);
+                    .insert_value_lookup(lookup.symbol, QualifiedReference::Qualified);
 
-                if scope
-                    .abilities_store
-                    .is_ability_member_name(lookedup_symbol.symbol)
-                {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     // todo(agus): params for abilities?
                     AbilityMember(
-                        lookedup_symbol.symbol,
+                        lookup.symbol,
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(lookedup_symbol, var_store.fresh())
+                    Var(lookup, var_store.fresh())
                 }
             }
             Err(problem) => {
