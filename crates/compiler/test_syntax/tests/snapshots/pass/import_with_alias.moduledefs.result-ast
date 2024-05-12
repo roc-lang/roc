@@ -29,6 +29,7 @@ Defs {
                         "JsonEncode",
                     ),
                 },
+                params: None,
                 alias: Some(
                     KeywordItem {
                         keyword: Spaces {
@@ -53,6 +54,7 @@ Defs {
                         "Bytes.Decode",
                     ),
                 },
+                params: None,
                 alias: Some(
                     KeywordItem {
                         keyword: Spaces {

@@ -2,7 +2,8 @@ Module {
     comments: [],
     header: Module(
         ModuleHeader {
-            before_exposes: [],
+            after_keyword: [],
+            params: None,
             exposes: [],
             interface_imports: None,
         },

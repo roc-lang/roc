@@ -2,7 +2,8 @@ Module {
     comments: [],
     header: Module(
         ModuleHeader {
-            before_exposes: [],
+            after_keyword: [],
+            params: None,
             exposes: [
                 @23-26 ExposedName(
                     "Foo",

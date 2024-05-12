@@ -540,22 +540,8 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Record(_erecord, pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([alloc.reflow("TODO provide more context.")]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "RECORD PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
-            }
+        EExpr::Record(erecord, pos) => {
+            to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
         EExpr::OptionalValueInRecordBuilder(region) => {
@@ -708,6 +694,31 @@ fn to_expr_report<'a>(
             }
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_record_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    _parse_problem: &roc_parse::parser::ERecord<'a>,
+    pos: Position,
+    start: Position,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.concat([alloc.reflow("TODO provide more context.")]),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "RECORD PARSE PROBLEM".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -1450,6 +1461,7 @@ fn to_import_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EImport::*;
+    use roc_parse::parser::EImportParams;
 
     match parse_problem {
         Import(_pos) => unreachable!("another branch would be taken"),
@@ -1475,32 +1487,76 @@ fn to_import_report<'a>(
                     .indent(4),
             ]),
         ),
-        IndentAs(pos) | As(pos) | IndentExposing(pos) | Exposing(pos) | EndNewline(pos) => {
-            to_unfinished_import_report(
-                alloc,
-                lines,
-                filename,
-                *pos,
-                start,
-                alloc.stack([
-                    alloc.concat([
-                        alloc.reflow("I was expecting to see the "),
-                        alloc.keyword("as"),
-                        alloc.reflow(" keyword, like:"),
-                    ]),
-                    alloc
-                        .parser_suggestion("import svg.Path as SvgPath")
-                        .indent(4),
-                    alloc.concat([
-                        alloc.reflow("Or the "),
-                        alloc.keyword("exposing"),
-                        alloc.reflow(" keyword, like:"),
-                    ]),
-                    alloc
-                        .parser_suggestion("import svg.Path exposing [arc, rx]")
-                        .indent(4),
+        Params(EImportParams::Indent(pos), _)
+        | IndentAs(pos)
+        | As(pos)
+        | IndentExposing(pos)
+        | Exposing(pos)
+        | EndNewline(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.concat([
+                    alloc.reflow("I was expecting to see the "),
+                    alloc.keyword("as"),
+                    alloc.reflow(" keyword, like:"),
                 ]),
-            )
+                alloc
+                    .parser_suggestion("import svg.Path as SvgPath")
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow("Or the "),
+                    alloc.keyword("exposing"),
+                    alloc.reflow(" keyword, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("import svg.Path exposing [arc, rx]")
+                    .indent(4),
+                alloc.reflow("Or module params, like:"),
+                alloc
+                    .parser_suggestion("import Menu { echo, read }")
+                    .indent(4),
+            ]),
+        ),
+        Params(EImportParams::Record(problem, pos), _) => {
+            to_record_report(alloc, lines, filename, problem, *pos, start)
+        }
+        Params(EImportParams::RecordApplyFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("This looks like a record builder field, but those are not allowed in module params."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        Params(EImportParams::RecordUpdateFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("It looks like you're trying to update a record, but module params require a standalone record literal."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD UPDATE IN MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
         }
         IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
             alloc,
@@ -1593,7 +1649,9 @@ fn to_import_report<'a>(
                     .indent(4),
             ]),
         ),
-        Space(problem, pos) => to_space_report(alloc, lines, filename, problem, *pos),
+        Space(problem, pos) | Params(EImportParams::Space(problem, pos), _) => {
+            to_space_report(alloc, lines, filename, problem, *pos)
+        }
     }
 }
 
@@ -3392,6 +3450,8 @@ fn to_header_report<'a>(
             to_provides_report(alloc, lines, filename, provides, *pos)
         }
 
+        EHeader::Params(params, pos) => to_params_report(alloc, lines, filename, params, *pos),
+
         EHeader::Exposes(exposes, pos) => to_exposes_report(alloc, lines, filename, exposes, *pos),
 
         EHeader::Imports(imports, pos) => to_imports_report(alloc, lines, filename, imports, *pos),
@@ -3783,6 +3843,48 @@ fn to_provides_report<'a>(
         }
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
+    }
+}
+
+fn to_params_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EParams<'a>,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EParams;
+
+    match parse_problem {
+        EParams::Pattern(error, pos) => to_precord_report(alloc, lines, filename, error, *pos),
+
+        EParams::BeforeArrow(pos) | EParams::Arrow(pos) | EParams::AfterArrow(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I am partway through parsing a module header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting "),
+                    alloc.keyword("->"),
+                    alloc.reflow(" next, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("module { echo, read } -> [menu]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EParams::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
     }
 }
 

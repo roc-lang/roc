@@ -11,8 +11,9 @@ use roc_parse::{
         WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, ModuleHeader, ModuleName, PackageEntry,
-        PackageHeader, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To, TypedIdent,
+        AppHeader, ExposedName, HostedHeader, ImportsEntry, ModuleHeader, ModuleName, ModuleParams,
+        PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To,
+        TypedIdent,
     },
     ident::{Accessor, UppercaseIdent},
 };
@@ -213,12 +214,41 @@ impl IterTokens for Header<'_> {
 impl IterTokens for ModuleHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_exposes: _,
+            after_keyword: _,
+            params,
             exposes,
             interface_imports: _,
         } = self;
 
-        exposes.iter_tokens(arena)
+        params
+            .iter_tokens(arena)
+            .into_iter()
+            .chain(exposes.iter_tokens(arena))
+            .collect_in(arena)
+    }
+}
+
+impl<T> IterTokens for Option<T>
+where
+    T: IterTokens,
+{
+    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
+        match self {
+            Some(params) => params.iter_tokens(arena),
+            None => bumpvec![in arena;],
+        }
+    }
+}
+
+impl IterTokens for ModuleParams<'_> {
+    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
+        let Self {
+            params,
+            before_arrow: _,
+            after_arrow: _,
+        } = self;
+
+        params.iter_tokens(arena)
     }
 }
 

@@ -4944,6 +4944,67 @@ mod test_reporting {
     );
 
     test_report!(
+        weird_import_params_record,
+        indoc!(
+            r"
+            import Menu { x = 4 }
+            "
+        ),@r###"
+    ── RECORD PARSE PROBLEM in tmp/weird_import_params_record/Test.roc ─────────────
+
+    I am partway through parsing a record, but I got stuck here:
+
+    4│      import Menu { x = 4 }
+                        ^
+
+    TODO provide more context.
+    "###
+    );
+
+    test_report!(
+        record_builder_in_module_params,
+        indoc!(
+            r"
+            import Menu {
+                echo,
+                name: <- applyName
+            }
+            "
+        ),@r###"
+    ── RECORD BUILDER IN MODULE PARAMS in ...ord_builder_in_module_params/Test.roc ─
+
+    I was partway through parsing module params, but I got stuck here:
+
+    4│      import Menu {
+    5│          echo,
+    6│          name: <- applyName
+                ^^^^^^^^^^^^^^^^^^
+
+    This looks like a record builder field, but those are not allowed in
+    module params.
+    "###
+    );
+
+    test_report!(
+        record_update_in_module_params,
+        indoc!(
+            r"
+            import Menu { myParams & echo: echoFn }
+            "
+        ),@r###"
+    ── RECORD UPDATE IN MODULE PARAMS in ...ecord_update_in_module_params/Test.roc ─
+
+    I was partway through parsing module params, but I got stuck here:
+
+    4│      import Menu { myParams & echo: echoFn }
+                          ^^^^^^^^
+
+    It looks like you're trying to update a record, but module params
+    require a standalone record literal.
+    "###
+    );
+
+    test_report!(
         unfinished_import_as_or_exposing,
         indoc!(
             r"
@@ -4965,6 +5026,10 @@ mod test_reporting {
     Or the `exposing` keyword, like:
 
         import svg.Path exposing [arc, rx]
+
+    Or module params, like:
+
+        import Menu { echo, read }
     "###
     );
 
@@ -6205,6 +6270,31 @@ In roc, functions are always written as a lambda, like{}
                 I am expecting the platform name next, like:
 
                     to pf
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn module_params_with_missing_arrow() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                module {echo, read} [menu]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE PARAMS in /code/proj/Main.roc ──────────────────────────────────
+
+                I am partway through parsing a module header, but I got stuck here:
+
+                1│  module {echo, read} [menu]
+                                        ^
+
+                I am expecting `->` next, like:
+
+                    module { echo, read } -> [menu]
                 "#
             ),
         )

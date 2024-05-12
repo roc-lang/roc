@@ -4,17 +4,18 @@ use crate::expr::merge_spaces;
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
     HostedHeader, ImportsCollection, ImportsEntry, ImportsKeyword, ImportsKeywordItem, Keyword,
-    KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader, PackagesKeyword,
-    PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword,
-    TypedIdent, WithKeyword,
+    KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry, PackageHeader,
+    PackagesKeyword, PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo,
+    RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, byte, increment_min_indent, optional, reset_min_indent, specialize_err,
-    two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides,
-    ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
+    two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EParams,
+    EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
 };
+use crate::pattern::record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
@@ -111,11 +112,23 @@ pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
 #[inline(always)]
 fn module_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
     record!(ModuleHeader {
-        before_exposes: space0_e(EHeader::IndentStart),
+        after_keyword: space0_e(EHeader::IndentStart),
+        params: optional(specialize_err(EHeader::Params, module_params())),
         exposes: specialize_err(EHeader::Exposes, exposes_list()),
         interface_imports: succeed!(None)
     })
     .trace("module_header")
+}
+
+fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
+    record!(ModuleParams {
+        params: specialize_err(EParams::Pattern, record_pattern_fields()),
+        before_arrow: skip_second!(
+            space0_e(EParams::BeforeArrow),
+            loc!(two_bytes(b'-', b'>', EParams::Arrow))
+        ),
+        after_arrow: space0_e(EParams::AfterArrow),
+    })
 }
 
 macro_rules! merge_n_spaces {
@@ -131,7 +144,7 @@ macro_rules! merge_n_spaces {
 /// Parse old interface headers so we can format them into module headers
 #[inline(always)]
 fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
-    let before_exposes = map_with_arena!(
+    let after_keyword = map_with_arena!(
         and!(
             skip_second!(
                 space0_e(EHeader::IndentStart),
@@ -146,7 +159,8 @@ fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
     );
 
     record!(ModuleHeader {
-        before_exposes: before_exposes,
+        after_keyword: after_keyword,
+        params: succeed!(None),
         exposes: specialize_err(EHeader::Exposes, exposes_list()).trace("exposes_list"),
         interface_imports: map!(
             specialize_err(EHeader::Imports, imports()),

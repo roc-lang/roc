@@ -6,8 +6,8 @@ use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT}
 use crate::Buf;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, Pattern, Spaces,
-    StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::header::Keyword;
 use roc_region::all::Loc;
@@ -192,12 +192,14 @@ impl<'a> Formattable for ModuleImport<'a> {
         let Self {
             before_name,
             name,
+            params,
             alias,
             exposed,
         } = self;
 
         !before_name.is_empty()
             || name.is_multiline()
+            || params.is_multiline()
             || alias.is_multiline()
             || match exposed {
                 Some(a) => a.keyword.is_multiline() || is_collection_multiline(&a.item),
@@ -215,6 +217,7 @@ impl<'a> Formattable for ModuleImport<'a> {
         let Self {
             before_name,
             name,
+            params,
             alias,
             exposed,
         } = self;
@@ -222,32 +225,41 @@ impl<'a> Formattable for ModuleImport<'a> {
         buf.indent(indent);
         buf.push_str("import");
 
-        let indent = indent + INDENT;
+        let indent = if !before_name.is_empty()
+            || (params.is_multiline() && exposed.is_some())
+            || alias.is_multiline()
+            || exposed.map_or(false, |e| e.keyword.is_multiline())
+        {
+            indent + INDENT
+        } else {
+            indent
+        };
 
         fmt_default_spaces(buf, before_name, indent);
 
-        buf.indent(indent);
         name.format(buf, indent);
-
-        if let Some(alias) = alias {
-            alias.format(buf, indent);
-        }
+        params.format(buf, indent);
+        alias.format(buf, indent);
 
         if let Some(exposed) = exposed {
             exposed.keyword.format(buf, indent);
-
-            let list_indent = if !before_name.is_empty()
-                || alias.is_multiline()
-                || exposed.keyword.is_multiline()
-            {
-                indent
-            } else {
-                // Align list with import keyword
-                indent - INDENT
-            };
-
-            fmt_collection(buf, list_indent, Braces::Square, exposed.item, Newlines::No);
+            fmt_collection(buf, indent, Braces::Square, exposed.item, Newlines::No);
         }
+    }
+}
+
+impl<'a> Formattable for ModuleImportParams<'a> {
+    fn is_multiline(&self) -> bool {
+        let ModuleImportParams { before, params } = self;
+
+        !before.is_empty() || is_collection_multiline(params)
+    }
+
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
+        let ModuleImportParams { before, params } = self;
+
+        fmt_default_spaces(buf, before, indent);
+        fmt_collection(buf, indent, Braces::Curly, *params, newlines);
     }
 }
 

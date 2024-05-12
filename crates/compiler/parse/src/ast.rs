@@ -246,6 +246,7 @@ impl<'a> Module<'a> {
                     name,
                 },
             },
+            params: None,
             alias: None,
             exposed: new_exposed,
         })
@@ -784,43 +785,6 @@ pub enum ValueDef<'a> {
 }
 
 impl<'a> ValueDef<'a> {
-    pub fn expr(&self) -> Option<&'a Expr<'a>> {
-        match self {
-            ValueDef::Body(_, body) => Some(&body.value),
-
-            ValueDef::AnnotatedBody {
-                ann_pattern: _,
-                ann_type: _,
-                comment: _,
-                body_pattern: _,
-                body_expr,
-            } => Some(&body_expr.value),
-
-            ValueDef::Dbg {
-                condition,
-                preceding_comment: _,
-            }
-            | ValueDef::Expect {
-                condition,
-                preceding_comment: _,
-            }
-            | ValueDef::ExpectFx {
-                condition,
-                preceding_comment: _,
-            } => Some(&condition.value),
-
-            ValueDef::Annotation(_, _)
-            | ValueDef::ModuleImport(ModuleImport {
-                before_name: _,
-                name: _,
-                alias: _,
-                exposed: _,
-            })
-            | ValueDef::IngestedFileImport(_) => None,
-            ValueDef::Stmt(loc_expr) => Some(&loc_expr.value),
-        }
-    }
-
     pub fn replace_expr(&mut self, new_expr: &'a Loc<Expr<'a>>) {
         match self {
             ValueDef::Body(_, expr) => *expr = new_expr,
@@ -1019,8 +983,47 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                     let def = &self.current.value_defs[def_index.index()];
                     let region = &self.current.regions[self.index];
 
-                    if let Some(expr) = def.expr() {
-                        self.push_pending_from_expr(expr);
+                    match def {
+                        ValueDef::Body(_, body) => self.push_pending_from_expr(&body.value),
+
+                        ValueDef::AnnotatedBody {
+                            ann_pattern: _,
+                            ann_type: _,
+                            comment: _,
+                            body_pattern: _,
+                            body_expr,
+                        } => self.push_pending_from_expr(&body_expr.value),
+
+                        ValueDef::Dbg {
+                            condition,
+                            preceding_comment: _,
+                        }
+                        | ValueDef::Expect {
+                            condition,
+                            preceding_comment: _,
+                        }
+                        | ValueDef::ExpectFx {
+                            condition,
+                            preceding_comment: _,
+                        } => self.push_pending_from_expr(&condition.value),
+
+                        ValueDef::ModuleImport(ModuleImport {
+                            before_name: _,
+                            name: _,
+                            alias: _,
+                            exposed: _,
+                            params,
+                        }) => {
+                            if let Some(ModuleImportParams { before: _, params }) = params {
+                                for loc_assigned_field in params.items {
+                                    if let Some(expr) = loc_assigned_field.value.value() {
+                                        self.push_pending_from_expr(&expr.value);
+                                    }
+                                }
+                            }
+                        }
+                        ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
+                        ValueDef::Annotation(_, _) | ValueDef::IngestedFileImport(_) => {}
                     }
 
                     self.index += 1;
@@ -1046,6 +1049,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
 pub struct ModuleImport<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<ImportedModuleName<'a>>,
+    pub params: Option<ModuleImportParams<'a>>,
     pub alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
     pub exposed: Option<
         header::KeywordItem<
@@ -1054,6 +1058,12 @@ pub struct ModuleImport<'a> {
             Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
         >,
     >,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImportParams<'a> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub params: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1535,6 +1545,20 @@ pub enum AssignedField<'a, Val> {
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
+}
+
+impl<'a, Val> AssignedField<'a, Val> {
+    pub fn value(&self) -> Option<&Loc<Val>> {
+        let mut current = self;
+
+        loop {
+            match current {
+                Self::RequiredValue(_, _, val) | Self::OptionalValue(_, _, val) => break Some(val),
+                Self::LabelOnly(_) | Self::Malformed(_) => break None,
+                Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2635,9 +2659,10 @@ impl<'a> Malformed for ValueDef<'a> {
             ValueDef::ModuleImport(ModuleImport {
                 before_name: _,
                 name: _,
+                params,
                 alias: _,
                 exposed: _,
-            }) => false,
+            }) => params.is_malformed(),
             ValueDef::IngestedFileImport(IngestedFileImport {
                 before_path: _,
                 path,
@@ -2646,6 +2671,14 @@ impl<'a> Malformed for ValueDef<'a> {
             }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
         }
+    }
+}
+
+impl<'a> Malformed for ModuleImportParams<'a> {
+    fn is_malformed(&self) -> bool {
+        let Self { before: _, params } = self;
+
+        params.is_malformed()
     }
 }
 

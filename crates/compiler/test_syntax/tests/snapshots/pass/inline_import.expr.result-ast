@@ -32,6 +32,7 @@ Defs(
                             "Json",
                         ),
                     },
+                    params: None,
                     alias: None,
                     exposed: Some(
                         KeywordItem {
@@ -58,6 +59,7 @@ Defs(
                             "Json.Encode",
                         ),
                     },
+                    params: None,
                     alias: Some(
                         KeywordItem {
                             keyword: Spaces {

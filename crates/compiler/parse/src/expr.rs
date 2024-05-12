@@ -1,8 +1,9 @@
 use crate::ast::{
     is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, Pattern,
-    RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation,
+    TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -15,8 +16,8 @@ use crate::module::module_name_help;
 use crate::parser::{
     self, backtrackable, byte, byte_indent, increment_min_indent, line_min_indent, optional,
     reset_min_indent, sep_by1, sep_by1_e, set_min_indent, specialize_err, specialize_err_ref, then,
-    two_bytes, EClosure, EExpect, EExpr, EIf, EImport, EInParens, EList, ENumber, EPattern,
-    ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    two_bytes, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber,
+    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -979,10 +980,42 @@ fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
         record!(ModuleImport {
             before_name: space0_e(EImport::IndentStart),
             name: loc!(imported_module_name()),
+            params: optional(specialize_err(EImport::Params, import_params())),
             alias: optional(import_as()),
             exposed: optional(import_exposing())
         }),
         ValueDef::ModuleImport
+    )
+}
+
+fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<'a>> {
+    then(
+        and!(
+            backtrackable(space0_e(EImportParams::Indent)),
+            specialize_err(EImportParams::Record, record_help())
+        ),
+        |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
+            if let Some(update) = record.update {
+                return Err((
+                    MadeProgress,
+                    EImportParams::RecordUpdateFound(update.region),
+                ));
+            }
+
+            let params = record.fields.map_items_result(arena, |loc_field| {
+                match loc_field.value.to_assigned_field(arena) {
+                    Ok(field) => Ok(Loc::at(loc_field.region, field)),
+                    Err(FoundApplyValue) => Err((
+                        MadeProgress,
+                        EImportParams::RecordApplyFound(loc_field.region),
+                    )),
+                }
+            })?;
+
+            let import_params = ModuleImportParams { before, params };
+
+            Ok((MadeProgress, import_params, state))
+        },
     )
 }
 
