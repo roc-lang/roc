@@ -294,9 +294,9 @@ fn stub_lib_is_up_to_date(target: Target, stub_lib_path: &Path, custom_names: &[
 
 pub fn preprocess_host(
     target: Target,
-    host_path: &PathBuf,
-    platform_path: &PathBuf,
-    dylib_path: &PathBuf,
+    host_path: &Path,
+    platform_path: &Path,
+    dylib_path: &Path,
     verbose: bool,
     time: bool,
 ) {
@@ -305,10 +305,10 @@ pub fn preprocess_host(
 
     preprocess(
         target,
-        &host_path,
+        host_path,
         &metadata_path,
         preprocessed_path.as_path(),
-        dylib_path.as_path(),
+        dylib_path,
         &[],
         verbose,
         time,

@@ -506,5 +506,5 @@ pub fn rebuild_host(dir_name: &PathBuf, file_name: &PathBuf) {
             ("ZIG_GLUE", zig_glue_path.display().to_string().as_str()),
         ])
         .status()
-        .expect(format!("unable to run build script {}", build_script_path.display()).as_str());
+        .unwrap_or_else(|_| panic!("unable to run build script {}", build_script_path.display()));
 }
