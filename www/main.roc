@@ -21,6 +21,7 @@ pageData =
     |> Dict.insert "platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
     |> Dict.insert "tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
     |> Dict.insert "repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
+    |> Dict.insert "examples/index.html" { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." }
 
 getPageInfo : Str -> { title : Str, description : Str }
 getPageInfo = \pagePathStr ->
@@ -29,10 +30,12 @@ getPageInfo = \pagePathStr ->
         Ok pageInfo -> pageInfo
         Err KeyNotFound ->
             if Str.contains pagePathStr "examples/" then
-                Str.splitLast pagePathStr "/"
-                |> unwrapOrCrash "This splitLast should never fail. pagePathStr ($(pagePathStr)) did not contain any `/`."
-                |> .after # get part after last /
-                |> (\pageTitle -> { title: pageTitle, description: "Example of $(pageTitle) in the Roc programming language." })
+                Str.split pagePathStr "/"
+                |> List.takeLast 2
+                |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
+                |> unwrapOrCrash "This List.first should never fail. pagePathStr ($(pagePathStr)) did not contain any `/`."
+                |> (\pageTitle ->
+                    { title: "$(pageTitle) | Roc", description: "$(pageTitle) example in the Roc programming language." })
             else
                 crash "Web page $(pagePathStr) did not have a title and description specified in the pageData Dict. Please add one."
 
@@ -45,17 +48,9 @@ unwrapOrCrash = \result, errorMsg ->
         Err err ->
             crash "$(Inspect.toStr err): $(errorMsg)"
 
-getTitle : Str -> Str
-getTitle = \current ->
-    getPageInfo current |> .title
-
-getDescription : Str -> Str
-getDescription = \current ->
-    getPageInfo current |> .description
-
 transformFileContent : Str, Str -> Str
-transformFileContent = \page, htmlContent ->
-    Html.render (view page htmlContent)
+transformFileContent = \pagePathStr, htmlContent ->
+    Html.render (view pagePathStr htmlContent)
 
 preloadWoff2 : Str -> Node
 preloadWoff2 = \url ->
@@ -70,9 +65,9 @@ preloadWoff2 = \url ->
     ]
 
 view : Str, Str -> Html.Node
-view = \page, htmlContent ->
+view = \pagePathStr, htmlContent ->
     mainBody =
-        if page == "index.html" then
+        if pagePathStr == "index.html" then
             when Str.splitFirst htmlContent "<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->" is
                 Ok { before, after } -> [text before, InteractiveExample.view, text after]
                 Err NotFound -> crash "Could not find the comment where the larger example on the homepage should have been inserted. Was it removed or edited?"
@@ -80,11 +75,11 @@ view = \page, htmlContent ->
             [text htmlContent]
 
     bodyAttrs =
-        when page is
+        when pagePathStr is
             "index.html" -> [id "homepage-main"]
             "tutorial.html" -> [id "tutorial-main", class "article-layout"]
             _ ->
-                if Str.startsWith page "examples/" && page != "examples/index.html" then
+                if Str.startsWith pagePathStr "examples/" && pagePathStr != "examples/index.html" then
                     # Individual examples should render wider than articles.
                     # Otherwise the width is unreasonably low for the code blocks,
                     # and those pages don't tend to have big paragraphs anyway.
@@ -95,11 +90,13 @@ view = \page, htmlContent ->
                 else
                     [class "article-layout"]
 
+    pageInfo = getPageInfo pagePathStr
+
     html [lang "en", class "no-js"] [
         head [] [
             meta [charset "utf-8"],
-            Html.title [] [text (getTitle page)],
-            meta [name "description", content (getDescription page)],
+            Html.title [] [text (pageInfo.title)],
+            meta [name "description", content (pageInfo.description)],
             meta [name "viewport", content "width=device-width"],
             link [rel "icon", href "/favicon.svg"],
             # Preload the latin-regular (but not latin-ext) unicode ranges of our fonts.
@@ -121,7 +118,7 @@ view = \page, htmlContent ->
             script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"],
         ],
         body bodyAttrs [
-            viewNavbar page,
+            viewNavbar pagePathStr,
             main [] mainBody,
             footer [] [
                 div [id "footer"] [
@@ -140,8 +137,8 @@ view = \page, htmlContent ->
     ]
 
 viewNavbar : Str -> Html.Node
-viewNavbar = \page ->
-    isHomepage = page == "index.html"
+viewNavbar = \pagePathStr ->
+    isHomepage = pagePathStr == "index.html"
 
     homeLinkAttrs =
         [id "nav-home-link", href "/", title "The Roc Programming Language Homepage"]
