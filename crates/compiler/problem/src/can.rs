@@ -76,7 +76,7 @@ pub enum Problem {
         variable_name: Lowercase,
         alias_kind: AliasKind,
     },
-    UnboundTypeVariable {
+    UndeclaredTypeVar {
         typ: Symbol,
         num_unbound: usize,
         one_occurrence: Region,
@@ -99,7 +99,6 @@ pub enum Problem {
         record_region: Region,
         field_region: Region,
     },
-
     DuplicateTag {
         tag_name: TagName,
         tag_union_region: Region,
@@ -225,6 +224,18 @@ pub enum Problem {
         filename: PathBuf,
         error: io::ErrorKind,
     },
+    WildcardNotAllowed {
+        typ: Symbol,
+        num_wildcards: usize,
+        one_occurrence: Region,
+        kind: AliasKind,
+    },
+    UnderscoreNotAllowed {
+        typ: Symbol,
+        num_underscores: usize,
+        one_occurrence: Region,
+        kind: AliasKind,
+    },
 }
 
 impl Problem {
@@ -249,7 +260,9 @@ impl Problem {
             Problem::CyclicAlias(..) => RuntimeError,
             Problem::BadRecursion(_) => RuntimeError,
             Problem::PhantomTypeArgument { .. } => Warning,
-            Problem::UnboundTypeVariable { .. } => RuntimeError,
+            Problem::UndeclaredTypeVar { .. } => RuntimeError,
+            Problem::WildcardNotAllowed { .. } => RuntimeError,
+            Problem::UnderscoreNotAllowed { .. } => RuntimeError,
             Problem::DuplicateRecordFieldValue { .. } => Warning,
             Problem::DuplicateRecordFieldType { .. } => RuntimeError,
             Problem::InvalidOptionalValue { .. } => RuntimeError,
@@ -330,7 +343,15 @@ impl Problem {
                 variable_region: region,
                 ..
             }
-            | Problem::UnboundTypeVariable {
+            | Problem::WildcardNotAllowed {
+                one_occurrence: region,
+                ..
+            }
+            | Problem::UnderscoreNotAllowed {
+                one_occurrence: region,
+                ..
+            }
+            | Problem::UndeclaredTypeVar {
                 one_occurrence: region,
                 ..
             }

@@ -8652,6 +8652,29 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        underscore_in_alias,
+        indoc!(
+            r"
+            I : Num.Int _
+            a : I
+            a = 0x5
+            a
+            "
+        ),
+        @r"
+    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+
+    The definition of `I` has an unbound type variable:
+
+    4│      I : Num.Int _
+                        ^
+
+    Tip: Type variables must be bound before the `:`. Perhaps you intended
+    to add a type parameter to this type?
+    "
+    );
+
+    test_report!(
         wildcard_in_opaque,
         indoc!(
             r"
