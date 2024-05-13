@@ -8638,17 +8638,17 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── WILDCARD NOT ALLOWED HERE in /code/proj/Main.roc ────────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes a wildcard (`*`) type variable:
 
     4│      I : Num.Int *
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use wildcard (`*`) type variables. Only
+    named type variables are allowed.
+    "###
     );
 
     test_report!(
@@ -8657,21 +8657,19 @@ In roc, functions are always written as a lambda, like{}
             r"
             I : Num.Int _
             a : I
-            a = 0x5
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── UNDERSCORE NOT ALLOWED HERE in /code/proj/Main.roc ──────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes an inferred (`_`) type:
 
     4│      I : Num.Int _
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use inferred types (`_`).
+    "###
     );
 
     test_report!(
@@ -8683,17 +8681,17 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── WILDCARD NOT ALLOWED HERE in /code/proj/Main.roc ────────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes a wildcard (`*`) type variable:
 
     4│      I := Num.Int *
                          ^
 
-    Tip: Type variables must be bound before the `:=`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Opaque type definitions may not use wildcard (`*`) type variables. Only
+    named type variables are allowed.
+    "###
     );
 
     test_report!(
@@ -8705,19 +8703,18 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── WILDCARD NOT ALLOWED HERE in /code/proj/Main.roc ────────────────────────────
 
-    The definition of `I` has 2 unbound type variables.
-
-    Here is one occurrence:
+    The definition of `I` includes 2 wildcard (`*`) type variables. Here is
+    one of them:
 
     4│      I : [A (Num.Int *), B (Num.Int *)]
                             ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use wildcard (`*`) type variables. Only
+    named type variables are allowed.
+    "###
     );
 
     test_report!(
@@ -8729,17 +8726,16 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── UNDERSCORE NOT ALLOWED HERE in /code/proj/Main.roc ──────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes an inferred (`_`) type:
 
     4│      I : Num.Int _
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use inferred types (`_`).
+    "###
     );
 
     test_report!(
@@ -8751,17 +8747,19 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── UNDECLARED TYPE VARIABLE in /code/proj/Main.roc ─────────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes an undeclared type variable:
 
     4│      I : Num.Int a
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    All type variables in type alias definitions must be declared.
+
+    Tip: You can declare type variables by putting them right before the `:`
+    symbol, separated by spaces.
+    "###
     );
 
     test_report!(

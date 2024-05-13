@@ -482,26 +482,19 @@ pub fn can_problem<'b>(
                     text!(alloc, "{}", num_wildcards),
                     alloc.reflow(" wildcard ("),
                     alloc.keyword("*"),
-                    alloc.reflow(") type variables:"),
+                    alloc.reflow(") type variables. Here is one of them:"),
                 ]));
-                stack.push(alloc.reflow("Here is one of them:"));
             }
             stack.push(alloc.region(lines.convert_region(one_occurrence)));
-            stack.push(alloc.tip().append(alloc.concat([
-                alloc.reflow("All type variables in "),
+            stack.push(alloc.concat([
                 alloc.reflow(match kind {
-                    AliasKind::Structural => "type alias",
-                    AliasKind::Opaque => "opaque type",
+                    AliasKind::Structural => "Type alias",
+                    AliasKind::Opaque => "Opaque type",
                 }),
-                alloc.reflow(" definitions must be named, and also declared before the "),
-                alloc.keyword(match kind {
-                    AliasKind::Structural => ":",
-                    AliasKind::Opaque => ":=",
-                }),
-                alloc.reflow(" symbol. Wildcard type variables ("),
+                alloc.reflow(" definitions may not use wildcard ("),
                 alloc.keyword("*"),
-                alloc.reflow(") may not be used."),
-            ])));
+                alloc.reflow(") type variables. Only named type variables are allowed."),
+            ]));
             doc = alloc.stack(stack);
 
             title = WILDCARD_NOT_ALLOWED.to_string();
@@ -534,7 +527,7 @@ pub fn can_problem<'b>(
                 stack.push(alloc.reflow("Here is one of them:"));
             }
             stack.push(alloc.region(lines.convert_region(one_occurrence)));
-            stack.push(alloc.tip().append(alloc.concat([
+            stack.push(alloc.concat([
                 alloc.reflow(match kind {
                     AliasKind::Structural => "Type alias",
                     AliasKind::Opaque => "Opaque type",
@@ -542,7 +535,7 @@ pub fn can_problem<'b>(
                 alloc.reflow(" definitions may not use inferred types ("),
                 alloc.keyword("_"),
                 alloc.reflow(")."),
-            ])));
+            ]));
             doc = alloc.stack(stack);
 
             title = UNDERSCORE_NOT_ALLOWED.to_string();
@@ -576,24 +569,18 @@ pub fn can_problem<'b>(
                 stack.push(alloc.reflow("Here is one of them:"));
             }
             stack.push(alloc.region(lines.convert_region(one_occurrence)));
-            stack.push(alloc.tip().append(alloc.concat([
+            stack.push(alloc.concat([
                 alloc.reflow("All type variables in "),
                 alloc.reflow(match kind {
                     AliasKind::Structural => "type alias",
                     AliasKind::Opaque => "opaque type",
                 }),
-                alloc.reflow(" definitions must be declared before the "),
+                alloc.reflow(" definitions must be declared."),
+            ]));
+            stack.push(alloc.tip().append(alloc.concat([
+                alloc.reflow("You can declare type variables by putting them right before the "),
                 alloc.keyword(decl_symbol),
-                alloc.reflow(" symbol."),
-                alloc.tip().append(alloc.stack(
-                    [
-                        alloc.reflow(
-                            "You can declare type variables by putting them right before the ",
-                        ),
-                        alloc.keyword(decl_symbol),
-                        alloc.reflow(" symbol, separated by spaces."),
-                    ],
-                )),
+                alloc.reflow(" symbol, separated by spaces."),
             ])));
             doc = alloc.stack(stack);
 
