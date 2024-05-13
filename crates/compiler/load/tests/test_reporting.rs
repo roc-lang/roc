@@ -4545,13 +4545,13 @@ mod test_reporting {
 
     test_report!(
         comment_with_tab,
-        "# comment with a \t\n4",
+        "# comment with a \t char\n4",
         @r###"
     ── TAB CHARACTER in tmp/comment_with_tab/Test.roc ──────────────────────────────
 
     I encountered a tab character:
 
-    4│      # comment with a 	
+    4│      # comment with a 	 char
                              ^
 
     Tab characters are not allowed in Roc code. Please use spaces instead!
@@ -4560,13 +4560,13 @@ mod test_reporting {
 
     test_report!(
         comment_with_control_character,
-        "# comment with a \x07\n",
+        "# comment with a \x07 char\n",
         @r###"
     ── ASCII CONTROL CHARACTER in tmp/comment_with_control_character/Test.roc ──────
 
     I encountered an ASCII control character:
 
-    4│      # comment with a 
+    4│      # comment with a  char
                              ^
 
     ASCII control characters are not allowed.
