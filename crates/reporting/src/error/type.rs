@@ -1237,6 +1237,10 @@ fn to_expr_report<'b>(
                                 "Roc does not allow functions to be partially applied. \
                                 Use a closure to make partial application explicit.",
                             ),
+                            alloc.reflow(
+                                r#"For example: ["a", "b"] |> \list -> Str.joinWith list ", ""#,
+                            ),
+                            alloc.reflow(r#"or simplier: ["a", "b"] |> Str.joinWith ", ""#),
                         ];
 
                         Report {
