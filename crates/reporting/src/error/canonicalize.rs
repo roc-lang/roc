@@ -23,7 +23,9 @@ const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const IMPORT_NAME_CONFLICT: &str = "IMPORT NAME CONFLICT";
 const EXPLICIT_BUILTIN_IMPORT: &str = "EXPLICIT BUILTIN IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
-const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
+const UNDECLARED_TYPE_VARIABLE: &str = "UNDECLARED TYPE VARIABLE";
+const WILDCARD_NOT_ALLOWED: &str = "WILDCARD NOT ALLOWED HERE";
+const UNDERSCORE_NOT_ALLOWED: &str = "UNDERSCORE NOT ALLOWED HERE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
 const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
@@ -457,41 +459,132 @@ pub fn can_problem<'b>(
 
             title = UNUSED_ALIAS_PARAM.to_string();
         }
-        Problem::UnboundTypeVariable {
+        Problem::WildcardNotAllowed {
             typ: alias,
-            num_unbound,
+            num_wildcards,
             one_occurrence,
             kind,
         } => {
             let mut stack = Vec::with_capacity(4);
-            if num_unbound == 1 {
+            if num_wildcards == 1 {
                 stack.push(alloc.concat([
                     alloc.reflow("The definition of "),
                     alloc.symbol_unqualified(alias),
-                    alloc.reflow(" has an unbound type variable:"),
+                    alloc.reflow(" includes a wildcard ("),
+                    alloc.keyword("*"),
+                    alloc.reflow(") type variable:"),
                 ]));
             } else {
                 stack.push(alloc.concat([
                     alloc.reflow("The definition of "),
                     alloc.symbol_unqualified(alias),
-                    alloc.reflow(" has "),
-                    text!(alloc, "{}", num_unbound),
-                    alloc.reflow(" unbound type variables."),
+                    alloc.reflow(" includes "),
+                    text!(alloc, "{}", num_wildcards),
+                    alloc.reflow(" wildcard ("),
+                    alloc.keyword("*"),
+                    alloc.reflow(") type variables. Here is one of them:"),
                 ]));
-                stack.push(alloc.reflow("Here is one occurrence:"));
             }
             stack.push(alloc.region(lines.convert_region(one_occurrence)));
-            stack.push(alloc.tip().append(alloc.concat([
-                alloc.reflow("Type variables must be bound before the "),
-                alloc.keyword(match kind {
-                    AliasKind::Structural => ":",
-                    AliasKind::Opaque => ":=",
+            stack.push(alloc.concat([
+                alloc.reflow(match kind {
+                    AliasKind::Structural => "Type alias",
+                    AliasKind::Opaque => "Opaque type",
                 }),
-                alloc.reflow(". Perhaps you intended to add a type parameter to this type?"),
+                alloc.reflow(" definitions may not use wildcard ("),
+                alloc.keyword("*"),
+                alloc.reflow(") type variables. Only named type variables are allowed."),
+            ]));
+            doc = alloc.stack(stack);
+
+            title = WILDCARD_NOT_ALLOWED.to_string();
+        }
+        Problem::UnderscoreNotAllowed {
+            typ: alias,
+            num_underscores,
+            one_occurrence,
+            kind,
+        } => {
+            let mut stack = Vec::with_capacity(4);
+            if num_underscores == 1 {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes an inferred ("),
+                    alloc.keyword("_"),
+                    alloc.reflow(") type:"),
+                ]));
+            } else {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes "),
+                    text!(alloc, "{}", num_underscores),
+                    alloc.reflow(" inferred ("),
+                    alloc.keyword("_"),
+                    alloc.reflow(") types:"),
+                ]));
+                stack.push(alloc.reflow("Here is one of them:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
+            stack.push(alloc.concat([
+                alloc.reflow(match kind {
+                    AliasKind::Structural => "Type alias",
+                    AliasKind::Opaque => "Opaque type",
+                }),
+                alloc.reflow(" definitions may not use inferred types ("),
+                alloc.keyword("_"),
+                alloc.reflow(")."),
+            ]));
+            doc = alloc.stack(stack);
+
+            title = UNDERSCORE_NOT_ALLOWED.to_string();
+        }
+        Problem::UndeclaredTypeVar {
+            typ: alias,
+            num_unbound,
+            one_occurrence,
+            kind,
+        } => {
+            let decl_symbol = match kind {
+                AliasKind::Structural => ":",
+                AliasKind::Opaque => ":=",
+            };
+            let mut stack = Vec::with_capacity(4);
+
+            if num_unbound == 1 {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes an undeclared type variable:"),
+                ]));
+            } else {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes "),
+                    text!(alloc, "{}", num_unbound),
+                    alloc.reflow(" undeclared type variables."),
+                ]));
+                stack.push(alloc.reflow("Here is one of them:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
+            stack.push(alloc.concat([
+                alloc.reflow("All type variables in "),
+                alloc.reflow(match kind {
+                    AliasKind::Structural => "type alias",
+                    AliasKind::Opaque => "opaque type",
+                }),
+                alloc.reflow(" definitions must be declared."),
+            ]));
+            stack.push(alloc.tip().append(alloc.concat([
+                alloc.reflow("You can declare type variables by putting them right before the "),
+                alloc.keyword(decl_symbol),
+                alloc.reflow(" symbol, separated by spaces."),
             ])));
             doc = alloc.stack(stack);
 
-            title = UNBOUND_TYPE_VARIABLE.to_string();
+            title = UNDECLARED_TYPE_VARIABLE.to_string();
         }
         Problem::BadRecursion(entries) => {
             doc = to_circular_def_doc(alloc, lines, &entries);

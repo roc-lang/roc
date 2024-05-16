@@ -439,36 +439,54 @@ fn canonicalize_alias<'a>(
         return Err(());
     }
 
-    let num_unbound = named.len() + wildcards.len() + inferred.len();
-    if num_unbound > 0 {
-        let one_occurrence = named
-            .iter()
-            .map(|nv| Loc::at(nv.first_seen(), nv.variable()))
-            .chain(wildcards)
-            .chain(inferred)
-            .next()
-            .unwrap()
-            .region;
+    // Report errors for wildcards (*), underscores (_), and named vars that weren't declared.
+    let mut no_problems = true;
 
-        env.problems.push(Problem::UnboundTypeVariable {
+    if let Some(loc_var) = wildcards.first() {
+        env.problems.push(Problem::WildcardNotAllowed {
             typ: symbol,
-            num_unbound,
-            one_occurrence,
+            num_wildcards: wildcards.len(),
+            one_occurrence: loc_var.region,
             kind,
         });
 
-        // Bail out
-        return Err(());
+        no_problems = false;
     }
 
-    Ok(create_alias(
-        symbol,
-        name.region,
-        can_vars.clone(),
-        infer_ext_in_output,
-        can_ann.typ,
-        kind,
-    ))
+    if let Some(loc_var) = inferred.first() {
+        env.problems.push(Problem::UnderscoreNotAllowed {
+            typ: symbol,
+            num_underscores: inferred.len(),
+            one_occurrence: loc_var.region,
+            kind,
+        });
+
+        no_problems = false;
+    }
+
+    if let Some(nv) = named.first() {
+        env.problems.push(Problem::UndeclaredTypeVar {
+            typ: symbol,
+            num_unbound: named.len(),
+            one_occurrence: nv.first_seen(),
+            kind,
+        });
+
+        no_problems = false;
+    }
+
+    if no_problems {
+        Ok(create_alias(
+            symbol,
+            name.region,
+            can_vars.clone(),
+            infer_ext_in_output,
+            can_ann.typ,
+            kind,
+        ))
+    } else {
+        Err(())
+    }
 }
 
 /// Canonicalizes a claimed ability implementation like `{ eq }` or `{ eq: myEq }`.
