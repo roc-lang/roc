@@ -148,6 +148,7 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
+    <li><a href="https://github.com/jluckyiv">Jackson Lucky</a></li>
     <li><a href="https://github.com/agu-z">Agus Zubiaga</a></li>
     <li><a href="https://github.com/AngeloChecked">Angelo Ceccato</a></li>
     <li><a href="https://github.com/noverby">Niclas Overby</a></li>
