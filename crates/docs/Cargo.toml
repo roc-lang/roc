@@ -28,3 +28,7 @@ ven_pretty = { path = "../vendor/pretty" }
 bumpalo.workspace = true
 pulldown-cmark.workspace = true
 snafu.workspace = true
+const_format.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

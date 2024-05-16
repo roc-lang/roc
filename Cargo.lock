@@ -2493,6 +2493,8 @@ name = "roc_docs"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "const_format",
+ "pretty_assertions",
  "pulldown-cmark",
  "roc_builtins",
  "roc_can",

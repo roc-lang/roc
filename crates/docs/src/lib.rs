@@ -1,4 +1,4 @@
-//! Generates html documentation from Roc files. Used for
+//! Generates html documentation from Roc files. Used for things like
 //! [roc-lang.org/builtins/Num](https://www.roc-lang.org/builtins/Num).
 extern crate pulldown_cmark;
 extern crate roc_load;
@@ -17,6 +17,8 @@ use roc_problem::Severity;
 use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+mod html;
 
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
