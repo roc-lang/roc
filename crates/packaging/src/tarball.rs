@@ -291,34 +291,33 @@ fn add_ingested_files<W: Write>(
     let (module, state) = read_header(arena, &mut buf, dot_roc_path)?;
     let (_, defs) = module.upgrade_header_imports(arena);
 
-    match parse_module_defs(arena, state, defs) {
-        Ok(defs) => RecursiveValueDefIter::new(&defs).try_for_each(|(def, _)| {
-            if let ValueDef::IngestedFileImport(IngestedFileImport { path, .. }) = def {
-                if let StrLiteral::PlainLine(relative_path) = path.value {
-                    let mut abs_path: PathBuf = relative_path.into();
-                    abs_path.pop();
-                    abs_path.push(relative_path);
+    let defs = parse_module_defs(arena, state, defs).unwrap_or_else(|err| {
+        panic!("{} failed to parse: {:?}", dot_roc_path.display(), err);
+    });
 
-                    match abs_path.strip_prefix(root_dir) {
-                        Ok(name) => builder.append_path_with_name(abs_path.as_path(), name),
-                        Err(_) => {
-                            panic!(
-                                "Cannot bundle {} (imported in {}) since it's outside {}",
-                                abs_path.display(),
-                                dot_roc_path.display(),
-                                root_dir.display()
-                            );
-                        }
+    RecursiveValueDefIter::new(&defs).try_for_each(|(def, _)| {
+        if let ValueDef::IngestedFileImport(IngestedFileImport { path, .. }) = def {
+            if let StrLiteral::PlainLine(relative_path) = path.value {
+                let mut abs_path: PathBuf = relative_path.into();
+                abs_path.pop();
+                abs_path.push(relative_path);
+
+                match abs_path.strip_prefix(root_dir) {
+                    Ok(name) => builder.append_path_with_name(abs_path.as_path(), name),
+                    Err(_) => {
+                        panic!(
+                            "Cannot bundle {} (imported in {}) since it's outside {}",
+                            abs_path.display(),
+                            dot_roc_path.display(),
+                            root_dir.display()
+                        );
                     }
-                } else {
-                    unreachable!()
                 }
             } else {
-                Ok(())
+                unreachable!()
             }
-        }),
-        Err(err) => {
-            panic!("{} failed to parse: {:?}", dot_roc_path.display(), err);
+        } else {
+            Ok(())
         }
-    }
+    })
 }
