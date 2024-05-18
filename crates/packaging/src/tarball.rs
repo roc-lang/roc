@@ -295,14 +295,21 @@ fn add_ingested_files<W: Write>(
         Ok(defs) => RecursiveValueDefIter::new(&defs).try_for_each(|(def, _)| {
             if let ValueDef::IngestedFileImport(IngestedFileImport { path, .. }) = def {
                 if let StrLiteral::PlainLine(relative_path) = path.value {
-                    let mut abs_path: PathBuf = dot_roc_path.into();
+                    let mut abs_path: PathBuf = relative_path.into();
                     abs_path.pop();
                     abs_path.push(relative_path);
 
-                    builder.append_path_with_name(
-                        abs_path.as_path(),
-                        abs_path.strip_prefix(root_dir).unwrap(),
-                    )
+                    match abs_path.strip_prefix(root_dir) {
+                        Ok(name) => builder.append_path_with_name(abs_path.as_path(), name),
+                        Err(_) => {
+                            panic!(
+                                "Cannot bundle {} (imported in {}) since it's outside {}",
+                                abs_path.display(),
+                                dot_roc_path.display(),
+                                root_dir.display()
+                            );
+                        }
+                    }
                 } else {
                     unreachable!()
                 }
