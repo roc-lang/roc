@@ -274,11 +274,11 @@ fn read_header<'a>(
     // (We can't use that for the parser state and still return Module<'a> unfortunately.)
     let arena_buf = bumpalo::collections::Vec::from_iter_in(buf.iter().copied(), arena);
     let parse_state = State::new(arena_buf.into_bump_slice());
-    let (module, state) = parse_header(arena, parse_state).unwrap_or_else(|_err| {
+    let result = parse_header(arena, parse_state).unwrap_or_else(|_err| {
         todo!(); // TODO report a nice error and exit 1 - or maybe just return Err, for better testability?
     });
 
-    Ok((module, state))
+    Ok(result)
 }
 
 fn add_ingested_files<W: Write>(
