@@ -747,7 +747,7 @@ pub fn build(
             }
 
             // Rather than building an executable or library, we're building
-            // a tarball so this code can be distributed via a HTTPS
+            // a tarball so this code can be distributed via HTTPS
             let filename = roc_packaging::tarball::build(path, compression)?;
             let total_time_ms = start_time.elapsed().as_millis();
             let total_time = if total_time_ms > 1000 {
