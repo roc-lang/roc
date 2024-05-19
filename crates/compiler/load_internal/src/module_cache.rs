@@ -39,6 +39,7 @@ pub(crate) struct ModuleCache<'a> {
     pub(crate) exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
     pub(crate) top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     pub(crate) documentation: VecMap<ModuleId, ModuleDocumentation>,
+    pub(crate) header_doc_comments: VecMap<ModuleId, String>,
     pub(crate) can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub(crate) type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
@@ -96,6 +97,7 @@ impl Default for ModuleCache<'_> {
 
         Self {
             module_names,
+            // These are all listed explicitly to avoid default() self-recursing indefinitely
             headers: Default::default(),
             parsed: Default::default(),
             aliases: Default::default(),
@@ -111,6 +113,7 @@ impl Default for ModuleCache<'_> {
             exposes: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
+            header_doc_comments: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
             sources: Default::default(),

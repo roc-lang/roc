@@ -638,6 +638,7 @@ struct CanAndCon {
     constrained_module: ConstrainedModule,
     canonicalization_problems: Vec<roc_problem::can::Problem>,
     module_docs: Option<ModuleDocumentation>,
+    header_doc_comment: String,
 }
 
 #[derive(Debug)]
@@ -2473,6 +2474,7 @@ fn update<'a>(
             constrained_module,
             canonicalization_problems,
             module_docs,
+            header_doc_comment,
         }) => {
             let module_id = constrained_module.module.module_id;
             log!("generated constraints for {:?}", module_id);
@@ -2494,6 +2496,11 @@ fn update<'a>(
                 .module_cache
                 .aliases
                 .insert(module_id, constrained_module.module.aliases.clone());
+
+            state
+                .module_cache
+                .header_doc_comments
+                .insert(module_id, header_doc_comment);
 
             state
                 .module_cache
@@ -3324,9 +3331,44 @@ fn finish(
 
     roc_checkmate::dump_checkmate!(checkmate);
 
+<<<<<<< HEAD
+||||||| parent of 9759cf6616 (wip)
+    let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
+
+    for module_id in state.exposed_modules.iter() {
+        let docs = documentation.remove(module_id).unwrap_or_else(|| {
+            panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
+        });
+
+        docs_by_module.push(docs);
+    }
+
+    debug_assert_eq!(documentation.len(), 0);
+
+=======
+    let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
+
+    for module_id in state.exposed_modules.iter() {
+        let docs = documentation.remove(module_id).unwrap_or_else(|| {
+            panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
+        });
+
+        docs_by_module.push(docs);
+    }
+
+    debug_assert_eq!(documentation.len(), 0);
+
+    let module_id = state.root_id;
+
+    let (_module_id, header_doc_comment) = state
+        .module_cache
+        .header_doc_comments
+        .remove(&module_id)
+        .unwrap();
+
     LoadedModule {
-        module_id: state.root_id,
         filename: state.root_path,
+        module_id,
         interns,
         solved,
         can_problems: state.module_cache.can_problems,
@@ -3347,6 +3389,7 @@ fn finish(
         exposed_imports: state.module_cache.exposed_imports,
         imports: state.module_cache.imports,
         exposes: state.module_cache.exposes,
+        header_doc_comment,
     }
 }
 
@@ -5005,11 +5048,29 @@ fn canonicalize_and_constrain<'a>(
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start);
 
+    let mut header_doc_comment = String::new();
+
+    {
+        for comment_or_new_line in parsed.header_comments.iter() {
+            match comment_or_new_line {
+                CommentOrNewline::DocComment(doc_str) => {
+                    header_doc_comment.push_str(doc_str);
+                    header_doc_comment.push('\n');
+                }
+                CommentOrNewline::Newline | CommentOrNewline::LineComment(_) => {
+                    break;
+                }
+            }
+        }
+    };
+
     // Generate documentation information
     // TODO: store timing information?
+<<<<<<< HEAD
     let module_docs = {
         let module_name = header_type.get_name();
         module_name.map(|module_name| {
+            let todo = (); // TODO: if exposed_module_ids.contains(&parsed.module_id) =>
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             crate::docs::generate_module_docs(
@@ -5024,6 +5085,10 @@ fn canonicalize_and_constrain<'a>(
             )
         })
     };
+
+    // // Since we created module docs, don't separately store the header later later.
+    // // (There is definitely some nicer way this could be organized!)
+    // header_doc_comment = String::new();
 
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
@@ -5115,6 +5180,7 @@ fn canonicalize_and_constrain<'a>(
         constrained_module,
         canonicalization_problems: module_output.problems,
         module_docs,
+        header_doc_comment,
     }
 }
 

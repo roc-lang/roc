@@ -125,6 +125,10 @@ impl<'a> IoDocs<'a> {
             },
         )
     }
+
+    fn header_doc_comment(&self) -> &'a str {
+        self.arena.alloc_str(&self.loaded_module.header_doc_comment)
+    }
 }
 
 #[derive(Debug)]
@@ -262,8 +266,8 @@ impl<'a>
         self.opt_user_specified_base_url
     }
 
-    fn package_doc_comment_html(&self) -> &'a str {
-        "TODO package_doc_comment_html"
+    fn package_doc_comment_markdown(&self) -> &'a str {
+        self.header_doc_comment()
     }
 
     fn base_url(&self, module_id: ModuleId) -> &'a str {

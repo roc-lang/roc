@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 pub struct LoadedModule {
     pub module_id: ModuleId,
     pub filename: PathBuf,
+    pub header_doc_comment: String,
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,

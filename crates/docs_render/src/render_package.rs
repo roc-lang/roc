@@ -75,7 +75,7 @@ pub trait Docs<
     fn package_name(&self) -> &'a str;
     fn user_specified_base_url(&self) -> Option<&'a str>;
     fn raw_template_html(&self) -> &'a str;
-    fn package_doc_comment_html(&self) -> &'a str;
+    fn package_doc_comment_markdown(&self) -> &'a str;
 
     // Required iterators
     fn module_names(&self) -> ModuleNames;
@@ -104,7 +104,7 @@ pub trait Docs<
         // as well as the contents of the file.
         write_to_disk: impl Fn(Option<&str>, &str) -> Result<(), Problem>,
     ) -> Result<(), Problem> {
-        let package_doc_comment_html = self.package_doc_comment_html();
+        let package_doc_comment_html = self.package_doc_comment_markdown();
         let raw_template_html = self.raw_template_html();
         let package_name = self.package_name();
         let mut buf = String::with_capacity_in(raw_template_html.len() + 2048, arena);

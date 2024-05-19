@@ -16,6 +16,7 @@ pub struct ModuleDocumentation {
     pub entries: Vec<DocEntry>,
     pub scope: Scope,
     pub exposed_symbols: VecSet<Symbol>,
+    pub header_doc_comment: String,
 }
 
 impl ModuleDocumentation {
@@ -131,7 +132,7 @@ pub fn generate_module_docs(
     parsed_defs: &roc_parse::ast::Defs,
     exposed_module_ids: &[ModuleId],
     exposed_symbols: VecSet<Symbol>,
-    header_comments: &[CommentOrNewline<'_>],
+    header_doc_comment: String,
 ) -> ModuleDocumentation {
     let entries = generate_entry_docs(
         home,
@@ -139,7 +140,6 @@ pub fn generate_module_docs(
         module_ids,
         parsed_defs,
         exposed_module_ids,
-        header_comments,
     );
 
     ModuleDocumentation {
@@ -147,6 +147,7 @@ pub fn generate_module_docs(
         scope,
         entries,
         exposed_symbols,
+        header_doc_comment,
     }
 }
 
@@ -183,16 +184,10 @@ fn generate_entry_docs(
     module_ids: &ModuleIds,
     defs: &roc_parse::ast::Defs<'_>,
     exposed_module_ids: &[ModuleId],
-    header_comments: &[CommentOrNewline<'_>],
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;
 
     let mut doc_entries = Vec::with_capacity(defs.tags.len() + 1);
-
-    if let Some(docs) = comments_or_new_lines_to_docs(header_comments) {
-        doc_entries.push(DocEntry::ModuleDoc(docs));
-    }
-
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;
     let mut scratchpad = Vec::new();
 
