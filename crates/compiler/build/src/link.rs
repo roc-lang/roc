@@ -50,8 +50,15 @@ pub fn legacy_host_file(target: Target, platform_main_roc: &Path) -> PathBuf {
         .replace(roc_linker::PRECOMPILED_HOST_EXT, lib_ext);
 
     let lib_path = platform_main_roc.with_file_name(file_name);
+
+    let default_host_path: PathBuf = platform_main_roc
+        .with_file_name("libhost")
+        .with_extension(lib_ext);
+
     if lib_path.exists() {
         lib_path
+    } else if default_host_path.exists() {
+        default_host_path
     } else {
         let obj_ext = target.object_file_ext();
         lib_path.with_extension(obj_ext)
