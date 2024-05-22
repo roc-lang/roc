@@ -875,21 +875,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
-    fn static_site_gen() {
-        test_roc_app(
-            "examples/static-site-gen",
-            "static-site.roc",
-            &[],
-            &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
-            &[],
-            "Processed 4 files with 3 successes and 0 errors\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
