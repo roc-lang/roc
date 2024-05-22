@@ -990,8 +990,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser",
-            "parse-movies-csv.roc",
+            "crates/cli/tests/cli",
+            "parser-movies-csv.roc",
             "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n",
             UseValgrind::No,
         )
@@ -1002,8 +1002,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
-            "examples/parser",
-            "letter-counts.roc",
+            "crates/cli/tests/cli",
+            "parser-letter-counts.roc",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
