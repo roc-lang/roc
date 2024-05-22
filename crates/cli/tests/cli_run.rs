@@ -778,7 +778,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args_check() {
-        let path = file_path_from_root("examples/cli", "argsBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
