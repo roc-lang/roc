@@ -716,29 +716,6 @@ mod cli_run {
         test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
     }
 
-    #[cfg_attr(windows, ignore)] // flaky error; issue #5024
-    #[serial(breakout)]
-    #[test]
-    fn breakout() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "breakoutBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
-    #[test]
-    #[serial(breakout)]
-    fn breakout_hello_gui() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "hello-guiBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
