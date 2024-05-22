@@ -939,14 +939,14 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file.roc",
             &[],
             &[],
             &[],
             format!(
                 "\nThis roc file can print its own source code. The source is:\n\n{}\n",
-                include_str!("../../../examples/cli/ingested-file.roc")
+                include_str!("cli/ingested-file.roc")
             )
             .as_str(),
             UseValgrind::No,
