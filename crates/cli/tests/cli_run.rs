@@ -917,7 +917,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "env.roc",
             &[],
             &[],
