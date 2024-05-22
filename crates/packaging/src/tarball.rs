@@ -300,14 +300,14 @@ fn add_ingested_files<W: Write>(
 
                 if relative_path_str.contains("..") {
                     panic!(
-                        "Cannot bundle {} (imported in {}) since it contains a relative `..` which would access files outside {}",
+                        "Cannot bundle {} (imported in {}) since it contains a relative `..` which would access files outside {}.",
                         &relative_path.display(),
                         dot_roc_path.display(),
                         root_dir.display()
                     );
                 }
 
-                builder.append_path_with_name(dbg!(root_dir.join(&relative_path)), relative_path.display().to_string())
+                builder.append_path_with_name(root_dir.join(&relative_path), relative_path.display().to_string())
 
             } else {
                 unreachable!()
