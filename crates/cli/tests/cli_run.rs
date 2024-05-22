@@ -841,7 +841,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_http_get_check() {
-        let path = file_path_from_root("examples/cli", "http-get.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
