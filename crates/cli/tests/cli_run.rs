@@ -959,12 +959,12 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file-bytes.roc",
             &[],
             &[],
             &[],
-            "162088\n",
+            "27101\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
