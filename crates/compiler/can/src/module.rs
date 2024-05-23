@@ -8,7 +8,9 @@ use crate::env::Env;
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
-use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
+use crate::pattern::{
+    canonicalize_record_destructure, BindingsFromPattern, Pattern, PermitShadows,
+};
 use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -149,7 +151,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
-    pub param_patterns: Vec<Pattern>,
+    pub params_pattern: Option<Pattern>,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
@@ -387,27 +389,25 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut output = Output::default();
 
-    let mut param_patterns = Vec::new();
-
-    if let Some(ModuleParams { pattern, .. }) = header_type.get_params() {
-        param_patterns.reserve_exact(pattern.value.len());
-
-        for param in pattern.value.iter() {
-            let pattern = canonicalize_pattern(
+    let params_pattern = header_type.get_params().as_ref().map(
+        |ModuleParams {
+             pattern,
+             before_arrow: _,
+             after_arrow: _,
+         }| {
+            canonicalize_record_destructure(
                 &mut env,
                 var_store,
                 &mut scope,
                 &mut output,
                 // todo(agus): custom type for param
                 PatternType::FunctionArg,
-                &param.value,
-                param.region,
+                &pattern.value,
+                pattern.region,
                 PermitShadows(false),
-            );
-
-            param_patterns.push(pattern.value);
-        }
-    }
+            )
+        },
+    );
 
     let (defs, output, symbols_introduced, imports_introduced) = canonicalize_defs(
         &mut env,
@@ -839,7 +839,7 @@ pub fn canonicalize_module_defs<'a>(
         scope,
         aliases,
         rigid_variables,
-        param_patterns,
+        params_pattern,
         declarations,
         referenced_values,
         exposed_imports: can_exposed_imports,
