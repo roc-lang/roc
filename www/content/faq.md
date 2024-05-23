@@ -454,6 +454,16 @@ Similarly, platforms can share code for common Roc logic using normal Roc packag
 
 Putting all this together, applications have exactly one platform, which enables platform authors to create a cohesive experience optimized for a particular domain, and both application authors and platform authors can share code as much as they like.
 
+## [Will Roc ever compile to JavaScript, JVM/CLR/BEAM bytecode, or other higher-level targets?](#other-compilation-targets)
+
+The plan is for Roc to compile only to very low-level targets like machine code and WebAssembly.
+
+This is partly in order to keep the scope of the project smaller, but also because supporting higher-level targets could make it significantly more difficult to create an ecosystem of high-performance Roc packages. Techniques which are performance optimizations on low-level targets like machine code or WebAssembly might actually impede performance on higher-level targets, and vice versa.
+
+Additionally, some of these higher-level targets may not be able to represent Roc's full range of numbers efficiently (e.g. Roc's very common [`U64`](https://www.roc-lang.org/builtins/Num#U64) would be represented in JavaScript as [a heap-allocated `BigInt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt), which would be massively slower), and their string representations may not work well with Roc's builtins (e.g. Roc's [`Str`](https://www.roc-lang.org/builtins/Str) uses UTF-8 and has operations which let you traverse those bytes directly, although the JVM, CLR, and JavaScript all use UTF-16).
+
+Fortunately, since these higher-level targets tend to support some combination of C FFI, WebAssembly calls, or both, there's already a path to use Roc code in those environments even if Roc doesn't directly compile to their higher-level bytecode.
+
 ## [Will Roc's compiler ever be self-hosted? (That is, will it ever be written in Roc?)](#self-hosted-compiler) {#self-hosted-compiler}
 
 The plan is to never implement Roc's compiler in Roc.
