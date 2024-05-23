@@ -8,7 +8,7 @@ use crate::env::Env;
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
-use crate::pattern::{BindingsFromPattern, Pattern};
+use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -18,7 +18,7 @@ use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::HeaderType;
+use roc_parse::header::{HeaderType, ModuleParams};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -149,6 +149,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
+    pub param_patterns: Vec<Pattern>,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
@@ -244,6 +245,7 @@ impl GeneratedInfo {
                 generates_with,
                 name: _,
                 exposes: _,
+                opt_params: _,
             } => {
                 debug_assert!(generates_with.is_empty());
                 GeneratedInfo::Builtin
@@ -274,7 +276,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
     loc_defs: &'a mut Defs<'a>,
-    header_type: &roc_parse::header::HeaderType,
+    header_type: &'a roc_parse::header::HeaderType,
     home: ModuleId,
     module_path: &'a str,
     src: &'a str,
@@ -290,6 +292,7 @@ pub fn canonicalize_module_defs<'a>(
     opt_shorthand: Option<&'a str>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
+
     let mut scope = Scope::new(
         home,
         qualified_module_ids
@@ -382,9 +385,33 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
+    let mut output = Output::default();
+
+    let mut param_patterns = Vec::new();
+
+    if let Some(ModuleParams { params, .. }) = header_type.get_params() {
+        param_patterns.reserve_exact(params.len());
+
+        for param in params.iter() {
+            let pattern = canonicalize_pattern(
+                &mut env,
+                var_store,
+                &mut scope,
+                &mut output,
+                // todo(agus): custom type for param
+                PatternType::FunctionArg,
+                &param.value,
+                param.region,
+                PermitShadows(false),
+            );
+
+            param_patterns.push(pattern.value);
+        }
+    }
+
     let (defs, output, symbols_introduced, imports_introduced) = canonicalize_defs(
         &mut env,
-        Output::default(),
+        output,
         var_store,
         &mut scope,
         loc_defs,
@@ -812,6 +839,7 @@ pub fn canonicalize_module_defs<'a>(
         scope,
         aliases,
         rigid_variables,
+        param_patterns,
         declarations,
         referenced_values,
         exposed_imports: can_exposed_imports,

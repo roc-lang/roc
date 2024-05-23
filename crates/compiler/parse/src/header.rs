@@ -55,6 +55,7 @@ pub enum HeaderType<'a> {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
         generates_with: &'a [Symbol],
+        opt_params: Option<ModuleParams<'a>>,
     },
     Package {
         /// usually something other than `pf`
@@ -78,6 +79,7 @@ pub enum HeaderType<'a> {
     Module {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
+        opt_params: Option<ModuleParams<'a>>,
     },
 }
 
@@ -102,12 +104,57 @@ impl<'a> HeaderType<'a> {
         }
     }
 
+    pub fn get_params(&self) -> &Option<ModuleParams<'a>> {
+        match self {
+            Self::Module {
+                opt_params,
+                name: _,
+                exposes: _,
+            }
+            | Self::Builtin {
+                opt_params,
+                name: _,
+                exposes: _,
+                generates_with: _,
+            } => opt_params,
+            Self::App {
+                provides: _,
+                to_platform: _,
+            }
+            | Self::Package {
+                config_shorthand: _,
+                exposes: _,
+                exposes_ids: _,
+            }
+            | Self::Hosted {
+                name: _,
+                exposes: _,
+                generates: _,
+                generates_with: _,
+            }
+            | Self::Platform {
+                opt_app_module_id: _,
+                provides: _,
+                requires: _,
+                requires_types: _,
+                exposes: _,
+                exposes_ids: _,
+                config_shorthand: _,
+            } => &None,
+        }
+    }
+
     pub fn to_maybe_builtin(self, module_id: ModuleId) -> Self {
         match self {
-            HeaderType::Module { name, exposes } if module_id.is_builtin() => HeaderType::Builtin {
+            HeaderType::Module {
+                name,
+                exposes,
+                opt_params,
+            } if module_id.is_builtin() => HeaderType::Builtin {
                 name,
                 exposes,
                 generates_with: &[],
+                opt_params,
             },
             _ => self,
         }
