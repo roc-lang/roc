@@ -21,7 +21,6 @@ main = \{ inputDir, outputDir } ->
         outHtml = transform url inHtml
 
         SSG.writeFile { outputDir, relpath, content: outHtml }
-
     ## process each file
     Task.forEach! files processFile
 
@@ -49,7 +48,7 @@ getPageInfo = \pagePathStr ->
     when Dict.get pageData pagePathStr is
         Ok pageInfo -> pageInfo
         Err KeyNotFound ->
-            if Str.contains pagePathStr "examples/" then
+            if Str.contains pagePathStr "/examples/" then
                 Str.split pagePathStr "/"
                 |> List.takeLast 2
                 |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
@@ -87,9 +86,8 @@ preloadWoff2 = \url ->
 
 view : Str, Str -> Html.Node
 view = \pagePathStr, htmlContent ->
-
     mainBody =
-        if pagePathStr == "index.html" then
+        if pagePathStr == "/index.html" then
             when Str.splitFirst htmlContent "<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->" is
                 Ok { before, after } -> [text before, InteractiveExample.view, text after]
                 Err NotFound -> crash "Could not find the comment where the larger example on the homepage should have been inserted. Was it removed or edited?"
@@ -98,10 +96,10 @@ view = \pagePathStr, htmlContent ->
 
     bodyAttrs =
         when pagePathStr is
-            "index.html" -> [id "homepage-main"]
-            "tutorial.html" -> [id "tutorial-main", class "article-layout"]
+            "/index.html" -> [id "homepage-main"]
+            "/tutorial.html" -> [id "tutorial-main", class "article-layout"]
             _ ->
-                if Str.startsWith pagePathStr "examples/" && pagePathStr != "examples/index.html" then
+                if Str.startsWith pagePathStr "/examples/" && pagePathStr != "/examples/index.html" then
                     # Individual examples should render wider than articles.
                     # Otherwise the width is unreasonably low for the code blocks,
                     # and those pages don't tend to have big paragraphs anyway.
@@ -160,8 +158,7 @@ view = \pagePathStr, htmlContent ->
 
 viewNavbar : Str -> Html.Node
 viewNavbar = \pagePathStr ->
-
-    isHomepage = pagePathStr == "index.html"
+    isHomepage = pagePathStr == "/index.html"
 
     homeLinkAttrs =
         [id "nav-home-link", href "/", title "The Roc Programming Language Homepage"]
