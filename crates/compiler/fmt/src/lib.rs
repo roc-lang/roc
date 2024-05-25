@@ -5,6 +5,7 @@
 pub mod annotation;
 pub mod collection;
 pub mod def;
+pub mod doc;
 pub mod expr;
 pub mod header;
 pub mod pattern;
