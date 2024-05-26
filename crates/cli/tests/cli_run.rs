@@ -478,7 +478,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
-            "crates/cli/tests/cli",
+            "examples",
             "helloWorld.roc",
             "Hello, World!\n",
             UseValgrind::Yes,
