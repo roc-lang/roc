@@ -194,7 +194,7 @@ pub fn desugar_defs_node_values<'a>(
 /// For each top-level ValueDef in our module, we will unwrap any suffixed
 /// expressions
 ///
-/// e.g. `say! "hi"` desugars to `Task.await (say "hi") -> \{} -> ...`
+/// e.g. `say! "hi"` desugars to `Task.await (say "hi") \{} -> ...`
 pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) -> ValueDef<'a> {
     use ValueDef::*;
 

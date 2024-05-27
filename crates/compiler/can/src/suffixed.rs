@@ -267,16 +267,13 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
             // Any suffixed arguments will be innermost, therefore we unwrap those first
             let local_args = arena.alloc_slice_copy(apply_args);
             for arg in local_args.iter_mut() {
-                match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
+                // Args are always expressions, don't pass `maybe_def_pat`
+                match unwrap_suffixed_expression(arena, arg, None) {
                     Ok(new_arg) => {
                         *arg = new_arg;
                     }
-                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_arg)) => {
-                        *arg = unwrapped_arg;
-
-                        let new_apply = arena.alloc(Loc::at(loc_expr.region, Apply(function, local_args, called_via)));
-
-                        return Err(EUnwrapped::UnwrappedDefExpr(new_apply));
+                    Err(EUnwrapped::UnwrappedDefExpr(_)) => {
+                        return Err(EUnwrapped::Malformed)
                     }
                     Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new: new_arg }) => {
 
