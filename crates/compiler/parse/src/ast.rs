@@ -1130,6 +1130,8 @@ impl<'a> ImportAlias<'a> {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
+    /// A collection of references by index to either `type_defs` or `value_defs`
+    /// It's an entry point for actual definitions, while `type_defs` and `value_defs` are append-only collections
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
     pub regions: std::vec::Vec<Region>,
     pub space_before: std::vec::Vec<Slice<CommentOrNewline<'a>>>,
