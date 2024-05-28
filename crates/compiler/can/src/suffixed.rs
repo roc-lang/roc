@@ -129,7 +129,7 @@ pub fn unwrap_suffixed_expression<'a>(
                 internal_error!("BinOps should have been desugared in desugar_expr");
             }
 
-            Expr::LowLevelDbg(moduel, arg, rest) => {
+            Expr::LowLevelDbg(dbg_src, arg, rest) => {
                 if is_expr_suffixed(&arg.value) {
                     // we cannot unwrap a suffixed expression within dbg
                     // e.g. dbg (foo! "bar")
@@ -140,14 +140,14 @@ pub fn unwrap_suffixed_expression<'a>(
                     Ok(unwrapped_expr) => {
                         let new_dbg = arena.alloc(Loc::at(
                             loc_expr.region,
-                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
                         ));
                         return Ok(new_dbg);
                     }
                     Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
                         let new_dbg = arena.alloc(Loc::at(
                             loc_expr.region,
-                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
                         ));
                         Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
                     }
@@ -158,7 +158,7 @@ pub fn unwrap_suffixed_expression<'a>(
                     }) => {
                         let new_dbg = arena.alloc(Loc::at(
                             loc_expr.region,
-                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
                         ));
                         Err(EUnwrapped::UnwrappedSubExpr {
                             sub_arg: new_dbg,
