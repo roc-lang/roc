@@ -272,8 +272,8 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                     Ok(new_arg) => {
                         *arg = new_arg;
                     }
-                    Err(EUnwrapped::UnwrappedDefExpr(_)) => {
-                        return Err(EUnwrapped::Malformed)
+                    Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                        internal_error!("unreachable, unwrapped arg cannot be def expression as `None` was passed as pattern");
                     }
                     Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new: new_arg }) => {
 
