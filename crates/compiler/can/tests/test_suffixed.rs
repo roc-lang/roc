@@ -810,7 +810,7 @@ mod suffixed_tests {
     //        c = b #!a0
     //        Task.ok c
     #[test]
-    fn await_fn_arg() {
+    fn apply_argument_single() {
         run_test(
             r#"
             main =
@@ -818,6 +818,23 @@ mod suffixed_tests {
                 c
             "#,
             r##"Defs { tags: [Index(2147483648)], regions: [@0-49], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @27-31 Apply(@27-31 Var { module_name: "Task", ident: "await" }, [@29-30 Var { module_name: "", ident: "a" }, @27-31 Closure([@29-30 Identifier { ident: "#!a0" }], @27-31 Defs(Defs { tags: [Index(2147483650)], regions: [@27-31], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "c" }, @27-31 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 TaskAwaitBang(Var { module_name: "", ident: "a" })], Space)), Body(@23-24 Identifier { ident: "c" }, @27-31 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }], Space)), Body(@23-24 Identifier { ident: "c" }, @27-31 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }], Space))] }, @48-49 Var { module_name: "", ident: "c" }))], BangSuffix))] }"##,
+        );
+    }
+
+    // main =
+    //    Task.await a \#!a0 ->
+    //        Task.await x \#!a1 ->
+    //            c = b #!a0 #!a1
+    //            Task.ok c
+    #[test]
+    fn apply_argument_multiple() {
+        run_test(
+            r#"
+            main =
+                c = b a! x!
+                c
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-52], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @27-34 Apply(@27-34 Var { module_name: "Task", ident: "await" }, [@29-30 Var { module_name: "", ident: "a" }, @27-34 Closure([@29-30 Identifier { ident: "#!a0" }], @27-34 Apply(@27-34 Var { module_name: "Task", ident: "await" }, [@32-33 Var { module_name: "", ident: "x" }, @27-34 Closure([@32-33 Identifier { ident: "#!a1" }], @27-34 Defs(Defs { tags: [Index(2147483651)], regions: [@27-34], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 TaskAwaitBang(Var { module_name: "", ident: "a" }), @32-33 TaskAwaitBang(Var { module_name: "", ident: "x" })], Space)), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }, @32-33 TaskAwaitBang(Var { module_name: "", ident: "x" })], Space)), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }, @32-33 Var { module_name: "", ident: "#!a1" }], Space)), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }, @32-33 Var { module_name: "", ident: "#!a1" }], Space))] }, @51-52 Var { module_name: "", ident: "c" }))], BangSuffix))], BangSuffix))] }"##,
         );
     }
 
