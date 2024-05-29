@@ -3331,21 +3331,6 @@ fn finish(
 
     roc_checkmate::dump_checkmate!(checkmate);
 
-<<<<<<< HEAD
-||||||| parent of 9759cf6616 (wip)
-    let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
-
-    for module_id in state.exposed_modules.iter() {
-        let docs = documentation.remove(module_id).unwrap_or_else(|| {
-            panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
-        });
-
-        docs_by_module.push(docs);
-    }
-
-    debug_assert_eq!(documentation.len(), 0);
-
-=======
     let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
 
     for module_id in state.exposed_modules.iter() {
@@ -5066,7 +5051,6 @@ fn canonicalize_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-<<<<<<< HEAD
     let module_docs = {
         let module_name = header_type.get_name();
         module_name.map(|module_name| {
