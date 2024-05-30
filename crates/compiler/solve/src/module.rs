@@ -80,6 +80,9 @@ pub struct SolveConfig<'a> {
     #[cfg(debug_assertions)]
     /// The checkmate collector for this module.
     pub checkmate: Option<roc_checkmate::Collector>,
+
+    /// Module params pattern
+    pub params_pattern: Option<roc_can::pattern::Pattern>,
 }
 
 pub struct SolveOutput {

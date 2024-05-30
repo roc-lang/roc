@@ -129,15 +129,18 @@ fn run_help(
         exposed_by_module,
         derived_module,
         function_kind,
+        params_pattern,
         ..
     } = config;
 
     let mut pools = Pools::default();
 
+    // todo(agus): Do we need state here?
     let state = State {
-        scope: Scope::default(),
+        scope: Scope::new(None),
         mark: Mark::NONE.next(),
     };
+
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
@@ -186,6 +189,7 @@ fn run_help(
         abilities_store,
         &mut obligation_cache,
         &mut awaiting_specializations,
+        params_pattern,
     );
 
     RunSolveOutput {
@@ -244,9 +248,10 @@ fn solve(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
+    params_pattern: Option<roc_can::pattern::Pattern>,
 ) -> State {
     let initial = Work::Constraint {
-        scope: &Scope::default(),
+        scope: &Scope::new(params_pattern),
         rank,
         constraint,
     };
