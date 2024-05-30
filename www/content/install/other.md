@@ -1,4 +1,4 @@
-# Roc installation guide for other systems
+# Other Systems
 
 1. [Install Rust](https://rustup.rs/)
 

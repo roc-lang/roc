@@ -10,12 +10,12 @@ If you have a specific question, the [FAQ](../www/content/faq.md) might have an 
 
 ## Installation
 
-- [🐧 Linux x86_64](linux_x86_64.md)
-- [❄️ Nix Linux/MacOS](nix.md)
-- [🍏 MacOS Apple Silicon](macos_apple_silicon.md)
-- [🍏 MacOS x86_64](macos_x86_64.md)
-- [🟦 Windows](windows.md)
-- [Other](other.md)
+- [🐧 Linux x86_64](/install/linux_x86_64.html)
+- [❄️ Nix Linux/MacOS](/install/nix.html)
+- [🍏 MacOS Apple Silicon](/install/macos_apple_silicon.html)
+- [🍏 MacOS x86_64](/install/macos_x86_64.html)
+- [🟦 Windows](/install/windows.html)
+- [Other](/install/other.html)
 
 ## Editor
 
@@ -37,7 +37,6 @@ roc dev helloWorld.roc
 ```
 
 [crates/cli/tests/benchmarks](https://github.com/roc-lang/roc/tree/main/crates/cli/tests/benchmarks) contains more examples.
-
 
 ## Getting Involved
 

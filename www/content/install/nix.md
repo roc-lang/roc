@@ -1,3 +1,5 @@
+# Nix
+
 ## Try out
 
 To quickly try out roc without installing, use `nix run`:
