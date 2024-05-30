@@ -138,17 +138,6 @@ fn docify<'a>(expr: &Expr<'a>, doc: &mut Doc<'a>) -> NodeRange {
             base,
             is_negative,
         } => {
-            // Doc::Concat(vec![
-            //     Doc::Literal(if *is_negative { "-" } else { "" }),
-            //     Doc::Literal(match base {
-            //         Base::Hex => "0x",
-            //         Base::Octal => "0o",
-            //         Base::Binary => "0b",
-            //         Base::Decimal => "",
-            //     }),
-            //     Doc::Copy(string),
-            // ])
-
             let begin = doc.begin();
             doc.push(Node::Literal(if *is_negative { "-" } else { "" }));
             doc.push(Node::Literal(match base {
@@ -165,7 +154,6 @@ fn docify<'a>(expr: &Expr<'a>, doc: &mut Doc<'a>) -> NodeRange {
         Expr::SingleQuote(_) => todo!(),
 
         Expr::RecordAccess(rec, field) | Expr::TupleAccess(rec, field) => {
-            // Doc::Concat(vec![docify(rec), Doc::Literal("."), Doc::Copy(field)])
             let begin = doc.begin();
             let rec = docify(rec, doc);
             doc.push(Node::Literal("."));
@@ -174,7 +162,6 @@ fn docify<'a>(expr: &Expr<'a>, doc: &mut Doc<'a>) -> NodeRange {
         }
         Expr::AccessorFunction(Accessor::TupleIndex(name))
         | Expr::AccessorFunction(Accessor::RecordField(name)) => {
-            // Doc::Concat(vec![Doc::Literal("."), Doc::Copy(name)])
             let begin = doc.begin();
             doc.push(Node::Literal("."));
             let name = doc.copy(name);
@@ -182,11 +169,6 @@ fn docify<'a>(expr: &Expr<'a>, doc: &mut Doc<'a>) -> NodeRange {
         }
 
         Expr::TaskAwaitBang(inner) => {
-            // Doc::Concat(vec![
-            //     docify_paren(Prec::TaskAwaitBang, inner),
-            //     Doc::Literal(" !"),
-            // ])
-
             let begin = doc.begin();
             let inner = docify(inner, doc);
             doc.push(Node::Literal(" !"));
@@ -194,27 +176,6 @@ fn docify<'a>(expr: &Expr<'a>, doc: &mut Doc<'a>) -> NodeRange {
         }
 
         Expr::List(items) => {
-            // let mut inner = Vec::with_capacity(items.len() * 2);
-
-            // for (i, item) in items.iter().enumerate() {
-            //     if i > 0 {
-            //         inner.push(Doc::Literal(","));
-            //     }
-            //     inner.push(Doc::OptionalNewline);
-            //     inner.push(docify(&item.value));
-            // }
-
-            // if !items.is_empty() {
-            //     inner.push(Doc::WhenMultiline(Box::new(Doc::Literal(","))));
-            //     inner.push(Doc::OptionalNewline);
-            // }
-
-            // let mut parts = Vec::with_capacity(4);
-            // parts.push(Doc::Literal("["));
-            // parts.push(Doc::Indent(Box::new(Doc::Concat(inner))));
-            // parts.push(Doc::Literal("]"));
-            // Doc::Group(parts)
-
             let begin = doc.begin();
             doc.push(Node::Literal("["));
 
@@ -403,17 +364,11 @@ impl<'a> Doc<'a> {
     fn render(&self, max_width: usize) -> String {
         let arena = Bump::new();
         let mut buf = Buf::new_in(&arena);
-        self.render_inner(0, max_width, true, &mut buf);
+        self.render_inner(max_width, &mut buf);
         buf.as_str().to_string()
     }
 
-    fn render_inner(
-        &self,
-        indent: usize,
-        max_width: usize,
-        honor_newlines: bool,
-        buf: &mut Buf<'_>,
-    ) {
+    fn render_inner(&self, max_width: usize, buf: &mut Buf<'_>) {
         let must_be_multiline = self.compute_must_be_multiline();
         let width_without_newlines = self.compute_width_without_newlines();
         let indents = self.compute_indents();
@@ -426,7 +381,6 @@ impl<'a> Doc<'a> {
         let honor_newlines = self.compute_honor_newlines(&is_multiline);
 
         for i in 0..must_be_multiline.len() {
-            // debug vis - print one per line, in columns (must_be_multiline, width_without_newlines, is_multiline, indent, node)
             println!(
                 "{:5} {:5} {:5} {:5} {:5} {:?}",
                 must_be_multiline[i],
@@ -490,6 +444,6 @@ fn test_docify() {
     let expr = roc_parse::test_helpers::parse_expr_with(&arena, "[123, 456]").unwrap();
     let mut doc = Doc::new();
     docify(&expr, &mut doc);
-    assert_eq!(doc.render(10), "[ 123, 456 ]");
+    assert_eq!(doc.render(20), "[ 123, 456 ]");
     assert_eq!(doc.render(5), "[\n    123,\n    456,\n]");
 }
