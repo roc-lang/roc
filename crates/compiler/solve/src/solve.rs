@@ -135,12 +135,6 @@ fn run_help(
 
     let mut pools = Pools::default();
 
-    // todo(agus): Do we need state here?
-    let state = State {
-        scope: Scope::new(None),
-        mark: Mark::NONE.next(),
-    };
-
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
@@ -181,7 +175,6 @@ fn run_help(
     let state = solve(
         &mut env,
         types,
-        state,
         rank,
         problems,
         aliases,
@@ -240,7 +233,6 @@ enum Work<'a> {
 fn solve(
     env: &mut InferenceEnv,
     mut can_types: Types,
-    mut state: State,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     aliases: &mut Aliases,
@@ -250,13 +242,20 @@ fn solve(
     awaiting_specializations: &mut AwaitingSpecializations,
     params_pattern: Option<roc_can::pattern::Pattern>,
 ) -> State {
+    let scope = Scope::new(params_pattern);
+
     let initial = Work::Constraint {
-        scope: &Scope::new(params_pattern),
+        scope: &scope.clone(),
         rank,
         constraint,
     };
 
     let mut stack = vec![initial];
+
+    let mut state = State {
+        scope,
+        mark: Mark::NONE.next(),
+    };
 
     while let Some(work_item) = stack.pop() {
         let (scope, rank, constraint) = match work_item {
