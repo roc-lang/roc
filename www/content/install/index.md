@@ -13,12 +13,12 @@ There are currently a few known OS-specific issues:
 Here are some Getting Started guides for different operating systems:
 <!-- TODO detect current OS with browser and only show link for that, provide other button for others  -->
 
-- [Linux x86-64](/install/linux_x86_64.html)
-- [Nix Linux/MacOS](/install/nix.html)
-- [MacOS Apple Silicon](/install/macos_apple_silicon.html)
-- [MacOS x86-64](/install/macos_x86_64.html)
-- [Windows](/install/windows.html)
-- [Other Systems](/install/other.html)
+- [Linux x86-64](/install/linux_x86_64)
+- [Nix Linux/MacOS](/install/nix)
+- [MacOS Apple Silicon](/install/macos_apple_silicon)
+- [MacOS x86-64](/install/macos_x86_64)
+- [Windows](/install/windows)
+- [Other Systems](/install/other)
 
 ### [Editor Extensions/Plugins](#editor-extensions) {#editor-extensions}
 
