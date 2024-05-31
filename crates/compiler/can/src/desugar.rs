@@ -179,8 +179,8 @@ pub fn desugar_defs_node_values<'a>(
         *value_def = desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
     }
 
-    // `desugar_defs_node_values` is called recursively in `desugar_expr` and we
-    // only we only want to unwrap suffixed nodes if they are a top level def.
+    // `desugar_defs_node_values` is called recursively in `desugar_expr`
+    // and we only want to unwrap suffixed nodes if they are a top level def.
     //
     // check here first so we only unwrap the expressions once, and after they have
     // been desugared
@@ -194,7 +194,7 @@ pub fn desugar_defs_node_values<'a>(
 /// For each top-level ValueDef in our module, we will unwrap any suffixed
 /// expressions
 ///
-/// e.g. `say! "hi"` desugars to `Task.await (say "hi") -> \{} -> ...`
+/// e.g. `say! "hi"` desugars to `Task.await (say "hi") \{} -> ...`
 pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) -> ValueDef<'a> {
     use ValueDef::*;
 

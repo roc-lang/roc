@@ -442,7 +442,7 @@ My C code will compile to an executable which does something like this:
 2. At some point, call a function named something like "roc_app_main"
 3. That roc_app_main function will result in the actual Roc application code running.
 
-An important characteristic of this design is that the platform is in complete control of when all the Roc code runs. If the host written in C, that C code will specify the `main()` function that runs when the compiled binary runs. (The Roc application might also have something named `main`, but that just compiles down to a pure function the C host can choose to call—or not—whenever it pleases.)
+An important characteristic of this design is that the platform is in complete control of when all the Roc code runs. If the host is written in C, that C code will specify the `main()` function that runs when the compiled binary runs. (The Roc application might also have something named `main`, but that just compiles down to a pure function the C host can choose to call—or not—whenever it pleases.)
 
 One of the main goals of this design is to give platform authors the ability to make a coherent experience for a specific domain. The public API can omit operations that aren't implementable in a particular host, or which wouldn't make sense in the target domain. The Task data structure provides enough information for the host to use any kind of asynchronous I/O system they like, or synchronous blocking I/O if that makes more sense.
 
