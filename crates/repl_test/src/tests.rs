@@ -102,8 +102,13 @@ fn num_ceil_checked_division_success() {
 
 #[test]
 fn float_division_by_zero() {
-    expect_success("1f64 / 0", "∞ : F64");
-    expect_success("-1f64 / 0", "-∞ : F64");
+    expect_success("1f64 / 0", "Num.infinityF64 : F64");
+    expect_success("-1f64 / 0", "-Num.infinityF64 : F64");
+    expect_success("0f64 / 0", "Num.nanF64 : F64");
+
+    expect_success("1f32 / 0", "Num.infinityF32 : F32");
+    expect_success("-1f32 / 0", "-Num.infinityF32 : F32");
+    expect_success("0f32 / 0", "Num.nanF32 : F32");
 }
 
 #[test]
