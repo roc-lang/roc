@@ -1254,6 +1254,14 @@ fn fix_values_captured_in_closure_expr(
             }
         }
 
+        ImportParams(loc_expr, _) => {
+            fix_values_captured_in_closure_expr(
+                &mut loc_expr.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
         Tuple { elems, .. } => {
             for (_var, expr) in elems.iter_mut() {
                 fix_values_captured_in_closure_expr(

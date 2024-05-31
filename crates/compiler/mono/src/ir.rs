@@ -4425,6 +4425,15 @@ pub fn with_hole<'a>(
         ParamsVar { .. } => {
             todo!("agus: handle params var")
         }
+        ImportParams(loc_expr, _) => with_hole(
+            env,
+            loc_expr.value,
+            variable,
+            procs,
+            layout_cache,
+            assigned,
+            hole,
+        ),
         AbilityMember(member, specialization_id, specialization_var) => {
             let specialization_symbol = late_resolve_ability_specialization(
                 env,

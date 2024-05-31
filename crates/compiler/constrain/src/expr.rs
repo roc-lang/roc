@@ -577,7 +577,7 @@ pub fn constrain_expr(
         }
         ParamsVar {
             symbol,
-            params,
+            params: _,
             var,
         } => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
@@ -586,10 +586,11 @@ pub fn constrain_expr(
 
             let lookup_constr = constraints.lookup(*symbol, expected, region);
 
-            // todo(agus): check params
-            // let params_constr = constraints.lookup(*params, expected, region);
-
             constraints.and_constraint([store_expected, lookup_constr])
+        }
+        ImportParams(params, module_id) => {
+            // todo(agus): constrain
+            Constraint::True
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
@@ -4105,6 +4106,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 return true;
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
+            ImportParams(loc_expr, _) => expr = &loc_expr.value,
             Str(_)
             | IngestedFile(..)
             | List { .. }

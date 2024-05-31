@@ -167,10 +167,11 @@ enum PendingValueDef<'a> {
         &'a Loc<ast::Expr<'a>>,
     ),
     /// Module params from an import
-    ImportParams(
-        Loc<Pattern>,
-        ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>,
-    ),
+    ImportParams {
+        loc_pattern: Loc<Pattern>,
+        module_id: ModuleId,
+        params: ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>,
+    },
     /// Ingested file
     IngestedFile(
         Loc<Pattern>,
@@ -185,7 +186,11 @@ impl PendingValueDef<'_> {
             PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
             PendingValueDef::Body(loc_pattern, _) => loc_pattern,
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
-            PendingValueDef::ImportParams(loc_pattern, _) => loc_pattern,
+            PendingValueDef::ImportParams {
+                loc_pattern,
+                module_id: _,
+                params: _,
+            } => loc_pattern,
             PendingValueDef::IngestedFile(loc_pattern, _, _) => loc_pattern,
         }
     }
@@ -1144,7 +1149,11 @@ fn canonicalize_value_defs<'a>(
                 });
 
                 if let Some((loc_pattern, params)) = params {
-                    pending_value_defs.push(PendingValueDef::ImportParams(loc_pattern, params));
+                    pending_value_defs.push(PendingValueDef::ImportParams {
+                        loc_pattern,
+                        module_id,
+                        params,
+                    });
                 }
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
@@ -2387,13 +2396,22 @@ fn canonicalize_pending_value_def<'a>(
                 None,
             )
         }
-        ImportParams(loc_pattern, params) => {
-            let (expr, can_output) =
+        ImportParams {
+            loc_pattern,
+            module_id,
+            params,
+        } => {
+            let (record, can_output) =
                 canonicalize_record(env, var_store, scope, loc_pattern.region, params);
 
             output.union(can_output);
 
-            let loc_expr = Loc::at(loc_pattern.region, expr);
+            let loc_record = Loc::at(loc_pattern.region, record);
+
+            let loc_expr = Loc::at(
+                loc_pattern.region,
+                Expr::ImportParams(Box::new(loc_record), module_id),
+            );
 
             let def = single_can_def(
                 loc_pattern,

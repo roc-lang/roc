@@ -297,6 +297,9 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             params: *params,
             var: sub!(*var),
         },
+        ImportParams(loc_expr, module_id) => {
+            ImportParams(Box::new(loc_expr.map(|e| go_help!(e))), *module_id)
+        }
         &AbilityMember(sym, specialization, specialization_var) => {
             AbilityMember(sym, specialization, sub!(specialization_var))
         }

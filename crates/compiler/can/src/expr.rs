@@ -17,7 +17,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{LookedupSymbol, Symbol};
+use roc_module::symbol::{LookedupSymbol, ModuleId, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
@@ -183,6 +183,9 @@ pub enum Expr {
         elems: Vec<(Variable, Box<Loc<Expr>>)>,
     },
 
+    /// Module params expression in import
+    ImportParams(Box<Loc<Expr>>, ModuleId),
+
     /// The "crash" keyword
     Crash {
         msg: Box<Loc<Expr>>,
@@ -335,6 +338,7 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
+            Self::ImportParams(loc_expr, _) => loc_expr.value.category(),
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -2221,6 +2225,11 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
+        ImportParams(loc_expr, module_id) => {
+            let loc_expr = Loc::at(loc_expr.region, inline_calls(var_store, loc_expr.value));
+            ImportParams(Box::new(loc_expr), module_id)
+        }
+
         RecordAccess {
             record_var,
             ext_var,
@@ -3232,6 +3241,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             }
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
+            }
+            Expr::ImportParams(loc_expr, _) => {
+                stack.push(&loc_expr.value);
             }
             Expr::Expect {
                 loc_continuation, ..
