@@ -632,6 +632,10 @@ mod test_snapshots {
         if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {
             input.check_invariants(check_saved_formatting(input.as_str(), formatted_path), true);
         }
+
+        if expect == TestExpectation::Pass {
+            input.check_invariants2();
+        }
     }
 
     fn check_saved_formatting(original: &'_ str, result_path: PathBuf) -> impl Fn(Input) + '_ {
