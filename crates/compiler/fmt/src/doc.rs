@@ -4,14 +4,15 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AssignedField, Base, Collection, Defs, EscapedChar, Expr, ExtractSpaces, Header,
-        ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Module, Pattern,
-        Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        AbilityImpls, AssignedField, Base, Collection, Defs, EscapedChar, Expr, ExtractSpaces,
+        Header, ImplementsAbilities, ImplementsAbility, ImportAlias, ImportAsKeyword,
+        ImportExposingKeyword, ImportedModuleName, Module, Pattern, Spaced, Spaces, StrLiteral,
+        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
     },
     header::{
-        ExposedName, ExposesKeyword, ImportsEntry, ImportsKeyword, KeywordItem, ModuleName,
-        PackageEntry, PackageName, PackagesKeyword, PlatformRequires, ProvidesKeyword,
-        RequiresKeyword, TypedIdent,
+        ExposedName, ExposesKeyword, GeneratesKeyword, ImportsEntry, ImportsKeyword, KeywordItem,
+        ModuleName, PackageEntry, PackageName, PackagesKeyword, PlatformRequires, ProvidesKeyword,
+        RequiresKeyword, TypedIdent, WithKeyword,
     },
     ident::{Accessor, UppercaseIdent},
 };
@@ -214,7 +215,11 @@ impl<'a> Docify<'a> for TypedIdent<'a> {
 impl<'a> Docify<'a> for Header<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
-            Header::Module(h) => todo!(),
+            Header::Module(h) => {
+                doc.literal("module");
+                doc.space();
+                docify_collection(&h.exposes, Braces::Square, doc);
+            }
             Header::App(h) => {
                 doc.literal("app");
                 doc.space();
@@ -256,7 +261,27 @@ impl<'a> Docify<'a> for Header<'a> {
                     });
                 });
             }
-            Header::Hosted(h) => todo!(),
+            Header::Hosted(h) => {
+                group!(doc, {
+                    doc.literal("hosted");
+                    doc.space();
+                    h.name.docify(doc);
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        h.exposes.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.exposes.item, Braces::Square, doc);
+                        h.imports.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.imports.item, Braces::Square, doc);
+                        h.generates.docify(doc);
+                        doc.space();
+                        h.generates_with.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.generates_with.item, Braces::Square, doc);
+                    });
+                });
+            }
         }
     }
 }
@@ -594,11 +619,7 @@ impl<'a> Docify<'a> for Expr<'a> {
             }
             Expr::Crash => doc.literal("crash"),
             Expr::Tag(name) => doc.copy(name),
-            Expr::OpaqueRef(name) => {
-                let begin = doc.begin();
-                doc.literal("@");
-                doc.copy(name);
-            }
+            Expr::OpaqueRef(name) => doc.copy(name),
             Expr::Closure(args, body) => {
                 let begin = doc.begin();
                 doc.literal("\\");
@@ -651,8 +672,24 @@ impl<'a> Docify<'a> for Expr<'a> {
                 // no indent!
                 body.value.docify(doc);
             }
-            Expr::Expect(_, _) => todo!(),
-            Expr::Dbg(_, _) => todo!(),
+            Expr::Expect(condition, continuation) => {
+                group!(doc, {
+                    doc.literal("expect");
+                    doc.space();
+                    condition.value.docify(doc);
+                    doc.push(Node::ForcedNewline);
+                    continuation.value.docify(doc);
+                });
+            }
+            Expr::Dbg(condition, continuation) => {
+                group!(doc, {
+                    doc.literal("dbg");
+                    doc.space();
+                    condition.value.docify(doc);
+                    doc.push(Node::ForcedNewline);
+                    continuation.value.docify(doc);
+                });
+            }
             Expr::LowLevelDbg(_, _, _) => todo!(),
             Expr::Apply(func, args, _) => {
                 let begin = doc.begin();
@@ -669,16 +706,19 @@ impl<'a> Docify<'a> for Expr<'a> {
                 doc.group_to(begin)
             }
             Expr::BinOps(vals_ops, last) => {
-                let begin = doc.begin();
-                for (val, op) in *vals_ops {
-                    val.value.docify(doc);
+                group!(doc, {
+                    for (val, op) in *vals_ops {
+                        val.value.docify(doc);
+                        doc.space();
+                        // doc.push(Node::OptionalNewline); // Doing this is more correct, but hides a bug!
+                        // Need to handle how to inject parens around the lambda here:
+                        // "a string" |> Str.toUtf8 |> List.map \byte -> byte +  1 |>  List.reverse
+                        op.value.docify(doc);
+                        doc.space();
+                    }
                     doc.space();
-                    op.value.docify(doc);
-                    doc.space();
-                }
-                doc.space();
-                last.value.docify(doc);
-                doc.group_to(begin)
+                    last.value.docify(doc);
+                });
             }
             Expr::UnaryOp(expr, op) => {
                 let begin = doc.begin();
@@ -774,12 +814,7 @@ impl<'a> Docify<'a> for TypeDef<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             TypeDef::Alias { header, ann } => {
-                let begin = doc.begin();
-                doc.copy(header.name.value);
-                for pat in header.vars {
-                    doc.space();
-                    pat.value.docify(doc);
-                }
+                header.docify(doc);
                 doc.literal(":");
                 doc.space();
                 ann.value.docify(doc);
@@ -788,7 +823,18 @@ impl<'a> Docify<'a> for TypeDef<'a> {
                 header,
                 typ,
                 derived,
-            } => todo!(),
+            } => {
+                group!(doc, {
+                    docify_general_def(header, ":=", &typ.value, doc);
+
+                    if let Some(derived) = derived {
+                        indent!(doc, {
+                            doc.push(Node::OptionalNewline);
+                            derived.docify(doc);
+                        });
+                    }
+                });
+            }
             TypeDef::Ability {
                 header,
                 loc_implements,
@@ -819,6 +865,59 @@ impl<'a> Docify<'a> for TypeDef<'a> {
                     });
                 })
             }
+        }
+    }
+}
+
+fn docify_general_def<'a, T: Docify<'a>>(
+    t: &'a T,
+    op: &'static str,
+    ty: &'a TypeAnnotation<'a>,
+    doc: &mut Doc<'a>,
+) {
+    t.docify(doc);
+    doc.space();
+    doc.literal(op);
+    doc.space();
+    ty.docify(doc);
+}
+
+impl<'a> Docify<'a> for AbilityImpls<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        match self {
+            AbilityImpls::AbilityImpls(items) => docify_collection(items, Braces::Curly, doc),
+            AbilityImpls::SpaceBefore(_, _) => todo!(),
+            AbilityImpls::SpaceAfter(_, _) => todo!(),
+        }
+    }
+}
+
+impl<'a> Docify<'a> for ImplementsAbility<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        match self {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
+                ability.docify(doc);
+                if let Some(impls) = impls {
+                    doc.space();
+                    impls.value.docify(doc);
+                }
+            }
+            ImplementsAbility::SpaceBefore(item, _comments)
+            | ImplementsAbility::SpaceAfter(item, _comments) => item.docify(doc),
+        }
+    }
+}
+
+impl<'a> Docify<'a> for ImplementsAbilities<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        match self {
+            ImplementsAbilities::Implements(items) => {
+                doc.literal("implements");
+                doc.space();
+                docify_collection(items, Braces::Square, doc)
+            }
+            ImplementsAbilities::SpaceBefore(item, _comments)
+            | ImplementsAbilities::SpaceAfter(item, _comments) => item.docify(doc),
         }
     }
 }
@@ -864,7 +963,7 @@ impl<'a> Docify<'a> for TypeHeader<'a> {
         doc.copy(self.name.value);
         for var in self.vars {
             doc.space();
-            var.value.docify(doc);
+            docify_pattern_parens(&var.value, doc);
         }
     }
 }
@@ -1098,7 +1197,11 @@ impl<'a> Docify<'a> for ValueDef<'a> {
             ValueDef::ExpectFx {
                 condition,
                 preceding_comment,
-            } => todo!(),
+            } => {
+                doc.literal("expect-fx");
+                doc.space();
+                condition.value.docify(doc);
+            }
             ValueDef::ModuleImport(import) => {
                 doc.literal("import");
 
@@ -1124,6 +1227,8 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 doc.space();
                 import.name.docify(doc);
                 if let Some(ann) = &import.annotation {
+                    doc.space();
+                    doc.literal(":");
                     doc.space();
                     ann.annotation.docify(doc);
                 }
@@ -1160,6 +1265,18 @@ impl<'a> Docify<'a> for PackagesKeyword {
 impl<'a> Docify<'a> for ImportsKeyword {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.literal("imports")
+    }
+}
+
+impl<'a> Docify<'a> for WithKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("with")
+    }
+}
+
+impl<'a> Docify<'a> for GeneratesKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("generates")
     }
 }
 
@@ -1226,11 +1343,7 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.copy(ident);
             }
             Pattern::Tag(name) => doc.copy(name),
-            Pattern::OpaqueRef(name) => {
-                let begin = doc.begin();
-                doc.literal("@");
-                doc.copy(name);
-            }
+            Pattern::OpaqueRef(name) => doc.copy(name),
             Pattern::Apply(func, args) => {
                 let begin = doc.begin();
                 func.value.docify(doc);
