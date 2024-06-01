@@ -6,10 +6,14 @@ use roc_parse::{
     ast::{
         AssignedField, Base, Collection, Defs, EscapedChar, Expr, ExtractSpaces, Header,
         ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Module, Pattern,
-        Spaced, Spaces, StrLiteral, StrSegment, TypeAnnotation, TypeDef, ValueDef,
+        Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
     },
-    header::{ExposedName, KeywordItem, ModuleName, PackageEntry, PackageName},
-    ident::Accessor,
+    header::{
+        ExposedName, ExposesKeyword, ImportsEntry, ImportsKeyword, KeywordItem, ModuleName,
+        PackageEntry, PackageName, PackagesKeyword, PlatformRequires, ProvidesKeyword,
+        RequiresKeyword, TypedIdent,
+    },
+    ident::{Accessor, UppercaseIdent},
 };
 use roc_region::all::Loc;
 
@@ -48,14 +52,18 @@ enum Node<'a> {
 }
 
 macro_rules! group {
-    // group!{
-    //    doc,
-    //   { doc.push(Node::Literal("{")); doc.push(Node::ForcedNewline); },
-    // }
-    ($doc:ident, { $($stmts:stmt;)* }) => {{
+    ($doc:ident, $body:expr) => {{
         let begin = $doc.begin();
-        $($stmts;)*
+        $body;
         $doc.group_to(begin)
+    }};
+}
+
+macro_rules! indent {
+    ($doc:ident, $body:expr) => {{
+        let begin = $doc.begin();
+        $body;
+        $doc.indent_to(begin)
     }};
 }
 
@@ -78,20 +86,16 @@ impl<'a> Doc<'a> {
         true
     }
 
-    fn push(&mut self, node: Node<'a>) -> NodeRange {
+    fn push(&mut self, node: Node<'a>) {
         let a = self.nodes.len();
         self.nodes.push(node);
-        NodeRange {
-            begin: NodeId(a),
-            end: NodeId(a + 1),
-        }
     }
 
-    fn copy(&mut self, text: &'a str) -> NodeRange {
+    fn copy(&mut self, text: &'a str) {
         self.push(Node::Copy(text))
     }
 
-    fn literal(&mut self, text: &'static str) -> NodeRange {
+    fn literal(&mut self, text: &'static str) {
         self.push(Node::Literal(text))
     }
 
@@ -99,7 +103,7 @@ impl<'a> Doc<'a> {
         NodeId(self.nodes.len())
     }
 
-    fn indent_to(&mut self, begin: NodeId) -> NodeRange {
+    fn indent_to(&mut self, begin: NodeId) {
         let end = self.nodes.len();
         self.push(Node::Indent(NodeRange {
             begin,
@@ -108,10 +112,9 @@ impl<'a> Doc<'a> {
         let end = NodeId(self.nodes.len());
         let res = NodeRange { begin, end };
         debug_assert!(self.fully_contained(res));
-        res
     }
 
-    fn group_to(&mut self, begin: NodeId) -> NodeRange {
+    fn group_to(&mut self, begin: NodeId) {
         let end = self.nodes.len();
         self.push(Node::Group(NodeRange {
             begin,
@@ -120,17 +123,9 @@ impl<'a> Doc<'a> {
         let end = NodeId(self.nodes.len());
         let res = NodeRange { begin, end };
         debug_assert!(self.fully_contained(res));
-        res
     }
 
-    fn to(&self, begin: NodeId) -> NodeRange {
-        NodeRange {
-            begin,
-            end: NodeId(self.nodes.len()),
-        }
-    }
-
-    fn space(&mut self) -> NodeRange {
+    fn space(&mut self) {
         self.push(Node::Space)
     }
 }
@@ -173,41 +168,94 @@ pub fn doc_fmt_expr(expr: &Expr) -> String {
 }
 
 trait Docify<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange;
+    fn docify(&'a self, doc: &mut Doc<'a>);
 }
 
 impl<'a> Docify<'a> for Module<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         self.header.docify(doc)
     }
 }
 
 impl<'a, T: Docify<'a>> Docify<'a> for Loc<T> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         self.value.docify(doc)
     }
 }
 
 impl<'a, T: Docify<'a>> Docify<'a> for Spaces<'a, T> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         self.item.docify(doc)
     }
 }
 
+impl<'a> Docify<'a> for PlatformRequires<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        docify_collection(&self.rigids, Braces::Curly, doc);
+        doc.space();
+        doc.literal("{");
+        doc.space();
+        self.signature.docify(doc);
+        doc.space();
+        doc.literal("}");
+    }
+}
+
+impl<'a> Docify<'a> for TypedIdent<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        self.ident.docify(doc);
+        doc.space();
+        doc.literal(":");
+        doc.space();
+        self.ann.docify(doc);
+    }
+}
+
 impl<'a> Docify<'a> for Header<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             Header::Module(h) => todo!(),
             Header::App(h) => {
-                let begin = doc.begin();
                 doc.literal("app");
                 doc.space();
                 docify_collection(&h.provides, Braces::Square, doc);
                 docify_collection(&h.packages.value, Braces::Curly, doc);
-                doc.to(begin)
             }
-            Header::Package(h) => todo!(),
-            Header::Platform(h) => todo!(),
+            Header::Package(h) => {
+                doc.literal("package");
+                doc.space();
+                docify_collection(&h.exposes, Braces::Square, doc);
+                docify_collection(&h.packages.value, Braces::Curly, doc);
+            }
+            Header::Platform(h) => {
+                group!(doc, {
+                    doc.literal("platform");
+                    doc.space();
+                    doc.literal("\"");
+                    h.name.docify(doc);
+                    doc.literal("\"");
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        h.requires.docify(doc);
+                        doc.push(Node::OptionalNewline);
+                        h.exposes.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.exposes.item, Braces::Square, doc);
+                        doc.push(Node::OptionalNewline);
+                        h.packages.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.packages.item, Braces::Curly, doc);
+                        doc.push(Node::OptionalNewline);
+                        h.imports.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.imports.item, Braces::Square, doc);
+                        doc.push(Node::OptionalNewline);
+                        h.provides.keyword.docify(doc);
+                        doc.space();
+                        docify_collection(&h.provides.item, Braces::Square, doc);
+                    });
+                });
+            }
             Header::Hosted(h) => todo!(),
         }
     }
@@ -217,64 +265,147 @@ fn docify_collection<'a, T: Docify<'a>>(
     items: &'a Collection<'a, T>,
     delim: Braces,
     doc: &mut Doc<'a>,
-) -> NodeRange {
-    let begin = doc.begin();
-    match delim {
-        Braces::Curly => doc.literal("{"),
-        Braces::Square => doc.literal("["),
-        Braces::Round => doc.literal("("),
-    };
-    for (i, item) in items.iter().enumerate() {
-        if i > 0 {
-            doc.literal(",");
-            doc.space();
+) {
+    group!(doc, {
+        match delim {
+            Braces::Curly => doc.literal("{"),
+            Braces::Square => doc.literal("["),
+            Braces::Round => doc.literal("("),
+        };
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 {
+                doc.literal(",");
+                doc.space();
+            }
+            item.docify(doc);
         }
-        item.docify(doc);
-    }
-    match delim {
-        Braces::Curly => doc.literal("}"),
-        Braces::Square => doc.literal("]"),
-        Braces::Round => doc.literal(")"),
-    };
-    doc.group_to(begin)
+        match delim {
+            Braces::Curly => doc.literal("}"),
+            Braces::Square => doc.literal("]"),
+            Braces::Round => doc.literal(")"),
+        };
+    })
 }
 
 impl<'a> Docify<'a> for ExposedName<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.copy(self.as_str())
     }
 }
 
 impl<'a> Docify<'a> for PackageName<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.copy(self.as_str())
     }
 }
 
 impl<'a> Docify<'a> for ModuleName<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.copy(self.as_str())
     }
 }
 
+impl<'a> Docify<'a> for UppercaseIdent<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.copy(self.into())
+    }
+}
+
 impl<'a> Docify<'a> for ImportedModuleName<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         let begin = doc.begin();
         if let Some(package) = &self.package {
             package.docify(doc);
             doc.literal(".");
         }
         self.name.docify(doc);
-        doc.to(begin)
+    }
+}
+
+impl<'a> Docify<'a> for ImportsEntry<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        // old:
+        //
+        // use roc_parse::header::ImportsEntry::*;
+
+        // buf.indent(indent);
+
+        // match entry {
+        //     Module(module, loc_exposes_entries) => {
+        //         buf.push_str(module.as_str());
+
+        //         if !loc_exposes_entries.is_empty() {
+        //             buf.push('.');
+
+        //             fmt_collection(
+        //                 buf,
+        //                 indent,
+        //                 Braces::Curly,
+        //                 *loc_exposes_entries,
+        //                 Newlines::No,
+        //             )
+        //         }
+        //     }
+
+        //     Package(pkg, name, entries) => {
+        //         buf.push_str(pkg);
+        //         buf.push('.');
+        //         buf.push_str(name.as_str());
+
+        //         if !entries.is_empty() {
+        //             buf.push('.');
+
+        //             fmt_collection(buf, indent, Braces::Curly, *entries, Newlines::No)
+        //         }
+        //     }
+
+        //     IngestedFile(file_name, typed_ident) => {
+        //         fmt_str_literal(buf, *file_name, indent);
+        //         buf.push_str_allow_spaces(" as ");
+        //         typed_ident.format(buf, 0);
+        //     }
+        // }
+        //
+
+        match self {
+            ImportsEntry::Module(module, entries) => {
+                module.docify(doc);
+                if !entries.is_empty() {
+                    doc.literal(".");
+                    docify_collection(entries, Braces::Curly, doc);
+                }
+            }
+            ImportsEntry::Package(pkg, name, entries) => {
+                pkg.docify(doc);
+                doc.literal(".");
+                name.docify(doc);
+                if !entries.is_empty() {
+                    doc.literal(".");
+                    docify_collection(entries, Braces::Curly, doc);
+                }
+            }
+            ImportsEntry::IngestedFile(file_name, typed_ident) => {
+                docify_str(file_name, doc);
+                doc.space();
+                doc.literal("as");
+                doc.space();
+                typed_ident.docify(doc);
+            }
+        }
     }
 }
 
 impl<'a> Docify<'a> for PackageEntry<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         let begin = doc.begin();
         doc.copy(self.shorthand);
         doc.literal(":");
         doc.space();
+
+        if let Some(_) = self.platform_marker {
+            doc.literal("platform");
+            doc.space();
+        }
         doc.literal("\"");
         self.package_name.docify(doc);
         doc.literal("\"");
@@ -283,7 +414,7 @@ impl<'a> Docify<'a> for PackageEntry<'a> {
 }
 
 impl<'a> Docify<'a> for Defs<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         let begin = doc.begin();
         for def in self.defs() {
             match def {
@@ -297,7 +428,7 @@ impl<'a> Docify<'a> for Defs<'a> {
 }
 
 impl<'a> Docify<'a> for Expr<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             Expr::Float(text) | Expr::Num(text) => doc.copy(text),
             Expr::NonBase10Int {
@@ -314,7 +445,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                     Base::Decimal => "",
                 });
                 doc.copy(string);
-                doc.to(begin)
             }
 
             Expr::Str(lit) => docify_str(lit, doc),
@@ -325,21 +455,18 @@ impl<'a> Docify<'a> for Expr<'a> {
                 let rec = rec.docify(doc);
                 doc.literal(".");
                 let field = doc.copy(field);
-                doc.to(begin)
             }
             Expr::AccessorFunction(Accessor::TupleIndex(name))
             | Expr::AccessorFunction(Accessor::RecordField(name)) => {
                 let begin = doc.begin();
                 doc.literal(".");
                 let name = doc.copy(name);
-                doc.to(begin)
             }
 
             Expr::TaskAwaitBang(inner) => {
                 let begin = doc.begin();
                 inner.docify(doc);
                 doc.literal("!");
-                doc.to(begin)
             }
 
             Expr::List(items) => {
@@ -370,7 +497,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                 let begin = doc.begin();
                 doc.literal("_");
                 doc.copy(name); // might be empty
-                doc.to(begin)
             }
 
             Expr::Record(fields) => {
@@ -464,7 +590,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                     doc.copy(module_name);
                     doc.literal(".");
                     doc.copy(ident);
-                    doc.to(begin)
                 }
             }
             Expr::Crash => doc.literal("crash"),
@@ -473,7 +598,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                 let begin = doc.begin();
                 doc.literal("@");
                 doc.copy(name);
-                doc.to(begin)
             }
             Expr::Closure(args, body) => {
                 let begin = doc.begin();
@@ -510,7 +634,6 @@ impl<'a> Docify<'a> for Expr<'a> {
             }
             Expr::EmptyDefsFinal => {
                 let begin = doc.begin();
-                doc.to(begin)
             }
             Expr::Backpassing(pats, call, body) => {
                 let begin = doc.begin();
@@ -527,7 +650,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                 doc.push(Node::ForcedNewline);
                 // no indent!
                 body.value.docify(doc);
-                doc.to(begin)
             }
             Expr::Expect(_, _) => todo!(),
             Expr::Dbg(_, _) => todo!(),
@@ -565,7 +687,29 @@ impl<'a> Docify<'a> for Expr<'a> {
                 expr.value.docify(doc);
                 doc.group_to(begin)
             }
-            Expr::If(_, _) => todo!(),
+            Expr::If(conds_thens, otherwise) => {
+                group!(doc, {
+                    for (i, (cond, then_expr)) in conds_thens.iter().enumerate() {
+                        if i > 0 {
+                            doc.push(Node::OptionalNewline);
+                            doc.literal("else");
+                            doc.space();
+                        }
+                        doc.literal("if");
+                        doc.space();
+                        cond.value.docify(doc);
+                        doc.space();
+                        doc.literal("then");
+                        doc.push(Node::OptionalNewline);
+                        then_expr.value.docify(doc);
+                    }
+
+                    doc.push(Node::OptionalNewline);
+                    doc.literal("else");
+                    doc.push(Node::OptionalNewline);
+                    otherwise.value.docify(doc);
+                })
+            }
             Expr::When(cond, branches) => {
                 let begin = doc.begin();
                 doc.literal("when");
@@ -627,7 +771,7 @@ impl<'a> Docify<'a> for Expr<'a> {
 }
 
 impl<'a> Docify<'a> for TypeDef<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             TypeDef::Alias { header, ann } => {
                 let begin = doc.begin();
@@ -639,7 +783,6 @@ impl<'a> Docify<'a> for TypeDef<'a> {
                 doc.literal(":");
                 doc.space();
                 ann.value.docify(doc);
-                doc.to(begin)
             }
             TypeDef::Opaque {
                 header,
@@ -651,67 +794,37 @@ impl<'a> Docify<'a> for TypeDef<'a> {
                 loc_implements,
                 members,
             } => {
-                // old:
-                // buf.indent(indent);
-                // buf.push_str(name.value);
-                // for var in *vars {
-                //     buf.spaces(1);
-                //     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
-                //     buf.indent(indent);
-                // }
-                // buf.spaces(1);
-                // buf.push_str(roc_parse::keyword::IMPLEMENTS);
-                // if !self.is_multiline() {
-                //     debug_assert_eq!(members.len(), 1);
-                //     buf.spaces(1);
-                //     members[0].format_with_options(
-                //         buf,
-                //         Parens::NotNeeded,
-                //         Newlines::No,
-                //         indent + INDENT,
-                //     );
-                // } else {
-                //     for member in members.iter() {
-                //         member.format_with_options(
-                //             buf,
-                //             Parens::NotNeeded,
-                //             Newlines::Yes,
-                //             indent + INDENT,
-                //         );
-                //     }
-                // }
-                //
+                let newline = if members.len() > 1 {
+                    Node::ForcedNewline
+                } else {
+                    Node::OptionalNewline
+                };
 
-                let begin = doc.begin();
-                doc.copy(header.name.value);
-                for pat in header.vars {
-                    doc.space();
-                    pat.value.docify(doc);
-                }
-                doc.space();
-                doc.literal("implements");
-                let begin_indent = doc.begin();
-                for (i, loc) in loc_implements.value.iter().enumerate() {
-                    if i > 0 {
-                        doc.push(Node::OptionalNewline);
-                        doc.literal(",");
+                group!(doc, {
+                    doc.copy(header.name.value);
+                    for pat in header.vars {
+                        doc.space();
+                        pat.value.docify(doc);
                     }
                     doc.space();
-                    loc.value.docify(doc);
-                }
-                doc.indent_to(begin_indent);
-                for member in members.iter() {
-                    doc.push(Node::OptionalNewline);
-                    member.value.docify(doc);
-                }
-                doc.group_to(begin)
+                    doc.literal("implements");
+                    indent!(doc, {
+                        for member in members.iter() {
+                            doc.push(newline);
+                            member.name.value.docify(doc);
+                            doc.literal(":");
+                            doc.space();
+                            member.typ.docify(doc);
+                        }
+                    });
+                })
             }
         }
     }
 }
 
 impl<'a> Docify<'a> for UnaryOp {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             UnaryOp::Negate => doc.literal("-"),
             UnaryOp::Not => doc.literal("!"),
@@ -720,7 +833,7 @@ impl<'a> Docify<'a> for UnaryOp {
 }
 
 impl<'a> Docify<'a> for BinOp {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             BinOp::Caret => doc.literal("^"),
             BinOp::Star => doc.literal("*"),
@@ -746,8 +859,36 @@ impl<'a> Docify<'a> for BinOp {
     }
 }
 
+impl<'a> Docify<'a> for TypeHeader<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.copy(self.name.value);
+        for var in self.vars {
+            doc.space();
+            var.value.docify(doc);
+        }
+    }
+}
+
+impl<'a> Docify<'a> for Tag<'a> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        match self {
+            Tag::Apply { name, args } => {
+                group!(doc, {
+                    name.value.docify(doc);
+                    for arg in *args {
+                        doc.space();
+                        arg.value.docify(doc);
+                    }
+                })
+            }
+            Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => tag.docify(doc),
+            Tag::Malformed(_) => todo!(),
+        }
+    }
+}
+
 impl<'a> Docify<'a> for TypeAnnotation<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             TypeAnnotation::Function(args, ret) => {
                 let begin = doc.begin();
@@ -777,10 +918,17 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                     doc.space();
                     arg.value.docify(doc);
                 }
-                doc.to(begin)
             }
             TypeAnnotation::BoundVariable(name) => doc.copy(name),
-            TypeAnnotation::As(_, _, _) => todo!(),
+            TypeAnnotation::As(ty, _comment, th) => {
+                let begin = doc.begin();
+                ty.value.docify(doc);
+                doc.space();
+                doc.literal("as");
+                doc.space();
+                th.docify(doc);
+                doc.group_to(begin)
+            }
             TypeAnnotation::Record { fields, ext } => {
                 let begin = doc.begin();
                 doc.literal("{");
@@ -796,25 +944,39 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                 doc.group_to(begin)
             }
             TypeAnnotation::Tuple { elems, ext } => {
-                let begin = doc.begin();
-                doc.literal("(");
-                let begin_indent = doc.begin();
-                for (i, elem) in elems.iter().enumerate() {
-                    if i > 0 {
-                        doc.literal(",");
+                group!(doc, {
+                    doc.literal("(");
+                    let begin_indent = doc.begin();
+                    for (i, elem) in elems.iter().enumerate() {
+                        if i > 0 {
+                            doc.literal(",");
+                        }
+                        elem.value.docify(doc);
                     }
-                    elem.value.docify(doc);
-                }
-                doc.indent_to(begin_indent);
-                doc.literal(")");
-
-                if let Some(ext) = ext {
-                    ext.value.docify(doc);
-                }
-
-                doc.group_to(begin)
+                    doc.indent_to(begin_indent);
+                    doc.literal(")");
+                    if let Some(ext) = ext {
+                        ext.value.docify(doc);
+                    }
+                })
             }
-            TypeAnnotation::TagUnion { ext, tags } => todo!(),
+            TypeAnnotation::TagUnion { ext, tags } => {
+                group!(doc, {
+                    doc.literal("[");
+                    let begin_indent = doc.begin();
+                    for (i, tag) in tags.iter().enumerate() {
+                        if i > 0 {
+                            doc.literal(",");
+                        }
+                        tag.value.docify(doc);
+                    }
+                    doc.indent_to(begin_indent);
+                    doc.literal("]");
+                    if let Some(ext) = ext {
+                        ext.value.docify(doc);
+                    }
+                })
+            }
             TypeAnnotation::Inferred => doc.literal("_"),
             TypeAnnotation::Wildcard => doc.literal("*"),
             TypeAnnotation::Where(ty, clauses) => {
@@ -842,7 +1004,6 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                         ability.value.docify(doc);
                     }
                 }
-                doc.to(begin)
             }
             TypeAnnotation::SpaceBefore(ty, _comments)
             | TypeAnnotation::SpaceAfter(ty, _comments) => ty.docify(doc),
@@ -851,7 +1012,7 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
     }
 }
 
-fn docify_parens<'a>(value: &'a TypeAnnotation, doc: &mut Doc<'a>) -> NodeRange {
+fn docify_parens<'a>(value: &'a TypeAnnotation, doc: &mut Doc<'a>) {
     let need_parens = match value.extract_spaces().item {
         TypeAnnotation::Function(_, _) => true,
         TypeAnnotation::Apply(_, _, _) => true,
@@ -870,7 +1031,7 @@ fn docify_parens<'a>(value: &'a TypeAnnotation, doc: &mut Doc<'a>) -> NodeRange 
 }
 
 impl<'a, T: Docify<'a>> Docify<'a> for Spaced<'a, T> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             Spaced::Item(t) => t.docify(doc),
             Spaced::SpaceBefore(inner, _comment) | Spaced::SpaceAfter(inner, _comment) => {
@@ -881,13 +1042,13 @@ impl<'a, T: Docify<'a>> Docify<'a> for Spaced<'a, T> {
 }
 
 impl<'a> Docify<'a> for &'a str {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.copy(self)
     }
 }
 
 impl<'a> Docify<'a> for ValueDef<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             ValueDef::Annotation(pat, ty) => {
                 let begin = doc.begin();
@@ -895,7 +1056,6 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 doc.literal(":");
                 doc.space();
                 ty.value.docify(doc);
-                doc.to(begin)
             }
             ValueDef::Body(pat, body) => {
                 let begin = doc.begin();
@@ -926,7 +1086,6 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 doc.literal("=");
                 doc.space();
                 body_expr.value.docify(doc);
-                doc.to(begin)
             }
             ValueDef::Dbg {
                 condition,
@@ -941,49 +1100,89 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 preceding_comment,
             } => todo!(),
             ValueDef::ModuleImport(import) => {
-                let begin = doc.begin();
                 doc.literal("import");
 
                 doc.space();
                 import.name.value.docify(doc);
-                doc.space();
 
                 if let Some(alias) = &import.alias {
+                    doc.space();
                     alias.docify(doc);
                 }
 
                 if let Some(exposed) = &import.exposed {
+                    doc.space();
                     exposed.keyword.docify(doc);
+                    doc.space();
                     docify_collection(&exposed.item, Braces::Square, doc);
                 }
-                doc.to(begin)
             }
-            ValueDef::IngestedFileImport(_) => todo!(),
+            ValueDef::IngestedFileImport(import) => {
+                doc.literal("import");
+                doc.space();
+                docify_str(&import.path.value, doc);
+                doc.space();
+                import.name.docify(doc);
+                if let Some(ann) = &import.annotation {
+                    doc.space();
+                    ann.annotation.docify(doc);
+                }
+            }
             ValueDef::Stmt(expr) => expr.value.docify(doc),
         }
     }
 }
 
 impl<'a> Docify<'a> for ImportAsKeyword {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.literal("as")
     }
 }
 
+impl<'a> Docify<'a> for RequiresKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("requires")
+    }
+}
+
+impl<'a> Docify<'a> for ExposesKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("exposes")
+    }
+}
+
+impl<'a> Docify<'a> for PackagesKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("packages")
+    }
+}
+
+impl<'a> Docify<'a> for ImportsKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("imports")
+    }
+}
+
+impl<'a> Docify<'a> for ProvidesKeyword {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        doc.literal("provides")
+    }
+}
+
 impl<'a> Docify<'a> for ImportExposingKeyword {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.literal("exposing")
     }
 }
 
 impl<'a> Docify<'a> for ImportAlias<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         doc.copy(self.as_str())
     }
 }
 
 impl<'a, K: Docify<'a>, T: Docify<'a>> Docify<'a> for KeywordItem<'a, K, T> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         self.keyword.item.docify(doc);
         doc.space();
         self.item.docify(doc)
@@ -991,7 +1190,7 @@ impl<'a, K: Docify<'a>, T: Docify<'a>> Docify<'a> for KeywordItem<'a, K, T> {
 }
 
 impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             AssignedField::RequiredValue(name, _comments, value) => {
                 let begin = doc.begin();
@@ -1000,7 +1199,6 @@ impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
                 doc.space();
                 doc.space();
                 value.value.docify(doc);
-                doc.to(begin)
             }
             AssignedField::OptionalValue(name, _comments, value) => {
                 let begin = doc.begin();
@@ -1008,18 +1206,17 @@ impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
                 doc.literal("?");
                 doc.space();
                 value.value.docify(doc);
-                doc.to(begin)
             }
             AssignedField::LabelOnly(name) => doc.push(Node::Copy(name.value)),
-            AssignedField::SpaceBefore(_, _) => todo!(),
-            AssignedField::SpaceAfter(_, _) => todo!(),
+            AssignedField::SpaceBefore(item, _comment)
+            | AssignedField::SpaceAfter(item, _comment) => item.docify(doc),
             AssignedField::Malformed(_) => todo!(),
         }
     }
 }
 
 impl<'a> Docify<'a> for Pattern<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) -> NodeRange {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             Pattern::Identifier { ident } => doc.copy(ident),
             Pattern::QualifiedIdentifier { module_name, ident } => {
@@ -1027,14 +1224,12 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.copy(module_name);
                 doc.literal(".");
                 doc.copy(ident);
-                doc.to(begin)
             }
             Pattern::Tag(name) => doc.copy(name),
             Pattern::OpaqueRef(name) => {
                 let begin = doc.begin();
                 doc.literal("@");
                 doc.copy(name);
-                doc.to(begin)
             }
             Pattern::Apply(func, args) => {
                 let begin = doc.begin();
@@ -1043,7 +1238,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                     doc.space();
                     docify_pattern_parens(&arg.value, doc);
                 }
-                doc.to(begin)
             }
             Pattern::RecordDestructure(items) => {
                 let begin = doc.begin();
@@ -1058,7 +1252,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 }
                 doc.space();
                 doc.literal("}");
-                doc.to(begin)
             }
             Pattern::RequiredField(name, pat) => {
                 let begin = doc.begin();
@@ -1066,7 +1259,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.literal(":");
                 doc.space();
                 pat.value.docify(doc);
-                doc.to(begin)
             }
             Pattern::OptionalField(name, pat) => {
                 let begin = doc.begin();
@@ -1074,7 +1266,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.literal("?");
                 doc.space();
                 pat.value.docify(doc);
-                doc.to(begin)
             }
             Pattern::NumLiteral(text) => doc.copy(text),
             Pattern::NonBase10Literal {
@@ -1088,7 +1279,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 let begin = doc.begin();
                 doc.literal("_");
                 doc.copy(name);
-                doc.to(begin)
             }
             Pattern::SingleQuote(_) => todo!(),
             Pattern::Tuple(items) => {
@@ -1104,7 +1294,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 }
                 doc.space();
                 doc.literal(")");
-                doc.to(begin)
             }
             Pattern::List(items) => {
                 let begin = doc.begin();
@@ -1119,10 +1308,25 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 }
                 doc.space();
                 doc.literal("]");
-                doc.to(begin)
             }
-            Pattern::ListRest(_) => todo!(),
-            Pattern::As(_, _) => todo!(),
+            Pattern::ListRest(comment_as_pair) => {
+                let begin = doc.begin();
+                doc.literal("..");
+                if let Some((_, name)) = comment_as_pair {
+                    doc.space();
+                    doc.literal("as");
+                    doc.space();
+                    doc.copy(name.identifier.value);
+                }
+            }
+            Pattern::As(pat, pat_as) => {
+                let begin = doc.begin();
+                pat.value.docify(doc);
+                doc.space();
+                doc.literal("as");
+                doc.space();
+                doc.copy(pat_as.identifier.value);
+            }
             Pattern::SpaceBefore(pat, _comment) | Pattern::SpaceAfter(pat, _comment) => {
                 pat.docify(doc)
             }
@@ -1132,14 +1336,13 @@ impl<'a> Docify<'a> for Pattern<'a> {
     }
 }
 
-fn docify_str<'a>(lit: &'a StrLiteral, doc: &mut Doc<'a>) -> NodeRange {
+fn docify_str<'a>(lit: &'a StrLiteral, doc: &mut Doc<'a>) {
     match lit {
         StrLiteral::PlainLine(text) => {
             let begin = doc.begin();
             doc.literal("\"");
             doc.copy(text);
             doc.literal("\"");
-            doc.to(begin)
         }
         StrLiteral::Line(segments) => {
             let begin = doc.begin();
@@ -1174,13 +1377,12 @@ fn docify_str<'a>(lit: &'a StrLiteral, doc: &mut Doc<'a>) -> NodeRange {
                 }
             }
             doc.literal("\"");
-            doc.to(begin)
         }
         StrLiteral::Block(_) => todo!(),
     }
 }
 
-fn docify_pattern_parens<'a>(value: &'a Pattern, doc: &mut Doc<'a>) -> NodeRange {
+fn docify_pattern_parens<'a>(value: &'a Pattern, doc: &mut Doc<'a>) {
     let needs_parens = match value.extract_spaces().item {
         Pattern::Apply(_, _) => true,
         _ => false,
@@ -1191,7 +1393,6 @@ fn docify_pattern_parens<'a>(value: &'a Pattern, doc: &mut Doc<'a>) -> NodeRange
         doc.literal("(");
         value.docify(doc);
         doc.literal(")");
-        doc.to(begin)
     } else {
         value.docify(doc)
     }
@@ -1396,14 +1597,4 @@ impl Display for Doc<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.render(10))
     }
-}
-
-#[test]
-fn test_docify() {
-    let arena = Bump::new();
-    let expr = roc_parse::test_helpers::parse_expr_with(&arena, "[123, 456]").unwrap();
-    let mut doc = Doc::new();
-    docify(&expr, &mut doc);
-    assert_eq!(doc.render(20), "[ 123, 456 ]");
-    assert_eq!(doc.render(5), "[\n    123,\n    456,\n]");
 }
