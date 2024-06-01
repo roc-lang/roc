@@ -5,10 +5,17 @@ extern crate indoc;
 mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::def::fmt_defs;
+    use roc_fmt::doc::doc_fmt_module;
     use roc_fmt::header::fmt_header;
+    use roc_fmt::module::fmt_module;
+    use roc_fmt::spaces::RemoveSpaces;
+    use roc_fmt::Buf;
     use roc_fmt::Buf;
     use roc_parse::ast::{Defs, Header, SpacesBefore};
+    use roc_parse::ast::{Defs, Module};
     use roc_parse::header::{self, parse_module_defs};
+    use roc_parse::parser::Parser;
+    use roc_parse::parser::SyntaxError;
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
@@ -5849,6 +5856,47 @@ mod test_fmt {
                 let src = std::fs::read_to_string(path).unwrap();
                 println!("Now trying to format {}", path.display());
                 module_formats_same(&src);
+
+                println!("Now trying fmt v2 on {}", path.display());
+
+                let arena = Bump::new();
+
+                let actual = Input::Expr(&src).parse_in(&arena).unwrap_or_else(|err| {
+                    panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", src, err);
+                });
+
+                let output = actual.format2();
+
+                let reparsed_ast = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
+                    panic!(
+                        "After formatting, the source code no longer parsed!\n\n\
+                        Parse error was: {:?}\n\n\
+                        The original code was:\n\n{}\n\n\
+                        The code that failed to parse:\n\n{}\n\n\
+                        The original ast was:\n\n{:#?}\n\n",
+                        err,
+                        src,
+                        output.as_ref().as_str(),
+                        actual
+                    );
+                });
+
+                let ast_normalized = actual.remove_spaces(&arena);
+                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+
+                if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
+                    panic!(
+                        "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                        * * * Source code before formatting:\n{}\n\n\
+                        * * * Source code after formatting:\n{}\n\n\
+                        * * * AST before formatting:\n{:#?}\n\n\
+                        * * * AST after formatting:\n{:#?}\n\n",
+                        src,
+                        output.as_ref().as_str(),
+                        actual,
+                        reparsed_ast_normalized
+                    );
+                }
             }
         }
         assert!(

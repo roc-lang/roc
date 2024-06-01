@@ -120,9 +120,9 @@ impl<'a> Output<'a> {
         }
     }
 
-    fn format2(&self) -> InputOwned {
+    pub fn format2(&self) -> InputOwned {
         let arena = Bump::new();
-        let mut buf = Buf::new_in(&arena);
+        let buf = Buf::new_in(&arena);
         match self {
             Output::Header(header) => InputOwned::Header(doc_fmt_module(Some(header), None)),
             Output::ModuleDefs(defs) => InputOwned::ModuleDefs(doc_fmt_module(None, Some(defs))),

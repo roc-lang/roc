@@ -80,8 +80,16 @@ impl<'a> Buf<'a> {
             "push_str: `{s}` with text:\n{}",
             self.text
         );
-        debug_assert!(!s.contains('\n'));
-        debug_assert!(!s.ends_with(' '));
+        debug_assert!(
+            !s.contains('\n'),
+            "Don't call buf.push_str with a newline: `{}`",
+            s
+        );
+        debug_assert!(
+            !s.ends_with(' '),
+            "Don't call buf.push_str with a space at the end: `{}`",
+            s
+        );
 
         if !s.is_empty() {
             self.flush_spaces();
@@ -112,6 +120,14 @@ impl<'a> Buf<'a> {
         self.spaces_to_flush = 0;
         self.newlines_to_flush = std::cmp::min(self.newlines_to_flush + 1, 2);
         self.beginning_of_line = true;
+    }
+
+    /// Ensures the current buffer ends in a space, if it didn't already.
+    /// Doesn't add a space if the buffer already ends in one.
+    pub fn ensure_ends_with_space(&mut self) {
+        if !self.text.is_empty() && self.spaces_to_flush == 0 {
+            self.spaces(1)
+        }
     }
 
     /// Ensures the current buffer ends in a newline, if it didn't already.
