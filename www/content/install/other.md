@@ -1,8 +1,8 @@
-# Roc installation guide for other systems
+# Other Systems
 
 1. [Install Rust](https://rustup.rs/)
 
-1. [Build Roc from source](../BUILDING_FROM_SOURCE.md)
+1. [Build Roc from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)
 
 1. Run examples:
 

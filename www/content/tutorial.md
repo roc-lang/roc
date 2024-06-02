@@ -22,7 +22,7 @@
     </section>
     <section>
         <h2 id="installation"><a href="#installation">Installation</a></h2>
-        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="https://github.com/roc-lang/roc/tree/main/getting_started#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
+        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
 ## [REPL](#repl) {#repl}

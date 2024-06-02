@@ -36,12 +36,19 @@ pageData =
     |> Dict.insert "/friendly.html" { title: "Friendly | Roc", description: "What does it mean that the Roc programming language is friendly?" }
     |> Dict.insert "/functional.html" { title: "Functional | Roc", description: "What does it mean that the Roc programming language is functional?" }
     |> Dict.insert "/index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language." }
-    |> Dict.insert "/install.html" { title: "Install | Roc", description: "How to install the Roc programming language." }
+    |> Dict.insert "/install/index.html" { title: "Install | Roc", description: "How to install the Roc programming language." }
     |> Dict.insert "/plans.html" { title: "Planned Changes | Roc", description: "Planned changes to the Roc programming language." }
     |> Dict.insert "/platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
     |> Dict.insert "/tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
     |> Dict.insert "/repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
     |> Dict.insert "/examples/index.html" { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." }
+    |> Dict.insert "/install/other.html" { title: "Getting started on other systems | Roc", description: "Roc installation guide for other systems" }
+    |> Dict.insert "/install/linux_x86_64.html" { title: "Getting started on Linux x86_64 | Roc", description: "Roc installation guide for Linux x86_64" }
+    |> Dict.insert "/install/macos_apple_silicon.html" { title: "Getting started on MacOS Apple Silicon | Roc", description: "Roc installation guide for MacOS Apple Silicon" }
+    |> Dict.insert "/install/macos_x86_64.html" { title: "Getting started on MacOS x86_64 | Roc", description: "Roc installation guide for MacOS x86_64" }
+    |> Dict.insert "/install/windows.html" { title: "Getting started on Windows | Roc", description: "Roc installation guide for Windows" }
+    |> Dict.insert "/install/nix.html" { title: "Getting started with Nix | Roc", description: "Roc installation guide for Nix" }
+    |> Dict.insert "/install/getting_started.html" { title: "Getting started | Roc", description: "How to get started with Roc" }
 
 getPageInfo : Str -> { title : Str, description : Str }
 getPageInfo = \pagePathStr ->
