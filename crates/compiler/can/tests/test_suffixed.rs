@@ -865,6 +865,21 @@ mod suffixed_tests {
             r#"Defs { tags: [Index(2147483648)], regions: [@0-55], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-55 Expect(@30-36 Apply(@32-34 Var { module_name: "Bool", ident: "isEq" }, [@30-31 Num("1"), @35-36 Num("2")], BinOp(Equals)), @53-55 Var { module_name: "", ident: "x" }))] }"#,
         );
     }
+
+    #[test]
+    fn deep_when() {
+        run_test(
+            r#"
+            main =
+                when a is
+                    0 ->
+                        when b is
+                            1 ->
+                                c!
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-159], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-159 When(@28-29 Var { module_name: "", ident: "a" }, [WhenBranch { patterns: [@53-54 NumLiteral("0")], value: @82-159 When(@87-88 Var { module_name: "", ident: "b" }, [WhenBranch { patterns: [@120-121 NumLiteral("1")], value: @157-159 Var { module_name: "", ident: "c" }, guard: None }]), guard: None }]))] }"#,
+        );
+    }
 }
 
 #[cfg(test)]
