@@ -1127,7 +1127,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completed removed in desugar_value_def_suffixed"),
+        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
