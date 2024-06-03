@@ -170,6 +170,41 @@ pub fn unwrap_suffixed_expression<'a>(
                 }
             }
 
+            Expr::Expect(condition, continuation) => {
+                if is_expr_suffixed(&condition.value) {
+                    // we cannot unwrap a suffixed expression within expect
+                    // e.g. expect (foo! "bar")
+                    return Err(EUnwrapped::Malformed);
+                }
+
+                match unwrap_suffixed_expression(arena, continuation, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        return Ok(new_expect);
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        Err(EUnwrapped::UnwrappedDefExpr(new_expect))
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: unwrapped_expr,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg: new_expect,
+                            sub_pat,
+                            sub_new,
+                        })
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                }
+            }
+
             // we only need to unwrap some expressions, leave the rest as is
             _ => Ok(loc_expr),
         }
