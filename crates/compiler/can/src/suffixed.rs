@@ -576,6 +576,8 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
                         Err(..) => return Err(EUnwrapped::Malformed),
                     };
 
+                    // TODO: unwrap guard
+
                     let new_branch = WhenBranch{value: *unwrapped_branch_value, patterns, guard: *guard};
                     let mut new_branches = Vec::new_in(arena);
                     let (before, rest) = branches.split_at(branch_index);
