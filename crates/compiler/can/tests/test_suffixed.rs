@@ -853,6 +853,18 @@ mod suffixed_tests {
             r##"Defs { tags: [Index(2147483648)], regions: [@0-52], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @27-34 Apply(@27-34 Var { module_name: "Task", ident: "await" }, [@27-28 Var { module_name: "", ident: "a" }, @27-34 Closure([@27-28 Identifier { ident: "#!a0" }], @27-34 Defs(Defs { tags: [Index(2147483650)], regions: [@27-34], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@33-34 Var { module_name: "", ident: "b" }, [@27-28 TaskAwaitBang(Var { module_name: "", ident: "a" })], BinOp(Pizza))), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@33-34 Var { module_name: "", ident: "b" }, [@27-28 Var { module_name: "", ident: "#!a0" }], BinOp(Pizza))), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@33-34 Var { module_name: "", ident: "b" }, [@27-28 Var { module_name: "", ident: "#!a0" }], BinOp(Pizza)))] }, @51-52 Var { module_name: "", ident: "c" }))], BangSuffix))] }"##,
         );
     }
+
+    #[test]
+    fn expect_then_bang() {
+        run_test(
+            r#"
+            main =
+                expect 1 == 2
+                x!
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-55], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-55 Expect(@30-36 Apply(@32-34 Var { module_name: "Bool", ident: "isEq" }, [@30-31 Num("1"), @35-36 Num("2")], BinOp(Equals)), @53-55 Var { module_name: "", ident: "x" }))] }"#,
+        );
+    }
 }
 
 #[cfg(test)]
