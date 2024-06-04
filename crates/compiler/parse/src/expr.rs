@@ -1877,7 +1877,7 @@ fn finish_parsing_ability_def_help<'a>(
 fn parse_expr_operator<'a>(
     min_indent: u32,
     options: ExprParseOptions,
-    mut expr_state: ExprState<'a>,
+    expr_state: ExprState<'a>,
     loc_op: Loc<OperatorOrDef>,
     line_indent: u32,
     arena: &'a Bump,
@@ -1895,124 +1895,35 @@ fn parse_expr_operator<'a>(
     let new_start = state.pos();
     match op {
         OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
-            // negative terms
-
-            let (_, negated_expr, state) = loc_term(options).parse(arena, state, min_indent)?;
-            let new_end = state.pos();
-
-            let arg = numeric_negate_expression(
+            parse_negated_term(
+                expr_state,
+                options,
                 arena,
+                state,
+                min_indent,
                 initial_state,
                 loc_op,
-                negated_expr,
-                expr_state.spaces_after,
-            );
-
-            let initial_state = state.clone();
-
-            let (spaces, state) =
-                match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-                    Err((_, _)) => (&[] as &[_], state),
-                    Ok((_, spaces, state)) => (spaces, state),
-                };
-
-            expr_state.arguments.push(arena.alloc(arg));
-            expr_state.spaces_after = spaces;
-            expr_state.end = new_end;
-
-            parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
+            )
         }
-        OperatorOrDef::Assignment => {
-            let expr_region = expr_state.expr.region;
-
-            let indented_more = line_indent + 1;
-
-            let call = expr_state
-                .validate_assignment_or_backpassing(arena, loc_op, EExpr::ElmStyleFunction)
-                .map_err(|fail| (MadeProgress, fail))?;
-
-            let (value_def, def_region, state) = {
-                match expr_to_pattern_help(arena, &call.value) {
-                    Ok(good) => {
-                        let (_, mut body, state) =
-                            expr_start(options).parse(arena, state, indented_more)?;
-
-                        // put the spaces from after the operator in front of the call
-                        if !spaces_after_operator.is_empty() {
-                            body = arena
-                                .alloc(body.value)
-                                .with_spaces_before(spaces_after_operator, body.region);
-                        }
-
-                        let body_region = Region::span_across(&call.region, &body.region);
-
-                        let alias = ValueDef::Body(
-                            arena.alloc(Loc::at(expr_region, good)),
-                            arena.alloc(body),
-                        );
-
-                        (alias, body_region, state)
-                    }
-                    Err(_) => {
-                        // this `=` likely occurred inline; treat it as an invalid operator
-                        let fail = EExpr::BadOperator(arena.alloc("="), loc_op.region.start());
-
-                        return Err((MadeProgress, fail));
-                    }
-                }
-            };
-
-            let mut defs = Defs::default();
-            defs.push_value_def(value_def, def_region, &[], &[]);
-
-            parse_defs_expr(options, min_indent, defs, arena, state)
-        }
-        OperatorOrDef::Backpassing => {
-            let expr_region = expr_state.expr.region;
-            let indented_more = min_indent + 1;
-
-            let call = expr_state
-                .validate_assignment_or_backpassing(arena, loc_op, |_, pos| {
-                    EExpr::BadOperator("<-", pos)
-                })
-                .map_err(|fail| (MadeProgress, fail))?;
-
-            let (loc_pattern, loc_body, state) = {
-                match expr_to_pattern_help(arena, &call.value) {
-                    Ok(good) => {
-                        let (_, mut ann_type, state) =
-                            expr_start(options).parse(arena, state, indented_more)?;
-
-                        // put the spaces from after the operator in front of the call
-                        if !spaces_after_operator.is_empty() {
-                            ann_type = arena
-                                .alloc(ann_type.value)
-                                .with_spaces_before(spaces_after_operator, ann_type.region);
-                        }
-
-                        (Loc::at(expr_region, good), ann_type, state)
-                    }
-                    Err(_) => {
-                        // this `=` likely occurred inline; treat it as an invalid operator
-                        let fail = EExpr::BadOperator("=", loc_op.region.start());
-
-                        return Err((MadeProgress, fail));
-                    }
-                }
-            };
-
-            let parse_cont = space0_before_e(expr_start(options), EExpr::IndentEnd);
-
-            let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
-
-            let ret = Expr::Backpassing(
-                arena.alloc([loc_pattern]),
-                arena.alloc(loc_body),
-                arena.alloc(loc_cont),
-            );
-
-            Ok((MadeProgress, ret, state))
-        }
+        OperatorOrDef::Assignment => parse_assignment(
+            expr_state,
+            line_indent,
+            arena,
+            loc_op,
+            options,
+            state,
+            spaces_after_operator,
+            min_indent,
+        ),
+        OperatorOrDef::Backpassing => parse_backpassing(
+            expr_state,
+            min_indent,
+            arena,
+            loc_op,
+            options,
+            state,
+            spaces_after_operator,
+        ),
         OperatorOrDef::AliasOrOpaque(kind) => finish_parsing_alias_or_opaque(
             min_indent,
             options,
@@ -2022,101 +1933,329 @@ fn parse_expr_operator<'a>(
             state,
             spaces_after_operator,
         ),
-        OperatorOrDef::BinOp(op) => match loc_possibly_negative_or_negated_term(options).parse(
+        OperatorOrDef::BinOp(op) => parse_after_binop(
+            options,
             arena,
-            state.clone(),
+            state,
             min_indent,
-        ) {
-            Err((MadeProgress, f)) => Err((MadeProgress, f)),
-            Ok((_, mut new_expr, state)) => {
-                let new_end = state.pos();
-
-                let initial_state = state.clone();
-
-                // put the spaces from after the operator in front of the new_expr
-                if !spaces_after_operator.is_empty() {
-                    new_expr = arena
-                        .alloc(new_expr.value)
-                        .with_spaces_before(spaces_after_operator, new_expr.region);
-                }
-
-                match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-                    Err((_, _)) => {
-                        let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
-
-                        let call = to_call(arena, args, expr_state.expr);
-
-                        expr_state.operators.push((call, loc_op.with_value(op)));
-                        expr_state.expr = new_expr;
-                        expr_state.end = new_end;
-                        expr_state.spaces_after = &[];
-
-                        let expr = parse_expr_final(expr_state, arena);
-                        Ok((MadeProgress, expr, state))
-                    }
-                    Ok((_, spaces, state)) => {
-                        let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
-
-                        let call = to_call(arena, args, expr_state.expr);
-
-                        expr_state.operators.push((call, loc_op.with_value(op)));
-                        expr_state.expr = new_expr;
-                        expr_state.end = new_end;
-                        expr_state.spaces_after = spaces;
-
-                        let new_min_indent = if is_expr_suffixed(&new_expr.value) {
-                            min_indent + 1
-                        } else {
-                            min_indent
-                        };
-
-                        match parse_expr_end(
-                            new_min_indent,
-                            options,
-                            expr_state,
-                            arena,
-                            state,
-                            initial_state,
-                        ) {
-                            Ok((progress, expr, state)) => {
-                                if let Expr::BinOps(..) = expr {
-                                    let def_region = expr.get_region_spanning_binops();
-                                    let mut new_expr = Loc::at(def_region, expr);
-
-                                    if is_expr_suffixed(&new_expr.value) {
-                                        // We have parsed a statement such as `"hello" |> line!`
-                                        // put the spaces from after the operator in front of the call
-                                        if !spaces_after_operator.is_empty() {
-                                            new_expr = arena.alloc(expr).with_spaces_before(
-                                                spaces_after_operator,
-                                                def_region,
-                                            );
-                                        }
-
-                                        let value_def = ValueDef::Stmt(arena.alloc(new_expr));
-
-                                        let mut defs = Defs::default();
-                                        defs.push_value_def(value_def, def_region, &[], &[]);
-
-                                        return parse_defs_expr(
-                                            options, min_indent, defs, arena, state,
-                                        );
-                                    }
-                                }
-
-                                // else return the parsed expression
-                                Ok((progress, expr, state))
-                            }
-                            Err(err) => Err(err),
-                        }
-                    }
-                }
-            }
-            Err((NoProgress, _e)) => {
-                return Err((MadeProgress, EExpr::TrailingOperator(state.pos())));
-            }
-        },
+            spaces_after_operator,
+            expr_state,
+            loc_op,
+            op,
+        ),
     }
+}
+
+fn parse_after_binop<'a>(
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+    spaces_after_operator: &'a [CommentOrNewline],
+    mut expr_state: ExprState<'a>,
+    loc_op: Loc<OperatorOrDef>,
+    op: BinOp,
+) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
+    match loc_possibly_negative_or_negated_term(options).parse(arena, state.clone(), min_indent) {
+        Err((MadeProgress, f)) => Err((MadeProgress, f)),
+        Ok((_, mut new_expr, state)) => {
+            let new_end = state.pos();
+
+            let initial_state = state.clone();
+
+            // put the spaces from after the operator in front of the new_expr
+            if !spaces_after_operator.is_empty() {
+                new_expr = arena
+                    .alloc(new_expr.value)
+                    .with_spaces_before(spaces_after_operator, new_expr.region);
+            }
+
+            match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
+                Err((_, _)) => {
+                    let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
+
+                    let call = to_call(arena, args, expr_state.expr);
+
+                    expr_state.operators.push((call, loc_op.with_value(op)));
+                    expr_state.expr = new_expr;
+                    expr_state.end = new_end;
+                    expr_state.spaces_after = &[];
+
+                    let expr = parse_expr_final(expr_state, arena);
+                    Ok((MadeProgress, expr, state))
+                }
+                Ok((_, spaces, state)) => {
+                    let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
+
+                    let call = to_call(arena, args, expr_state.expr);
+
+                    expr_state.operators.push((call, loc_op.with_value(op)));
+                    expr_state.expr = new_expr;
+                    expr_state.end = new_end;
+                    expr_state.spaces_after = spaces;
+
+                    let new_min_indent = if is_expr_suffixed(&new_expr.value) {
+                        min_indent + 1
+                    } else {
+                        min_indent
+                    };
+
+                    match parse_expr_end(
+                        new_min_indent,
+                        options,
+                        expr_state,
+                        arena,
+                        state,
+                        initial_state,
+                    ) {
+                        Ok((progress, expr, state)) => {
+                            if let Expr::BinOps(..) = expr {
+                                let def_region = expr.get_region_spanning_binops();
+                                let mut new_expr = Loc::at(def_region, expr);
+
+                                if is_expr_suffixed(&new_expr.value) {
+                                    // We have parsed a statement such as `"hello" |> line!`
+                                    // put the spaces from after the operator in front of the call
+                                    if !spaces_after_operator.is_empty() {
+                                        new_expr = arena
+                                            .alloc(expr)
+                                            .with_spaces_before(spaces_after_operator, def_region);
+                                    }
+
+                                    let value_def = ValueDef::Stmt(arena.alloc(new_expr));
+
+                                    let mut defs = Defs::default();
+                                    defs.push_value_def(value_def, def_region, &[], &[]);
+
+                                    return parse_defs_expr(
+                                        options, min_indent, defs, arena, state,
+                                    );
+                                }
+                            }
+
+                            // else return the parsed expression
+                            Ok((progress, expr, state))
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+            }
+        }
+        Err((NoProgress, _e)) => {
+            return Err((MadeProgress, EExpr::TrailingOperator(state.pos())));
+        }
+    }
+}
+
+fn parse_backpassing<'a>(
+    expr_state: ExprState<'a>,
+    min_indent: u32,
+    arena: &'a Bump,
+    loc_op: Loc<OperatorOrDef>,
+    options: ExprParseOptions,
+    state: State<'a>,
+    spaces_after_operator: &'a [CommentOrNewline],
+) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
+    // called after parsing the <- operator
+
+    let expr_region = expr_state.expr.region;
+    let indented_more = min_indent + 1;
+
+    let call = expr_state
+        .validate_assignment_or_backpassing(arena, loc_op, |_, pos| EExpr::BadOperator("<-", pos))
+        .map_err(|fail| (MadeProgress, fail))?;
+
+    let (loc_pattern, loc_body, state) = {
+        match expr_to_pattern_help(arena, &call.value) {
+            Ok(good) => {
+                let (_, mut ann_type, state) =
+                    expr_start(options).parse(arena, state, indented_more)?;
+
+                // put the spaces from after the operator in front of the call
+                if !spaces_after_operator.is_empty() {
+                    ann_type = arena
+                        .alloc(ann_type.value)
+                        .with_spaces_before(spaces_after_operator, ann_type.region);
+                }
+
+                (Loc::at(expr_region, good), ann_type, state)
+            }
+            Err(_) => {
+                // this `=` likely occurred inline; treat it as an invalid operator
+                let fail = EExpr::BadOperator("=", loc_op.region.start());
+
+                return Err((MadeProgress, fail));
+            }
+        }
+    };
+
+    let parse_cont = space0_before_e(expr_start(options), EExpr::IndentEnd);
+
+    let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
+
+    let ret = Expr::Backpassing(
+        arena.alloc([loc_pattern]),
+        arena.alloc(loc_body),
+        arena.alloc(loc_cont),
+    );
+
+    Ok((MadeProgress, ret, state))
+}
+
+fn parse_multi_backpassing<'a>(
+    mut expr_state: ExprState<'a>,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+    options: ExprParseOptions,
+) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
+    // called after parsing the first , in `a, b <- c` (e.g.)
+
+    let (_, mut patterns, state) = specialize_err_ref(
+        EExpr::Pattern,
+        crate::parser::sep_by0(
+            byte(b',', EPattern::Start),
+            space0_around_ee(
+                crate::pattern::loc_pattern_help(),
+                EPattern::Start,
+                EPattern::IndentEnd,
+            ),
+        ),
+    )
+    .parse(arena, state, min_indent)
+    .map_err(|(progress, err)| {
+        // We were expecting the end of an expression, and parsed a comma
+        // therefore we are either on the LHS of backpassing or this is was
+        // in an invalid position.
+        if let EExpr::Pattern(EPattern::IndentEnd(_), pos) = err {
+            (progress, EExpr::UnexpectedComma(pos.sub(1)))
+        } else {
+            (progress, err)
+        }
+    })?;
+
+    expr_state.consume_spaces(arena);
+    let call = to_call(arena, expr_state.arguments, expr_state.expr);
+
+    let pattern = expr_to_pattern_help(arena, &call.value).map_err(|()| {
+        (
+            MadeProgress,
+            EExpr::Pattern(arena.alloc(EPattern::NotAPattern(state.pos())), state.pos()),
+        )
+    })?;
+
+    let loc_pattern = Loc::at(call.region, pattern);
+
+    patterns.insert(0, loc_pattern);
+
+    match two_bytes(b'<', b'-', EExpr::BackpassArrow).parse(arena, state.clone(), min_indent) {
+        Err((_, fail)) => Err((MadeProgress, fail)),
+        Ok((_, _, state)) => {
+            let parse_body =
+                space0_before_e(increment_min_indent(expr_start(options)), EExpr::IndentEnd);
+
+            let (_, loc_body, state) = parse_body.parse(arena, state, min_indent)?;
+
+            let parse_cont = space0_before_e(expr_start(options), EExpr::IndentEnd);
+
+            let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
+
+            let ret = Expr::Backpassing(
+                patterns.into_bump_slice(),
+                arena.alloc(loc_body),
+                arena.alloc(loc_cont),
+            );
+
+            Ok((MadeProgress, ret, state))
+        }
+    }
+}
+
+fn parse_assignment<'a>(
+    expr_state: ExprState<'a>,
+    line_indent: u32,
+    arena: &'a Bump,
+    loc_op: Loc<OperatorOrDef>,
+    options: ExprParseOptions,
+    state: State<'a>,
+    spaces_after_operator: &'a [CommentOrNewline],
+    min_indent: u32,
+) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
+    let expr_region = expr_state.expr.region;
+
+    let indented_more = line_indent + 1;
+
+    let call = expr_state
+        .validate_assignment_or_backpassing(arena, loc_op, EExpr::ElmStyleFunction)
+        .map_err(|fail| (MadeProgress, fail))?;
+
+    let (value_def, def_region, state) = {
+        match expr_to_pattern_help(arena, &call.value) {
+            Ok(good) => {
+                let (_, mut body, state) =
+                    expr_start(options).parse(arena, state, indented_more)?;
+
+                // put the spaces from after the operator in front of the call
+                if !spaces_after_operator.is_empty() {
+                    body = arena
+                        .alloc(body.value)
+                        .with_spaces_before(spaces_after_operator, body.region);
+                }
+
+                let body_region = Region::span_across(&call.region, &body.region);
+
+                let alias =
+                    ValueDef::Body(arena.alloc(Loc::at(expr_region, good)), arena.alloc(body));
+
+                (alias, body_region, state)
+            }
+            Err(_) => {
+                // this `=` likely occurred inline; treat it as an invalid operator
+                let fail = EExpr::BadOperator(arena.alloc("="), loc_op.region.start());
+
+                return Err((MadeProgress, fail));
+            }
+        }
+    };
+
+    let mut defs = Defs::default();
+    defs.push_value_def(value_def, def_region, &[], &[]);
+
+    parse_defs_expr(options, min_indent, defs, arena, state)
+}
+
+fn parse_negated_term<'a>(
+    mut expr_state: ExprState<'a>,
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+    initial_state: State<'a>,
+    loc_op: Loc<OperatorOrDef>,
+) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
+    let (_, negated_expr, state) = loc_term(options).parse(arena, state, min_indent)?;
+    let new_end = state.pos();
+
+    let arg = numeric_negate_expression(
+        arena,
+        initial_state,
+        loc_op,
+        negated_expr,
+        expr_state.spaces_after,
+    );
+
+    let initial_state = state.clone();
+
+    let (spaces, state) = match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
+        Err((_, _)) => (&[] as &[_], state),
+        Ok((_, spaces, state)) => (spaces, state),
+    };
+
+    expr_state.arguments.push(arena.alloc(arg));
+    expr_state.spaces_after = spaces;
+    expr_state.end = new_end;
+
+    parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
 }
 
 fn parse_expr_end<'a>(
@@ -2176,7 +2315,7 @@ fn parse_expr_end<'a>(
                     if options.accept_multi_backpassing && state.bytes().starts_with(b",") {
                         state = state.advance(1);
 
-                        parse_backpassing(expr_state, arena, state, min_indent, options)
+                        parse_multi_backpassing(expr_state, arena, state, min_indent, options)
                     } else if options.check_for_arrow && state.bytes().starts_with(b"->") {
                         Err((MadeProgress, EExpr::BadOperator("->", state.pos())))
                     } else {
@@ -2187,73 +2326,6 @@ fn parse_expr_end<'a>(
                     }
                 }
             }
-        }
-    }
-}
-
-fn parse_backpassing<'a>(
-    mut expr_state: ExprState<'a>,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-    options: ExprParseOptions,
-) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
-    let (_, mut patterns, state) = specialize_err_ref(
-        EExpr::Pattern,
-        crate::parser::sep_by0(
-            byte(b',', EPattern::Start),
-            space0_around_ee(
-                crate::pattern::loc_pattern_help(),
-                EPattern::Start,
-                EPattern::IndentEnd,
-            ),
-        ),
-    )
-    .parse(arena, state, min_indent)
-    .map_err(|(progress, err)| {
-        // We were expecting the end of an expression, and parsed a comma
-        // therefore we are either on the LHS of backpassing or this is was
-        // in an invalid position.
-        if let EExpr::Pattern(EPattern::IndentEnd(_), pos) = err {
-            (progress, EExpr::UnexpectedComma(pos.sub(1)))
-        } else {
-            (progress, err)
-        }
-    })?;
-
-    expr_state.consume_spaces(arena);
-    let call = to_call(arena, expr_state.arguments, expr_state.expr);
-
-    let pattern = expr_to_pattern_help(arena, &call.value).map_err(|()| {
-        (
-            MadeProgress,
-            EExpr::Pattern(arena.alloc(EPattern::NotAPattern(state.pos())), state.pos()),
-        )
-    })?;
-
-    let loc_pattern = Loc::at(call.region, pattern);
-
-    patterns.insert(0, loc_pattern);
-
-    match two_bytes(b'<', b'-', EExpr::BackpassArrow).parse(arena, state.clone(), min_indent) {
-        Err((_, fail)) => Err((MadeProgress, fail)),
-        Ok((_, _, state)) => {
-            let parse_body =
-                space0_before_e(increment_min_indent(expr_start(options)), EExpr::IndentEnd);
-
-            let (_, loc_body, state) = parse_body.parse(arena, state, min_indent)?;
-
-            let parse_cont = space0_before_e(expr_start(options), EExpr::IndentEnd);
-
-            let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
-
-            let ret = Expr::Backpassing(
-                patterns.into_bump_slice(),
-                arena.alloc(loc_body),
-                arena.alloc(loc_cont),
-            );
-
-            Ok((MadeProgress, ret, state))
         }
     }
 }
