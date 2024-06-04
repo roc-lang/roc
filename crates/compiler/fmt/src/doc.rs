@@ -19,10 +19,15 @@ use roc_parse::{
 };
 use roc_region::all::Loc;
 
-use crate::{collection::Braces, expr::is_str_multiline, Buf};
+use crate::{
+    collection::Braces,
+    expr::{is_str_multiline, needs_unicode_escape},
+    Buf,
+};
 
 pub struct Doc<'a> {
     nodes: Vec<Node<'a>>,
+    buf: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,6 +48,7 @@ impl NodeRange {
 #[derive(Debug, Copy, Clone)]
 enum Node<'a> {
     Copy(&'a str),
+    CopyComputed(usize, usize),
     CopyAllowSpaces(&'a str),
     OptionalNewline,
     WhenMultiline(&'static str),
@@ -52,6 +58,7 @@ enum Node<'a> {
     Comment(&'a str),
     Group(NodeRange),
     Indent(NodeRange),
+    BlankLine,
 }
 
 macro_rules! group {
@@ -72,7 +79,10 @@ macro_rules! indent {
 
 impl<'a> Doc<'a> {
     fn new() -> Doc<'a> {
-        Doc { nodes: Vec::new() }
+        Doc {
+            nodes: Vec::new(),
+            buf: String::new(),
+        }
     }
 
     fn fully_contained(&self, range: NodeRange) -> bool {
@@ -98,6 +108,15 @@ impl<'a> Doc<'a> {
         debug_assert!(!text.ends_with(' '));
         debug_assert!(!text.contains('\n'));
         self.push(Node::Copy(text))
+    }
+
+    fn copy_computed(&mut self, text: &str) {
+        debug_assert!(!text.ends_with(' '));
+        debug_assert!(!text.contains('\n'));
+        let begin = self.buf.len();
+        let end = self.buf.len() + text.len();
+        self.buf.push_str(text);
+        self.push(Node::CopyComputed(begin, end))
     }
 
     fn copy_allow_spaces(&mut self, text: &'a str) {
@@ -135,7 +154,11 @@ impl<'a> Doc<'a> {
     }
 
     fn space(&mut self) {
-        self.push(Node::Space)
+        self.push(Node::Space);
+    }
+
+    fn blank_line(&mut self) {
+        self.push(Node::BlankLine);
     }
 }
 
@@ -484,11 +507,7 @@ impl<'a> Docify<'a> for Expr<'a> {
             }
 
             Expr::Str(lit) => docify_str(lit, doc),
-            Expr::SingleQuote(lit) => {
-                doc.literal("'");
-                doc.copy_allow_spaces(lit);
-                doc.literal("'");
-            }
+            Expr::SingleQuote(lit) => docify_single_quote(lit, doc),
 
             Expr::RecordAccess(rec, field) | Expr::TupleAccess(rec, field) => {
                 rec.docify(doc);
@@ -539,22 +558,20 @@ impl<'a> Docify<'a> for Expr<'a> {
                 group!(doc, {
                     doc.literal("{");
 
-                    let begin_indent = doc.begin();
-
-                    for (i, field) in fields.iter().enumerate() {
-                        if i > 0 {
-                            doc.literal(",");
+                    indent!(doc, {
+                        for (i, field) in fields.iter().enumerate() {
+                            if i > 0 {
+                                doc.literal(",");
+                            }
+                            doc.push(Node::OptionalNewline);
+                            field.value.docify(doc);
                         }
-                        doc.push(Node::OptionalNewline);
-                        field.value.docify(doc);
-                    }
+                    });
 
                     if !fields.is_empty() {
                         doc.push(Node::WhenMultiline(","));
                         doc.push(Node::OptionalNewline);
                     }
-
-                    doc.indent_to(begin_indent);
 
                     doc.literal("}");
                 });
@@ -702,31 +719,28 @@ impl<'a> Docify<'a> for Expr<'a> {
             }
             Expr::LowLevelDbg(_, _, _) => todo!(),
             Expr::Apply(func, args, _) => {
-                let begin = doc.begin();
-                docify_expr_parens(&func.value, doc);
-                doc.space();
-                let begin_indent = doc.begin();
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        doc.space();
-                    }
-                    if i < args.len() - 1 {
-                        docify_expr_parens(&arg.value, doc);
-                    } else {
-                        arg.value.docify(doc);
-                    }
-                }
-                doc.indent_to(begin_indent);
-                doc.group_to(begin)
+                group!(doc, {
+                    docify_expr_parens(&func.value, doc);
+                    doc.push(Node::OptionalNewline);
+                    indent!(doc, {
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 {
+                                doc.push(Node::OptionalNewline);
+                            }
+                            if i < args.len() - 1 {
+                                docify_expr_parens(&arg.value, doc);
+                            } else {
+                                arg.value.docify(doc);
+                            }
+                        }
+                    });
+                });
             }
             Expr::BinOps(vals_ops, last) => {
                 group!(doc, {
                     for (val, op) in *vals_ops {
                         val.value.docify(doc);
-                        doc.space();
-                        // doc.push(Node::OptionalNewline); // Doing this is more correct, but hides a bug!
-                        // Need to handle how to inject parens around the lambda here:
-                        // "a string" |> Str.toUtf8 |> List.map \byte -> byte +  1 |>  List.reverse
+                        doc.push(Node::OptionalNewline);
                         op.value.docify(doc);
                         doc.space();
                     }
@@ -821,13 +835,17 @@ impl<'a> Docify<'a> for Expr<'a> {
                 expr.docify(doc)
             }
             Expr::ParensAround(expr) => {
-                let begin = doc.begin();
-                doc.literal("(");
-                expr.docify(doc);
-                doc.literal(")");
-                doc.group_to(begin)
+                group!(doc, {
+                    doc.literal("(");
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        expr.docify(doc);
+                    });
+                    doc.push(Node::OptionalNewline);
+                    doc.literal(")");
+                });
             }
-            Expr::MalformedIdent(_, _) => todo!(),
+            Expr::MalformedIdent(text, _) => doc.copy(text),
             Expr::MalformedClosure => todo!(),
             Expr::MalformedSuffixed(_) => todo!(),
             Expr::PrecedenceConflict(_) => todo!(),
@@ -860,6 +878,7 @@ impl<'a> Docify<'a> for TypeDef<'a> {
                 doc.literal(":");
                 doc.space();
                 ann.value.docify(doc);
+                doc.blank_line();
             }
             TypeDef::Opaque {
                 header,
@@ -1018,7 +1037,7 @@ impl<'a> Docify<'a> for Tag<'a> {
                     name.value.docify(doc);
                     for arg in *args {
                         doc.space();
-                        arg.value.docify(doc);
+                        docify_type_parens(&arg.value, doc);
                     }
                 })
             }
@@ -1026,6 +1045,54 @@ impl<'a> Docify<'a> for Tag<'a> {
             Tag::Malformed(_) => todo!(),
         }
     }
+}
+
+fn docify_single_quote<'a>(s: &'a str, doc: &mut Doc<'a>) {
+    doc.literal("'");
+    let mut base = 0;
+    for (i, c) in s.char_indices() {
+        macro_rules! flush {
+            () => {
+                if base < i {
+                    doc.copy_allow_spaces(&s[base..i]);
+                }
+                base = i + c.len_utf8();
+            };
+        }
+        match c {
+            '"' => {}
+            '\'' => {
+                flush!();
+                doc.literal("\\\'")
+            }
+            '\t' => {
+                flush!();
+                doc.literal("\\t")
+            }
+            '\r' => {
+                flush!();
+                doc.literal("\\r")
+            }
+            '\n' => {
+                flush!();
+                doc.literal("\\n")
+            }
+            '\\' => {
+                flush!();
+                doc.literal("\\\\")
+            }
+            _ => {
+                if needs_unicode_escape(c) {
+                    flush!();
+                    doc.copy_computed(&format!("\\u({:x})", c as u32))
+                }
+            }
+        }
+    }
+    if base < s.len() {
+        doc.copy_allow_spaces(&s[base..]);
+    }
+    doc.literal("'");
 }
 
 impl<'a> Docify<'a> for TypeAnnotation<'a> {
@@ -1039,17 +1106,16 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                         doc.literal(",");
                         doc.space();
                     }
-                    arg.value.docify(doc);
+                    docify_type_parens(&arg.value, doc);
                 }
                 doc.space();
                 doc.literal("->");
                 doc.space();
-                docify_parens(&ret.value, doc);
+                docify_type_parens(&ret.value, doc);
                 doc.indent_to(begin_indent);
                 doc.group_to(begin)
             }
             TypeAnnotation::Apply(module, func, args) => {
-                let begin = doc.begin();
                 doc.copy(module);
                 if !module.is_empty() {
                     doc.literal(".");
@@ -1057,32 +1123,35 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                 doc.copy(func);
                 for arg in *args {
                     doc.space();
-                    arg.value.docify(doc);
+                    docify_type_parens(&arg.value, doc);
                 }
             }
             TypeAnnotation::BoundVariable(name) => doc.copy(name),
             TypeAnnotation::As(ty, _comment, th) => {
-                let begin = doc.begin();
-                ty.value.docify(doc);
-                doc.space();
-                doc.literal("as");
-                doc.space();
-                th.docify(doc);
-                doc.group_to(begin)
+                group!(doc, {
+                    ty.value.docify(doc);
+                    doc.space();
+                    doc.literal("as");
+                    doc.space();
+                    th.docify(doc);
+                });
             }
             TypeAnnotation::Record { fields, ext } => {
-                let begin = doc.begin();
-                doc.literal("{");
-                let begin_indent = doc.begin();
-                for (i, field) in fields.iter().enumerate() {
-                    if i > 0 {
-                        doc.literal(",");
+                group!(doc, {
+                    doc.literal("{");
+                    let begin_indent = doc.begin();
+                    for (i, field) in fields.iter().enumerate() {
+                        if i > 0 {
+                            doc.literal(",");
+                        }
+                        field.value.docify(doc);
                     }
-                    field.value.docify(doc);
-                }
-                doc.indent_to(begin_indent);
-                doc.literal("}");
-                doc.group_to(begin)
+                    doc.indent_to(begin_indent);
+                    doc.literal("}");
+                    if let Some(ext) = ext {
+                        ext.value.docify(doc);
+                    }
+                });
             }
             TypeAnnotation::Tuple { elems, ext } => {
                 group!(doc, {
@@ -1153,10 +1222,10 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
     }
 }
 
-fn docify_parens<'a>(value: &'a TypeAnnotation, doc: &mut Doc<'a>) {
+fn docify_type_parens<'a>(value: &'a TypeAnnotation, doc: &mut Doc<'a>) {
     let need_parens = match value.extract_spaces().item {
         TypeAnnotation::Function(_, _) => true,
-        TypeAnnotation::Apply(_, _, _) => true,
+        TypeAnnotation::Apply(_, _, args) => args.len() > 0,
         _ => false,
     };
 
@@ -1192,11 +1261,15 @@ impl<'a> Docify<'a> for ValueDef<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             ValueDef::Annotation(pat, ty) => {
-                let begin = doc.begin();
-                pat.value.docify(doc);
-                doc.literal(":");
-                doc.space();
-                ty.value.docify(doc);
+                group!(doc, {
+                    pat.value.docify(doc);
+                    doc.literal(":");
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        ty.value.docify(doc);
+                    });
+                });
+                doc.blank_line(); // necessary to separate the annotation from what may appear to be a body later.
             }
             ValueDef::Body(pat, body) => {
                 group!(doc, {
@@ -1216,17 +1289,24 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 body_pattern,
                 body_expr,
             } => {
-                let begin = doc.begin();
-                ann_pattern.value.docify(doc);
-                doc.literal(":");
-                doc.space();
-                ann_type.value.docify(doc);
+                group!(doc, {
+                    ann_pattern.value.docify(doc);
+                    doc.literal(":");
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        ann_type.value.docify(doc);
+                    });
+                });
                 doc.push(Node::ForcedNewline);
-                body_pattern.value.docify(doc);
-                doc.space();
-                doc.literal("=");
-                doc.space();
-                body_expr.value.docify(doc);
+                group!(doc, {
+                    body_pattern.value.docify(doc);
+                    doc.space();
+                    doc.literal("=");
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        body_expr.value.docify(doc);
+                    });
+                });
             }
             ValueDef::Dbg {
                 condition,
@@ -1463,11 +1543,7 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.literal("_");
                 doc.copy(name);
             }
-            Pattern::SingleQuote(lit) => {
-                doc.literal("'");
-                doc.copy_allow_spaces(lit);
-                doc.literal("'");
-            }
+            Pattern::SingleQuote(lit) => docify_single_quote(lit, doc),
             Pattern::Tuple(items) => {
                 doc.literal("(");
                 doc.space();
@@ -1515,50 +1591,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
             }
             Pattern::Malformed(_) => todo!(),
             Pattern::MalformedIdent(_, _) => todo!(),
-        }
-    }
-}
-
-fn docify_single_quote<'a>(lit: &'a SingleQuoteLiteral, doc: &mut Doc<'a>) {
-    match lit {
-        SingleQuoteLiteral::PlainLine(text) => {
-            if text.contains('"') {
-                doc.literal("\"\"\"");
-                doc.copy(text);
-                doc.literal("\"\"\"");
-            } else {
-                doc.literal("\"");
-                doc.copy(text);
-                doc.literal("\"");
-            }
-        }
-        SingleQuoteLiteral::Line(segments) => {
-            doc.literal("\"");
-            for segment in *segments {
-                match segment {
-                    SingleQuoteSegment::Plaintext(text) => {
-                        doc.copy(text);
-                    }
-                    SingleQuoteSegment::Unicode(text) => {
-                        doc.literal("\\u(");
-                        doc.copy(text.value);
-                        doc.literal(")");
-                    }
-                    SingleQuoteSegment::EscapedChar(escaped) => {
-                        doc.literal("\\");
-                        match escaped {
-                            EscapedChar::Newline => doc.literal("n"),
-                            EscapedChar::Tab => doc.literal("t"),
-                            EscapedChar::DoubleQuote => doc.literal("\""),
-                            EscapedChar::SingleQuote => doc.literal("'"),
-                            EscapedChar::Backslash => doc.literal("\\"),
-                            EscapedChar::CarriageReturn => doc.literal("r"),
-                            EscapedChar::Dollar => doc.literal("$"),
-                        };
-                    }
-                }
-            }
-            doc.literal("\"");
         }
     }
 }
@@ -1684,12 +1716,14 @@ impl<'a> Doc<'a> {
 
             match node {
                 Node::Copy(_)
+                | Node::CopyComputed(..)
                 | Node::CopyAllowSpaces(_)
                 | Node::Literal(_)
                 | Node::Space
                 | Node::OptionalNewline
                 | Node::WhenMultiline(_)
                 | Node::ForcedNewline
+                | Node::BlankLine
                 | Node::Comment(_) => {}
                 Node::Group(range) | Node::Indent(range) => {
                     while let Some((i, v)) = stack.pop() {
@@ -1713,6 +1747,7 @@ impl<'a> Doc<'a> {
         self.bubble_up(
             |_, node| match node {
                 Node::Copy(_)
+                | Node::CopyComputed(..)
                 | Node::CopyAllowSpaces(_)
                 | Node::Literal(_)
                 | Node::Space
@@ -1720,7 +1755,7 @@ impl<'a> Doc<'a> {
                 | Node::WhenMultiline(_)
                 | Node::Group(_)
                 | Node::Indent(_) => false,
-                Node::ForcedNewline | Node::Comment(_) => true,
+                Node::ForcedNewline | Node::BlankLine | Node::Comment(_) => true,
             },
             |a, b| a | b,
         )
@@ -1730,9 +1765,10 @@ impl<'a> Doc<'a> {
         self.bubble_up(
             |_, node| match node {
                 Node::Copy(s) | Node::CopyAllowSpaces(s) | Node::Literal(s) => s.len(),
+                Node::CopyComputed(begin, end) => end - begin,
                 Node::Space | Node::OptionalNewline => 1,
                 Node::WhenMultiline(_) => 0,
-                Node::ForcedNewline => 0,
+                Node::ForcedNewline | Node::BlankLine => 0,
                 Node::Comment(s) => s.len(),
                 Node::Group(_) | Node::Indent(_) => 0,
             },
@@ -1850,14 +1886,14 @@ impl<'a> Doc<'a> {
         );
         let honor_newlines = self.compute_honor_newlines(&is_multiline);
 
-        debug_print_doc(
-            self,
-            &must_be_multiline,
-            &width_without_newlines,
-            &indents,
-            &is_multiline,
-            &honor_newlines,
-        );
+        // debug_print_doc(
+        //     self,
+        //     &must_be_multiline,
+        //     &width_without_newlines,
+        //     &indents,
+        //     &is_multiline,
+        //     &honor_newlines,
+        // );
 
         for ((node, honor_newlines), indent) in self
             .nodes
@@ -1881,6 +1917,10 @@ impl<'a> Doc<'a> {
                     }
                 }
                 Node::Space => buf.ensure_ends_with_space(),
+                Node::CopyComputed(begin, end) => {
+                    buf.indent(indent);
+                    buf.push_str(&self.buf[*begin..*end])
+                }
                 Node::Copy(s) | Node::Literal(s) => {
                     buf.indent(indent);
                     buf.push_str(s)
@@ -1892,6 +1932,10 @@ impl<'a> Doc<'a> {
                 Node::ForcedNewline => {
                     assert!(honor_newlines);
                     buf.ensure_ends_with_newline()
+                }
+                Node::BlankLine => {
+                    assert!(honor_newlines);
+                    buf.ensure_ends_with_blank_line()
                 }
                 Node::Comment(s) => {
                     buf.indent(indent);

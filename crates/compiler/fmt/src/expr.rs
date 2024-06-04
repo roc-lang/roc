@@ -566,7 +566,7 @@ pub fn is_str_multiline(literal: &StrLiteral) -> bool {
     }
 }
 
-fn needs_unicode_escape(ch: char) -> bool {
+pub fn needs_unicode_escape(ch: char) -> bool {
     matches!(ch, '\u{0000}'..='\u{001f}' | '\u{007f}'..='\u{009f}')
 }
 

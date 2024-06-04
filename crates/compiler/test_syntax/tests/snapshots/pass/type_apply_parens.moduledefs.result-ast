@@ -1,0 +1,39 @@
+Defs {
+    tags: [
+        Index(0),
+    ],
+    regions: [
+        @0-8,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [
+        Alias {
+            header: TypeHeader {
+                name: @0-1 "I",
+                vars: [],
+            },
+            ann: @2-8 Apply(
+                "",
+                "N",
+                [
+                    @4-7 Apply(
+                        "",
+                        "I",
+                        [
+                            @6-7 BoundVariable(
+                                "e",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        },
+    ],
+    value_defs: [],
+}

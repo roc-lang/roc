@@ -1,0 +1,111 @@
+Full {
+    header: Module {
+        comments: [],
+        header: Module(
+            ModuleHeader {
+                before_exposes: [],
+                exposes: [],
+                interface_imports: None,
+            },
+        ),
+    },
+    module_defs: Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @10-71,
+        ],
+        space_before: [
+            Slice(start = 0, length = 1),
+        ],
+        space_after: [
+            Slice(start = 1, length = 0),
+        ],
+        spaces: [
+            Newline,
+        ],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @10-11 Identifier {
+                    ident: "d",
+                },
+                @12-71 BinOps(
+                    [
+                        (
+                            @12-22 Apply(
+                                @12-13 Var {
+                                    module_name: "",
+                                    ident: "t",
+                                },
+                                [
+                                    @13-22 Record(
+                                        [
+                                            @14-21 RequiredValue(
+                                                @14-15 "t",
+                                                [],
+                                                @16-21 Defs(
+                                                    Defs {
+                                                        tags: [
+                                                            Index(2147483648),
+                                                        ],
+                                                        regions: [
+                                                            @16-19,
+                                                        ],
+                                                        space_before: [
+                                                            Slice(start = 0, length = 0),
+                                                        ],
+                                                        space_after: [
+                                                            Slice(start = 0, length = 0),
+                                                        ],
+                                                        spaces: [],
+                                                        type_defs: [],
+                                                        value_defs: [
+                                                            Annotation(
+                                                                @16-17 Identifier {
+                                                                    ident: "n",
+                                                                },
+                                                                @18-19 BoundVariable(
+                                                                    "a",
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    },
+                                                    @20-21 Num(
+                                                        "2",
+                                                    ),
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                                Space,
+                            ),
+                            @22-23 GreaterThan,
+                        ),
+                    ],
+                    @23-71 Closure(
+                        [
+                            @24-50 Identifier {
+                                ident: "bytesWithoutQuotationMarks",
+                            },
+                        ],
+                        @52-71 Apply(
+                            @52-69 Var {
+                                module_name: "",
+                                ident: "placeEscapedChars",
+                            },
+                            [
+                                @69-71 Record(
+                                    [],
+                                ),
+                            ],
+                            Space,
+                        ),
+                    ),
+                ),
+            ),
+        ],
+    },
+}

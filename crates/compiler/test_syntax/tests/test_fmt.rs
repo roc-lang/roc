@@ -7,9 +7,6 @@ mod test_fmt {
     use roc_fmt::def::fmt_defs;
     use roc_fmt::doc::doc_fmt_module;
     use roc_fmt::header::fmt_header;
-    use roc_fmt::module::fmt_module;
-    use roc_fmt::spaces::RemoveSpaces;
-    use roc_fmt::Buf;
     use roc_fmt::Buf;
     use roc_parse::ast::{Defs, Header, SpacesBefore};
     use roc_parse::ast::{Defs, Module};
@@ -19,6 +16,7 @@ mod test_fmt {
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
+    use test_syntax::minimize::print_minimizations;
     use test_syntax::test_helpers::Input;
 
     fn check_formatting(expected: &'_ str) -> impl Fn(Input) + '_ {
@@ -5861,14 +5859,16 @@ mod test_fmt {
 
                 let arena = Bump::new();
 
-                let actual = Input::Expr(&src).parse_in(&arena).unwrap_or_else(|err| {
-                    panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", src, err);
+                let actual = Input::Full(&src).parse_in(&arena).unwrap_or_else(|err| {
+                    eprintln!("Unexpected parse failure when parsing this for formatting\n\nParse error was:\n\n{:?}\n\n", err);
+                    print_minimizations(&src);
+                    panic!();
                 });
 
                 let output = actual.format2();
 
                 let reparsed_ast = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
-                    panic!(
+                    eprintln!(
                         "After formatting, the source code no longer parsed!\n\n\
                         Parse error was: {:?}\n\n\
                         The original code was:\n\n{}\n\n\
@@ -5879,13 +5879,15 @@ mod test_fmt {
                         output.as_ref().as_str(),
                         actual
                     );
+                    print_minimizations(&src);
+                    panic!();
                 });
 
                 let ast_normalized = actual.remove_spaces(&arena);
                 let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
 
                 if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
-                    panic!(
+                    eprintln!(
                         "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
                         * * * Source code before formatting:\n{}\n\n\
                         * * * Source code after formatting:\n{}\n\n\
@@ -5896,6 +5898,8 @@ mod test_fmt {
                         actual,
                         reparsed_ast_normalized
                     );
+                    print_minimizations(&src);
+                    panic!();
                 }
             }
         }

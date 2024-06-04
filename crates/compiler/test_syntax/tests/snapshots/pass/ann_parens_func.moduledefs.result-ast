@@ -1,0 +1,40 @@
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-11,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Annotation(
+            @0-1 Identifier {
+                ident: "m",
+            },
+            @3-11 Function(
+                [
+                    @3-7 Function(
+                        [
+                            @3-4 BoundVariable(
+                                "k",
+                            ),
+                        ],
+                        @6-7 BoundVariable(
+                            "b",
+                        ),
+                    ),
+                ],
+                @10-11 BoundVariable(
+                    "b",
+                ),
+            ),
+        ),
+    ],
+}

@@ -1,0 +1,99 @@
+Full {
+    header: Module {
+        comments: [],
+        header: Module(
+            ModuleHeader {
+                before_exposes: [],
+                exposes: [],
+                interface_imports: None,
+            },
+        ),
+    },
+    module_defs: Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @10-64,
+        ],
+        space_before: [
+            Slice(start = 0, length = 1),
+        ],
+        space_after: [
+            Slice(start = 1, length = 0),
+        ],
+        spaces: [
+            Newline,
+        ],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @10-11 Identifier {
+                    ident: "d",
+                },
+                @12-64 Closure(
+                    [
+                        @13-14 Identifier {
+                            ident: "i",
+                        },
+                    ],
+                    @16-64 Backpassing(
+                        [
+                            @16-17 Tag(
+                                "D",
+                            ),
+                        ],
+                        @19-61 BinOps(
+                            [
+                                (
+                                    @20-49 ParensAround(
+                                        Apply(
+                                            @20-27 Var {
+                                                module_name: "",
+                                                ident: "ueBytes",
+                                            },
+                                            [
+                                                @28-40 Var {
+                                                    module_name: "",
+                                                    ident: "valueDecoder",
+                                                },
+                                                @41-48 ParensAround(
+                                                    Apply(
+                                                        @41-46 OpaqueRef(
+                                                            "@Json",
+                                                        ),
+                                                        [
+                                                            @46-48 Record(
+                                                                [],
+                                                            ),
+                                                        ],
+                                                        Space,
+                                                    ),
+                                                ),
+                                            ],
+                                            Space,
+                                        ),
+                                    ),
+                                    @50-52 Pizza,
+                                ),
+                            ],
+                            @52-61 Var {
+                                module_name: "",
+                                ident: "tryDecode",
+                            },
+                        ),
+                        @63-64 SpaceBefore(
+                            Var {
+                                module_name: "",
+                                ident: "t",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ),
+                ),
+            ),
+        ],
+    },
+}
