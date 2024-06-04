@@ -435,7 +435,7 @@ impl<'a> ExprState<'a> {
     fn validate_assignment_or_backpassing<F>(
         mut self,
         arena: &'a Bump,
-        loc_op: Loc<BinOp>,
+        loc_op: Loc<OperatorOrDef>,
         argument_error: F,
     ) -> Result<Loc<Expr<'a>>, EExpr<'a>>
     where
@@ -444,8 +444,8 @@ impl<'a> ExprState<'a> {
         if !self.operators.is_empty() {
             // this `=` or `<-` likely occurred inline; treat it as an invalid operator
             let opchar = match loc_op.value {
-                BinOp::Assignment => "=",
-                BinOp::Backpassing => "<-",
+                OperatorOrDef::Assignment => "=",
+                OperatorOrDef::Backpassing => "<-",
                 _ => unreachable!(),
             };
 
@@ -469,24 +469,15 @@ impl<'a> ExprState<'a> {
     fn validate_is_type_def(
         mut self,
         arena: &'a Bump,
-        loc_op: Loc<BinOp>,
-        kind: AliasOrOpaque,
+        kind: Loc<AliasOrOpaque>,
     ) -> Result<(Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>), EExpr<'a>> {
-        debug_assert_eq!(
-            loc_op.value,
-            match kind {
-                AliasOrOpaque::Alias => BinOp::IsAliasType,
-                AliasOrOpaque::Opaque => BinOp::IsOpaqueType,
-            }
-        );
-
         if !self.operators.is_empty() {
             // this `:`/`:=` likely occurred inline; treat it as an invalid operator
-            let op = match kind {
+            let op = match kind.value {
                 AliasOrOpaque::Alias => ":",
                 AliasOrOpaque::Opaque => ":=",
             };
-            let fail = EExpr::BadOperator(op, loc_op.region.start());
+            let fail = EExpr::BadOperator(op, kind.region.start());
 
             Err(fail)
         } else {
@@ -754,7 +745,7 @@ pub fn parse_single_def<'a>(
             // This may be a def or alias.
             let operator_result = operator().parse(arena, state.clone(), min_indent);
 
-            if let Ok((_, BinOp::Assignment, operator_result_state)) = operator_result {
+            if let Ok((_, OperatorOrDef::Assignment, operator_result_state)) = operator_result {
                 return parse_single_def_assignment(
                     options,
                     // to support statements we have to increase the indent here so that we can parse a child def
@@ -772,7 +763,9 @@ pub fn parse_single_def<'a>(
                 );
             };
 
-            if let Ok((_, BinOp::IsAliasType, state)) = operator_result {
+            if let Ok((_, OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Alias), state)) =
+                operator_result
+            {
                 // the increment_min_indent here is probably _wrong_, since alias_signature_with_space_before does
                 // that internally.
                 // TODO: re-evaluate this
@@ -851,7 +844,9 @@ pub fn parse_single_def<'a>(
                 }
             };
 
-            if let Ok((_, BinOp::IsOpaqueType, state)) = operator_result {
+            if let Ok((_, OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Opaque), state)) =
+                operator_result
+            {
                 let (_, (signature, derived), state) =
                     opaque_signature_with_space_before().parse(arena, state, min_indent + 1)?;
                 let region = Region::span_across(&loc_pattern.region, &signature.region);
@@ -1551,7 +1546,7 @@ fn opaque_signature_with_space_before<'a>() -> impl Parser<
     )
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum AliasOrOpaque {
     Alias,
     Opaque,
@@ -1585,17 +1580,16 @@ fn finish_parsing_alias_or_opaque<'a>(
     min_indent: u32,
     options: ExprParseOptions,
     expr_state: ExprState<'a>,
-    loc_op: Loc<BinOp>,
+    kind: Loc<AliasOrOpaque>,
     arena: &'a Bump,
     state: State<'a>,
     spaces_after_operator: &'a [CommentOrNewline<'a>],
-    kind: AliasOrOpaque,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let expr_region = expr_state.expr.region;
     let indented_more = min_indent + 1;
 
     let (expr, arguments) = expr_state
-        .validate_is_type_def(arena, loc_op, kind)
+        .validate_is_type_def(arena, kind)
         .map_err(|fail| (MadeProgress, fail))?;
 
     let mut defs = Defs::default();
@@ -1621,7 +1615,7 @@ fn finish_parsing_alias_or_opaque<'a>(
             }
         }
 
-        match kind {
+        match kind.value {
             AliasOrOpaque::Alias => {
                 let (_, signature, state) =
                     alias_signature_with_space_before().parse(arena, state, min_indent)?;
@@ -1700,11 +1694,11 @@ fn finish_parsing_alias_or_opaque<'a>(
             }
             Err(_) => {
                 // this `:`/`:=` likely occurred inline; treat it as an invalid operator
-                let op = match kind {
+                let op = match kind.value {
                     AliasOrOpaque::Alias => ":",
                     AliasOrOpaque::Opaque => ":=",
                 };
-                let fail = EExpr::BadOperator(op, loc_op.region.start());
+                let fail = EExpr::BadOperator(op, kind.region.start());
 
                 return Err((MadeProgress, fail));
             }
@@ -1884,7 +1878,7 @@ fn parse_expr_operator<'a>(
     min_indent: u32,
     options: ExprParseOptions,
     mut expr_state: ExprState<'a>,
-    loc_op: Loc<BinOp>,
+    loc_op: Loc<OperatorOrDef>,
     line_indent: u32,
     arena: &'a Bump,
     state: State<'a>,
@@ -1900,7 +1894,7 @@ fn parse_expr_operator<'a>(
     let op_end = loc_op.region.end();
     let new_start = state.pos();
     match op {
-        BinOp::Minus if expr_state.end != op_start && op_end == new_start => {
+        OperatorOrDef::BinOp(BinOp::Minus) if expr_state.end != op_start && op_end == new_start => {
             // negative terms
 
             let (_, negated_expr, state) = loc_term(options).parse(arena, state, min_indent)?;
@@ -1928,7 +1922,7 @@ fn parse_expr_operator<'a>(
 
             parse_expr_end(min_indent, options, expr_state, arena, state, initial_state)
         }
-        BinOp::Assignment => {
+        OperatorOrDef::Assignment => {
             let expr_region = expr_state.expr.region;
 
             let indented_more = line_indent + 1;
@@ -1973,7 +1967,7 @@ fn parse_expr_operator<'a>(
 
             parse_defs_expr(options, min_indent, defs, arena, state)
         }
-        BinOp::Backpassing => {
+        OperatorOrDef::Backpassing => {
             let expr_region = expr_state.expr.region;
             let indented_more = min_indent + 1;
 
@@ -2019,21 +2013,16 @@ fn parse_expr_operator<'a>(
 
             Ok((MadeProgress, ret, state))
         }
-        BinOp::IsAliasType | BinOp::IsOpaqueType => finish_parsing_alias_or_opaque(
+        OperatorOrDef::AliasOrOpaque(kind) => finish_parsing_alias_or_opaque(
             min_indent,
             options,
             expr_state,
-            loc_op,
+            loc_op.with_value(kind),
             arena,
             state,
             spaces_after_operator,
-            match op {
-                BinOp::IsAliasType => AliasOrOpaque::Alias,
-                BinOp::IsOpaqueType => AliasOrOpaque::Opaque,
-                _ => unreachable!(),
-            },
         ),
-        _ => match loc_possibly_negative_or_negated_term(options).parse(
+        OperatorOrDef::BinOp(op) => match loc_possibly_negative_or_negated_term(options).parse(
             arena,
             state.clone(),
             min_indent,
@@ -2057,7 +2046,7 @@ fn parse_expr_operator<'a>(
 
                         let call = to_call(arena, args, expr_state.expr);
 
-                        expr_state.operators.push((call, loc_op));
+                        expr_state.operators.push((call, loc_op.with_value(op)));
                         expr_state.expr = new_expr;
                         expr_state.end = new_end;
                         expr_state.spaces_after = &[];
@@ -2070,7 +2059,7 @@ fn parse_expr_operator<'a>(
 
                         let call = to_call(arena, args, expr_state.expr);
 
-                        expr_state.operators.push((call, loc_op));
+                        expr_state.operators.push((call, loc_op.with_value(op)));
                         expr_state.expr = new_expr;
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
@@ -3485,7 +3474,15 @@ const BINOP_CHAR_MASK: [bool; 125] = {
     result
 };
 
-fn operator<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum OperatorOrDef {
+    BinOp(BinOp),
+    Assignment,
+    AliasOrOpaque(AliasOrOpaque),
+    Backpassing,
+}
+
+fn operator<'a>() -> impl Parser<'a, OperatorOrDef, EExpr<'a>> {
     |_, state, _m| operator_help(EExpr::Start, EExpr::BadOperator, state)
 }
 
@@ -3494,7 +3491,7 @@ fn operator_help<'a, F, G, E>(
     to_expectation: F,
     to_error: G,
     mut state: State<'a>,
-) -> ParseResult<'a, BinOp, E>
+) -> ParseResult<'a, OperatorOrDef, E>
 where
     F: Fn(Position) -> E,
     G: Fn(&'a str, Position) -> E,
@@ -3518,34 +3515,34 @@ where
 
     match chomped {
         "" => Err((NoProgress, to_expectation(state.pos()))),
-        "+" => good!(BinOp::Plus, 1),
-        "-" => good!(BinOp::Minus, 1),
-        "*" => good!(BinOp::Star, 1),
-        "/" => good!(BinOp::Slash, 1),
-        "%" => good!(BinOp::Percent, 1),
-        "^" => good!(BinOp::Caret, 1),
-        ">" => good!(BinOp::GreaterThan, 1),
-        "<" => good!(BinOp::LessThan, 1),
+        "+" => good!(OperatorOrDef::BinOp(BinOp::Plus), 1),
+        "-" => good!(OperatorOrDef::BinOp(BinOp::Minus), 1),
+        "*" => good!(OperatorOrDef::BinOp(BinOp::Star), 1),
+        "/" => good!(OperatorOrDef::BinOp(BinOp::Slash), 1),
+        "%" => good!(OperatorOrDef::BinOp(BinOp::Percent), 1),
+        "^" => good!(OperatorOrDef::BinOp(BinOp::Caret), 1),
+        ">" => good!(OperatorOrDef::BinOp(BinOp::GreaterThan), 1),
+        "<" => good!(OperatorOrDef::BinOp(BinOp::LessThan), 1),
         "." => {
             // a `.` makes no progress, so it does not interfere with `.foo` access(or)
             Err((NoProgress, to_error(".", state.pos())))
         }
-        "=" => good!(BinOp::Assignment, 1),
-        ":=" => good!(BinOp::IsOpaqueType, 2),
-        ":" => good!(BinOp::IsAliasType, 1),
-        "|>" => good!(BinOp::Pizza, 2),
-        "==" => good!(BinOp::Equals, 2),
-        "!=" => good!(BinOp::NotEquals, 2),
-        ">=" => good!(BinOp::GreaterThanOrEq, 2),
-        "<=" => good!(BinOp::LessThanOrEq, 2),
-        "&&" => good!(BinOp::And, 2),
-        "||" => good!(BinOp::Or, 2),
-        "//" => good!(BinOp::DoubleSlash, 2),
+        "=" => good!(OperatorOrDef::Assignment, 1),
+        ":=" => good!(OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Opaque), 2),
+        ":" => good!(OperatorOrDef::AliasOrOpaque(AliasOrOpaque::Alias), 1),
+        "|>" => good!(OperatorOrDef::BinOp(BinOp::Pizza), 2),
+        "==" => good!(OperatorOrDef::BinOp(BinOp::Equals), 2),
+        "!=" => good!(OperatorOrDef::BinOp(BinOp::NotEquals), 2),
+        ">=" => good!(OperatorOrDef::BinOp(BinOp::GreaterThanOrEq), 2),
+        "<=" => good!(OperatorOrDef::BinOp(BinOp::LessThanOrEq), 2),
+        "&&" => good!(OperatorOrDef::BinOp(BinOp::And), 2),
+        "||" => good!(OperatorOrDef::BinOp(BinOp::Or), 2),
+        "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
             Err((NoProgress, to_error("->", state.pos())))
         }
-        "<-" => good!(BinOp::Backpassing, 2),
+        "<-" => good!(OperatorOrDef::Backpassing, 2),
         "!" => Err((NoProgress, to_error("!", state.pos()))),
         _ => bad_made_progress!(chomped),
     }
