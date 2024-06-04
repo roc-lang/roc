@@ -1796,7 +1796,7 @@ Task.await (Stdout.line "Type in something and press Enter:") \_ ->
 
 Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
-If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylsitic convention in the Roc ecosystem to use `!` instead.
+If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylistic convention in the Roc ecosystem to use `!` instead.
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
