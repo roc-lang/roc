@@ -1,0 +1,9 @@
+[package]
+name = "scope"
+description = "Managing scopes - introducing bindings etc."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
