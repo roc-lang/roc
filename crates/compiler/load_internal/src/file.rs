@@ -1130,7 +1130,41 @@ impl<'a> LoadStart<'a> {
             );
 
             match res_loaded {
-                Ok(header_output) => adjust_header_paths(header_output, &mut src_dir),
+                Ok(header_output) => {
+                    if let Msg::Header(ModuleHeader {
+                        module_id: header_id,
+                        header_type,
+                        ..
+                    }) = &header_output.msg
+                    {
+                        debug_assert_eq!(*header_id, header_output.module_id);
+
+                        use HeaderType::*;
+
+                        match header_type {
+                            Module { .. } | Builtin { .. } | Hosted { .. } => {
+                                let main_path = loop {
+                                    match src_dir.join("main.roc").canonicalize() {
+                                        Ok(path) => break path,
+                                        Err(_) => {
+                                            if !src_dir.pop() {
+                                                return Err(LoadingProblem::FormattedReport(
+                                                    "todo(agus): good error".to_string(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                };
+
+                                dbg!(main_path);
+                                dbg!(&src_dir);
+                            }
+                            App { .. } | Package { .. } | Platform { .. } => {}
+                        }
+                    }
+
+                    header_output
+                }
 
                 Err(problem) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
