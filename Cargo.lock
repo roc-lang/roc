@@ -2343,6 +2343,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_scope",
  "roc_serialize",
  "roc_test_utils",
  "roc_types",
@@ -3059,6 +3060,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_scope"
+version = "0.0.1"
+
+[[package]]
 name = "roc_serialize"
 version = "0.0.1"
 dependencies = [
@@ -3374,10 +3379,6 @@ dependencies = [
  "serde_derive_internals",
  "syn 1.0.109",
 ]
-
-[[package]]
-name = "scope"
-version = "0.0.1"
 
 [[package]]
 name = "scopeguard"

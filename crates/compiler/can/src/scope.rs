@@ -16,6 +16,9 @@ pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, VecSet<Symbol>>;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
+    /// This is the new scope. The goal is to move enough logic from here into there until this module is no longer needed.
+    scope: roc_scope::Scope<IdentId, Region>,
+
     /// The type aliases currently in scope
     pub aliases: VecMap<Symbol, Alias>,
 
@@ -56,6 +59,8 @@ impl Scope {
         module_name: ModuleName,
         initial_ident_ids: IdentIds,
         starting_abilities_store: PendingAbilitiesStore,
+        top_level_lowercase: impl Iterator<Item = (IdentId, Region)>,
+        top_level_uppercase: impl Iterator<Item = (IdentId, Region)>,
     ) -> Scope {
         // Add all `Apply` types.
         let default_imports = Symbol::apply_types_in_scope()
@@ -63,8 +68,12 @@ impl Scope {
             .map(|(a, (b, c))| (a, b, c))
             .collect();
 
+        let (scope, _shadows /* TODO report shadows */) =
+            roc_scope::Scope::new(top_level_lowercase, top_level_uppercase);
+
         Scope {
             home,
+            scope,
             exposed_ident_count: initial_ident_ids.len(),
             locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
             aliases: VecMap::default(),
@@ -436,7 +445,9 @@ impl Scope {
         let imported_symbols_snapshot = self.imported_symbols.len();
         let imported_modules_snapshot = self.modules.len();
 
+        self.scope.push();
         let result = f(self);
+        self.scope.pop();
 
         self.aliases.truncate(aliases_count);
         self.ignored_locals.truncate(ignored_locals_count);
@@ -649,6 +660,7 @@ impl ScopedIdentIds {
 #[cfg(test)]
 mod test {
     use super::*;
+    use core::iter;
     use roc_module::symbol::ModuleIds;
     use roc_region::all::Position;
 
@@ -662,6 +674,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let region = Region::zero();
@@ -682,6 +696,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let region1 = Region::from_pos(Position { offset: 10 });
@@ -712,6 +728,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let region = Region::zero();
@@ -734,6 +752,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let idents: Vec<_> = scope.idents_in_scope().collect();
@@ -752,6 +772,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let idents: Vec<_> = scope.idents_in_scope().collect();
@@ -814,6 +836,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let ident = Ident::from("product");
@@ -837,6 +861,8 @@ mod test {
             "#Attr".into(),
             IdentIds::default(),
             PendingAbilitiesStore::default(),
+            iter::empty(),
+            iter::empty(),
         );
 
         let ident = Ident::from("product");

@@ -38,7 +38,10 @@ struct ScopeLen {
     uc: u32,
 }
 
-#[derive(Debug)]
+#[derive(
+    Debug,
+    Clone, // TODO would like to get rid of Clone; only needed by the Scope that wraps this
+)]
 pub struct Scope<IdentId, Region> {
     /// Bindings nested under the top level.
     nested_lc: Vec3<IdentId, Region, LowercaseId>,
@@ -56,7 +59,7 @@ pub struct Scope<IdentId, Region> {
     ident_ids_by_uc_id: Vec2<IdentId, Region>,
 }
 
-impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Region> {
+impl<IdentId: Copy + PartialEq + Debug, Region: Copy + Debug> Scope<IdentId, Region> {
     /// Top-level bindings must be provided when the Scope is initialized, because whenever we add a new lookup,
     /// it's always allowed to reference top level bindings no matter where they are. We don't store the
     /// actual bindings because the first (number of top-level bindings) entries in ident_ids_by_scope_id are
@@ -153,14 +156,14 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
     }
 
     /// Create a new nested scope. This can happen inside a lambda, a when-branch, indented def, etc.
-    fn push(&mut self) {
+    pub fn push(&mut self) {
         // This can never overflow because we only have at most u16::MAX lines in the source code, and
         // at most u16::MAX bytes per line. So even if filled every line with (if x then ...) it wouldn't overflow.
         self.scope_lengths.push(ScopeLen::default());
     }
 
     /// End the current scope.
-    fn pop(&mut self) {
+    pub fn pop(&mut self) {
         match self.scope_lengths.pop() {
             Some(scope_len) => {
                 debug_assert!(

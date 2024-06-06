@@ -1,5 +1,5 @@
 [package]
-name = "scope"
+name = "roc_scope"
 description = "Managing scopes - introducing bindings etc."
 
 authors.workspace = true
