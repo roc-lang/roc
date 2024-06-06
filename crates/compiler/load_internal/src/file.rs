@@ -2250,161 +2250,83 @@ fn update<'a>(
             Ok(state)
         }
         Header(header) => {
-            use HeaderType::*;
-
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
             let mut work = MutSet::default();
 
-            // Register the package's path under its shorthand
-            // (e.g. for { pf: "blah" }, register that "pf" should resolve to "blah")
-            {
-                let mut shorthands = (*state.arc_shorthands).lock();
+            // Only lock shorthands if this header has packages
+            if !header.packages.is_empty() {
+                let mut shorthands = state.arc_shorthands.lock();
 
-                for (shorthand, package_name) in header.packages.iter() {
-                    let package_str = package_name.as_str();
-                    let shorthand_path = if package_str.starts_with("https://") {
-                        #[cfg(not(target_family = "wasm"))]
-                        {
-                            let url = package_str;
-                            match PackageMetadata::try_from(url) {
-                                Ok(url_metadata) => {
-                                    // This was a valid URL
-                                    let root_module_dir = state
-                                        .cache_dir
-                                        .join(url_metadata.cache_subdir)
-                                        .join(url_metadata.content_hash);
-                                    let root_module = root_module_dir.join(
-                                        url_metadata.root_module_filename.unwrap_or("main.roc"),
-                                    );
+                register_package_shorthands(&mut shorthands, &header, src_dir, &state.cache_dir)?;
+            }
 
-                                    ShorthandPath::FromHttpsUrl {
-                                        root_module_dir,
-                                        root_module,
-                                    }
-                                }
-                                Err(url_err) => {
-                                    let buf = to_https_problem_report_string(
-                                        url,
-                                        Problem::InvalidUrl(url_err),
-                                        header.module_path,
-                                    );
-                                    return Err(LoadingProblem::FormattedReport(buf));
-                                }
-                            }
-                        }
+            use HeaderType::*;
 
-                        #[cfg(target_family = "wasm")]
-                        {
-                            panic!(
-                                "Specifying packages via URLs is currently unsupported in wasm."
-                            );
-                        }
+            match header.header_type {
+                App { to_platform, .. } => {
+                    state.platform_path = PlatformPath::Valid(to_platform);
+                }
+                Package {
+                    config_shorthand,
+                    exposes_ids,
+                    ..
+                } => {
+                    if header.is_root_module {
+                        state.exposed_modules = exposes_ids;
+                    }
+
+                    work.extend(state.dependencies.notify_package(config_shorthand));
+                }
+                Platform {
+                    config_shorthand,
+                    provides,
+                    exposes_ids,
+                    ..
+                } => {
+                    work.extend(state.dependencies.notify_package(config_shorthand));
+
+                    let is_prebuilt = if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsPlatformModule;
+
+                        // If the root module is this platform, then the platform is the very
+                        // thing we're rebuilding!
+                        false
                     } else {
-                        // This wasn't a URL, so it must be a filesystem path.
-                        let root_module: PathBuf = src_dir.join(package_str);
-                        let root_module_dir = root_module.parent().unwrap_or_else(|| {
-                            if root_module.is_file() {
-                                // Files must have parents!
-                                internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
-                            } else {
-                                // TODO make this a nice report
-                                todo!(
-                                    "platform module {:?} was not a file.",
-                                    package_str
-                                )
-                            }
-                        }).into();
-
-                        ShorthandPath::RelativeToSrc {
-                            root_module_dir,
-                            root_module,
-                        }
+                        // platforms from HTTPS URLs are always prebuilt
+                        matches!(
+                            state.arc_shorthands.lock().get(config_shorthand),
+                            Some(ShorthandPath::FromHttpsUrl { .. })
+                        )
                     };
 
-                    log!(
-                        "New package shorthand: {:?} => {:?}",
-                        shorthand,
-                        shorthand_path
-                    );
+                    // If we're building an app module, and this was the platform
+                    // specified in its header's `to` field, record it as our platform.
+                    if state.opt_platform_shorthand == Some(config_shorthand) {
+                        debug_assert!(state.platform_data.is_none());
 
-                    shorthands.insert(shorthand, shorthand_path);
+                        state.platform_data = Some(PlatformData {
+                            module_id: header.module_id,
+                            provides,
+                            is_prebuilt,
+                        });
+                    }
+
+                    if header.is_root_module {
+                        state.exposed_modules = exposes_ids;
+                    }
                 }
-
-                match header.header_type {
-                    App { to_platform, .. } => {
-                        state.platform_path = PlatformPath::Valid(to_platform);
+                Builtin { .. } | Module { .. } => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsModule;
                     }
-                    Package {
-                        config_shorthand,
-                        exposes_ids,
-                        ..
-                    } => {
-                        if header.is_root_module {
-                            state.exposed_modules = exposes_ids;
-                        }
-
-                        work.extend(state.dependencies.notify_package(config_shorthand));
-                    }
-                    Platform {
-                        config_shorthand,
-                        provides,
-                        exposes_ids,
-                        ..
-                    } => {
-                        work.extend(state.dependencies.notify_package(config_shorthand));
-
-                        let is_prebuilt = if header.is_root_module {
-                            debug_assert!(matches!(
-                                state.platform_path,
-                                PlatformPath::NotSpecified
-                            ));
-                            state.platform_path = PlatformPath::RootIsPlatformModule;
-
-                            // If the root module is this platform, then the platform is the very
-                            // thing we're rebuilding!
-                            false
-                        } else {
-                            // platforms from HTTPS URLs are always prebuilt
-                            matches!(
-                                shorthands.get(config_shorthand),
-                                Some(ShorthandPath::FromHttpsUrl { .. })
-                            )
-                        };
-
-                        // If we're building an app module, and this was the platform
-                        // specified in its header's `to` field, record it as our platform.
-                        if state.opt_platform_shorthand == Some(config_shorthand) {
-                            debug_assert!(state.platform_data.is_none());
-
-                            state.platform_data = Some(PlatformData {
-                                module_id: header.module_id,
-                                provides,
-                                is_prebuilt,
-                            });
-                        }
-
-                        if header.is_root_module {
-                            state.exposed_modules = exposes_ids;
-                        }
-                    }
-                    Builtin { .. } | Module { .. } => {
-                        if header.is_root_module {
-                            debug_assert!(matches!(
-                                state.platform_path,
-                                PlatformPath::NotSpecified
-                            ));
-                            state.platform_path = PlatformPath::RootIsModule;
-                        }
-                    }
-                    Hosted { .. } => {
-                        if header.is_root_module {
-                            debug_assert!(matches!(
-                                state.platform_path,
-                                PlatformPath::NotSpecified
-                            ));
-                            state.platform_path = PlatformPath::RootIsHosted;
-                        }
+                }
+                Hosted { .. } => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsHosted;
                     }
                 }
             }
@@ -3123,6 +3045,81 @@ fn update<'a>(
             internal_error!();
         }
     }
+}
+
+fn register_package_shorthands<'a>(
+    shorthands: &mut MutMap<&'a str, ShorthandPath>,
+    header: &ModuleHeader<'a>,
+    src_dir: &Path,
+    cache_dir: &Path,
+) -> Result<(), LoadingProblem<'a>> {
+    for (shorthand, package_name) in header.packages.iter() {
+        let package_str = package_name.as_str();
+        let shorthand_path = if package_str.starts_with("https://") {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let url = package_str;
+                match PackageMetadata::try_from(url) {
+                    Ok(url_metadata) => {
+                        // This was a valid URL
+                        let root_module_dir = cache_dir
+                            .join(url_metadata.cache_subdir)
+                            .join(url_metadata.content_hash);
+                        let root_module = root_module_dir
+                            .join(url_metadata.root_module_filename.unwrap_or("main.roc"));
+
+                        ShorthandPath::FromHttpsUrl {
+                            root_module_dir,
+                            root_module,
+                        }
+                    }
+                    Err(url_err) => {
+                        let buf = to_https_problem_report_string(
+                            url,
+                            Problem::InvalidUrl(url_err),
+                            header.module_path.clone(),
+                        );
+                        return Err(LoadingProblem::FormattedReport(buf));
+                    }
+                }
+            }
+
+            #[cfg(target_family = "wasm")]
+            {
+                panic!("Specifying packages via URLs is currently unsupported in wasm.");
+            }
+        } else {
+            // This wasn't a URL, so it must be a filesystem path.
+            let root_module: PathBuf = src_dir.join(package_str);
+            let root_module_dir = root_module.parent().unwrap_or_else(|| {
+                if root_module.is_file() {
+                    // Files must have parents!
+                    internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
+                } else {
+                    // TODO make this a nice report
+                    todo!(
+                        "platform module {:?} was not a file.",
+                        package_str
+                    )
+                }
+            }).into();
+
+            ShorthandPath::RelativeToSrc {
+                root_module_dir,
+                root_module,
+            }
+        };
+
+        log!(
+            "New package shorthand: {:?} => {:?}",
+            shorthand,
+            shorthand_path
+        );
+
+        shorthands.insert(shorthand, shorthand_path);
+    }
+
+    Ok(())
 }
 
 #[cfg(debug_assertions)]
