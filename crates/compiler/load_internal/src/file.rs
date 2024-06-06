@@ -49,8 +49,8 @@ use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::{
-    self, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader, PlatformHeader,
-    To, TypedIdent,
+    self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
+    PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
@@ -1281,44 +1281,42 @@ fn load_packages_from_main<'a>(
             )
         })?;
 
-    match parsed_module {
-        ast::Module {
-            header: ast::Header::App(header),
-            comments: _,
-        } => {
-            let packages = unspace(arena, header.packages.value.items);
+    use ast::Header::*;
 
-            load_packages(
-                packages,
-                messages,
-                RocCacheDir::Persistent(cache_dir),
-                src_dir.clone(),
-                arena,
-                None,
-                module_ids,
-                ident_ids_by_module,
-                filename.clone(),
-            );
-
-            let package_entries = packages
-                .iter()
-                .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
-                .collect::<MutMap<_, _>>();
-
-            let mut shorthands = arc_shorthands.lock();
-
-            register_package_shorthands(
-                &mut shorthands,
-                &package_entries,
-                &filename,
-                &src_dir,
-                cache_dir,
-            )?;
+    let packages = match parsed_module.header {
+        App(AppHeader { packages, .. }) | Package(PackageHeader { packages, .. }) => {
+            unspace(arena, packages.value.items)
         }
-        _ => todo!("agus: handle other types of modules"),
-    }
+        Platform(PlatformHeader { packages, .. }) => unspace(arena, packages.item.items),
+        Module(_) | Hosted(_) => todo!("agus: report bad main"),
+    };
 
-    Ok(())
+    load_packages(
+        packages,
+        messages,
+        RocCacheDir::Persistent(cache_dir),
+        src_dir.clone(),
+        arena,
+        None,
+        module_ids,
+        ident_ids_by_module,
+        filename.clone(),
+    );
+
+    let package_entries = packages
+        .iter()
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
+        .collect::<MutMap<_, _>>();
+
+    let mut shorthands = arc_shorthands.lock();
+
+    register_package_shorthands(
+        &mut shorthands,
+        &package_entries,
+        &filename,
+        &src_dir,
+        cache_dir,
+    )
 }
 
 fn adjust_header_paths<'a>(
