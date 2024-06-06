@@ -8,7 +8,7 @@ use crate::num::{
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
-use crate::procedure::{QualifiedReference, References};
+use crate::references::{QualifiedReference, References};
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
@@ -36,7 +36,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 
 #[derive(Clone, Default, Debug)]
 pub struct Output {
-    pub references: References,
+    pub references: References<Symbol>,
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
@@ -712,7 +712,7 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::Tuple(fields) => {
             let mut can_elems = Vec::with_capacity(fields.len());
-            let mut references = References::new();
+            let mut references = References::default();
 
             for loc_elem in fields.iter() {
                 let (can_expr, elem_out) =
@@ -780,7 +780,7 @@ pub fn canonicalize_expr<'a>(
                 )
             } else {
                 let mut can_elems = Vec::with_capacity(loc_elems.len());
-                let mut references = References::new();
+                let mut references = References::default();
 
                 for loc_elem in loc_elems.iter() {
                     let (can_expr, elem_out) =
@@ -1630,7 +1630,7 @@ fn canonicalize_when_branch<'a>(
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
-) -> (WhenBranch, References) {
+) -> (WhenBranch, References<Symbol>) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
 

@@ -448,7 +448,7 @@ pub fn canonicalize_pattern<'a>(
 
                             output.references.insert_type_lookup(
                                 opaque,
-                                crate::procedure::QualifiedReference::Unqualified,
+                                crate::references::QualifiedReference::Unqualified,
                             );
 
                             Pattern::UnwrappedOpaque {

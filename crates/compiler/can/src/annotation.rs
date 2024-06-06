@@ -1,5 +1,5 @@
 use crate::env::Env;
-use crate::procedure::{QualifiedReference, References};
+use crate::references::QualifiedReference;
 use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -12,6 +12,8 @@ use roc_types::types::{
     name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, ExtImplicitOpenness,
     LambdaSet, OptAbleType, OptAbleVar, RecordField, Type, TypeExtension,
 };
+
+type References = crate::references::References<Symbol>;
 
 #[derive(Clone, Debug)]
 pub struct Annotation {
@@ -289,7 +291,7 @@ pub(crate) fn canonicalize_annotation(
     annotation_for: AnnotationFor,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = References::new();
+    let mut references = References::default();
     let mut aliases = VecMap::default();
 
     let (annotation, region) = match annotation {

@@ -1,43 +1,3 @@
-use crate::expr::Expr;
-use crate::pattern::Pattern;
-use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
-
-#[derive(Clone, Debug)]
-pub struct Procedure {
-    pub name: Option<Box<str>>,
-    pub is_self_tail_recursive: bool,
-    pub definition: Region,
-    pub args: Vec<Loc<Pattern>>,
-    pub body: Loc<Expr>,
-    pub references: References,
-    pub var: Variable,
-    pub ret_var: Variable,
-}
-
-impl Procedure {
-    pub fn new(
-        definition: Region,
-        args: Vec<Loc<Pattern>>,
-        body: Loc<Expr>,
-        references: References,
-        var: Variable,
-        ret_var: Variable,
-    ) -> Procedure {
-        Procedure {
-            name: None,
-            is_self_tail_recursive: false,
-            definition,
-            args,
-            body,
-            references,
-            var,
-            ret_var,
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 struct ReferencesBitflags(u8);
 
@@ -65,17 +25,22 @@ impl QualifiedReference {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct References {
+#[derive(Clone, Debug)]
+pub struct References<Symbol> {
     symbols: Vec<Symbol>,
     bitflags: Vec<ReferencesBitflags>,
 }
 
-impl References {
-    pub fn new() -> Self {
-        Self::default()
+impl<Symbol> Default for References<Symbol> {
+    fn default() -> Self {
+        Self {
+            symbols: Vec::new(),
+            bitflags: Vec::new(),
+        }
     }
+}
 
+impl<Symbol: PartialEq + Copy> References<Symbol> {
     pub fn union_mut(&mut self, other: &Self) {
         for (k, v) in other.symbols.iter().zip(other.bitflags.iter()) {
             self.insert(*k, *v);
@@ -212,7 +177,7 @@ impl References {
         self.has_type_lookup(symbol)
     }
 
-    pub fn has_module_lookup(&self, module_id: ModuleId) -> bool {
-        self.symbols.iter().any(|sym| sym.module_id() == module_id)
+    pub fn any_symbol(&self, f: impl FnMut(Symbol) -> bool) -> bool {
+        self.symbols.iter().copied().any(f)
     }
 }

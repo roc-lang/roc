@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::procedure::References;
+use crate::references::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
@@ -25,7 +25,7 @@ pub struct Env<'a> {
     pub problems: Vec<Problem>,
 
     /// Closures
-    pub closures: MutMap<Symbol, References>,
+    pub closures: MutMap<Symbol, References<Symbol>>,
 
     /// current tail-callable symbol
     pub tailcallable_symbol: Option<Symbol>,

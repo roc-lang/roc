@@ -18,7 +18,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
-use crate::procedure::References;
+use crate::references::References;
 use crate::scope::create_alias;
 use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::ReferenceMatrix;
@@ -734,7 +734,7 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
-    let mut references = References::new();
+    let mut references = References::default();
 
     let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
@@ -1557,7 +1557,7 @@ impl DefOrdering {
         }
     }
 
-    fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences) {
+    fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences<Symbol>) {
         match def_references {
             DefReferences::Value(references) => {
                 let it = references.value_lookups().chain(references.calls());
@@ -2173,21 +2173,21 @@ fn single_can_def(
 // Functions' references don't count in defs.
 // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
 // parent commit for the bug this fixed!
-enum DefReferences {
+enum DefReferences<S> {
     /// A value may not reference itself
-    Value(References),
+    Value(References<S>),
 
     /// If the def is a function, different rules apply (it can call itself)
-    Function(References),
+    Function(References<S>),
 
     /// An annotation without a body references no other defs
     AnnotationWithoutBody,
 }
 
-struct DefOutput {
+struct DefOutput<S> {
     output: Output,
     def: Def,
-    references: DefReferences,
+    references: DefReferences<S>,
 }
 
 // TODO trim down these arguments!
@@ -2201,7 +2201,7 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
-) -> DefOutput {
+) -> DefOutput<Symbol> {
     use PendingValueDef::*;
 
     // All abilities should be resolved by the time we're canonicalizing value defs.
@@ -2419,7 +2419,7 @@ fn canonicalize_pending_value_def<'a>(
 
             DefOutput {
                 output,
-                references: DefReferences::Value(References::new()),
+                references: DefReferences::Value(References::default()),
                 def,
             }
         }
@@ -2453,7 +2453,7 @@ fn canonicalize_pending_body<'a>(
     loc_expr: &'a Loc<ast::Expr>,
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
-) -> DefOutput {
+) -> DefOutput<Symbol> {
     let mut loc_value = &loc_expr.value;
 
     while let ast::Expr::ParensAround(value) = loc_value {
@@ -2628,12 +2628,12 @@ pub fn can_defs_with_return<'a>(
 
 pub fn report_unused_imports(
     imports_introduced: Vec<IntroducedImport>,
-    references: &References,
+    references: &References<Symbol>,
     env: &mut Env<'_>,
     scope: &mut Scope,
 ) {
     for import in imports_introduced {
-        if references.has_module_lookup(import.module_id) {
+        if references.any_symbol(|sym| sym.module_id() == import.module_id) {
             for (symbol, region) in &import.exposed_symbols {
                 if !references.has_unqualified_type_or_value_lookup(*symbol)
                     && !scope.abilities_store.is_specialization_name(*symbol)

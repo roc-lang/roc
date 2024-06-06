@@ -22,7 +22,7 @@ pub mod expr;
 pub mod module;
 pub mod num;
 pub mod pattern;
-pub mod procedure;
+mod references;
 pub mod scope;
 pub mod string;
 pub mod suffixed;
