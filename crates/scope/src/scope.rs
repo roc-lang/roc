@@ -11,8 +11,6 @@ use core::fmt::Debug;
 type Vec2<A, B> = Vec<(A, B)>;
 /// TODO replace this with the real Vec3 that stores 1 length as u32 etc.
 type Vec3<A, B, C> = Vec<(A, B, C)>;
-/// TODO replace this with the real Vec3 that stores 1 length as u32 etc.
-type Vec4<A, B, C, D> = Vec<(A, B, C, D)>;
 
 /// Either a binding or a lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,27 +38,12 @@ struct ScopeLen {
     uc: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum UppercaseKind {
-    /// A structural alias is something like
-    ///   List a : [Nil, Cons a (List a)]
-    /// It is typed structurally, so that a `List U8` is always equal to a `[Nil]_`, for example.
-    TypeAlias,
-    /// An opaque alias corresponds to an opaque type from the language syntax, like
-    ///   Age := U32
-    /// It is type nominally, so that `Age` is never equal to `U8` - the only way to unwrap the
-    /// structural type inside `Age` is to unwrap the opaque, so `Age` = `@Age U8`.
-    OpaqueType,
-    /// Ability definition
-    Ability,
-}
-
 #[derive(Debug)]
 pub struct Scope<IdentId, Region> {
     /// Bindings nested under the top level.
     nested_lc: Vec3<IdentId, Region, LowercaseId>,
     /// Uppercase bindings nested under the top level.
-    nested_uc: Vec4<IdentId, UppercaseKind, Region, UppercaseId>,
+    nested_uc: Vec3<IdentId, Region, UppercaseId>,
 
     /// Whenever we pop the scope, we take the .last() of this and
     /// truncate that many entries from the end of bindings.
@@ -70,7 +53,7 @@ pub struct Scope<IdentId, Region> {
     ident_ids_by_lc_id: Vec2<IdentId, Region>,
 
     /// Each UppercaseId is an index into this.
-    ident_ids_by_uc_id: Vec3<IdentId, UppercaseKind, Region>,
+    ident_ids_by_uc_id: Vec2<IdentId, Region>,
 }
 
 impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Region> {
@@ -83,7 +66,7 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
     /// (since top-level bindings may not shadow each other).
     pub fn new(
         top_level_lowercase: impl Iterator<Item = (IdentId, Region)>,
-        top_level_uppercase: impl Iterator<Item = (IdentId, UppercaseKind, Region)>,
+        top_level_uppercase: impl Iterator<Item = (IdentId, Region)>,
     ) -> (Self, Vec2<IdentId, Region>) {
         let mut shadowed: Vec2<IdentId, Region> = Default::default();
         let mut ident_ids_by_lc_id: Vec2<IdentId, Region> = Default::default();
@@ -102,18 +85,18 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
             }
         }
 
-        let mut ident_ids_by_uc_id: Vec3<IdentId, UppercaseKind, Region> = Default::default();
+        let mut ident_ids_by_uc_id: Vec2<IdentId, Region> = Default::default();
 
-        for (ident_id, uc_kind, region) in top_level_uppercase {
+        for (ident_id, region) in top_level_uppercase {
             match ident_ids_by_uc_id
                 .iter()
-                .find(|(existing_ident_id, _, _)| *existing_ident_id == ident_id)
+                .find(|(existing_ident_id, _)| *existing_ident_id == ident_id)
             {
-                Some((existing_ident_id, _existing_uc_kind, existing_region)) => {
+                Some((existing_ident_id, existing_region)) => {
                     shadowed.push((*existing_ident_id, *existing_region));
                 }
                 None => {
-                    ident_ids_by_uc_id.push((ident_id, uc_kind, region));
+                    ident_ids_by_uc_id.push((ident_id, region));
                 }
             }
         }
@@ -217,16 +200,11 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
         scope_id
     }
 
-    fn new_uc_id(
-        &mut self,
-        ident_id: IdentId,
-        uc_kind: UppercaseKind,
-        region: Region,
-    ) -> UppercaseId {
+    fn new_uc_id(&mut self, ident_id: IdentId, region: Region) -> UppercaseId {
         // This should never overflow because we only have u16::MAX lines.
         let scope_id = UppercaseId(self.ident_ids_by_uc_id.len() as u32);
 
-        self.ident_ids_by_uc_id.push((ident_id, uc_kind, region));
+        self.ident_ids_by_uc_id.push((ident_id, region));
 
         scope_id
     }
@@ -260,12 +238,7 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
         scope_id
     }
 
-    pub fn add_uc_binding(
-        &mut self,
-        ident_id: IdentId,
-        uc_kind: UppercaseKind,
-        region: Region,
-    ) -> UppercaseId {
+    pub fn add_uc_binding(&mut self, ident_id: IdentId, region: Region) -> UppercaseId {
         debug_assert!(self.scope_lengths.len() > 1, "Tried to add a lowercase binding to the top level before Scope::push() was called (or if Scope::pop() had been called enough times to get back to the top level). All top-level bindings in Scope must be initialized on startup; no more can be added later!");
 
         // Increment the current scope lengths. This is needed so that when we pop
@@ -286,10 +259,10 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
             }
         }
 
-        let uc_id = self.new_uc_id(ident_id, uc_kind, region.clone());
+        let uc_id = self.new_uc_id(ident_id, region.clone());
         let nested = &mut self.nested_uc;
 
-        nested.push((ident_id, uc_kind, region.clone(), uc_id));
+        nested.push((ident_id, region.clone(), uc_id));
 
         uc_id
     }
@@ -349,18 +322,14 @@ impl<Region: Copy + Debug, IdentId: Copy + PartialEq + Debug> Scope<IdentId, Reg
         unsafe { self.ident_ids_by_lc_id.get_unchecked(uc_id.to_index()).0 }
     }
 
-    pub fn kind_from_uc_id(&self, uc_id: UppercaseId) -> UppercaseKind {
-        unsafe { self.ident_ids_by_uc_id.get_unchecked(uc_id.to_index()).1 }
-    }
-
     pub fn region_from_uc_id(&self, uc_id: UppercaseId) -> Region {
-        unsafe { self.ident_ids_by_uc_id.get_unchecked(uc_id.to_index()).2 }
+        unsafe { self.ident_ids_by_uc_id.get_unchecked(uc_id.to_index()).1 }
     }
 }
 
 #[cfg(test)]
 mod scope_tests {
-    use super::{Scope, UppercaseKind, Vec2};
+    use super::{Scope, Vec2};
 
     type IdentId = usize;
     type Region = usize;
@@ -368,7 +337,7 @@ mod scope_tests {
 
     fn new_scope(
         lowercase: &[IdentId],
-        uppercase: &[(IdentId, UppercaseKind)],
+        uppercase: &[IdentId],
     ) -> (TestScope, Vec2<IdentId, Region>) {
         Scope::new(
             lowercase
@@ -378,7 +347,7 @@ mod scope_tests {
             uppercase
                 .iter()
                 .enumerate()
-                .map(|(region, (ident_id, uc_kind))| (*ident_id, *uc_kind, region)),
+                .map(|(region, ident_id)| (*ident_id, region)),
         )
     }
 
