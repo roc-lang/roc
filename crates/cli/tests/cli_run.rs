@@ -716,29 +716,6 @@ mod cli_run {
         test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
     }
 
-    #[cfg_attr(windows, ignore)] // flaky error; issue #5024
-    #[serial(breakout)]
-    #[test]
-    fn breakout() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "breakoutBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
-    #[test]
-    #[serial(breakout)]
-    fn breakout_hello_gui() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "hello-guiBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
@@ -778,7 +755,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args_check() {
-        let path = file_path_from_root("examples/cli", "argsBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -805,7 +782,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_countdown_check() {
-        let path = file_path_from_root("examples/cli", "countdown.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "countdown.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -814,7 +791,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_echo_check() {
-        let path = file_path_from_root("examples/cli", "echo.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "echo.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -823,7 +800,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_file_check() {
-        let path = file_path_from_root("examples/cli", "fileBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -832,7 +809,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_form_check() {
-        let path = file_path_from_root("examples/cli", "form.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -841,7 +818,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_http_get_check() {
-        let path = file_path_from_root("examples/cli", "http-get.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -898,26 +875,11 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
-    fn static_site_gen() {
-        test_roc_app(
-            "examples/static-site-gen",
-            "static-site.roc",
-            &[],
-            &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
-            &[],
-            "Processed 4 files with 3 successes and 0 errors\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "env.roc",
             &[],
             &[],
@@ -939,14 +901,14 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file.roc",
             &[],
             &[],
             &[],
             format!(
                 "\nThis roc file can print its own source code. The source is:\n\n{}\n",
-                include_str!("../../../examples/cli/ingested-file.roc")
+                include_str!("cli/ingested-file.roc")
             )
             .as_str(),
             UseValgrind::No,
@@ -959,12 +921,12 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file-bytes.roc",
             &[],
             &[],
             &[],
-            "162088\n",
+            "27101\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -974,12 +936,12 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes_no_ann() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file-bytes-no-ann.roc",
             &[],
             &[],
             &[],
-            "162088\n",
+            "27101\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -990,8 +952,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser",
-            "parse-movies-csv.roc",
+            "crates/cli/tests/cli",
+            "parser-movies-csv.roc",
             "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n",
             UseValgrind::No,
         )
@@ -1002,8 +964,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
-            "examples/parser",
-            "letter-counts.roc",
+            "crates/cli/tests/cli",
+            "parser-letter-counts.roc",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )

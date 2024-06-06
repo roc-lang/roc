@@ -13,12 +13,12 @@ There are currently a few known OS-specific issues:
 Here are some Getting Started guides for different operating systems:
 <!-- TODO detect current OS with browser and only show link for that, provide other button for others  -->
 
-- [Linux x86-64](https://github.com/roc-lang/roc/blob/main/getting_started/linux_x86_64.md)
-- [Nix Linux/MacOS](https://github.com/roc-lang/roc/blob/main/getting_started/nix.md)
-- [MacOS Apple Silicon](https://github.com/roc-lang/roc/blob/main/getting_started/macos_apple_silicon.md)
-- [MacOS x86-64](https://github.com/roc-lang/roc/blob/main/getting_started/macos_x86_64.md)
-- [Windows](https://github.com/roc-lang/roc/blob/main/getting_started/windows.md)
-- [Other Systems](https://github.com/roc-lang/roc/blob/main/getting_started/other.md)
+- [Linux x86-64](/install/linux_x86_64)
+- [Nix Linux/MacOS](/install/nix)
+- [MacOS Apple Silicon](/install/macos_apple_silicon)
+- [MacOS x86-64](/install/macos_x86_64)
+- [Windows](/install/windows)
+- [Other Systems](/install/other)
 
 ### [Editor Extensions/Plugins](#editor-extensions) {#editor-extensions}
 

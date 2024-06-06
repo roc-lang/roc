@@ -92,7 +92,7 @@ impl HasToken for ModuleName<'_> {
 
 impl HasToken for &str {
     fn token(&self) -> Token {
-        if self.chars().next().unwrap().is_uppercase() {
+        if self.starts_with(|c: char| c.is_uppercase()) {
             Token::Type
         } else {
             Token::Variable

@@ -1,4 +1,4 @@
-# Roc installation guide for Apple silicon systems
+# Apple Silicon
 
 ## How to install Roc
 

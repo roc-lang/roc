@@ -131,8 +131,8 @@ impl ReplState {
                     | ValueDef::Body(_, _)
                     | ValueDef::AnnotatedBody { .. } => {
                         todo!("handle pattern other than identifier (which repl doesn't support).\
-                              \nTip: this error can be triggered when trying to define a variable with a character that is not allowed,\
-                              like starting with an uppercase character.")
+                              \nTip: this error can be triggered when trying to define a variable with a character that is not allowed, \
+                              like starting with an uppercase character or using underdash (_).")
                     }
                     ValueDef::Dbg { .. } => {
                         todo!("handle receiving a `dbg` - what should the repl do for that?")
@@ -275,6 +275,9 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
 
             match roc_parse::expr::loc_expr(true).parse(arena, State::new(src_bytes), 0) {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
+                Err((roc_parse::parser::Progress::MadeProgress, EExpr::Start(_))) => {
+                    ParseOutcome::Empty
+                }
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _)))
                 | Err((_, EExpr::When(EWhen::Pattern(EPattern::Start(_), _), _)))

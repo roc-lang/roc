@@ -1,4 +1,4 @@
-# Roc installation guide for x86_64 Linux systems
+# Linux x86_64
 
 ## How to install Roc
 

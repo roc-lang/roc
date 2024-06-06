@@ -804,6 +804,82 @@ mod suffixed_tests {
             r#"Defs { tags: [Index(2147483648)], regions: [@0-85], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @29-36 Apply(@29-36 Var { module_name: "Task", ident: "await" }, [@29-36 Var { module_name: "", ident: "getFoo" }, @29-36 Closure([@23-26 Identifier { ident: "foo" }], @53-85 LowLevelDbg(("test.roc:4", "   "), @57-60 Apply(@57-60 Var { module_name: "Inspect", ident: "toStr" }, [@57-60 Var { module_name: "", ident: "foo" }], Space), @77-85 Apply(@77-85 Var { module_name: "", ident: "bar" }, [@82-85 Var { module_name: "", ident: "foo" }], Space)))], BangSuffix))] }"#,
         );
     }
+
+    // main =
+    //    Task.await a \#!a0 ->
+    //        c = b #!a0
+    //        Task.ok c
+    #[test]
+    fn apply_argument_single() {
+        run_test(
+            r#"
+            main =
+                c = b a!
+                c
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-49], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @27-31 Apply(@27-31 Var { module_name: "Task", ident: "await" }, [@29-30 Var { module_name: "", ident: "a" }, @27-31 Closure([@29-30 Identifier { ident: "#!a0" }], @27-31 Defs(Defs { tags: [Index(2147483650)], regions: [@27-31], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "c" }, @27-31 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 TaskAwaitBang(Var { module_name: "", ident: "a" })], Space)), Body(@23-24 Identifier { ident: "c" }, @27-31 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }], Space)), Body(@23-24 Identifier { ident: "c" }, @27-31 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }], Space))] }, @48-49 Var { module_name: "", ident: "c" }))], BangSuffix))] }"##,
+        );
+    }
+
+    // main =
+    //    Task.await a \#!a0 ->
+    //        Task.await x \#!a1 ->
+    //            c = b #!a0 #!a1
+    //            Task.ok c
+    #[test]
+    fn apply_argument_multiple() {
+        run_test(
+            r#"
+            main =
+                c = b a! x!
+                c
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-52], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @27-34 Apply(@27-34 Var { module_name: "Task", ident: "await" }, [@29-30 Var { module_name: "", ident: "a" }, @27-34 Closure([@29-30 Identifier { ident: "#!a0" }], @27-34 Apply(@27-34 Var { module_name: "Task", ident: "await" }, [@32-33 Var { module_name: "", ident: "x" }, @27-34 Closure([@32-33 Identifier { ident: "#!a1" }], @27-34 Defs(Defs { tags: [Index(2147483651)], regions: [@27-34], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 TaskAwaitBang(Var { module_name: "", ident: "a" }), @32-33 TaskAwaitBang(Var { module_name: "", ident: "x" })], Space)), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }, @32-33 TaskAwaitBang(Var { module_name: "", ident: "x" })], Space)), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }, @32-33 Var { module_name: "", ident: "#!a1" }], Space)), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@27-28 Var { module_name: "", ident: "b" }, [@29-30 Var { module_name: "", ident: "#!a0" }, @32-33 Var { module_name: "", ident: "#!a1" }], Space))] }, @51-52 Var { module_name: "", ident: "c" }))], BangSuffix))], BangSuffix))] }"##,
+        );
+    }
+
+    // main =
+    //    Task.await a \#!a0 ->
+    //        c = b #!a0
+    //        Task.ok c
+    #[test]
+    fn bang_in_pipe_root() {
+        run_test(
+            r#"
+            main =
+                c = a! |> b
+                c
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-52], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @27-34 Apply(@27-34 Var { module_name: "Task", ident: "await" }, [@27-28 Var { module_name: "", ident: "a" }, @27-34 Closure([@27-28 Identifier { ident: "#!a0" }], @27-34 Defs(Defs { tags: [Index(2147483650)], regions: [@27-34], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@33-34 Var { module_name: "", ident: "b" }, [@27-28 TaskAwaitBang(Var { module_name: "", ident: "a" })], BinOp(Pizza))), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@33-34 Var { module_name: "", ident: "b" }, [@27-28 Var { module_name: "", ident: "#!a0" }], BinOp(Pizza))), Body(@23-24 Identifier { ident: "c" }, @27-34 Apply(@33-34 Var { module_name: "", ident: "b" }, [@27-28 Var { module_name: "", ident: "#!a0" }], BinOp(Pizza)))] }, @51-52 Var { module_name: "", ident: "c" }))], BangSuffix))] }"##,
+        );
+    }
+
+    #[test]
+    fn expect_then_bang() {
+        run_test(
+            r#"
+            main =
+                expect 1 == 2
+                x!
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-55], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-55 Expect(@30-36 Apply(@32-34 Var { module_name: "Bool", ident: "isEq" }, [@30-31 Num("1"), @35-36 Num("2")], BinOp(Equals)), @53-55 Var { module_name: "", ident: "x" }))] }"#,
+        );
+    }
+
+    #[test]
+    fn deep_when() {
+        run_test(
+            r#"
+            main =
+                when a is
+                    0 ->
+                        when b is
+                            1 ->
+                                c!
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-159], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-159 When(@28-29 Var { module_name: "", ident: "a" }, [WhenBranch { patterns: [@53-54 NumLiteral("0")], value: @82-159 When(@87-88 Var { module_name: "", ident: "b" }, [WhenBranch { patterns: [@120-121 NumLiteral("1")], value: @157-159 Var { module_name: "", ident: "c" }, guard: None }]), guard: None }]))] }"#,
+        );
+    }
 }
 
 #[cfg(test)]

@@ -22,7 +22,7 @@
     </section>
     <section>
         <h2 id="installation"><a href="#installation">Installation</a></h2>
-        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="https://github.com/roc-lang/roc/tree/main/getting_started#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
+        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
 ## [REPL](#repl) {#repl}
@@ -1796,7 +1796,7 @@ Task.await (Stdout.line "Type in something and press Enter:") \_ ->
 
 Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
-If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylsitic convention in the Roc ecosystem to use `!` instead.
+If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylistic convention in the Roc ecosystem to use `!` instead.
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
