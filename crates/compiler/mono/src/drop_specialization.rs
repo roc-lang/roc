@@ -1539,6 +1539,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         StrGetUnsafe | ListGetUnsafe => RC::NoRc,
         ListConcat => RC::Rc,
         StrConcat => RC::Rc,
+        StrConcatUtf8 => RC::Rc,
         StrSubstringUnsafe => RC::Rc,
         StrReserve => RC::Rc,
         StrTrim => RC::Rc,

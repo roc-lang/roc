@@ -169,6 +169,18 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn string_concat_utf8() {
+        infer_eq_without_problem(
+            indoc!(
+                r"
+                Str.concatUtf8
+                "
+            ),
+            "List U8, Str -> List U8",
+        )
+    }
+
     // LIST
 
     #[test]

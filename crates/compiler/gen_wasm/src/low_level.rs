@@ -258,6 +258,7 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
+            StrConcatUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT_UTF8),
 
             // List
             ListLenU64 => {

@@ -2390,3 +2390,34 @@ pub fn strReleaseExcessCapacity(
         return output;
     }
 }
+
+pub fn strConcatUtf8(
+    list: RocList,
+    string: RocStr,
+) callconv(.C) RocList {
+    if (string.len() == 0) {
+        return list;
+    } else {
+        const combined_length = list.len() + string.len();
+
+        // XXX: I assume List U8 has alignment 1 and element_width 1?
+        var result = list.reallocate(1, combined_length, 1);
+        // We just allocated combined_length, which is > 0 because string.len() > 0
+        var bytes = result.bytes orelse unreachable;
+        @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
+
+        return result;
+    }
+}
+
+test "strConcatUtf8" {
+    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 });
+    defer list.decref(1);
+    const string_bytes = "🐦";
+    const string = RocStr.init(string_bytes, string_bytes.len);
+    defer string.decref();
+    const ret = strConcatUtf8(list, string);
+    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 });
+    defer expected.decref(1);
+    try expect(ret.eql(expected));
+}

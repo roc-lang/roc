@@ -1440,6 +1440,7 @@ define_builtins! {
         46 STR_REPLACE_FIRST: "replaceFirst"
         47 STR_REPLACE_LAST: "replaceLast"
         48 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        49 STR_CONCAT_UTF8: "concatUtf8"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias

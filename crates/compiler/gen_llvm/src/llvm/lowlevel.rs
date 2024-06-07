@@ -608,6 +608,28 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
+        StrConcatUtf8 => {
+            // Str.concatUtf8: List U8, Str -> List U8
+            arguments!(list, string);
+
+            // XXX: I don't know why I need to call different functions based on the target pointer width, but the test_gen tests panic if I don't
+            match env.target.ptr_width() {
+                PtrWidth::Bytes4 => call_str_bitcode_fn(
+                    env,
+                    &[list, string],
+                    &[],
+                    BitcodeReturns::List,
+                    bitcode::STR_CONCAT_UTF8,
+                ),
+                PtrWidth::Bytes8 => call_list_bitcode_fn(
+                    env,
+                    &[list.into_struct_value()],
+                    &[string],
+                    BitcodeReturns::List,
+                    bitcode::STR_CONCAT_UTF8,
+                ),
+            }
+        }
         ListLenU64 => {
             // List.len : List * -> U64
             arguments!(list);
