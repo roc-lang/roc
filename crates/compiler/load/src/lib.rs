@@ -121,6 +121,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
@@ -129,6 +130,7 @@ pub fn load_and_monomorphize<'a>(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        opt_main_path,
         load_config.render,
         roc_cache_dir,
         load_config.palette,
@@ -145,6 +147,7 @@ pub fn load_and_monomorphize<'a>(
 pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
@@ -153,6 +156,7 @@ pub fn load_and_typecheck<'a>(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        opt_main_path,
         load_config.render,
         roc_cache_dir,
         load_config.palette,

@@ -134,6 +134,7 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
+                None,
                 RocCacheDir::Disallowed,
                 load_config,
             );

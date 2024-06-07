@@ -735,9 +735,14 @@ pub fn build_file<'a>(
     let compilation_start = Instant::now();
 
     // Step 1: compile the app and generate the .o file
-    let loaded =
-        roc_load::load_and_monomorphize(arena, app_module_path.clone(), roc_cache_dir, load_config)
-            .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        app_module_path.clone(),
+        None,
+        roc_cache_dir,
+        load_config,
+    )
+    .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
 
     build_loaded_file(
         arena,
@@ -1187,6 +1192,7 @@ fn build_and_preprocess_host_lowlevel(
 pub fn check_file<'a>(
     arena: &'a Bump,
     roc_file_path: PathBuf,
+    opt_main_path: Option<PathBuf>,
     emit_timings: bool,
     roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
@@ -1209,8 +1215,13 @@ pub fn check_file<'a>(
         threading,
         exec_mode: ExecutionMode::Check,
     };
-    let mut loaded =
-        roc_load::load_and_typecheck(arena, roc_file_path, roc_cache_dir, load_config)?;
+    let mut loaded = roc_load::load_and_typecheck(
+        arena,
+        roc_file_path,
+        opt_main_path,
+        roc_cache_dir,
+        load_config,
+    )?;
 
     let buf = &mut String::with_capacity(1024);
 

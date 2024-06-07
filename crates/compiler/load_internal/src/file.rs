@@ -1105,6 +1105,7 @@ impl<'a> LoadStart<'a> {
     pub fn from_path(
         arena: &'a Bump,
         filename: PathBuf,
+        opt_main_path: Option<PathBuf>,
         render: RenderTarget,
         roc_cache_dir: RocCacheDir<'_>,
         palette: Palette,
@@ -1144,23 +1145,23 @@ impl<'a> LoadStart<'a> {
 
                     match header_type {
                         Module { .. } | Builtin { .. } | Hosted { .. } => {
-                            let main_path = loop {
+                            let main_path = opt_main_path.or_else(|| loop {
                                 match src_dir.join("main.roc").canonicalize() {
-                                    Ok(path) => break path,
+                                    Ok(path) => break Some(path),
                                     Err(_) => {
                                         if !src_dir.pop() {
-                                            return Err(LoadingProblem::FormattedReport(
-                                                "todo(agus): good error".to_string(),
-                                            ));
+                                            break None;
                                         }
                                     }
                                 }
-                            };
+                            });
 
-                            let mut messages = Vec::with_capacity(4);
-                            messages.push(header_output.msg);
+                            let cache_dir = roc_cache_dir.as_persistent_path();
 
-                            if let Some(cache_dir) = roc_cache_dir.as_persistent_path() {
+                            if let (Some(main_path), Some(cache_dir)) = (main_path, cache_dir) {
+                                let mut messages = Vec::with_capacity(4);
+                                messages.push(header_output.msg);
+
                                 load_packages_from_main(
                                     arena,
                                     src_dir.clone(),
@@ -1171,9 +1172,9 @@ impl<'a> LoadStart<'a> {
                                     Arc::clone(&arc_shorthands),
                                     cache_dir,
                                 )?;
-                            }
 
-                            header_output.msg = Msg::Many(messages);
+                                header_output.msg = Msg::Many(messages);
+                            }
                         }
                         App { .. } | Package { .. } | Platform { .. } => {}
                     }

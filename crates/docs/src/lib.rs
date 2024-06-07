@@ -482,6 +482,7 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     match roc_load::load_and_typecheck(
         &arena,
         filename,
+        None,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     ) {

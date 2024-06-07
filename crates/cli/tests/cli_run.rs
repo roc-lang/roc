@@ -649,6 +649,21 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn roc_test_main_flag() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "Module.roc",
+            &["--main", "tests/module_imports_pkg/app.roc"],
+            indoc!(
+                r#"
+                0 failed and 1 passed in <ignored for test> ms.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
