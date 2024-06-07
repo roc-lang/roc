@@ -2343,6 +2343,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_scope",
  "roc_serialize",
  "roc_test_utils",
  "roc_types",

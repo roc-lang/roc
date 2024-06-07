@@ -14,7 +14,6 @@ pub mod copy;
 pub mod def;
 mod derive;
 pub mod desugar;
-pub mod effect_module;
 pub mod env;
 pub mod exhaustive;
 pub mod expected;
@@ -31,3 +30,8 @@ pub mod traverse;
 pub use derive::DERIVED_REGION;
 
 pub mod debug;
+
+///////////////////////////
+
+mod effect_module;
+mod top_level;

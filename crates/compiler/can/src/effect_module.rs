@@ -1,15 +1,20 @@
 use crate::annotation::IntroducedVariables;
 use crate::def::Def;
+use crate::env::Env;
 use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive, WhenBranchPattern};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
-use roc_module::ident::TagName;
+use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::Symbol;
+use roc_parse::header::HeaderType;
+use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{AliasKind, LambdaSet, OptAbleType, OptAbleVar, Type, TypeExtension};
+use roc_types::types::{
+    AliasKind, AliasVar, LambdaSet, OptAbleType, OptAbleVar, Type, TypeExtension,
+};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
@@ -1568,4 +1573,96 @@ fn empty_record_pattern(var_store: &mut VarStore) -> Pattern {
         ext_var: var_store.fresh(),
         destructs: vec![],
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum GeneratedInfo {
+    Hosted {
+        effect_symbol: Symbol,
+        generated_functions: HostedGeneratedFunctions,
+    },
+    Builtin,
+    NotSpecial,
+}
+
+impl GeneratedInfo {
+    pub(crate) fn from_header_type(
+        env: &mut Env,
+        scope: &mut Scope,
+        var_store: &mut VarStore,
+        header_type: &HeaderType,
+    ) -> Self {
+        match header_type {
+            HeaderType::Hosted {
+                generates,
+                generates_with,
+                name: _,
+                exposes: _,
+            } => {
+                let name: &str = generates.into();
+                let (generated_functions, unknown_generated) =
+                    validate_generate_with(generates_with);
+
+                for unknown in unknown_generated {
+                    env.problem(Problem::UnknownGeneratesWith(unknown));
+                }
+
+                let effect_symbol = scope.introduce(name.into(), Region::zero()).unwrap();
+
+                {
+                    let a_var = var_store.fresh();
+
+                    let actual =
+                        crate::effect_module::build_effect_actual(Type::Variable(a_var), var_store);
+
+                    scope.add_alias(
+                        effect_symbol,
+                        Region::zero(),
+                        vec![Loc::at_zero(AliasVar::unbound("a".into(), a_var))],
+                        vec![],
+                        actual,
+                        AliasKind::Opaque,
+                    );
+                }
+
+                GeneratedInfo::Hosted {
+                    effect_symbol,
+                    generated_functions,
+                }
+            }
+            HeaderType::Builtin {
+                generates_with,
+                name: _,
+                exposes: _,
+            } => {
+                debug_assert!(generates_with.is_empty());
+                GeneratedInfo::Builtin
+            }
+            _ => GeneratedInfo::NotSpecial,
+        }
+    }
+}
+
+fn validate_generate_with<'a>(
+    generate_with: &'a [Loc<roc_parse::header::ExposedName<'a>>],
+) -> (HostedGeneratedFunctions, Vec<Loc<Ident>>) {
+    let mut functions = HostedGeneratedFunctions::default();
+    let mut unknown = Vec::new();
+
+    for generated in generate_with {
+        match generated.value.as_str() {
+            "after" => functions.after = true,
+            "map" => functions.map = true,
+            "always" => functions.always = true,
+            "loop" => functions.loop_ = true,
+            "forever" => functions.forever = true,
+            other => {
+                // we don't know how to generate this function
+                let ident = Ident::from(other);
+                unknown.push(Loc::at(generated.region, ident));
+            }
+        }
+    }
+
+    (functions, unknown)
 }

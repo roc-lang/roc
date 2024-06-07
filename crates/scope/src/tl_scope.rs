@@ -14,33 +14,44 @@ use core::fmt::Debug;
 type Vec2<'a, A, B> = Vec<'a, (A, B)>;
 /// TODO replace this with the real Vec3 that stores 1 length as u32 etc. (We can even do u16 len.)
 type Vec3<'a, A, B, C> = Vec<'a, (A, B, C)>;
+/// TODO replace this with the real Vec4 that stores 1 length as u32 etc. (We can even do u16 len.)
+type Vec4<'a, A, B, C, D> = Vec<'a, (A, B, C, D)>;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum IsUsed {
+    Used,
+    Unused,
+}
 
 #[derive(
     Debug,
     Clone, // TODO would like to get rid of Clone; only needed by the can::Scope that wraps this
 )]
-pub struct TopLevelScope<'a, LcStrId, UcStrId, ModuleStrId, Region> {
+pub struct TopLevelScope<'a, LcStrId, UcStrId, ShorthandStrId, ModuleStrId, Region> {
     /// Each LowercaseId is an index into this.
-    lc_bindings: Vec3<'a, ModuleId, LcStrId, Region>,
+    lc_bindings: Vec4<'a, ModuleId, LcStrId, Region, IsUsed>,
 
     /// Each UppercaseId is an index into this.
-    uc_bindings: Vec3<'a, ModuleId, UcStrId, Region>,
+    uc_bindings: Vec4<'a, ModuleId, UcStrId, Region, IsUsed>,
 
     /// Each ModuleId is an index into this.
-    imports: Vec2<'a, ModuleStrId, Region>,
+    imports: Vec4<'a, Option<ShorthandStrId>, ModuleStrId, Region, IsUsed>,
 }
 
 impl<
         'a,
         LcStrId: Copy + PartialEq + Debug,
         UcStrId: Copy + PartialEq + Debug,
+        ShorthandStrId: Copy + PartialEq + Debug,
         ModuleStrId: Copy + PartialEq + Debug,
         Region: Copy + Debug,
-    > TopLevelScope<'a, LcStrId, UcStrId, ModuleStrId, Region>
+    > TopLevelScope<'a, LcStrId, UcStrId, ShorthandStrId, ModuleStrId, Region>
 {
     pub fn new(arena: &'a Bump, home_module_name: ModuleStrId, home_module_region: Region) -> Self {
         let by_lc_id = Vec::with_capacity_in(8, arena);
+        let todo = (); // TODO populate by_uc_id with the exposed types in the builtin modules, since those are always in scope.
         let by_uc_id = Vec::with_capacity_in(8, arena);
+        let todo = (); // TODO populate by_module_id with the builtin modules. Remember that ModuleId 0 is HOME, so start at 1!
         let mut by_module_id = Vec::with_capacity_in(8, arena);
 
         // Since ModuleId exposes ModuleId::HOME, which is hardcoded to be index 0 under the hood,
@@ -72,7 +83,8 @@ impl<
             None => {
                 let lc_id = LowercaseId(self.lc_bindings.len() as u16);
 
-                self.lc_bindings.push((module_id, str_id, region));
+                self.lc_bindings
+                    .push((module_id, str_id, region, IsUsed::Unused));
 
                 Ok(lc_id)
             }
@@ -97,7 +109,8 @@ impl<
             None => {
                 let uc_id = UppercaseId(self.uc_bindings.len() as u16);
 
-                self.uc_bindings.push((module_id, str_id, region));
+                self.uc_bindings
+                    .push((module_id, str_id, region, IsUsed::Unused));
 
                 Ok(uc_id)
             }
@@ -113,6 +126,7 @@ impl<
     pub fn import_module(
         &mut self,
         // arena: &'a Bump, // TODO uncomment this once we switch to the Vec where push takes arena
+        shorthand: Option<ShorthandStrId>,
         str_id: ModuleStrId,
         region: Region,
     ) -> Result<ModuleId, Region> {
@@ -125,7 +139,8 @@ impl<
             None => {
                 let module_id = ModuleId(self.imports.len() as u16);
 
-                self.imports.push((str_id, region));
+                self.imports
+                    .push((shorthand, str_id, region, IsUsed::Unused));
 
                 Ok(module_id)
             }
@@ -135,19 +150,25 @@ impl<
     /// This is pub(crate) instead of pub because lookups must exist within decls,
     /// so only decl_scope should ever need to call this.
     pub(crate) fn lookup_lc(
-        &self,
+        &mut self,
         module_id: ModuleId,
         str_id: LcStrId,
     ) -> Option<(LowercaseId, Region)> {
-        self.lc_bindings.iter().enumerate().find_map(
-            |(index, (haystack_module_id, haystack_str_id, region))| {
-                if *haystack_str_id == str_id && *haystack_module_id == module_id {
-                    Some((LowercaseId(index as u16), *region))
-                } else {
-                    None
-                }
-            },
-        )
+        for (index, (haystack_module_id, haystack_str_id, region, _is_unused)) in
+            self.lc_bindings.iter().copied().enumerate()
+        {
+            if haystack_str_id == str_id && haystack_module_id == module_id {
+                // Safety: we just got this index from .enumerate() so we know it's in there!
+                let mut is_unused = &mut unsafe { self.lc_bindings.get_unchecked_mut(index).3 };
+
+                // Mark this as used now that we've looked it up.
+                *is_unused = IsUsed::Used;
+
+                return Some((LowercaseId(index as u16), region));
+            }
+        }
+
+        None
     }
 
     /// This is pub(crate) instead of pub because lookups must exist within decls,
@@ -157,30 +178,41 @@ impl<
         module_id: ModuleId,
         str_id: UcStrId,
     ) -> Option<(UppercaseId, Region)> {
-        self.uc_bindings.iter().enumerate().find_map(
-            |(index, (haystack_module_id, haystack_str_id, region))| {
-                if *haystack_str_id == str_id && *haystack_module_id == module_id {
-                    Some((UppercaseId(index as u16), *region))
-                } else {
-                    None
-                }
-            },
-        )
+        for (index, (haystack_module_id, haystack_str_id, region, _is_unused)) in
+            self.uc_bindings.iter().copied().enumerate()
+        {
+            if haystack_str_id == str_id && haystack_module_id == module_id {
+                // Safety: we just got this index from .enumerate() so we know it's in there!
+                let mut is_unused = &mut unsafe { self.uc_bindings.get_unchecked_mut(index).3 };
+
+                // Mark this as used now that we've looked it up.
+                *is_unused = IsUsed::Used;
+
+                return Some((UppercaseId(index as u16), region));
+            }
+        }
+
+        None
     }
 
     /// This is pub(crate) instead of pub because lookups must exist within decls,
     /// so only decl_scope should ever need to call this.
     pub(crate) fn lookup_module(&self, str_id: ModuleStrId) -> Option<(ModuleId, Region)> {
-        self.imports
-            .iter()
-            .enumerate()
-            .find_map(|(index, (haystack_str_id, region))| {
-                if *haystack_str_id == str_id {
-                    Some((ModuleId(index as u16), *region))
-                } else {
-                    None
-                }
-            })
+        for (index, (haystack_shorthand_id, haystack_module_str_id, region, _is_unused)) in
+            self.imports.iter().copied().enumerate()
+        {
+            if haystack_module_str_id == str_id {
+                // Safety: we just got this index from .enumerate() so we know it's in there!
+                let mut is_unused = &mut unsafe { self.imports.get_unchecked_mut(index).3 };
+
+                // Mark this as used now that we've looked it up.
+                *is_unused = IsUsed::Used;
+
+                return Some((ModuleId(index as u16), region));
+            }
+        }
+
+        None
     }
 
     pub fn region_from_lc_id(&self, lc_id: LowercaseId) -> Option<Region> {
@@ -241,11 +273,42 @@ impl<
     pub fn validate(
         &self,
         arena: &'a Bump,
-    ) -> Vec<'a, Problem<LcStrId, UcStrId, ModuleStrId, Region>> {
+    ) -> Vec<'a, Problem<LcStrId, UcStrId, ShorthandStrId, ModuleStrId, Region>> {
         let mut problems = Vec::new_in(arena);
 
         if self.lc_bindings.len() >= u16::MAX as usize {
             problems.push(Problem::TooManyBindings);
+        } else {
+            for (module_id, str_id, region, is_used) in self.lc_bindings {
+                if module_id != ModuleId::HOME && !self.is_lc_exposed(module_id, str_id) {
+                    // TODO report unexposed access
+                    // TODO actually, move this out of validate and into the actual site,
+                    // so that we know what's in scope and can make suggestions accordingly.
+                    // Importantly, this needs to be done *lazily* - we do *not* want to
+                    // add all the module's contents to scope "just in case," but rather we
+                    // want to verify on an as-requested basis whether these are exposed.
+                }
+
+                if is_used == IsUsed::Unused {
+                    // TODO report it using the region!
+                }
+            }
+        }
+
+        for (module_id, str_id, _region, is_used) in self.uc_bindings {
+            if module_id != ModuleId::HOME && !is_uc_exposed(module_id, str_id) {
+                // TODO report unexposed access
+            }
+
+            if is_used == IsUsed::Unused {
+                // TODO report it using the region!
+            }
+        }
+
+        for (shorthand_str_id, module_str_id, _region, is_used) in self.imports {
+            if is_used == IsUsed::Unused {
+                // TODO report it using the region!
+            }
         }
 
         // Note: module imports and uppercase bindings each go on their own lines,
