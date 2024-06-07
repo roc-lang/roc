@@ -4,7 +4,7 @@
 
 - Linux or MacOS operating system, Windows users can use linux through WSL.
 - Install [git](https://chat.openai.com/share/71fb3ae6-80d7-478c-8a27-a36aaa5ba921)
-- Install [nix](https://nixos.org/download.html)
+- Install [nix](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#installing-nix)
 
 ## Building the website from scratch
 
@@ -15,7 +15,7 @@ nix develop
 ./www/build.sh
 # make the roc command available 
 export PATH="$(pwd)/target/release/:$PATH"
-bash build-dev-local.sh
+bash ./www/build-dev-local.sh
 ```
 
 Open http://0.0.0.0:8080 in your browser.

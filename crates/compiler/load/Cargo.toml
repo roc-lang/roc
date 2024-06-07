@@ -29,11 +29,8 @@ roc_reporting = { path = "../../reporting" }
 roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 roc_error_macros = { path = "../../error_macros" }
-
-bumpalo.workspace = true
-
-[target.'cfg(not(windows))'.build-dependencies]
 roc_load_internal = { path = "../load_internal" }
+bumpalo.workspace = true
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
@@ -43,7 +40,7 @@ roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_solve_problem = { path = "../solve_problem" }
 ven_pretty = { path = "../../vendor/pretty" }
-roc_test_utils = { path = "../../test_utils" }
+roc_test_utils_dir = { path = "../../test_utils_dir" }
 
 indoc.workspace = true
 insta.workspace = true

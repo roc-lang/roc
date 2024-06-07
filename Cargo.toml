@@ -17,6 +17,7 @@ members = [
   "crates/repl_expect",
   "crates/roc_std",
   "crates/test_utils",
+  "crates/test_utils_dir",
   "crates/valgrind",
   "crates/tracing",
   "crates/utils/*",
@@ -26,14 +27,13 @@ members = [
   "crates/wasi-libc-sys",
   "crates/wasm_module",
   "crates/wasm_interp",
-  "crates/lang_srv",
+  "crates/language_server",
 ]
 
 exclude = [
   "ci/benchmarks/bench-runner",
   "ci/repl_basic_test",
   # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
-  "crates/cli_testing_examples",
   "examples",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
@@ -101,11 +101,11 @@ fnv = "1.0.7"
 fs_extra = "1.3.0"
 futures = "0.3.26"
 glyph_brush = "0.7.7"
-hashbrown = { version = "0.13.2", features = ["bumpalo"] }
+hashbrown = { version = "0.14.3" }
 iced-x86 = { version = "1.18.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
 im = "15.1.0"
 im-rc = "15.1.0"
-indexmap = "1.9.2"
+indexmap = "2.1.0"
 indoc = "1.0.9"
 insta = "1.28.0"
 js-sys = "0.3.61"
@@ -120,12 +120,11 @@ maplit = "1.0.2"
 memmap2 = "0.5.10"
 mimalloc = { version = "0.1.34", default-features = false }
 nonempty = "0.8.1"
-object = { version = "0.30.3", features = ["read", "write"] }
+object = { version = "0.32.2", features = ["read", "write"] }
 packed_struct = "0.10.1"
 page_size = "0.5.0"
 palette = "0.6.1"
 parking_lot = "0.12"
-peg = "0.8.1"
 perfcnt = "0.8.0"
 pest = "2.5.6"
 pest_derive = "2.5.6"
@@ -139,7 +138,7 @@ quote = "1.0.23"
 rand = "0.8.5"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
-reqwest = { version = "0.11.20", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
+reqwest = { version = "0.11.23", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
@@ -160,7 +159,7 @@ tar = "0.4.38"
 target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
 threadpool = "1.8.1"
-tracing = { version = "0.1.37", features = ["release_max_level_off"] }
+tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 unicode-segmentation = "1.10.1"

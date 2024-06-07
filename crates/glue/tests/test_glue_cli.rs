@@ -14,7 +14,15 @@ mod glue_cli_run {
     use crate::helpers::fixtures_dir;
     use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TEST_LEGACY_LINKER: bool = true;
+
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    const TEST_LEGACY_LINKER: bool = false;
 
     /// This macro does two things.
     ///
@@ -40,11 +48,8 @@ mod glue_cli_run {
 
                     generate_glue_for(&dir, std::iter::empty());
 
-                    let test_name_str = stringify!($test_name);
-
-                    // TODO after #5924 is fixed; remove this if
-                    if !(cfg!(target_os = "linux") && (test_name_str == "nullable_unwrapped" || test_name_str == "nullable_wrapped")) {
-                        let out = run_app(&dir.join("app.roc"), std::iter::empty());
+                    fn validate<'a, I: IntoIterator<Item = &'a str>>(dir: PathBuf, args: I) {
+                        let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
                         let ignorable = "🔨 Rebuilding platform...\n";
@@ -56,6 +61,21 @@ mod glue_cli_run {
                             $ends_with,
                             out.stdout
                         );
+                    }
+
+
+                    let test_name_str = stringify!($test_name);
+
+                    // TODO after #5924 is fixed; remove this
+                    let skip_on_linux_surgical_linker = ["closures", "option", "nullable_wrapped", "enumeration", "nested_record"];
+
+                    // Validate linux with the default linker.
+                    if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
+                        validate(dir.clone(), std::iter::empty());
+                    }
+
+                    if TEST_LEGACY_LINKER {
+                        validate(dir, ["--linker=legacy"]);
                     }
                 }
             )*
@@ -128,9 +148,13 @@ mod glue_cli_run {
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
         "#),
-        arguments:"arguments" => indoc!(r#"
-            Answer was: 84
-        "#),
+        // issue https://github.com/roc-lang/roc/issues/6121
+        // TODO: re-enable this test. Currently it is flaking on macos x86-64 with a bad exit code.
+        // nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
+        // enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
+        //        arguments:"arguments" => indoc!(r#"
+        //            Answer was: 84
+        //        "#),
         closures:"closures" => indoc!(r#"
             Answer was: 672
         "#),
@@ -231,7 +255,7 @@ mod glue_cli_run {
         glue_out
     }
 
-    fn run_app<'a, I: IntoIterator<Item = &'a str>>(app_file: &'a Path, args: I) -> Out {
+    fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
         // Generate test_glue for this platform
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues

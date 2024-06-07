@@ -1,6 +1,5 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
-use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::CrashTag;
 use roc_mono::ir::SingleEntryPoint;
@@ -57,7 +56,7 @@ pub fn helper(
     }
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_x86_64(),
+        target: roc_target::Target::LinuxX64,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -198,14 +197,9 @@ pub fn helper(
         mode: roc_gen_dev::AssemblyBackendMode::Test,
     };
 
-    let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(
-        &env,
-        &mut interns,
-        &mut layout_interner,
-        &target,
-        procedures,
-    );
+    let target = target_lexicon::Triple::host().into();
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let module_out = module_object
         .write()
@@ -215,14 +209,8 @@ pub fn helper(
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
-    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
-        let file_path = std::env::temp_dir().join("app.o");
-        println!("gen-test object file written to {}", file_path.display());
-        std::fs::copy(&app_o_file, file_path).unwrap();
-    }
-
     let (mut child, dylib_path) = link(
-        &target,
+        target,
         app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.

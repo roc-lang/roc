@@ -1,56 +1,53 @@
-interface Decode
-    exposes [
-        DecodeError,
-        DecodeResult,
-        Decoder,
-        Decoding,
-        DecoderFormatting,
-        decoder,
-        u8,
-        u16,
-        u32,
-        u64,
-        u128,
-        i8,
-        i16,
-        i32,
-        i64,
-        i128,
-        f32,
-        f64,
-        dec,
-        bool,
-        string,
-        list,
-        record,
-        tuple,
-        custom,
-        decodeWith,
-        fromBytesPartial,
-        fromBytes,
-        mapResult,
-    ]
-    imports [
-        List,
-        Result.{ Result },
-        Num.{
-            U8,
-            U16,
-            U32,
-            U64,
-            U128,
-            I8,
-            I16,
-            I32,
-            I64,
-            I128,
-            Nat,
-            F32,
-            F64,
-            Dec,
-        },
-        Bool.{ Bool },
-    ]
+module [
+    DecodeError,
+    DecodeResult,
+    Decoder,
+    Decoding,
+    DecoderFormatting,
+    decoder,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    f32,
+    f64,
+    dec,
+    bool,
+    string,
+    list,
+    record,
+    tuple,
+    custom,
+    decodeWith,
+    fromBytesPartial,
+    fromBytes,
+    mapResult,
+]
+
+import List
+import Result exposing [Result]
+import Num exposing [
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    F32,
+    F64,
+    Dec,
+]
+import Bool exposing [Bool]
 
 ## Error types when decoding a `List U8` of utf-8 bytes using a [Decoder]
 DecodeError : [TooShort]
@@ -60,7 +57,7 @@ DecodeError : [TooShort]
 ## This can be useful when creating a [custom](#custom) decoder or when
 ## using [fromBytesPartial](#fromBytesPartial). For example writing unit tests,
 ## such as;
-## ```
+## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
 ##     actual = Decode.fromBytesPartial input Json.json
@@ -104,7 +101,7 @@ DecoderFormatting implements
     ## `Skip` if the field is not a part of the decoded record.
     ##
     ## `finalizer` should produce the record value from the decoded `state`.
-    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
+    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state, fmt -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
     ## `tuple state stepElem finalizer` decodes a tuple element-by-element.
     ##
@@ -113,12 +110,12 @@ DecoderFormatting implements
     ## index passed to `stepElem` is 0-indexed.
     ##
     ## `finalizer` should produce the tuple value from the decoded `state`.
-    tuple : state, (state, Nat -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
+    tuple : state, (state, U64 -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
 ## Build a custom [Decoder] function. For example the implementation of
 ## `decodeBool` could be defined as follows;
 ##
-## ```
+## ```roc
 ## decodeBool = Decode.custom \bytes, @Json {} ->
 ##     when bytes is
 ##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.dropFirst bytes 5 }
@@ -133,7 +130,7 @@ decodeWith : List U8, Decoder val fmt, fmt -> DecodeResult val where fmt impleme
 decodeWith = \bytes, @Decoder decode, fmt -> decode bytes fmt
 
 ## Decode a `List U8` utf-8 bytes and return a [DecodeResult](#DecodeResult)
-## ```
+## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
 ##     actual = Decode.fromBytesPartial input Json.json
@@ -147,7 +144,7 @@ fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
 ## Decode a `List U8` utf-8 bytes and return a [Result] with no leftover bytes
 ## expected. If successful returns `Ok val`, however, if there are bytes
 ## remaining returns `Err Leftover (List U8)`.
-## ```
+## ```roc
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
 ##     actual = Decode.fromBytes input Json.json

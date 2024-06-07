@@ -11,12 +11,14 @@ extern crate roc_module;
 mod cli_run {
     use cli_utils::helpers::{
         extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
+    use regex::Regex;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -52,6 +54,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    #[allow(dead_code)]
     const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
@@ -198,7 +201,7 @@ mod cli_run {
                 vec.into_iter()
             };
 
-            let out = match cli_mode {
+            let cmd_output = match cli_mode {
                 CliMode::RocBuild => {
                     run_roc_on_failure_is_panic(
                         file,
@@ -294,39 +297,47 @@ mod cli_run {
                 }
             };
 
-            let mut actual = strip_colors(&out.stdout);
-
-            // e.g. "1 failed and 0 passed in 123 ms."
-            if let Some(split) = actual.rfind("passed in ") {
-                let (before_first_digit, _) = actual.split_at(split);
-                actual = format!("{before_first_digit}passed in <ignored for test> ms.");
-            }
-
             let self_path = file.display().to_string();
-            actual = actual.replace(&self_path, "<ignored for tests>");
 
-            if !actual.ends_with(expected_ending) {
+            let actual_cmd_stdout = ignore_test_timings(&strip_colors(&cmd_output.stdout))
+                .replace(&self_path, "<ignored for tests>");
+
+            if !actual_cmd_stdout.ends_with(expected_ending) {
                 panic!(
                     "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
-                    expected_ending, actual, out.stderr
+                    expected_ending, actual_cmd_stdout, cmd_output.stderr
                 );
             }
 
-            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
+            if !cmd_output.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
-                    out.status, out.stderr
+                    cmd_output.status, cmd_output.stderr
                 );
             }
         }
     }
 
+    fn ignore_test_timings(cmd_output: &str) -> String {
+        let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
+        let replacement = " in <ignored for test> ms.";
+        regex.replace_all(cmd_output, replacement).to_string()
+    }
+
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    fn test_roc_expect(dir_name: &str, roc_filename: &str) {
+    fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
         let path = file_path_from_root(dir_name, roc_filename);
-        let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        check_output_with_stdin(
+            &path,
+            &[],
+            flags,
+            &[],
+            &[],
+            expected_ending,
+            UseValgrind::Yes,
+            TestCliCommands::Test,
+        );
     }
 
     // when you don't need args, stdin or extra_env
@@ -545,16 +556,18 @@ mod cli_run {
         // on the building of the platform
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
                 This expectation failed:
 
-                19│      expect words == []
+                28│      expect words == []
                                 ^^^^^^^^^^^
 
                 When it failed, these variables had these values:
@@ -562,12 +575,12 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [<ignored for tests>:22] x = 42
-                [<ignored for tests>:23] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:24] "this is line 24" = "this is line 24"
-                [<ignored for tests>:13] x = "abc"
-                [<ignored for tests>:13] x = 10
-                [<ignored for tests>:13] x = (A (B C))
+                [<ignored for tests>:31] x = 42
+                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:35] "this is line 24" = "this is line 24"
+                [<ignored for tests>:21] x = "abc"
+                [<ignored for tests>:21] x = 10
+                [<ignored for tests>:21] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -576,35 +589,97 @@ mod cli_run {
         );
 
         test_roc_app(
-            "crates/cli_testing_examples/expects",
+            "crates/cli/tests/expects",
             "expects.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
                 This expectation failed:
 
-                 6│>  expect
-                 7│>      a = 1
-                 8│>      b = 2
-                 9│>
-                10│>      a == b
+                9│      expect a == 2
+                               ^^^^^^
 
                 When it failed, these variables had these values:
 
                 a : Num *
                 a = 1
 
-                b : Num *
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                10│      expect a == 3
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                14│>  expect
+                15│>      a = makeA
+                16│>      b = 2i64
+                17│>
+                18│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Int Signed64
+                a = 1
+
+                b : I64
                 b = 2
 
 
-
-                1 failed and 0 passed in <ignored for test> ms."#
+                1 failed and 0 passed in <ignored for test> ms.
+                "#
             ),
             UseValgrind::Yes,
             TestCliCommands::Test,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &[],
+            indoc!(
+                r#"
+                0 failed and 3 passed in <ignored for test> ms.
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn transitive_expects_verbose() {
+        test_roc_expect(
+            "crates/cli/tests/expects_transitive",
+            "main.roc",
+            &["--verbose"],
+            indoc!(
+                r#"
+                Compiled in <ignored for test> ms.
+
+                Direct.roc:
+                    0 failed and 2 passed in <ignored for test> ms.
+
+                Transitive.roc:
+                    0 failed and 1 passed in <ignored for test> ms.
+                "#
+            ),
         );
     }
 
@@ -629,7 +704,7 @@ mod cli_run {
     )]
     fn fibonacci() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "fibonacci.roc",
             "",
             UseValgrind::Yes,
@@ -641,34 +716,11 @@ mod cli_run {
         test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
     }
 
-    #[cfg_attr(windows, ignore)] // flaky error; issue #5024
-    #[serial(breakout)]
-    #[test]
-    fn breakout() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "breakoutBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
-    #[test]
-    #[serial(breakout)]
-    fn breakout_hello_gui() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "hello-guiBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
-            "crates/cli_testing_examples/algorithms",
+            "crates/cli/tests/algorithms",
             "quicksort.roc",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
@@ -703,7 +755,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args_check() {
-        let path = file_path_from_root("examples/cli", "argsBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -730,7 +782,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_countdown_check() {
-        let path = file_path_from_root("examples/cli", "countdown.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "countdown.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -739,7 +791,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_echo_check() {
-        let path = file_path_from_root("examples/cli", "echo.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "echo.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -748,7 +800,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_file_check() {
-        let path = file_path_from_root("examples/cli", "fileBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -757,7 +809,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_form_check() {
-        let path = file_path_from_root("examples/cli", "form.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -766,7 +818,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_http_get_check() {
-        let path = file_path_from_root("examples/cli", "http-get.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -823,26 +875,11 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
-    fn static_site_gen() {
-        test_roc_app(
-            "examples/static-site-gen",
-            "static-site.roc",
-            &[],
-            &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
-            &[],
-            "Processed 4 files with 3 successes and 0 errors\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "env.roc",
             &[],
             &[],
@@ -864,28 +901,16 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file.roc",
             &[],
             &[],
             &[],
-            indoc!(
-                r#"
-                This roc file can print it's own source code. The source is:
-
-                app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
-                    imports [
-                        pf.Stdout,
-                        "ingested-file.roc" as ownCode : Str,
-                    ]
-                    provides [main] to pf
-
-                main =
-                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
-
-                "#
-            ),
+            format!(
+                "\nThis roc file can print its own source code. The source is:\n\n{}\n",
+                include_str!("cli/ingested-file.roc")
+            )
+            .as_str(),
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -896,12 +921,27 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file-bytes.roc",
             &[],
             &[],
             &[],
-            "30461\n",
+            "27101\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes_no_ann() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "ingested-file-bytes-no-ann.roc",
+            &[],
+            &[],
+            &[],
+            "27101\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -912,9 +952,9 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser/examples",
-            "parse-movies-csv.roc",
-            "Parse success!\n",
+            "crates/cli/tests/cli",
+            "parser-movies-csv.roc",
+            "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n",
             UseValgrind::No,
         )
     }
@@ -924,17 +964,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
-            "examples/parser/examples",
-            "letter-counts.roc",
+            "crates/cli/tests/cli",
+            "parser-letter-counts.roc",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn parse_http() {
-        test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
     #[test]
@@ -957,32 +991,33 @@ mod cli_run {
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        #[allow(unused_imports)]
         use super::{TestCliCommands, UseValgrind};
         use cli_utils::helpers::cli_testing_dir;
 
+        #[allow(unused_imports)]
         use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
 
+        #[allow(unused_imports)]
         use std::{path::Path, sync::Once};
-
-        static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
         fn test_benchmark(
             roc_filename: &str,
             stdin: &[&str],
             expected_ending: &str,
-            use_valgrind: UseValgrind,
+            _use_valgrind: UseValgrind,
         ) {
             let file_name = cli_testing_dir("benchmarks").join(roc_filename);
 
             // TODO fix QuicksortApp and then remove this!
             match roc_filename {
-                "QuicksortApp.roc" => {
+                "quicksortApp.roc" => {
                     eprintln!(
                     "WARNING: skipping testing benchmark {roc_filename} because the test is broken right now!"
                 );
                     return;
                 }
-                "TestAStar.roc" => {
+                "testAStar.roc" => {
                     if cfg!(feature = "wasm32-cli-run") {
                         eprintln!(
                         "WARNING: skipping testing benchmark {roc_filename} because it currently does not work on wasm32 due to dictionaries."
@@ -994,14 +1029,17 @@ mod cli_run {
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            check_output_regular(&file_name, stdin, expected_ending, use_valgrind);
+            check_output_regular(&file_name, stdin, expected_ending, _use_valgrind);
 
             #[cfg(feature = "wasm32-cli-run")]
             check_output_wasm(&file_name, stdin, expected_ending);
 
             #[cfg(feature = "i386-cli-run")]
-            check_output_i386(&file_name, stdin, expected_ending, use_valgrind);
+            check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
         }
+
+        #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
+        static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
         #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
         fn check_output_regular(
@@ -1137,20 +1175,20 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("NQueens.roc", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("CFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
             test_benchmark(
-                "Deriv.roc",
+                "deriv.roc",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
@@ -1160,14 +1198,14 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("RBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
+            test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             test_benchmark(
-                "RBTreeInsert.roc",
+                "rBTreeInsert.roc",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
@@ -1179,25 +1217,25 @@ mod cli_run {
         #[test]
         fn rbtree_del() {
             test_benchmark(
-                "RBTreeDel.roc",
+                "rBTreeDel.roc",
                 &["420"],
-                &[],
                 "30\n",
-                true
+                UseValgrind::Yes,
             )
-        }*/
+        }
+        */
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("TestAStar.roc", &[], "True\n", UseValgrind::No)
+            test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
             test_benchmark(
-                "TestBase64.roc",
+                "testBase64.roc",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,
@@ -1207,19 +1245,19 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("Closure.roc", &[], "", UseValgrind::No)
+            test_benchmark("closure.roc", &[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("Issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark("issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
-                "QuicksortApp.roc",
+                "quicksortApp.roc",
                 &[],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,
@@ -1333,7 +1371,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
 
                 Something is off with the body of the main definition:
 
@@ -1363,13 +1401,36 @@ mod cli_run {
     }
 
     #[test]
+    fn known_type_error_with_long_path() {
+        check_compile_error(
+            &known_bad_file("UnusedImportButWithALongFileNameForTesting.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
+
+                Symbol is imported but not used.
+
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
     fn exposed_not_defined() {
         check_compile_error(
             &known_bad_file("ExposedNotDefined.roc"),
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
+                ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
 
                 bar is listed as exposed, but it isn't defined in this module.
 
@@ -1390,9 +1451,9 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
+                ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^
@@ -1413,7 +1474,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
+                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
 
                 I don't know how to generate the foobar function.
 

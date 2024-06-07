@@ -4,13 +4,15 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
-        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Module,
-        Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
+        IngestedFileImport, Module, ModuleImport, ModuleImportParams, Pattern, PatternAs,
+        RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
+        TypeHeader, ValueDef, WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
-        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
+        AppHeader, ExposedName, HostedHeader, ImportsEntry, KeywordItem, ModuleHeader, ModuleName,
+        ModuleParams, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
         ProvidesTo, To, TypedIdent,
     },
     ident::{BadIdent, UppercaseIdent},
@@ -154,7 +156,9 @@ fn fmt_comment(buf: &mut Buf, comment: &str) {
     }
 
     buf.push('#');
-    if !comment.starts_with(' ') {
+    // Add a space between the starting `#` and the rest of the comment,
+    // unless there already is a space or the comment is of the form `#### something`.
+    if !comment.starts_with(' ') && !comment.starts_with('#') {
         buf.spaces(1);
     }
     buf.push_str(comment.trim_end());
@@ -206,7 +210,7 @@ fn fmt_docs(buf: &mut Buf, docs: &str) {
 /// * Removing comments
 /// * Removing parens in Exprs
 ///
-/// Long term, we actuall want this transform to preserve comments (so we can assert they're maintained by formatting)
+/// Long term, we actually want this transform to preserve comments (so we can assert they're maintained by formatting)
 /// - but there are currently several bugs where they're _not_ preserved.
 /// TODO: ensure formatting retains comments
 pub trait RemoveSpaces<'a> {
@@ -280,23 +284,26 @@ impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
 impl<'a> RemoveSpaces<'a> for Module<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         let header = match &self.header {
-            Header::Interface(header) => Header::Interface(InterfaceHeader {
-                before_name: &[],
-                name: header.name.remove_spaces(arena),
+            Header::Module(header) => Header::Module(ModuleHeader {
+                after_keyword: &[],
+                params: header.params.remove_spaces(arena),
                 exposes: header.exposes.remove_spaces(arena),
-                imports: header.imports.remove_spaces(arena),
+                interface_imports: header.interface_imports.remove_spaces(arena),
             }),
             Header::App(header) => Header::App(AppHeader {
-                before_name: &[],
-                name: header.name.remove_spaces(arena),
-                packages: header.packages.remove_spaces(arena),
-                imports: header.imports.remove_spaces(arena),
+                before_provides: &[],
                 provides: header.provides.remove_spaces(arena),
+                before_packages: &[],
+                packages: header.packages.remove_spaces(arena),
+                old_imports: header.old_imports.remove_spaces(arena),
+                old_provides_to_new_package: header
+                    .old_provides_to_new_package
+                    .remove_spaces(arena),
             }),
             Header::Package(header) => Header::Package(PackageHeader {
-                before_name: &[],
-                name: header.name.remove_spaces(arena),
+                before_exposes: &[],
                 exposes: header.exposes.remove_spaces(arena),
+                before_packages: &[],
                 packages: header.packages.remove_spaces(arena),
             }),
             Header::Platform(header) => Header::Platform(PlatformHeader {
@@ -320,6 +327,16 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
         Module {
             comments: &[],
             header,
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ModuleParams<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ModuleParams {
+            params: self.params.remove_spaces(arena),
+            before_arrow: &[],
+            after_arrow: &[],
         }
     }
 }
@@ -403,6 +420,10 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
         PackageEntry {
             shorthand: self.shorthand,
             spaces_after_shorthand: &[],
+            platform_marker: match self.platform_marker {
+                Some(_) => Some(&[]),
+                None => None,
+            },
             package_name: self.package_name.remove_spaces(arena),
         }
     }
@@ -565,6 +586,79 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.remove_spaces(arena)),
                 preceding_comment: Region::zero(),
             },
+            ModuleImport(module_import) => ModuleImport(module_import.remove_spaces(arena)),
+            IngestedFileImport(ingested_file_import) => {
+                IngestedFileImport(ingested_file_import.remove_spaces(arena))
+            }
+            Stmt(loc_expr) => Stmt(arena.alloc(loc_expr.remove_spaces(arena))),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ModuleImport<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ModuleImport {
+            before_name: &[],
+            name: self.name.remove_spaces(arena),
+            params: self.params.remove_spaces(arena),
+            alias: self.alias.remove_spaces(arena),
+            exposed: self.exposed.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ModuleImportParams<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ModuleImportParams {
+            before: &[],
+            params: self.params.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for IngestedFileImport<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        IngestedFileImport {
+            before_path: &[],
+            path: self.path.remove_spaces(arena),
+            name: self.name.remove_spaces(arena),
+            annotation: self.annotation.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportedModuleName<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ImportedModuleName {
+            package: self.package.remove_spaces(arena),
+            name: self.name.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportAlias<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportAsKeyword {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportExposingKeyword {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for IngestedFileAnnotation<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        IngestedFileAnnotation {
+            before_colon: &[],
+            annotation: self.annotation.remove_spaces(arena),
         }
     }
 }
@@ -656,6 +750,9 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
             StrSegment::Unicode(t) => StrSegment::Unicode(t.remove_spaces(arena)),
             StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
             StrSegment::Interpolated(t) => StrSegment::Interpolated(t.remove_spaces(arena)),
+            StrSegment::DeprecatedInterpolated(t) => {
+                StrSegment::DeprecatedInterpolated(t.remove_spaces(arena))
+            }
         }
     }
 }
@@ -663,6 +760,7 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
 impl<'a> RemoveSpaces<'a> for Expr<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
+            Expr::EmptyDefsFinal => Expr::EmptyDefsFinal,
             Expr::Float(a) => Expr::Float(a),
             Expr::Num(a) => Expr::Num(a),
             Expr::NonBase10Int {
@@ -675,10 +773,10 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
-            Expr::IngestedFile(a, b) => Expr::IngestedFile(a, b),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
+            Expr::TaskAwaitBang(a) => Expr::TaskAwaitBang(arena.alloc(a.remove_spaces(arena))),
             Expr::List(a) => Expr::List(a.remove_spaces(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.remove_spaces(arena)),
@@ -750,6 +848,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
+            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
             Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
@@ -786,7 +885,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
 impl<'a> RemoveSpaces<'a> for Pattern<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Pattern::Identifier(a) => Pattern::Identifier(a),
+            Pattern::Identifier { ident } => Pattern::Identifier { ident },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(

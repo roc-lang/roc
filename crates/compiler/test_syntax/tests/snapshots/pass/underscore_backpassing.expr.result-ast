@@ -8,9 +8,9 @@ SpaceBefore(
         @23-32 ParensAround(
             Closure(
                 [
-                    @25-26 Identifier(
-                        "y",
-                    ),
+                    @25-26 Identifier {
+                        ident: "y",
+                    },
                 ],
                 @30-31 Var {
                     module_name: "",

@@ -21,9 +21,9 @@ Defs(
                         "Email",
                     ),
                     [
-                        @6-9 Identifier(
-                            "str",
-                        ),
+                        @6-9 Identifier {
+                            ident: "str",
+                        },
                     ],
                 ),
                 @12-36 Apply(

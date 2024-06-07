@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                },
                 @4-23 Apply(
                     @4-7 Var {
                         module_name: "",

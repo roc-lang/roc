@@ -1,5 +1,3 @@
-interface File
-    exposes [File]
-    imports []
+module [File]
 
 File : { name : Str, content : Str }

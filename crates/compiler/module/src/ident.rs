@@ -1,5 +1,8 @@
 pub use roc_ident::IdentStr;
-use std::fmt::{self, Debug};
+use std::{
+    fmt::{self, Debug},
+    path::{Path, PathBuf},
+};
 
 use crate::symbol::PQModuleName;
 
@@ -44,6 +47,19 @@ impl<'a> QualifiedModuleName<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleName(IdentStr);
+
+impl ModuleName {
+    /// Given the root module's path, infer this module's path based on its name.
+    pub fn filename(&self, root_filename: impl AsRef<Path>) -> PathBuf {
+        let mut answer = root_filename.as_ref().with_file_name("");
+
+        for part in self.split('.') {
+            answer = answer.join(part);
+        }
+
+        answer.with_extension("roc")
+    }
+}
 
 impl std::ops::Deref for ModuleName {
     type Target = str;
@@ -114,6 +130,7 @@ impl ModuleName {
     pub const DECODE: &'static str = "Decode";
     pub const HASH: &'static str = "Hash";
     pub const INSPECT: &'static str = "Inspect";
+    pub const TASK: &'static str = "Task";
     pub const JSON: &'static str = "TotallyNotJson";
 
     pub fn as_str(&self) -> &str {

@@ -143,6 +143,8 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
         layout_interner,
         layout_interner.get_repr(element_layout),
     );
+    // listGetUnsafe takes a U64, but we need to convert that to usize for index calculation.
+    let elem_index = builder.new_build_int_cast(elem_index, env.ptr_int(), "u64_to_usize");
     let ptr_type = elem_type.ptr_type(AddressSpace::default());
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
@@ -167,7 +169,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
     )
 }
 
-/// List.reserve : List elem, Nat -> List elem
+/// List.reserve : List elem, U64 -> List elem
 pub(crate) fn list_reserve<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -248,7 +250,7 @@ pub(crate) fn list_prepend<'a, 'ctx>(
     )
 }
 
-/// List.swap : List elem, Nat, Nat -> List elem
+/// List.swap : List elem, U64, U64 -> List elem
 pub(crate) fn list_swap<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -272,7 +274,7 @@ pub(crate) fn list_swap<'a, 'ctx>(
     )
 }
 
-/// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
+/// List.sublist : List elem, { start : U64, len : U64 } -> List elem
 pub(crate) fn list_sublist<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -297,7 +299,7 @@ pub(crate) fn list_sublist<'a, 'ctx>(
     )
 }
 
-/// List.dropAt : List elem, Nat -> List elem
+/// List.dropAt : List elem, U64 -> List elem
 pub(crate) fn list_drop_at<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -320,7 +322,7 @@ pub(crate) fn list_drop_at<'a, 'ctx>(
     )
 }
 
-/// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+/// List.replace_unsafe : List elem, U64, elem -> { list: List elem, value: elem }
 pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -376,7 +378,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     // the list has the same alignment as a usize / ptr. The element comes first in the struct if
     // its alignment is bigger than that of a list.
     let element_align = layout_interner.alignment_bytes(element_layout);
-    let element_first = element_align > env.target_info.ptr_width() as u32;
+    let element_first = element_align > env.target.ptr_width() as u32;
 
     let fields = if element_first {
         [element_layout, Layout::LIST_U8 /* any list works */]
@@ -423,8 +425,8 @@ fn bounds_check_comparison<'ctx>(
     builder.new_build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
-/// List.len : List * -> Nat
-pub(crate) fn list_len<'ctx>(
+/// List.len : List * -> usize (return value will be cast to U64 in user-facing API)
+pub(crate) fn list_len_usize<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -450,7 +452,7 @@ pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
 
 // Gets a pointer to just after the refcount for a list or seamless slice.
 // The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn list_refcount_ptr<'ctx>(
+pub(crate) fn list_allocation_ptr<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     wrapper_struct: StructValue<'ctx>,
 ) -> PointerValue<'ctx> {
@@ -459,7 +461,7 @@ pub(crate) fn list_refcount_ptr<'ctx>(
         &[wrapper_struct],
         &[],
         BitcodeReturns::Basic,
-        bitcode::LIST_REFCOUNT_PTR,
+        bitcode::LIST_ALLOCATION_PTR,
     )
     .into_pointer_value()
 }
@@ -864,7 +866,7 @@ pub(crate) fn decref<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
 ) {
-    let refcount_ptr = list_refcount_ptr(env, wrapper_struct);
+    let refcount_ptr = list_allocation_ptr(env, wrapper_struct);
 
     crate::llvm::refcounting::decref_pointer_check_null(env, refcount_ptr, alignment);
 }

@@ -17,9 +17,9 @@ Defs(
         value_defs: [
             Annotation(
                 @0-1 SpaceAfter(
-                    Identifier(
-                        "w",
-                    ),
+                    Identifier {
+                        ident: "w",
+                    },
                     [
                         LineComment(
                             "",

@@ -27,9 +27,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                },
                 @4-22 Str(
                     Line(
                         [
@@ -50,9 +50,9 @@ Defs(
                 ),
             ),
             Body(
-                @23-24 Identifier(
-                    "b",
-                ),
+                @23-24 Identifier {
+                    ident: "b",
+                },
                 @27-49 Str(
                     Block(
                         [
@@ -75,9 +75,9 @@ Defs(
                 ),
             ),
             Body(
-                @50-51 Identifier(
-                    "c",
-                ),
+                @50-51 Identifier {
+                    ident: "c",
+                },
                 @58-92 SpaceBefore(
                     Str(
                         Block(

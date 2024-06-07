@@ -11,11 +11,11 @@ BENCH_SUFFIX=$1
 
 cargo criterion -V
 cd crates/cli && cargo criterion --no-run && cd ../..
-mkdir -p bench-folder/crates/cli_testing_examples/benchmarks
+mkdir -p bench-folder/crates/cli/tests/benchmarks
 mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
 mkdir -p bench-folder/target/release/deps
-cp "crates/cli_testing_examples/benchmarks/"*".roc" bench-folder/crates/cli_testing_examples/benchmarks/
-cp -r crates/cli_testing_examples/benchmarks/platform bench-folder/crates/cli_testing_examples/benchmarks/
+cp "crates/cli/tests/benchmarks/"*".roc" bench-folder/crates/cli/tests/benchmarks/
+cp -r crates/cli/tests/benchmarks/platform bench-folder/crates/cli/tests/benchmarks/
 cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
 cp target/release/roc bench-folder/target/release
 

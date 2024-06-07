@@ -13,7 +13,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{GlueLayouts, HostExposedLambdaSets, LambdaSetId, Proc, ProcLayout, ProcsBase};
 use roc_mono::layout::{LayoutCache, STLayoutInterner};
-use roc_parse::ast::{CommentOrNewline, Defs, TypeAnnotation, ValueDef};
+use roc_parse::ast::{CommentOrNewline, Defs, TypeAnnotation};
 use roc_parse::header::{HeaderType, PackageName};
 use roc_region::all::{Loc, Region};
 use roc_solve::module::Solved;
@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct LoadedModule {
     pub module_id: ModuleId,
+    pub filename: PathBuf,
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -38,17 +39,29 @@ pub struct LoadedModule {
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
+    pub exposed_modules: Vec<ModuleId>,
     pub exposed_values: Vec<Symbol>,
     pub exposed_types_storage: ExposedTypesStorageSubs,
     pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub docs_by_module: Vec<(ModuleId, ModuleDocumentation)>,
+    pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
     pub typechecked: MutMap<ModuleId, CheckedModule>,
+
+    pub imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    pub exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
+    pub exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
 }
 
 impl LoadedModule {
+    /// Infer the filename for the given ModuleId, based on this root module's filename.
+    pub fn filename(&self, module_id: ModuleId) -> PathBuf {
+        let module_name = self.interns.module_name(module_id);
+
+        module_name.filename(&self.filename)
+    }
+
     pub fn total_problems(&self) -> usize {
         let mut total = 0;
 
@@ -83,26 +96,20 @@ pub(crate) struct ModuleHeader<'a> {
     pub(crate) module_id: ModuleId,
     pub(crate) module_path: PathBuf,
     pub(crate) is_root_module: bool,
-    pub(crate) exposed_ident_ids: IdentIds,
-    pub(crate) deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     pub(crate) packages: MutMap<&'a str, PackageName<'a>>,
-    pub(crate) imported_modules: MutMap<ModuleId, Region>,
-    pub(crate) package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
-    pub(crate) exposes: Vec<Symbol>,
-    pub(crate) exposed_imports: MutMap<Ident, (Symbol, Region)>,
     pub(crate) parse_state: roc_parse::state::State<'a>,
     pub(crate) header_type: HeaderType<'a>,
     pub(crate) header_comments: &'a [CommentOrNewline<'a>],
-    pub(crate) symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
+    pub(crate) header_imports: Option<roc_parse::header::ImportsKeywordItem<'a>>,
     pub(crate) module_timing: ModuleTiming,
-    pub(crate) defined_values: Vec<ValueDef<'a>>,
+    pub(crate) opt_shorthand: Option<&'a str>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ConstrainedModule {
     pub(crate) module: Module,
     pub(crate) declarations: Declarations,
-    pub(crate) imported_modules: MutMap<ModuleId, Region>,
+    pub(crate) available_modules: MutMap<ModuleId, Region>,
     pub(crate) constraints: Constraints,
     pub(crate) constraint: ConstraintSoa,
     pub(crate) ident_ids: IdentIds,
@@ -173,7 +180,7 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
-    pub toplevel_expects: ToplevelExpects,
+    pub toplevel_expects: MutMap<ModuleId, ToplevelExpects>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -190,13 +197,17 @@ pub struct ParsedModule<'a> {
     pub src: &'a str,
     pub module_timing: ModuleTiming,
     pub deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    pub imported_modules: MutMap<ModuleId, Region>,
     pub exposed_ident_ids: IdentIds,
-    pub exposed_imports: MutMap<Ident, (Symbol, Region)>,
     pub parsed_defs: Defs<'a>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     pub header_type: HeaderType<'a>,
     pub header_comments: &'a [CommentOrNewline<'a>],
+    pub available_modules: MutMap<ModuleId, Region>,
+    pub package_qualified_available_modules: MutSet<PackageQualified<'a, ModuleId>>,
+    pub packages: MutMap<&'a str, PackageName<'a>>,
+    pub initial_scope: MutMap<Ident, (Symbol, Region)>,
+    pub exposes: Vec<Symbol>,
+    pub opt_shorthand: Option<&'a str>,
 }
 
 #[derive(Debug)]

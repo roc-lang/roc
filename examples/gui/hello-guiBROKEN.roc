@@ -1,7 +1,5 @@
-app "hello-gui"
-    packages { pf: "platform/main.roc" }
-    imports [] # [pf.Action.{ Action }, pf.Elem.{ button, text, row, col }]
-    provides [render] to pf
+app # [pf.Action.{ Action }, pf.Elem.{ button, text, row, col }]
+    [render] { pf: platform "platform/main.roc" }
 
 render =
     rgba = \r, g, b, a -> { r: r / 255, g: g / 255, b: b / 255, a }

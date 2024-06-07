@@ -15,15 +15,15 @@ use indoc::indoc;
 
 use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
-use roc_std::{RocList, RocStr, U128};
+use roc_std::{RocList, RocStr, I128, U128};
 
 #[test]
 fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
-    let target_info = roc_target::TargetInfo::default_x86_64();
-    let interner = STLayoutInterner::with_capacity(4, target_info);
+    let target = roc_target::Target::LinuxX64;
+    let interner = STLayoutInterner::with_capacity(4, target);
 
     let t = &[Layout::U8] as &[_];
     let tt = [t, t];
@@ -39,14 +39,14 @@ fn width_and_alignment_u8_u8() {
 fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Maybe a : [Just a, Nothing]
 
                 x : Maybe I64
                 x = Nothing
 
                 x
-                "#
+                "
         ),
         1,
         (i64, u8),
@@ -59,14 +59,14 @@ fn applied_tag_nothing() {
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Maybe a : [Just a, Nothing]
 
                 y : Maybe I64
                 y = Just 0x4
 
                 y
-                "#
+                "
         ),
         (0x4, 0),
         (i64, u8)
@@ -78,7 +78,7 @@ fn applied_tag_just() {
 fn applied_tag_just_enum() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Fruit : [Orange, Apple, Banana]
                 Maybe a : [Just a, Nothing]
 
@@ -89,7 +89,7 @@ fn applied_tag_just_enum() {
                 y = Just orange
 
                 y
-                "#
+                "
         ),
         (2, 0),
         (u8, u8)
@@ -101,12 +101,12 @@ fn applied_tag_just_enum() {
 fn true_is_true() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                    bool : Bool
                    bool = Bool.true
 
                    bool
-                "#
+                "
         ),
         true,
         bool
@@ -118,12 +118,12 @@ fn true_is_true() {
 fn false_is_false() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                    bool : Bool
                    bool = Bool.false
 
                    bool
-                "#
+                "
         ),
         false,
         bool
@@ -135,7 +135,7 @@ fn false_is_false() {
 fn basic_enum() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Fruit : [Apple, Orange, Banana]
 
                 apple : Fruit
@@ -145,7 +145,7 @@ fn basic_enum() {
                 orange = Orange
 
                 apple == orange
-                "#
+                "
         ),
         false,
         bool
@@ -157,7 +157,7 @@ fn basic_enum() {
 fn even_odd() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 even = \n ->
                     when n is
                         0 -> Bool.true
@@ -171,7 +171,7 @@ fn even_odd() {
                         _ -> even (n - 1)
 
                 odd 5 && even 42
-                "#
+                "
         ),
         true,
         bool
@@ -183,9 +183,9 @@ fn even_odd() {
 fn gen_literal_true() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 if Bool.true then -1 else 1
-                "#
+                "
         ),
         -1,
         i64
@@ -197,9 +197,9 @@ fn gen_literal_true() {
 fn gen_if_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 if Bool.true then -1.0 else 1.0f64
-                "#
+                "
         ),
         -1.0,
         f64
@@ -210,14 +210,14 @@ fn gen_if_float() {
 fn when_on_nothing() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x : [Nothing, Just I64]
                 x = Nothing
 
                 when x is
                     Nothing -> 0x2
                     Just _ -> 0x1
-                "#
+                "
         ),
         2,
         i64
@@ -229,14 +229,14 @@ fn when_on_nothing() {
 fn when_on_just() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x : [Nothing, Just I64]
                 x = Just 41
 
                 when x is
                     Just v -> v + 0x1
                     Nothing -> 0x1
-                "#
+                "
         ),
         42,
         i64
@@ -248,14 +248,14 @@ fn when_on_just() {
 fn when_on_result() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x : Result I64 I64
                 x = Err 41
 
                 when x is
                     Err v ->  v + 1
                     Ok _ -> 1
-                "#
+                "
         ),
         42,
         i64
@@ -267,7 +267,7 @@ fn when_on_result() {
 fn when_on_these() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 These a b : [This a, That b, These a b]
 
                 x : These I64 I64
@@ -277,7 +277,7 @@ fn when_on_these() {
                     These a b -> a + b
                     That v -> v
                     This v -> v
-                "#
+                "
         ),
         5,
         i64
@@ -290,11 +290,11 @@ fn match_on_two_values() {
     // this will produce a Chain internally
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Pair 2 3 is
                     Pair 4 3 -> 9
                     Pair a b -> a + b
-                "#
+                "
         ),
         5,
         i64
@@ -306,12 +306,12 @@ fn match_on_two_values() {
 fn pair_with_underscore() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Pair 2 3 is
                     Pair 4 _ -> 1
                     Pair 3 _ -> 2
                     Pair a b -> a + b
-                "#
+                "
         ),
         5,
         i64
@@ -324,7 +324,7 @@ fn result_with_underscore() {
     // This test revealed an issue with hashing Test values
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : Result I64 I64
             x = Ok 2
 
@@ -332,7 +332,7 @@ fn result_with_underscore() {
                 Ok 3 -> 1
                 Ok _ -> 2
                 Err _ -> 3
-            "#
+            "
         ),
         2,
         i64
@@ -369,7 +369,7 @@ fn maybe_is_just_not_nested() {
 fn maybe_is_just_nested() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Maybe a : [Just a, Nothing]
 
                 isJust : Maybe a -> Bool
@@ -379,7 +379,7 @@ fn maybe_is_just_nested() {
                         Just _ -> Bool.true
 
                 isJust (Just 42)
-                "#
+                "
         ),
         true,
         bool
@@ -391,7 +391,7 @@ fn maybe_is_just_nested() {
 fn nested_pattern_match() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Maybe a : [Nothing, Just a]
 
                 x : Maybe (Maybe I64)
@@ -400,7 +400,7 @@ fn nested_pattern_match() {
                 when x is
                     Just (Just v) -> v + 0x1
                     _ -> 0x1
-                "#
+                "
         ),
         42,
         i64
@@ -428,11 +428,11 @@ fn if_guard_vanilla() {
 fn when_on_single_value_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when Identity 0 is
                 Identity 0 -> 6
                 Identity s -> s
-            "#
+            "
         ),
         6,
         i64
@@ -444,7 +444,7 @@ fn when_on_single_value_tag() {
 fn if_guard_multiple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f = \n ->
                 when Identity n 0 is
                         Identity x _ if x == 0 -> x + 0
@@ -453,7 +453,7 @@ fn if_guard_multiple() {
                         Identity x _ -> x - x
 
             { a: f 0, b: f 1, c: f 2, d: f 4 }
-                "#
+                "
         ),
         [0, 1, 2, 0],
         [i64; 4]
@@ -465,13 +465,13 @@ fn if_guard_multiple() {
 fn if_guard_constructor_switch() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when Identity 32 0 is
                     Identity 41 _ -> 0
                     Identity s 0 if s == 32 -> 3
                     # Identity s 0 -> s
                     Identity z _ -> z
-                "#
+                "
         ),
         3,
         i64
@@ -509,12 +509,12 @@ fn if_guard_constructor_switch() {
 fn if_guard_constructor_chain() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when Identity 43 0 is
                     Identity 42 _ if 3 == 3 -> 43
                     # Identity 42 _ -> 1
                     Identity z _ -> z
-                "#
+                "
         ),
         43,
         i64
@@ -526,14 +526,14 @@ fn if_guard_constructor_chain() {
 fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     when 2 is
                         2 if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
-                "#
+                "
         ),
         42,
         i64
@@ -545,14 +545,14 @@ fn if_guard_pattern_false() {
 fn if_guard_switch() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     when 2 is
                         2 | 3 if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
-                "#
+                "
         ),
         42,
         i64
@@ -564,14 +564,14 @@ fn if_guard_switch() {
 fn if_guard_pattern_true() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     when 2 is
                         2 if Bool.true -> 42
                         _ -> 0
 
                 wrapper {}
-                "#
+                "
         ),
         42,
         i64
@@ -583,14 +583,14 @@ fn if_guard_pattern_true() {
 fn if_guard_exhaustiveness() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     when 2 is
                         _ if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
-                "#
+                "
         ),
         42,
         i64
@@ -602,7 +602,7 @@ fn if_guard_exhaustiveness() {
 fn when_on_enum() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Fruit : [Apple, Orange, Banana]
 
                 apple : Fruit
@@ -612,7 +612,7 @@ fn when_on_enum() {
                     Apple -> 1
                     Banana -> 2
                     Orange -> 3
-                "#
+                "
         ),
         1,
         i64
@@ -624,14 +624,14 @@ fn when_on_enum() {
 fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Unit : [Unit]
 
                 f : Unit -> I64
                 f = \Unit -> 42
 
                 f Unit
-                "#
+                "
         ),
         42,
         i64
@@ -639,7 +639,7 @@ fn pattern_matching_unit() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Unit : [Unit]
 
                 x : Unit
@@ -647,7 +647,7 @@ fn pattern_matching_unit() {
 
                 when x is
                     Unit -> 42
-                "#
+                "
         ),
         42,
         i64
@@ -655,12 +655,12 @@ fn pattern_matching_unit() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 f : {} -> I64
                 f = \{} -> 42
 
                 f {}
-                "#
+                "
         ),
         42,
         i64
@@ -668,10 +668,10 @@ fn pattern_matching_unit() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when {} is
                     {} -> 42
-                "#
+                "
         ),
         42,
         i64
@@ -683,12 +683,12 @@ fn pattern_matching_unit() {
 fn one_element_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x : [Pair I64]
                 x = Pair 2
 
                 x
-                "#
+                "
         ),
         2,
         i64
@@ -721,14 +721,14 @@ fn nested_tag_union() {
 fn unit_type() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Unit : [Unit]
 
                 v : Unit
                 v = Unit
 
                 v
-                "#
+                "
         ),
         (),
         ()
@@ -740,12 +740,12 @@ fn unit_type() {
 fn join_point_if() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x =
                     if Bool.true then 1 else 2
 
                 x
-                "#
+                "
         ),
         1,
         i64
@@ -757,7 +757,7 @@ fn join_point_if() {
 fn join_point_when() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             wrapper = \{} ->
                 x : [Red, White, Blue]
                 x = Blue
@@ -771,7 +771,7 @@ fn join_point_when() {
                 y
 
             wrapper {}
-            "#
+            "
         ),
         3.1,
         f64
@@ -783,7 +783,7 @@ fn join_point_when() {
 fn join_point_with_cond_expr() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     y =
                         when 1 + 2 is
@@ -794,7 +794,7 @@ fn join_point_with_cond_expr() {
                     y
 
                 wrapper {}
-            "#
+            "
         ),
         3,
         i64
@@ -802,7 +802,7 @@ fn join_point_with_cond_expr() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             y =
                 if 1 + 2 > 0 then
                     3
@@ -810,7 +810,7 @@ fn join_point_with_cond_expr() {
                     0
 
             y
-            "#
+            "
         ),
         3,
         i64
@@ -1135,12 +1135,12 @@ fn applied_tag_function_pair() {
 fn tag_must_be_its_own_type() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             z : [A, B, C]
             z = Z
 
             z
-            "#
+            "
         ),
         1,
         i64
@@ -1171,12 +1171,12 @@ fn recursive_tag_union_into_flat_tag_union() {
 fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             b = \{} -> Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
             f (b {}) (b {})
-            "#
+            "
         ),
         18,
         u8
@@ -1391,7 +1391,7 @@ fn issue_2445() {
 fn issue_2458() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Foo a : [Blah (Bar a), Nothing {}]
             Bar a : Foo a
 
@@ -1401,7 +1401,7 @@ fn issue_2458() {
             when v is
                 Blah (Blah (Nothing {})) -> 15
                 _ -> 25
-            "#
+            "
         ),
         15,
         u8
@@ -1471,11 +1471,11 @@ fn issue_1162() {
 fn polymorphic_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : [Y U8]
             x = Y 3
             x
-            "#
+            "
         ),
         3, // Y is a newtype, it gets unwrapped
         u8
@@ -1487,11 +1487,11 @@ fn polymorphic_tag() {
 fn issue_2725_alias_polymorphic_lambda() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             wrap = \value -> Tag value
             wrapIt = wrap
             wrapIt 42
-            "#
+            "
         ),
         42, // Tag is a newtype, it gets unwrapped
         i64
@@ -1717,7 +1717,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 fn issue_3560_nested_tag_constructor_is_newtype() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f : _ -> u8
             f = \t ->
                 when t is
@@ -1725,7 +1725,7 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
                     Wrapper (AlternatePayload it) -> it
 
             {a: f (Wrapper (Payload 15u8)), b: f(Wrapper (AlternatePayload 31u8))}
-            "#
+            "
         ),
         (15, 31),
         (u8, u8)
@@ -1737,7 +1737,7 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
 fn issue_3560_nested_tag_constructor_is_record_newtype() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f : _ -> u8
             f = \t ->
                 when t is
@@ -1745,7 +1745,7 @@ fn issue_3560_nested_tag_constructor_is_record_newtype() {
                     {wrapper: (AlternatePayload it)} -> it
 
             {a: f {wrapper: (Payload 15u8)}, b: f {wrapper: (AlternatePayload 31u8)}}
-            "#
+            "
         ),
         (15, 31),
         (u8, u8)
@@ -1779,7 +1779,24 @@ fn alignment_i128() {
                 x
                 #"
         ),
-        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
+        // NOTE: roc_std::I128 is always aligned to 16, unlike rust's i128
+        ((I128::from(42), true), 1),
+        ((I128, bool), u8)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn alignment_u128() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One U128 Bool, Empty]
+                x = One 42 (1 == 1)
+                x
+                #"
+        ),
+        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's i128
         ((U128::from(42), true), 1),
         ((U128, bool), u8)
     );
@@ -1791,7 +1808,7 @@ fn alignment_i128() {
 fn error_type_in_tag_union_payload() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f : ([] -> Bool) -> Bool
             f = \fun ->
               if Bool.true then
@@ -1800,7 +1817,7 @@ fn error_type_in_tag_union_payload() {
                 Bool.false
 
             f (\x -> x)
-            "#
+            "
         ),
         0,
         u8,
@@ -1864,7 +1881,7 @@ fn issue_3653_recursion_pointer_in_naked_opaque_localized() {
 fn issue_2165_recursive_tag_destructure() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             SomeTag : [ Ctor { rec : List SomeTag } ]
 
             x : SomeTag
@@ -1872,7 +1889,7 @@ fn issue_2165_recursive_tag_destructure() {
 
             when x is
               Ctor { rec } -> Num.toStr (List.len rec)
-            "#
+            "
         ),
         RocStr::from("0"),
         RocStr
@@ -2183,7 +2200,7 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
-                r###"
+                r#"
                 app "test" provides [main] to "./platform"
 
                 Concept : [
@@ -2197,7 +2214,7 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
                 main =
                     when Dict.single bottom 0 is
                         _ -> Bool.true
-                "###
+                "#
             ),
             true,
             bool
@@ -2210,7 +2227,7 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
 fn nullable_wrapped_eq_issue_5434() {
     assert_evals_to!(
         indoc!(
-            r###"
+            r#"
             app "test" provides [main] to "./platform"
 
             Value : [
@@ -2229,7 +2246,7 @@ fn nullable_wrapped_eq_issue_5434() {
                     Bool.true
                 else
                     Bool.false
-            "###
+            "#
         ),
         false,
         bool
@@ -2241,7 +2258,7 @@ fn nullable_wrapped_eq_issue_5434() {
 fn recursive_tag_id_in_allocation_basic() {
     assert_evals_to!(
         indoc!(
-            r###"
+            r#"
             app "test" provides [main] to "./platform"
 
             Value : [
@@ -2270,7 +2287,7 @@ fn recursive_tag_id_in_allocation_basic() {
                     G _ -> "G"
                     H _ -> "H"
                     I _ -> "I"
-            "###
+            "#
         ),
         RocStr::from("H"),
         RocStr
@@ -2282,7 +2299,7 @@ fn recursive_tag_id_in_allocation_basic() {
 fn recursive_tag_id_in_allocation_eq() {
     assert_evals_to!(
         indoc!(
-            r###"
+            r#"
             app "test" provides [main] to "./platform"
 
             Value : [
@@ -2304,7 +2321,7 @@ fn recursive_tag_id_in_allocation_eq() {
             y = H 42
 
             main = (x == x) && (x != y) && (y == y)
-            "###
+            "#
         ),
         true,
         bool

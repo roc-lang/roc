@@ -15,8 +15,7 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
-    UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableEq, TypeError, UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
@@ -413,41 +412,17 @@ fn underivable_hint<'b>(
                 ])),
             ])))
         }
-        NotDerivableContext::Encode(reason) => match reason {
-            NotDerivableEncode::Nat => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Encoding a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" is not supported. Consider using a fixed-sized unsigned integer, like a "),
-                    alloc.type_str("U64"),
-                    alloc.reflow(" instead."),
-                ])))
-            }
-        },
-        NotDerivableContext::Decode(reason) => match reason {
-            NotDerivableDecode::Nat => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Decoding to a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" is not supported. Consider decoding to a fixed-sized unsigned integer, like "),
-                    alloc.type_str("U64"),
-                    alloc.reflow(", then converting to a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" if needed."),
-                ])))
-            }
-            NotDerivableDecode::OptionalRecordField(field) => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
-                    alloc.record_field(field),
-                    alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
-                    alloc.reflow("but are not a concept that extends to runtime!"),
-                    alloc.hardline(),
-                    alloc.reflow("Maybe you wanted to use a "),
-                    alloc.symbol_unqualified(Symbol::RESULT_RESULT),
-                    alloc.reflow("?"),
-                ])))
-            }
+        NotDerivableContext::DecodeOptionalRecordField(field) => {
+            Some(alloc.note("").append(alloc.concat([
+                alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
+                alloc.record_field(field),
+                alloc.reflow(". Default value record fields are polymorphic over records that may or may not contain them at compile time, "),
+                alloc.reflow("but are not a concept that extends to runtime!"),
+                alloc.hardline(),
+                alloc.reflow("Maybe you wanted to use a "),
+                alloc.symbol_unqualified(Symbol::RESULT_RESULT),
+                alloc.reflow("?"),
+            ])))
         },
         NotDerivableContext::Eq(reason) => match reason {
             NotDerivableEq::FloatingPoint => {
@@ -711,9 +686,9 @@ fn to_expr_report<'b>(
             let thing = match annotation_source {
                 TypedIfBranch {
                     index,
-                    num_branches,
+                    num_branches: 2,
                     ..
-                } if num_branches == 2 => alloc.concat([
+                } => alloc.concat([
                     alloc.keyword(if index == HumanIndex::FIRST {
                         "then"
                     } else {
@@ -3024,14 +2999,14 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
                 }
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
@@ -3044,7 +3019,7 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -3052,7 +3027,7 @@ fn to_diff<'b>(
 
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -4385,7 +4360,7 @@ fn type_problem_to_pretty<'b>(
         (FieldTypo(typo, possibilities), _) => {
             let suggestions = suggest::sort(typo.as_str(), possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let typo_str = format!("{typo}");
@@ -4437,7 +4412,7 @@ fn type_problem_to_pretty<'b>(
             let typo_str = format!("{}", typo.as_ident_str());
             let suggestions = suggest::sort(&typo_str, possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let nearest_str = format!("{nearest}");

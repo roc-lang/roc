@@ -23,9 +23,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
+                @0-1 Identifier {
+                    ident: "f",
+                },
                 @4-73 Where(
                     @4-10 Function(
                         [
@@ -77,9 +77,9 @@ Defs(
                 ),
             ),
             Annotation(
-                @75-76 Identifier(
-                    "f",
-                ),
+                @75-76 Identifier {
+                    ident: "f",
+                },
                 @79-154 Where(
                     @79-85 SpaceAfter(
                         Function(

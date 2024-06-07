@@ -1,1 +1,1 @@
-package "rtfeldman/blah" exposes [] packages {}
+package [] {}

@@ -1,7 +1,4 @@
-app "libhello"
-    packages { pf: "platform/main.roc" }
-    imports []
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
 main : U64 -> Str
 main = \num ->
@@ -10,4 +7,4 @@ main = \num ->
     else
         str = Num.toStr num
 
-        "The number was \(str), OH YEAH!!! 🤘🤘"
+        "The number was $(str), OH YEAH!!! 🤘🤘"

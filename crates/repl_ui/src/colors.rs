@@ -6,7 +6,6 @@ const STYLE_CODES: StyleCodes = if cfg!(target_family = "wasm") {
     ANSI_STYLE_CODES
 };
 
-pub const BLUE: &str = STYLE_CODES.blue;
-pub const PINK: &str = STYLE_CODES.magenta;
 pub const GREEN: &str = STYLE_CODES.green;
+pub const CYAN: &str = STYLE_CODES.cyan;
 pub const END_COL: &str = STYLE_CODES.reset;

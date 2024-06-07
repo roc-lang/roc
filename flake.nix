@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=886c9aee6ca9324e127f9c2c4e6f68c2641c8256";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=fd281bd6b7d3e32ddfa399853946f782553163b5";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -19,7 +19,7 @@
       inputs.flake-utils.follows = "flake-utils";
     };
 
-    # for non flake backwards compatibility 
+    # for non flake backwards compatibility
     flake-compat = {
       url = "github:edolstra/flake-compat";
       flake = false;
@@ -27,11 +27,16 @@
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
-    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
-    in flake-utils.lib.eachSystem supportedSystems (system:
+    let
+      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+
+      templates = import ./nix/templates { };
+    in
+    { inherit templates; } //
+    flake-utils.lib.eachSystem supportedSystems (system:
       let
         overlays = [ (import rust-overlay) ]
-          ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
@@ -40,7 +45,7 @@
         inherit (compile-deps) zigPkg llvmPkgs llvmVersion
           llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
-        # DevInputs are not necessary to build roc as a user 
+        # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
           lib.optionals stdenv.isLinux [
             valgrind # used in cli tests, see cli/tests/cli_run.rs
@@ -55,7 +60,7 @@
             xorg.libxcb
           ];
 
-        # DevInputs are not necessary to build roc as a user 
+        # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
           lib.optionals stdenv.isDarwin
             (with pkgs.darwin.apple_sdk.frameworks; [
@@ -79,6 +84,7 @@
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
           rocBuild.rust-shell
+          perl # ./ci/update_basic_cli_url.sh
         ]);
 
         sharedDevInputs = (with pkgs; [
@@ -92,6 +98,7 @@
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
           zls # zig language server
+          # cargo-udeps # to find unused dependencies
         ]);
 
         aliases = ''
@@ -105,7 +112,7 @@
 
         devShell = pkgs.mkShell {
           buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
-            ++ (if system == "x86_64-linux" then
+          ++ (if system == "x86_64-linux" then
             [ pkgs.nixgl.nixVulkanIntel ]
           else
             [ ]);
@@ -121,7 +128,7 @@
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-                ++ linuxDevInputs);
+              ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
@@ -144,6 +151,13 @@
           # only the CLI crate = executable provided in nightly releases
           cli = rocBuild.roc-cli;
           lang-server = rocBuild.roc-lang-server;
+        };
+
+        apps = {
+          default = {
+            type = "app";
+            program = "${rocBuild.roc-cli}/bin/roc";
+          };
         };
       });
 }

@@ -73,18 +73,18 @@ When(
                 @60-72 SpaceBefore(
                     List(
                         [
-                            @61-62 Identifier(
-                                "a",
-                            ),
-                            @64-65 Identifier(
-                                "b",
-                            ),
-                            @67-68 Identifier(
-                                "c",
-                            ),
-                            @70-71 Identifier(
-                                "d",
-                            ),
+                            @61-62 Identifier {
+                                ident: "a",
+                            },
+                            @64-65 Identifier {
+                                ident: "b",
+                            },
+                            @67-68 Identifier {
+                                ident: "c",
+                            },
+                            @70-71 Identifier {
+                                ident: "d",
+                            },
                         ],
                     ),
                     [
@@ -102,12 +102,12 @@ When(
                 @81-91 SpaceBefore(
                     List(
                         [
-                            @82-83 Identifier(
-                                "a",
-                            ),
-                            @85-86 Identifier(
-                                "b",
-                            ),
+                            @82-83 Identifier {
+                                ident: "a",
+                            },
+                            @85-86 Identifier {
+                                ident: "b",
+                            },
                             @88-90 ListRest(
                                 None,
                             ),
@@ -131,12 +131,12 @@ When(
                             @101-103 ListRest(
                                 None,
                             ),
-                            @105-106 Identifier(
-                                "c",
-                            ),
-                            @108-109 Identifier(
-                                "d",
-                            ),
+                            @105-106 Identifier {
+                                ident: "c",
+                            },
+                            @108-109 Identifier {
+                                ident: "d",
+                            },
                         ],
                     ),
                     [
@@ -170,9 +170,9 @@ When(
                             ),
                             @131-134 List(
                                 [
-                                    @132-133 Identifier(
-                                        "a",
-                                    ),
+                                    @132-133 Identifier {
+                                        ident: "a",
+                                    },
                                 ],
                             ),
                         ],
@@ -207,9 +207,9 @@ When(
                                     @156-158 List(
                                         [],
                                     ),
-                                    @160-161 Identifier(
-                                        "x",
-                                    ),
+                                    @160-161 Identifier {
+                                        ident: "x",
+                                    },
                                 ],
                             ),
                         ],

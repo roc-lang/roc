@@ -41,8 +41,12 @@ impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
         // Theory: a pattern should only be multiline when it contains a comment
         match self {
-            Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
-                debug_assert!(!spaces.is_empty());
+            Pattern::SpaceBefore(pattern, spaces) | Pattern::SpaceAfter(pattern, spaces) => {
+                debug_assert!(
+                    !spaces.is_empty(),
+                    "spaces is empty in pattern {:#?}",
+                    pattern
+                );
 
                 spaces.iter().any(|s| s.is_comment())
             }
@@ -60,7 +64,7 @@ impl<'a> Formattable for Pattern<'a> {
                 }
             },
 
-            Pattern::Identifier(_)
+            Pattern::Identifier { .. }
             | Pattern::Tag(_)
             | Pattern::OpaqueRef(_)
             | Pattern::Apply(_, _)
@@ -84,9 +88,9 @@ impl<'a> Formattable for Pattern<'a> {
         use self::Pattern::*;
 
         match self {
-            Identifier(string) => {
+            Identifier { ident: string } => {
                 buf.indent(indent);
-                buf.push_str(string)
+                buf.push_str(string);
             }
             Tag(name) | OpaqueRef(name) => {
                 buf.indent(indent);

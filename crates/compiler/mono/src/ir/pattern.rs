@@ -185,6 +185,7 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                     List {
                         element_layout,
                         elements,
+                        opt_rest,
                         ..
                     } => {
                         let stack = elements
@@ -193,7 +194,11 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                             .rev()
                             .collect();
                         *self = Stack(stack);
-                        self.next()
+
+                        match opt_rest {
+                            Some((_, Some(rest_sym))) => (*rest_sym, layout).into(),
+                            _ => self.next(),
+                        }
                     }
                     IntLiteral(_, _)
                     | FloatLiteral(_, _)
@@ -236,11 +241,16 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                             List {
                                 element_layout,
                                 elements,
+                                opt_rest,
                                 ..
                             } => {
                                 stack.extend(
                                     elements.iter().map(|p| (Pat(p), *element_layout)).rev(),
                                 );
+
+                                if let Some((_, Some(rest_sym))) = opt_rest {
+                                    return (*rest_sym, layout).into();
+                                }
                             }
                             IntLiteral(_, _)
                             | FloatLiteral(_, _)
@@ -385,12 +395,8 @@ fn from_can_pattern_help<'a>(
             use roc_exhaustive::Union;
 
             let res_variant = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 crate::layout::union_sorted_tags(&mut layout_env, *whole_var).map_err(Into::into)
             };
 
@@ -880,12 +886,8 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_elems = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 crate::layout::sort_tuple_elems(&mut layout_env, *whole_var)
                     .map_err(RuntimeError::from)?
             };
@@ -936,12 +938,8 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_fields = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 crate::layout::sort_record_fields(&mut layout_env, *whole_var)
                     .map_err(RuntimeError::from)?
             };
@@ -1409,22 +1407,20 @@ pub(crate) fn build_list_index_probe<'a>(
     list_sym: Symbol,
     list_index: &ListIndex,
 ) -> (Symbol, impl DoubleEndedIterator<Item = Store<'a>>) {
-    let usize_layout = Layout::usize(env.target_info);
-
     let list_index = list_index.0;
     let index_sym = env.unique_symbol();
 
     let (opt_len_store, opt_offset_store, index_store) = if list_index >= 0 {
         let index_expr = Expr::Literal(Literal::Int((list_index as i128).to_ne_bytes()));
 
-        let index_store = (index_sym, usize_layout, index_expr);
+        let index_store = (index_sym, Layout::U64, index_expr);
 
         (None, None, index_store)
     } else {
         let len_sym = env.unique_symbol();
         let len_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::ListLen,
+                op: LowLevel::ListLenU64,
                 update_mode: env.next_update_mode_id(),
             },
             arguments: env.arena.alloc([list_sym]),
@@ -1442,9 +1438,9 @@ pub(crate) fn build_list_index_probe<'a>(
             arguments: env.arena.alloc([len_sym, offset_sym]),
         });
 
-        let len_store = (len_sym, usize_layout, len_expr);
-        let offset_store = (offset_sym, usize_layout, offset_expr);
-        let index_store = (index_sym, usize_layout, index_expr);
+        let len_store = (len_sym, Layout::U64, len_expr);
+        let offset_store = (offset_sym, Layout::U64, offset_expr);
+        let index_store = (index_sym, Layout::U64, index_expr);
 
         (Some(len_store), Some(offset_store), index_store)
     };
@@ -1544,7 +1540,13 @@ fn store_list_pattern<'a>(
         }
     }
 
-    stmt = store_list_rest(env, list_sym, list_arity, list_layout, opt_rest, stmt);
+    stmt = match store_list_rest(env, list_sym, list_arity, list_layout, opt_rest, stmt) {
+        StorePattern::Productive(new) => {
+            is_productive = true;
+            new
+        }
+        StorePattern::NotProductive(new) => new,
+    };
 
     if is_productive {
         StorePattern::Productive(stmt)
@@ -1560,19 +1562,22 @@ fn store_list_rest<'a>(
     list_layout: InLayout<'a>,
     opt_rest: &Option<(usize, Option<Symbol>)>,
     mut stmt: Stmt<'a>,
-) -> Stmt<'a> {
+) -> StorePattern<'a> {
+    let mut is_productive = false;
+
     if let Some((index, Some(rest_sym))) = opt_rest {
-        let usize_layout = Layout::usize(env.target_info);
+        is_productive = true;
 
         let total_dropped = list_arity.min_len();
-
         let total_dropped_sym = env.unique_symbol();
         let total_dropped_expr = Expr::Literal(Literal::Int((total_dropped as u128).to_ne_bytes()));
 
         let list_len_sym = env.unique_symbol();
         let list_len_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::ListLen,
+                // Must use ListLenU64 here because we're using it with List.sublist,
+                // which takes U64s for start and len.
+                op: LowLevel::ListLenU64,
                 update_mode: env.next_update_mode_id(),
             },
             arguments: env.arena.alloc([list_sym]),
@@ -1598,17 +1603,22 @@ fn store_list_rest<'a>(
             arguments: env.arena.alloc([list_sym, start_sym, rest_len_sym]),
         });
         let needed_stores = [
-            (total_dropped_sym, total_dropped_expr, usize_layout),
-            (list_len_sym, list_len_expr, usize_layout),
-            (rest_len_sym, rest_len_expr, usize_layout),
-            (start_sym, start_expr, usize_layout),
+            (total_dropped_sym, total_dropped_expr, Layout::U64),
+            (list_len_sym, list_len_expr, Layout::U64),
+            (rest_len_sym, rest_len_expr, Layout::U64),
+            (start_sym, start_expr, Layout::U64),
             (*rest_sym, rest_expr, list_layout),
         ];
         for (sym, expr, lay) in needed_stores.into_iter().rev() {
             stmt = Stmt::Let(sym, expr, lay, env.arena.alloc(stmt));
         }
     }
-    stmt
+
+    if is_productive {
+        StorePattern::Productive(stmt)
+    } else {
+        StorePattern::NotProductive(stmt)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

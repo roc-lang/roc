@@ -1,6 +1,8 @@
 interface MissingIngestedFile
     exposes [unit]
-    imports ["ThisFileIsMissing" as data: List U8]
+    imports []
+
+import "ThisFileIsMissing" as data : List U8
 
 Unit : [Unit]
 

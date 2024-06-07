@@ -1,148 +1,378 @@
-## Roc strings are sequences of text values. This module includes functions for combining strings,
-## as well as breaking them up into smaller units—most commonly [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
-## (referred to in this module's documentation as "graphemes" rather than "characters" for clarity;
-## "characters" can mean very different things in different languages).
+## Strings represent text. For example, `"Hi!"` is a string.
 ##
-## This module focuses on graphemes (as opposed to, say, Unicode code points or LATIN-1 bytes)
-## because graphemes avoid common classes of bugs. Breaking strings up using code points often
-## leads to bugs around things like emoji, where multiple code points combine to form to a
-## single rendered glyph. Graphemes avoid these bugs by treating multi-code-point things like
-## emojis as indivisible units.
+## This guide starts at a high level and works down to the in-memory representation of strings and their [performance characteristics](#performance). For reasons that will be explained later in this guide, some string operations are in the `Str` module while others (notably [capitalization](#capitalization), [code points](#code-points), [graphemes](#graphemes), and sorting) are in separate packages. There's also a list of recommendations for [when to use code points, graphemes, and UTF-8](#when-to-use).
 ##
-## Because graphemes can have variable length (there's no upper limit on how many code points one
-## grapheme can represent), it takes linear time to count the number of graphemes in a string,
-## and also linear time to find an individual grapheme within a string by its position (or "index")
-## among the string's other graphemes. The only way to get constant-time access to these is in a way
-## that can result in bugs if the string contains multi-code-point things like emojis, which is why
-## this module does not offer those.
+## ## Syntax
 ##
+## The most common way to represent strings is using quotation marks:
 ##
-## ## Working with Unicode strings in Roc
-##
-## Unicode can represent text values which span multiple languages, symbols, and emoji.
-## Here are some valid Roc strings:
 ## ```
-## "Roc!"
-## "鹏"
-## "🕊"
+## "Hello, World!"
 ## ```
-## Every Unicode string is a sequence of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster).
-## An extended grapheme cluster represents what a person reading a string might
-## call a "character" - like "A" or "ö" or "👩‍👩‍👦‍👦".
-## Because the term "character" means different things in different areas of
-## programming, and "extended grapheme cluster" is a mouthful, in Roc we use the
-## term "grapheme" as a shorthand for the more precise "extended grapheme cluster."
 ##
-## You can get the number of graphemes in a string by calling `Str.countGraphemes` on it:
+## Using this syntax, the whole string must go on one line. You can write multiline strings using triple quotes:
+##
 ## ```
-## Str.countGraphemes "Roc!"
-## Str.countGraphemes "折り紙"
-## Str.countGraphemes "🕊"
+## text =
+##     """
+##     In memory, this string will not have any spaces
+##     at its start. That's because the first line
+##     starts at the same indentation level as the
+##     opening quotation mark. Actually, none of these
+##     lines will be indented.
+##
+##         However, this line will be indented!
+##     """
 ## ```
-## > The `countGraphemes` function walks through the entire string to get its answer,
-## > so if you want to check whether a string is empty, you'll get much better performance
-## > by calling `Str.isEmpty myStr` instead of `Str.countGraphemes myStr == 0`.
 ##
-## ### Escape sequences
+## In triple-quoted strings, both the opening and closing `"""` must be at the same indentation level. Lines in the string begin at that indentation level; the spaces that indent the multiline string itself are not considered content.
 ##
-## If you put a `\` in a Roc string literal, it begins an *escape sequence*.
-## An escape sequence is a convenient way to insert certain strings into other strings.
-## For example, suppose you write this Roc string:
+## ### Interpolation
+##
+## *String interpolation* is syntax for inserting a string into another string.
+##
 ## ```
-## "I took the one less traveled by,\nAnd that has made all the difference."
+## name = "Sam"
+##
+## "Hi, my name is $(name)!"
 ## ```
-## The `"\n"` in the middle will insert a line break into this string. There are
-## other ways of getting a line break in there, but `"\n"` is the most common.
 ##
-## Another way you could insert a newlines is by writing `\u(0A)` instead of `\n`.
-## That would result in the same string, because the `\u` escape sequence inserts
-## [Unicode code points](https://unicode.org/glossary/#code_point) directly into
-## the string. The Unicode code point 10 is a newline, and 10 is `0A` in hexadecimal.
-## `\u` escape sequences are always followed by a hexadecimal number inside `(` and `)`
-## like this.
+## This will evaluate to the string `"Hi, my name is Sam!"`
 ##
-## As another example, `"R\u(6F)c"` is the same string as `"Roc"`, because
-## `"\u(6F)"` corresponds to the Unicode code point for lowercase `o`. If you
-## want to [spice things up a bit](https://en.wikipedia.org/wiki/Metal_umlaut),
-## you can write `"R\u(F6)c"` as an alternative way to get the string `"Röc"\.
+## You can put any expression you like inside the parentheses, as long as it's all on one line:
 ##
-## Roc strings also support these escape sequences:
-##
-## * `\\` - an actual backslash (writing a single `\` always begins an escape sequence!)
-## * `\"` - an actual quotation mark (writing a `"` without a `\` ends the string)
-## * `\r` - [carriage return](https://en.wikipedia.org/wiki/Carriage_Return)
-## * `\t` - [horizontal tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
-## * `\v` - [vertical tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
-##
-## You can also use escape sequences to insert named strings into other strings, like so:
 ## ```
-## name = "Lee"
-## city = "Roctown"
-## greeting = "Hello there, \(name)! Welcome to \(city)."
+## colors = ["red", "green", "blue"]
+##
+## "The colors are $(colors |> Str.joinWith ", ")!"
 ## ```
-## Here, `greeting` will become the string `"Hello there, Lee! Welcome to Roctown."`.
-## This is known as [string interpolation](https://en.wikipedia.org/wiki/String_interpolation),
-## and you can use it as many times as you like inside a string. The name
-## between the parentheses must refer to a `Str` value that is currently in
-## scope, and it must be a name - it can't be an arbitrary expression like a function call.
-interface Str
-    exposes [
-        Utf8Problem,
-        Utf8ByteProblem,
-        concat,
-        isEmpty,
-        joinWith,
-        split,
-        repeat,
-        countGraphemes,
-        countUtf8Bytes,
-        startsWithScalar,
-        toUtf8,
-        fromUtf8,
-        fromUtf8Range,
-        startsWith,
-        endsWith,
-        trim,
-        trimStart,
-        trimEnd,
-        toDec,
-        toF64,
-        toF32,
-        toNat,
-        toU128,
-        toI128,
-        toU64,
-        toI64,
-        toU32,
-        toI32,
-        toU16,
-        toI16,
-        toU8,
-        toI8,
-        toScalars,
-        replaceEach,
-        replaceFirst,
-        replaceLast,
-        splitFirst,
-        splitLast,
-        walkUtf8,
-        walkUtf8WithIndex,
-        reserve,
-        releaseExcessCapacity,
-        appendScalar,
-        walkScalars,
-        walkScalarsUntil,
-        withCapacity,
-        withPrefix,
-        graphemes,
-        contains,
-    ]
-    imports [
-        Bool.{ Bool, Eq },
-        Result.{ Result },
-        List,
-        Num.{ Nat, Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
-    ]
+##
+## Interpolation can be used in multiline strings, but the part inside the parentheses must still be on one line.
+##
+## ### Escapes
+##
+## There are a few special escape sequences in strings:
+##
+## * `\n` becomes a [newline](https://en.wikipedia.org/wiki/Newline)
+## * `\r` becomes a [carriage return](https://en.wikipedia.org/wiki/Carriage_return#Computers)
+## * `\t` becomes a [tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
+## * `\"` becomes a normal `"` (this lets you write `"` inside a single-line string)
+## * `\\` becomes a normal `\` (this lets you write `\` without it being treated as an escape)
+## * `\$` becomes a normal `$` (this lets you write `$` followed by `(` without it being treated as [interpolation](#interpolation))
+##
+## These work in both single-line and multiline strings. We'll also discuss another escape later, for inserting [Unicode code points](#code-points) into a string.
+##
+## ### Single quote syntax
+##
+## Try putting `'👩'` into `roc repl`. You should see this:
+##
+## ```
+## » '👩'
+##
+## 128105 : Int *
+## ```
+##
+## The single-quote `'` syntax lets you represent a Unicode code point (discussed in the next section) in source code, in a way that renders as the actual text it represents rather than as a number literal. This lets you see what it looks like in the source code rather than looking at a number.
+##
+## At runtime, the single-quoted value will be treated the same as an ordinary number literal—in other words, `'👩'` is syntax sugar for writing `128105`. You can verify this in `roc repl`:
+##
+## ```
+## » '👩' == 128105
+##
+## Bool.true : Bool
+## ```
+##
+## Double quotes (`"`), on the other hand, are not type-compatible with integers—not only because strings can be empty (`""` is valid, but `''` is not) but also because there may be more than one code point involved in any given string!
+##
+## There are also some special escape sequences in single-quote strings:
+##
+## * `\n` becomes a [newline](https://en.wikipedia.org/wiki/Newline)
+## * `\r` becomes a [carriage return](https://en.wikipedia.org/wiki/Carriage_return#Computers)
+## * `\t` becomes a [tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
+## * `\'` becomes a normal `'` (this lets you write `'` inside a single-quote string)
+## * `\\` becomes a normal `\` (this lets you write `\` without it being treated as an escape)
+##
+## Most often this single-quote syntax is used when writing parsers; most Roc programs never use it at all.
+##
+## ## Unicode
+##
+## Roc strings represent text using [Unicode](https://unicode.org) This guide will provide only a basic overview of Unicode (the [Unicode glossary](http://www.unicode.org/glossary/) has over 500 entries in it), but it will include the most relevant differences between these concepts:
+##
+## * Code points
+## * Graphemes
+## * UTF-8
+##
+## It will also explain why some operations are included in Roc's builtin [Str](https://www.roc-lang.org/builtins/Str)
+## module, and why others are in separate packages like [roc-lang/unicode](https://github.com/roc-lang/unicode).
+##
+## ### Graphemes
+##
+## Let's start with the following string:
+##
+## `"👩‍👩‍👦‍👦"`
+##
+## Some might call this a "character." After all, in a monospace font, it looks to be about the same width as the letter "A" or the punctuation mark "!"—both of which are commonly called "characters." Unfortunately, the term "character" in programming has changed meanings many times across the years and across programming languages, and today it's become a major source of confusion.
+##
+## Unicode uses the less ambiguous term [*grapheme*](https://www.unicode.org/glossary/#grapheme), which it defines as a "user-perceived character" (as opposed to one of the several historical ways the term "character" has been used in programming) or, alternatively, "A minimally distinctive unit of writing in the context of a particular writing system."
+##
+## By Unicode's definition, each of the following is an individual grapheme:
+##
+## * `a`
+## * `鹏`
+## * `👩‍👩‍👦‍👦`
+##
+## Note that although *grapheme* is less ambiguous than *character*, its definition is still open to interpretation. To address this, Unicode has formally specified [text segmentation rules](https://www.unicode.org/reports/tr29/) which define grapheme boundaries in precise technical terms. We won't get into those rules here, but since they can change with new Unicode releases, functions for working with graphemes are in the [roc-lang/unicode](https://github.com/roc-lang/unicode) package rather than in the builtin [`Str`](https://www.roc-lang.org/builtins/Str) module. This allows them to be updated without being blocked on a new release of the Roc language.
+##
+## ### Code Points
+##
+## Every Unicode text value can be broken down into [Unicode code points](http://www.unicode.org/glossary/#code_point), which are integers between `0` and `285_212_438` that describe components of the text. In memory, every Roc string is a sequence of these integers stored in a format called UTF-8, which will be discussed [later](#utf8).
+##
+## The string `"👩‍👩‍👦‍👦"` happens to be made up of these code points:
+##
+## ```
+## [128105, 8205, 128105, 8205, 128102, 8205, 128102]
+## ```
+##
+## From this we can see that:
+##
+## -   One grapheme can be made up of multiple code points. In fact, there is no upper limit on how many code points can go into a single grapheme! (Some programming languages use the term "character" to refer to individual code points; this can be confusing for graphemes like 👩‍👩‍👦‍👦 because it visually looks like "one character" but no single code point can represent it.)
+## -   Sometimes code points repeat within an individual grapheme. Here, 128105 repeats twice, as does 128102, and there's an 8205 in between each of the other code points.
+##
+## ### Combining Code Points
+##
+## The reason every other code point in 👩‍👩‍👦‍👦 is 8205 is that code point 8205 joins together other code points. This emoji, known as ["Family: Woman, Woman, Boy, Boy"](https://emojipedia.org/family-woman-woman-boy-boy), is made by combining several emoji using [zero-width joiners](https://emojipedia.org/zero-width-joiner)—which are represented by code point 8205 in memory, and which have no visual repesentation on their own.
+##
+## Here are those code points again, this time with comments about what they represent:
+##
+## ```
+## [128105] # "👩"
+## [8205]   # (joiner)
+## [128105] # "👩"
+## [8205]   # (joiner)
+## [128102] # "👦"
+## [8205]   # (joiner)
+## [128102] # "👦"
+## ```
+##
+## One way to read this is "woman emoji joined to woman emoji joined to boy emoji joined to boy emoji." Without the joins, it would be:
+##
+## ```
+## "👩👩👦👦"
+## ```
+##
+## With the joins, however, it is instead:
+##
+## ```
+## "👩‍👩‍👦‍👦"
+## ```
+##
+## Even though 👩‍👩‍👦‍👦 is visually smaller when rendered, it takes up almost twice as much memory as 👩👩👦👦 does! That's because it has all the same code points, plus the zero-width joiners in between them.
+##
+## ### String equality and normalization
+##
+## Besides emoji like 👩‍👩‍👦‍👦, another classic example of multiple code points being combined to render as one grapheme has to do with accent marks. Try putting these two strings into `roc repl`:
+##
+## ```
+## "caf\u(e9)"
+## "cafe\u(301)"
+## ```
+##
+## The `\u(e9)` syntax is a way of inserting code points into string literals. In this case, it's the same as inserting the hexadecimal number `0xe9` as a code point onto the end of the string `"caf"`. Since Unicode code point `0xe9` happens to be `é`, the string `"caf\u(e9)"` ends up being identical in memory to the string `"café"`.
+##
+## We can verify this too:
+##
+## ```
+## » "caf\u(e9)" == "café"
+##
+## Bool.true : Bool
+## ```
+##
+## As it turns out, `"cafe\u(301)"` is another way to represent the same word. The Unicode code point 0x301 represents a ["combining acute accent"](https://unicodeplus.com/U+0301)—which essentially means that it will add an accent mark to whatever came before it. In this case, since `"cafe\u(301)"` has an `e` before the `"\u(301)"`, that `e` ends up with an accent mark on it and becomes `é`.
+##
+## Although these two strings get rendered identically to one another, they are different in memory because their code points are different! We can also confirm this in `roc repl`:
+##
+## ```
+## » "caf\u(e9)" == "cafe\u(301)"
+##
+## Bool.false : Bool
+## ```
+##
+## As you can imagine, this can be a source of bugs. Not only are they considered unequal, they also hash differently, meaning `"caf\u(e9)"` and `"cafe\u(301)"` can both be separate entries in the same [`Set`](https://www.roc-lang.org/builtins/Set).
+##
+##  One way to prevent problems like these is to perform [Unicode normalization](https://www.unicode.org/reports/tr15/), a process which converts conceptually equivalent strings (like `"caf\u(e9)"` and `"cafe\u(301)"`) into one canonical in-memory representation. This makes equality checks on them pass, among other benefits.
+##
+## It would be technically possible for Roc to perform string normalization automatically on every equality check. Unfortunately, although some programs might want to treat `"caf\u(e9)"` and `"cafe\u(301)"` as equivalent, for other programs it might actually be important to be able to tell them apart. If these equality checks always passed, then there would be no way to tell them apart!
+##
+## As such, normalization must be performed explicitly when desired. Like graphemes, Unicode normalization rules can change with new releases of Unicode. As such, these functions are in separate packages instead of builtins (normalization is planned to be in [roc-lang/unicode](https://github.com/roc-lang/unicode) in the future, but it has not yet been implemented) so that updates to these functions based on new Unicode releases can happen without waiting on new releases of the Roc language.
+##
+## ### Capitalization
+##
+## We've already seen two examples of Unicode definitions that can change with new Unicode releases: graphemes and normalization. Another is capitalization; these rules can change with new Unicode releases (most often in the form of additions of new languages, but breaking changes to capitalization rules for existing languages are also possible), and so they are not included in builtin [`Str`](https://www.roc-lang.org/builtins/Str).
+##
+## This might seem particularly surprising, since capitalization functions are commonly included in standard libraries. However, it turns out that "capitalizing an arbitrary string" is impossible to do correctly without additional information.
+##
+## For example, what is the capitalized version of this string?
+##
+## ```
+## "i"
+## ```
+##
+## * In English, the correct answer is `"I"`.
+## * In Turkish, the correct answer is `"İ"`.
+##
+## Similarly, the correct lowercased version of the string `"I"` is `"i"` in English and `"ı"` in Turkish.
+##
+## Turkish is not the only language to use this [dotless i](https://en.wikipedia.org/wiki/Dotless_I), and it's an example of how a function which capitalizes strings cannot give correct answers without the additional information of which language's capitalization rules should be used.
+##
+## Many languages defer to the operating system's [localization](https://en.wikipedia.org/wiki/Internationalization_and_localization) settings for this information. In that design, calling a program's capitalization function with an input string of `"i"` might give an answer of `"I"` on one machine and `"İ"` on a different machine, even though it was the same program running on both systems. Naturally, this can cause bugs—but more than that, writing tests to prevent bugs like this usually requires extra complexity compared to writing ordinary tests.
+##
+## In general, Roc programs should give the same answers for the same inputs even when run on different machines. There are exceptions to this (e.g. a program running out of system resources on one machine, while being able to make more progress on a machine that has more resources), but operating system's language localization is not among them.
+##
+## For these reasons, capitalization functions are not in [`Str`](https://www.roc-lang.org/builtins/Str). There is a planned `roc-lang` package to handle use cases like capitalization and sorting—sorting can also vary by language as well as by things like country—but implementation work has not yet started on this package.
+##
+## ### UTF-8
+##
+## Earlier, we discussed how Unicode code points can be described as [`U32`](https://www.roc-lang.org/builtins/Num#U32) integers. However, many common code points are very low integers, and can fit into a `U8` instead of needing an entire `U32` to represent them in memory. UTF-8 takes advantage of this, using a variable-width encoding to represent code points in 1-4 bytes, which saves a lot of memory in the typical case—especially compared to [UTF-16](https://en.wikipedia.org/wiki/UTF-16), which always uses at least 2 bytes to represent each code point, or [UTF-32](https://en.wikipedia.org/wiki/UTF-32), which always uses the maximum 4 bytes.
+##
+## This guide won't cover all the details of UTF-8, but the basic idea is this:
+##
+## - If a code point is 127 or lower, UTF-8 stores it in 1 byte.
+## - If it's between 128 and 2047, UTF-8 stores it in 2 bytes.
+## - If it's between 2048 and 65535, UTF-8 stores it in 3 bytes.
+## - If it's higher than that, UTF-8 stores it in 4 bytes.
+##
+## The specific [UTF-8 encoding](https://en.wikipedia.org/wiki/UTF-8#Encoding) of these bytes involves using 1 to 5 bits of each byte for metadata about multi-byte sequences.
+##
+## A valuable feature of UTF-8 is that it is backwards-compatible with the [ASCII](https://en.wikipedia.org/wiki/ASCII) encoding that was widely used for many years. ASCII existed before Unicode did, and only used the integers 0 to 127 to represent its equivalent of code points. The Unicode code points 0 to 127 represent the same semantic information as ASCII, (e.g. the number 64 represents the letter "A" in both ASCII and in Unicode), and since UTF-8 represents code points 0 to 127 using one byte, all valid ASCII strings can be successfully parsed as UTF-8 without any need for conversion.
+##
+## Since many textual computer encodings—including [CSV](https://en.wikipedia.org/wiki/CSV), [XML](https://en.wikipedia.org/wiki/XML), and [JSON](https://en.wikipedia.org/wiki/JSON)—do not use any code points above 127 for their delimiters, it is often possible to write parsers for these formats using only `Str` functions which present UTF-8 as raw `U8` sequences, such as [`Str.walkUtf8`](https://www.roc-lang.org/builtins/Str#walkUtf8) and [`Str.toUtf8`](https://www.roc-lang.org/builtins/Str#toUtf8). In the typical case where they do not to need to parse out individual Unicode code points, they can get everything they need from `Str` UTF-8 functions without needing to depend on other packages.
+##
+## ### When to use code points, graphemes, and UTF-8
+##
+## Deciding when to use code points, graphemes, and UTF-8 can be nonobvious to say the least!
+##
+## The way Roc organizes the `Str` module and supporting packages is designed to help answer this question. Every situation is different, but the following rules of thumb are typical:
+##
+## * Most often, using `Str` values along with helper functions like [`split`](https://www.roc-lang.org/builtins/Str#split), [`joinWith`](https://www.roc-lang.org/builtins/Str#joinWith), and so on, is the best option.
+## * If you are specifically implementing a parser, working in UTF-8 bytes is usually the best option. So functions like [`walkUtf8`](https://www.roc-lang.org/builtins/Str#walkUtf8), [toUtf8](https://www.roc-lang.org/builtins/Str#toUtf8), and so on. (Note that single-quote literals produce number literals, so ASCII-range literals like `'a'` gives an integer literal that works with a UTF-8 `U8`.)
+## * If you are implementing a Unicode library like [roc-lang/unicode](https://github.com/roc-lang/unicode), working in terms of code points will be unavoidable. Aside from basic readability considerations like `\u(...)` in string literals, if you have the option to avoid working in terms of code points, it is almost always correct to avoid them.
+## * If it seems like a good idea to split a string into "characters" (graphemes), you should definitely stop and reconsider whether this is really the best design. Almost always, doing this is some combination of more error-prone or slower (usually both) than doing something else that does not require taking graphemes into consideration.
+##
+## For this reason (among others), grapheme functions live in [roc-lang/unicode](https://github.com/roc-lang/unicode) rather than in [`Str`](https://www.roc-lang.org/builtins/Str). They are more niche than they seem, so they should not be reached for all the time!
+##
+## ## Performance
+##
+## This section deals with how Roc strings are represented in memory, and their performance characteristics.
+##
+## A normal heap-allocated roc `Str` is represented on the stack as:
+## - A "capacity" unsigned integer, which respresents how many bytes are allocated on the heap to hold the string's contents.
+## - A "length" unsigned integer, which rerepresents how many of the "capacity" bytes are actually in use. (A `Str` can have more bytes allocated on the heap than are actually in use.)
+## - The memory address of the first byte in the string's actual contents.
+##
+## Each of these three fields is the same size: 64 bits on a 64-bit system, and 32 bits on a 32-bit system. The actual contents of the string are stored in one contiguous sequence of bytes, encoded as UTF-8, often on the heap but sometimes elsewhere—more on this later. Empty strings do not have heap allocations, so an empty `Str` on a 64-bit system still takes up 24 bytes on the stack (due to its three 64-bit fields).
+##
+## ### Reference counting and opportunistic mutation
+##
+## Like lists, dictionaries, and sets, Roc strings are automatically reference-counted and can benefit from opportunistic in-place mutation. The reference count is stored on the heap immediately before the first byte of the string's contents, and it has the same size as a memory address. This means it can count so high that it's impossible to write a Roc program which overflows a reference count, because having that many simultaneous references (each of which is a memory address) would have exhausted the operating system's address space first.
+##
+## When the string's reference count is 1, functions like [`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) and [`Str.replaceEach`](https://www.roc-lang.org/builtins/Str#replaceEach) mutate the string in-place rather than allocating a new string. This preserves semantic immutability because it is unobservable in terms of the operation's output; if the reference count is 1, it means that memory would have otherwise been deallocated immediately anyway, and it's more efficient to reuse it instead of deallocating it and then immediately making a new allocation.
+##
+##  The contents of statically-known strings (today that means string literals) are stored in the readonly section of the binary, so they do not need heap allocations or reference counts. They are not eligible for in-place mutation, since mutating the readonly section of the binary would cause an operating system [access violation](https://en.wikipedia.org/wiki/Segmentation_fault).
+##
+## ### Small String Optimization
+##
+## Roc uses a "small string optimization" when representing certain strings in memory.
+##
+## If you have a sufficiently long string, then on a 64-bit system it will be represented on the stack using 24 bytes, and on a 32-bit system it will take 12 bytes—plus however many bytes are in the string itself—on the heap. However, if there is a string shorter than either of these stack sizes (so, a string of up to 23 bytes on a 64-bit system, and up to 11 bytes on a 32-bit system), then that string will be stored entirely on the stack rather than having a separate heap allocation at all.
+##
+## This can be much more memory-efficient! However, `List` does not have this optimization (it has some runtime cost, and in the case of `List` it's not anticipated to come up nearly as often), which means when converting a small string to `List U8` it can result in a heap allocation.
+##
+## Note that this optimization is based entirely on how many UTF-8 bytes the string takes up in memory. It doesn't matter how many [graphemes](#graphemes), [code points](#code-points) or anything else it has; the only factor that determines whether a particular string is eligible for the small string optimization is the number of UTF-8 bytes it takes up in memory!
+##
+## ### Seamless Slices
+##
+## Try putting this into `roc repl`:
+##
+## ```
+## » "foo/bar/baz" |> Str.split "/"
+##
+## ["foo", "bar", "baz"] : List Str
+## ```
+##
+## All of these strings are small enough that the [small string optimization](#small) will apply, so none of them will be allocated on the heap.
+##
+## Now let's suppose they were long enough that this optimization no longer applied:
+##
+## ```
+## » "a much, much, much, much/longer/string compared to the last one!" |> Str.split "/"
+##
+## ["a much, much, much, much", "longer", "string compared to the last one!"] : List Str
+## ```
+##
+## Here, the only strings small enough for the small string optimization are `"/"` and `"longer"`. They will be allocated on the stack.
+##
+## The first and last strings in the returned list `"a much, much, much, much"` and `"string compared to the last one!"` will not be allocated on the heap either. Instead, they will be *seamless slices*, which means they will share memory with the original input string.
+##
+## * `"a much, much, much, much"` will share the first 24 bytes of the original string.
+## * `"string compared to the last one!"` will share the last 32 bytes of the original string.
+##
+## All of these strings are semantically immutable, so sharing these bytes is an implementation detail that should only affect performance. By design, there is no way at either compile time or runtime to tell whether a string is a seamless slice. This allows the optimization's behavior to change in the future without affecting Roc programs' semantic behavior.
+##
+## Seamless slices create additional references to the original string, which make it ineligible for opportunistic mutation (along with the slices themselves; slices are never eligible for mutation), and which also make it take longer before the original string can be deallocated. A case where this might be noticeable in terms of performance would be:
+## 1. A function takes a very large string as an argument and returns a much smaller slice into that string.
+## 2. The smaller slice is used for a long time in the program, whereas the much larger original string stops being used.
+## 3. In this situation, it might have been better for total program memory usage (although not necessarily overall performance) if the original large string could have been deallocated sooner, even at the expense of having to copy the smaller string into a new allocation instead of reusing the bytes with a seamless slice.
+##
+## If a situation like this comes up, a slice can be turned into a separate string by using [`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) to concatenate the slice onto an empty string (or one created with [`Str.withCapacity`](https://www.roc-lang.org/builtins/Str#withCapacity)).
+##
+## Currently, the only way to get seamless slices of strings is by calling certain `Str` functions which return them. In general, `Str` functions which accept a string and return a subset of that string tend to do this. [`Str.trim`](https://www.roc-lang.org/builtins/Str#trim) is another example of a function which returns a seamless slice.
+module [
+    Utf8Problem,
+    Utf8ByteProblem,
+    concat,
+    isEmpty,
+    joinWith,
+    split,
+    repeat,
+    countUtf8Bytes,
+    toUtf8,
+    fromUtf8,
+    startsWith,
+    endsWith,
+    trim,
+    trimStart,
+    trimEnd,
+    toDec,
+    toF64,
+    toF32,
+    toU128,
+    toI128,
+    toU64,
+    toI64,
+    toU32,
+    toI32,
+    toU16,
+    toI16,
+    toU8,
+    toI8,
+    replaceEach,
+    replaceFirst,
+    replaceLast,
+    splitFirst,
+    splitLast,
+    walkUtf8,
+    walkUtf8WithIndex,
+    reserve,
+    releaseExcessCapacity,
+    withCapacity,
+    withPrefix,
+    contains,
+]
+
+import Bool exposing [Bool]
+import Result exposing [Result]
+import List
+import Num exposing [Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec]
 
 Utf8ByteProblem : [
     InvalidStartByte,
@@ -153,17 +383,17 @@ Utf8ByteProblem : [
     EncodesSurrogateHalf,
 ]
 
-Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
+Utf8Problem : { byteIndex : U64, problem : Utf8ByteProblem }
 
 ## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
-## ```
+## ```roc
 ## expect Str.isEmpty "hi!" == Bool.false
 ## expect Str.isEmpty "" == Bool.true
 ## ```
 isEmpty : Str -> Bool
 
 ## Concatenates two strings together.
-## ```
+## ```roc
 ## expect Str.concat "ab" "cd" == "abcd"
 ## expect Str.concat "hello" "" == "hello"
 ## expect Str.concat "" "" == ""
@@ -175,7 +405,7 @@ concat : Str, Str -> Str
 ## This is a performance optimization tool that's like calling [Str.reserve] on an empty string.
 ## It's useful when you plan to build up a string incrementally, for example by calling [Str.concat] on it:
 ##
-## ```
+## ```roc
 ## greeting = "Hello and welcome to Roc"
 ## subject = "Awesome Programmer"
 ##
@@ -194,7 +424,7 @@ concat : Str, Str -> Str
 ## the cost of using more memory than is necessary.
 ##
 ## For more details on how the performance optimization works, see [Str.reserve].
-withCapacity : Nat -> Str
+withCapacity : U64 -> Str
 
 ## Increase a string's capacity by at least the given number of additional bytes.
 ##
@@ -202,7 +432,7 @@ withCapacity : Nat -> Str
 ## allocating extra capacity up front, which can prevent the need for reallocations and copies.
 ## Consider the following example which does not use [Str.reserve]:
 ##
-## ```
+## ```roc
 ## greeting = "Hello and welcome to Roc"
 ## subject = "Awesome Programmer"
 ##
@@ -224,7 +454,7 @@ withCapacity : Nat -> Str
 ##
 ## Here's a modified example which uses [Str.reserve] to eliminate the need for all that reallocation, copying, and deallocation.
 ##
-## ```
+## ```roc
 ## helloWorld =
 ##     greeting
 ##     |> Str.reserve 21
@@ -252,11 +482,11 @@ withCapacity : Nat -> Str
 ## reallocations but will also waste a lot of memory!
 ##
 ## If you plan to use [Str.reserve] on an empty string, it's generally better to use [Str.withCapacity] instead.
-reserve : Str, Nat -> Str
+reserve : Str, U64 -> Str
 
 ## Combines a [List] of strings into a single string, with a separator
 ## string in between each.
-## ```
+## ```roc
 ## expect Str.joinWith ["one", "two", "three"] ", " == "one, two, three"
 ## expect Str.joinWith ["1", "2", "3", "4"] "." == "1.2.3.4"
 ## ```
@@ -265,102 +495,29 @@ joinWith : List Str, Str -> Str
 ## Split a string around a separator.
 ##
 ## Passing `""` for the separator is not useful;
-## it returns the original string wrapped in a [List]. To split a string
-## into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103), use `Str.graphemes`
-## ```
+## it returns the original string wrapped in a [List].
+## ```roc
 ## expect Str.split "1,2,3" "," == ["1","2","3"]
 ## expect Str.split "1,2,3" "" == ["1,2,3"]
 ## ```
 split : Str, Str -> List Str
 
 ## Repeats a string the given number of times.
-## ```
+## ```roc
 ## expect Str.repeat "z" 3 == "zzz"
 ## expect Str.repeat "na" 8 == "nananananananana"
 ## ```
 ## Returns `""` when given `""` for the string or `0` for the count.
-## ```
+## ```roc
 ## expect Str.repeat "" 10 == ""
 ## expect Str.repeat "anything" 0 == ""
 ## ```
-repeat : Str, Nat -> Str
-
-## Counts the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
-## in the string.
-##
-## Note that the number of extended grapheme clusters can be different from the number
-## of visual glyphs rendered! Consider the following examples:
-## ```
-## expect Str.countGraphemes "Roc" == 3
-## expect Str.countGraphemes "👩‍👩‍👦‍👦"  == 4
-## expect Str.countGraphemes "🕊"  == 1
-## ```
-## Note that "👩‍👩‍👦‍👦" takes up 4 graphemes (even though visually it appears as a single
-## glyph) because under the hood it's represented using an emoji modifier sequence.
-## In contrast, "🕊" only takes up 1 grapheme because under the hood it's represented
-## using a single Unicode code point.
-countGraphemes : Str -> Nat
-
-## Split a string into its constituent graphemes.
-##
-## This function breaks a string into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103),
-## returning them as a list of strings. This is useful for working with text that
-## contains complex characters, such as emojis.
-##
-## Examples:
-## ```
-## expect Str.graphemes "Roc" == ["R", "o", "c"]
-## expect Str.graphemes "नमस्ते" == ["न", "म", "स्", "ते"]
-## expect Str.graphemes "👩‍👩‍👦‍👦" == ["👩‍", "👩‍", "👦‍", "👦"]
-## ```
-##
-## Note that the "👩‍👩‍👦‍👦" example consists of 4 grapheme clusters, although it visually
-## appears as a single glyph. This is because it uses an emoji modifier sequence.
-graphemes : Str -> List Str
-
-## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], returns [Bool.true]. Otherwise returns [Bool.false].
-##
-## If the given string is empty, or if the given [U32] is not a valid
-## code point, returns [Bool.false].
-## ```
-## expect Str.startsWithScalar "鹏 means 'roc'" 40527 # "鹏" is Unicode scalar 40527
-## expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
-## expect !Str.startsWithScalar "" 40527
-## ```
-##
-## ## Performance Details
-##
-## This runs slightly faster than [Str.startsWith], so
-## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
-## instead of `Str.startsWith "鹏"`. ('鹏' evaluates to the [U32] value `40527`.)
-## This will not work for graphemes which take up multiple code points, however;
-## `Str.startsWithScalar '👩‍👩‍👦‍👦'` would be a compiler error because 👩‍👩‍👦‍👦 takes up
-## multiple code points and cannot be represented as a single [U32].
-## You'd need to use `Str.startsWithScalar "🕊"` instead.
-startsWithScalar : Str, U32 -> Bool
-
-## Returns a [List] of the [Unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
-## in the given string.
-##
-## (Roc strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
-## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
-## ```
-## expect Str.toScalars "Roc" == [82, 111, 99]
-## expect Str.toScalars "鹏" == [40527]
-## expect Str.toScalars "சி" == [2970, 3007]
-## expect Str.toScalars "🐦" == [128038]
-## expect Str.toScalars "👩‍👩‍👦‍👦" == [128105, 8205, 128105, 8205, 128102, 8205, 128102]
-## expect Str.toScalars "I ♥ Roc" == [73, 32, 9829, 32, 82, 111, 99]
-## expect Str.toScalars "" == []
-## ```
-toScalars : Str -> List U32
+repeat : Str, U64 -> Str
 
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
-## ```
+## ```roc
 ## expect Str.toUtf8 "Roc" == [82, 111, 99]
 ## expect Str.toUtf8 "鹏" == [233, 185, 143]
 ## expect Str.toUtf8 "சி" == [224, 174, 154, 224, 174, 191]
@@ -371,7 +528,7 @@ toUtf8 : Str -> List U8
 ## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 ##
 ## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
-## ```
+## ```roc
 ## expect Str.fromUtf8 [82, 111, 99] == Ok "Roc"
 ## expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
 ## expect Str.fromUtf8 [224, 174, 154, 224, 174, 191] == Ok "சி"
@@ -379,9 +536,9 @@ toUtf8 : Str -> List U8
 ## expect Str.fromUtf8 [] == Ok ""
 ## expect Str.fromUtf8 [255] |> Result.isErr
 ## ```
-fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]
+fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]
 fromUtf8 = \bytes ->
-    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
+    result = fromUtf8Lowlevel bytes
 
     if result.cIsOk then
         Ok result.bString
@@ -394,47 +551,24 @@ expect (Str.fromUtf8 [240, 159, 144, 166]) == Ok "🐦"
 expect (Str.fromUtf8 []) == Ok ""
 expect (Str.fromUtf8 [255]) |> Result.isErr
 
-## Encode part of a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## into a [Str]
-## ```
-## expect Str.fromUtf8Range [72, 105, 80, 103] { start : 0, count : 2 } == Ok "Hi"
-## ```
-fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]
-fromUtf8Range = \bytes, config ->
-    if Num.addSaturated config.start config.count <= List.len bytes then
-        result = fromUtf8RangeLowlevel bytes config.start config.count
-
-        if result.cIsOk then
-            Ok result.bString
-        else
-            Err (BadUtf8 result.dProblemCode result.aByteIndex)
-    else
-        Err OutOfBounds
-
-expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 0, count: 2 }) == Ok "Hi"
-expect (Str.fromUtf8Range [233, 185, 143, 224, 174, 154, 224, 174, 191] { start: 3, count: 3 }) == Ok "ச"
-expect (Str.fromUtf8Range [240, 159, 144, 166] { start: 0, count: 4 }) == Ok "🐦"
-expect (Str.fromUtf8Range [] { start: 0, count: 0 }) == Ok ""
-expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 2, count: 3 }) |> Result.isErr
-
 FromUtf8Result : {
-    aByteIndex : Nat,
+    aByteIndex : U64,
     bString : Str,
     cIsOk : Bool,
     dProblemCode : Utf8ByteProblem,
 }
 
-fromUtf8RangeLowlevel : List U8, Nat, Nat -> FromUtf8Result
+fromUtf8Lowlevel : List U8 -> FromUtf8Result
 
 ## Check if the given [Str] starts with a value.
-## ```
+## ```roc
 ## expect Str.startsWith "ABC" "A" == Bool.true
 ## expect Str.startsWith "ABC" "X" == Bool.false
 ## ```
 startsWith : Str, Str -> Bool
 
 ## Check if the given [Str] ends with a value.
-## ```
+## ```roc
 ## expect Str.endsWith "ABC" "C" == Bool.true
 ## expect Str.endsWith "ABC" "X" == Bool.false
 ## ```
@@ -442,26 +576,26 @@ endsWith : Str, Str -> Bool
 
 ## Return the [Str] with all whitespace removed from both the beginning
 ## as well as the end.
-## ```
+## ```roc
 ## expect Str.trim "   Hello      \n\n" == "Hello"
 ## ```
 trim : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the beginning.
-## ```
+## ```roc
 ## expect Str.trimStart "   Hello      \n\n" == "Hello      \n\n"
 ## ```
 trimStart : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the end.
-## ```
+## ```roc
 ## expect Str.trimEnd "   Hello      \n\n" == "   Hello"
 ## ```
 trimEnd : Str -> Str
 
 ## Encode a [Str] to a [Dec]. A [Dec] value is a 128-bit decimal
 ## [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic).
-## ```
+## ```roc
 ## expect Str.toDec "10" == Ok 10dec
 ## expect Str.toDec "-0.25" == Ok -0.25dec
 ## expect Str.toDec "not a number" == Err InvalidNumStr
@@ -472,7 +606,7 @@ toDec = \string -> strToNumHelp string
 ## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f64` suffix.
-## ```
+## ```roc
 ## expect Str.toF64 "0.10" == Ok 0.10f64
 ## expect Str.toF64 "not a number" == Err InvalidNumStr
 ## ```
@@ -482,36 +616,17 @@ toF64 = \string -> strToNumHelp string
 ## Encode a [Str] to a [F32].A [F32] value is a 32-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
 ## specified with a `f32` suffix.
-## ```
+## ```roc
 ## expect Str.toF32 "0.10" == Ok 0.10f32
 ## expect Str.toF32 "not a number" == Err InvalidNumStr
 ## ```
 toF32 : Str -> Result F32 [InvalidNumStr]
 toF32 = \string -> strToNumHelp string
 
-## Convert a [Str] to a [Nat]. If the given number doesn't fit in [Nat], it will be [truncated](https://www.ualberta.ca/computing-science/media-library/teaching-resources/java/truncation-rounding.html).
-## [Nat] has a different maximum number depending on the system you're building
-## for, so this may give a different answer on different systems.
-##
-## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
-## `Num.maxU32`. This means that calling `Str.toNat "9_000_000_000"` on a 32-bit
-## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
-## larger than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
-##
-## Calling `Str.toNat "9_000_000_000"` on a 64-bit system will return
-## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to `Num.maxU64`, and 9_000_000_000 is smaller than `Num.maxU64`.
-## ```
-## expect Str.toNat "9_000_000_000" == Ok 9000000000
-## expect Str.toNat "not a number" == Err InvalidNumStr
-## ```
-toNat : Str -> Result Nat [InvalidNumStr]
-toNat = \string -> strToNumHelp string
-
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
 ## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
 ## 340 undecillion). It can be specified with a u128 suffix.
-## ```
+## ```roc
 ## expect Str.toU128 "1500" == Ok 1500u128
 ## expect Str.toU128 "0.1" == Err InvalidNumStr
 ## expect Str.toU128 "-1" == Err InvalidNumStr
@@ -524,7 +639,7 @@ toU128 = \string -> strToNumHelp string
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
 ## `170_141_183_460_469_231_731_687_303_715_884_105_727`. It can be specified
 ## with a i128 suffix.
-## ```
+## ```roc
 ## expect Str.toI128 "1500" == Ok 1500i128
 ## expect Str.toI128 "-1" == Ok -1i128
 ## expect Str.toI128 "0.1" == Err InvalidNumStr
@@ -536,7 +651,7 @@ toI128 = \string -> strToNumHelp string
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
 ## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It
 ## can be specified with a u64 suffix.
-## ```
+## ```roc
 ## expect Str.toU64 "1500" == Ok 1500u64
 ## expect Str.toU64 "0.1" == Err InvalidNumStr
 ## expect Str.toU64 "-1" == Err InvalidNumStr
@@ -548,7 +663,7 @@ toU64 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
 ## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be
 ## specified with a i64 suffix.
-## ```
+## ```roc
 ## expect Str.toI64 "1500" == Ok 1500i64
 ## expect Str.toI64 "-1" == Ok -1i64
 ## expect Str.toI64 "0.1" == Err InvalidNumStr
@@ -560,7 +675,7 @@ toI64 = \string -> strToNumHelp string
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
 ## from `0` to `4_294_967_295` (over 4 billion). It can be specified with
 ## a u32 suffix.
-## ```
+## ```roc
 ## expect Str.toU32 "1500" == Ok 1500u32
 ## expect Str.toU32 "0.1" == Err InvalidNumStr
 ## expect Str.toU32 "-1" == Err InvalidNumStr
@@ -572,7 +687,7 @@ toU32 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
 ## from `-2_147_483_648` to `2_147_483_647`. It can be
 ## specified with a i32 suffix.
-## ```
+## ```roc
 ## expect Str.toI32 "1500" == Ok 1500i32
 ## expect Str.toI32 "-1" == Ok -1i32
 ## expect Str.toI32 "0.1" == Err InvalidNumStr
@@ -583,7 +698,7 @@ toI32 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
 ## from `0` to `65_535`. It can be specified with a u16 suffix.
-## ```
+## ```roc
 ## expect Str.toU16 "1500" == Ok 1500u16
 ## expect Str.toU16 "0.1" == Err InvalidNumStr
 ## expect Str.toU16 "-1" == Err InvalidNumStr
@@ -595,7 +710,7 @@ toU16 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
 ## from `-32_768` to `32_767`. It can be
 ## specified with a i16 suffix.
-## ```
+## ```roc
 ## expect Str.toI16 "1500" == Ok 1500i16
 ## expect Str.toI16 "-1" == Ok -1i16
 ## expect Str.toI16 "0.1" == Err InvalidNumStr
@@ -606,7 +721,7 @@ toI16 = \string -> strToNumHelp string
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
 ## from `0` to `255`. It can be specified with a u8 suffix.
-## ```
+## ```roc
 ## expect Str.toU8 "250" == Ok 250u8
 ## expect Str.toU8 "-0.1" == Err InvalidNumStr
 ## expect Str.toU8 "not a number" == Err InvalidNumStr
@@ -618,7 +733,7 @@ toU8 = \string -> strToNumHelp string
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
 ## from `-128` to `127`. It can be
 ## specified with a i8 suffix.
-## ```
+## ```roc
 ## expect Str.toI8 "-15" == Ok -15i8
 ## expect Str.toI8 "150.00" == Err InvalidNumStr
 ## expect Str.toI8 "not a number" == Err InvalidNumStr
@@ -627,21 +742,21 @@ toI8 : Str -> Result I8 [InvalidNumStr]
 toI8 = \string -> strToNumHelp string
 
 ## Get the byte at the given index, without performing a bounds check.
-getUnsafe : Str, Nat -> U8
+getUnsafe : Str, U64 -> U8
 
 ## Gives the number of bytes in a [Str] value.
-## ```
+## ```roc
 ## expect Str.countUtf8Bytes "Hello World" == 11
 ## ```
-countUtf8Bytes : Str -> Nat
+countUtf8Bytes : Str -> U64
 
 ## string slice that does not do bounds checking or utf-8 verification
-substringUnsafe : Str, Nat, Nat -> Str
+substringUnsafe : Str, U64, U64 -> Str
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
-## ```
+## ```roc
 ## expect Str.replaceEach "foo/bar/baz" "/" "_" == "foo_bar_baz"
 ## expect Str.replaceEach "not here" "/" "_" == "not here"
 ## ```
@@ -675,7 +790,7 @@ expect Str.replaceEach "abcdefg" "nothing" "_" == "abcdefg"
 ## Returns the given [Str] with the first occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
-## ```
+## ```roc
 ## expect Str.replaceFirst "foo/bar/baz" "/" "_" == "foo_bar/baz"
 ## expect Str.replaceFirst "no slashes here" "/" "_" == "no slashes here"
 ## ```
@@ -683,7 +798,7 @@ replaceFirst : Str, Str, Str -> Str
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
-            "\(before)\(flower)\(after)"
+            "$(before)$(flower)$(after)"
 
         Err NotFound -> haystack
 
@@ -693,7 +808,7 @@ expect Str.replaceFirst "abcdefg" "nothing" "_" == "abcdefg"
 ## Returns the given [Str] with the last occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
 ##
-## ```
+## ```roc
 ## expect Str.replaceLast "foo/bar/baz" "/" "_" == "foo/bar_baz"
 ## expect Str.replaceLast "no slashes here" "/" "_" == "no slashes here"
 ## ```
@@ -701,7 +816,7 @@ replaceLast : Str, Str, Str -> Str
 replaceLast = \haystack, needle, flower ->
     when splitLast haystack needle is
         Ok { before, after } ->
-            "\(before)\(flower)\(after)"
+            "$(before)$(flower)$(after)"
 
         Err NotFound -> haystack
 
@@ -711,7 +826,7 @@ expect Str.replaceLast "abcdefg" "nothing" "_" == "abcdefg"
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
-## ```
+## ```roc
 ## expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
 ## expect Str.splitFirst "no slashes here" "/" == Err NotFound
 ## ```
@@ -744,7 +859,7 @@ expect splitFirst "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
 # splitFirst when needle is haystack
 expect splitFirst "foo" "foo" == Ok { before: "", after: "" }
 
-firstMatch : Str, Str -> [Some Nat, None]
+firstMatch : Str, Str -> [Some U64, None]
 firstMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
@@ -752,7 +867,7 @@ firstMatch = \haystack, needle ->
 
     firstMatchHelp haystack needle 0 lastPossible
 
-firstMatchHelp : Str, Str, Nat, Nat -> [Some Nat, None]
+firstMatchHelp : Str, Str, U64, U64 -> [Some U64, None]
 firstMatchHelp = \haystack, needle, index, lastPossible ->
     if index <= lastPossible then
         if matchesAt haystack index needle then
@@ -765,7 +880,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
 ## Returns the given [Str] before the last occurrence of a delimiter, as well as
 ## the rest of the string after that occurrence.
 ## Returns [Err NotFound] if the delimiter is not found.
-## ```
+## ```roc
 ## expect Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
 ## expect Str.splitLast "no slashes here" "/" == Err NotFound
 ## ```
@@ -795,7 +910,7 @@ expect Str.splitLast "hullabaloo" "ab" == Ok { before: "hull", after: "aloo" }
 # splitLast when needle is haystack
 expect Str.splitLast "foo" "foo" == Ok { before: "", after: "" }
 
-lastMatch : Str, Str -> [Some Nat, None]
+lastMatch : Str, Str -> [Some U64, None]
 lastMatch = \haystack, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
@@ -803,7 +918,7 @@ lastMatch = \haystack, needle ->
 
     lastMatchHelp haystack needle lastPossibleIndex
 
-lastMatchHelp : Str, Str, Nat -> [Some Nat, None]
+lastMatchHelp : Str, Str, U64 -> [Some U64, None]
 lastMatchHelp = \haystack, needle, index ->
     if matchesAt haystack index needle then
         Some index
@@ -817,7 +932,7 @@ lastMatchHelp = \haystack, needle, index ->
 
 min = \x, y -> if x < y then x else y
 
-matchesAt : Str, Nat, Str -> Bool
+matchesAt : Str, U64, Str -> Bool
 matchesAt = \haystack, haystackIndex, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
@@ -857,16 +972,16 @@ matchesAtHelp = \state ->
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte. The index for that byte in the string is provided
 ## to the update function.
-## ```
-## f : List U8, U8, Nat -> List U8
+## ```roc
+## f : List U8, U8, U64 -> List U8
 ## f = \state, byte, _ -> List.append state byte
 ## expect Str.walkUtf8WithIndex "ABC" [] f == [65, 66, 67]
 ## ```
-walkUtf8WithIndex : Str, state, (state, U8, Nat -> state) -> state
+walkUtf8WithIndex : Str, state, (state, U8, U64 -> state) -> state
 walkUtf8WithIndex = \string, state, step ->
     walkUtf8WithIndexHelp string state step 0 (Str.countUtf8Bytes string)
 
-walkUtf8WithIndexHelp : Str, state, (state, U8, Nat -> state), Nat, Nat -> state
+walkUtf8WithIndexHelp : Str, state, (state, U8, U64 -> state), U64, U64 -> state
 walkUtf8WithIndexHelp = \string, state, step, index, length ->
     if index < length then
         byte = Str.getUnsafe string index
@@ -879,7 +994,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte.
 ##
-## ```
+## ```roc
 ## sumOfUtf8Bytes =
 ##     Str.walkUtf8 "Hello, World!" 0 \total, byte ->
 ##         total + byte
@@ -890,7 +1005,7 @@ walkUtf8 : Str, state, (state, U8 -> state) -> state
 walkUtf8 = \str, initial, step ->
     walkUtf8Help str initial step 0 (Str.countUtf8Bytes str)
 
-walkUtf8Help : Str, state, (state, U8 -> state), Nat, Nat -> state
+walkUtf8Help : Str, state, (state, U8 -> state), U64, U64 -> state
 walkUtf8Help = \str, state, step, index, length ->
     if index < length then
         byte = Str.getUnsafe str index
@@ -907,80 +1022,6 @@ expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
 ## Note: This will also convert seamless slices to regular lists.
 releaseExcessCapacity : Str -> Str
 
-## is UB when the scalar is invalid
-appendScalarUnsafe : Str, U32 -> Str
-
-## Append a [U32] scalar to the given string. If the given scalar is not a valid
-## unicode value, it returns [Err InvalidScalar].
-## ```
-## expect Str.appendScalar "H" 105 == Ok "Hi"
-## expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
-## ```
-appendScalar : Str, U32 -> Result Str [InvalidScalar]
-appendScalar = \string, scalar ->
-    if isValidScalar scalar then
-        Ok (appendScalarUnsafe string scalar)
-    else
-        Err InvalidScalar
-
-isValidScalar : U32 -> Bool
-isValidScalar = \scalar ->
-    scalar <= 0xD7FF || (scalar >= 0xE000 && scalar <= 0x10FFFF)
-
-getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
-
-## Walks over the unicode [U32] values for the given [Str] and calls a function
-## to update state for each.
-## ```
-## f : List U32, U32 -> List U32
-## f = \state, scalar -> List.append state scalar
-## expect Str.walkScalars "ABC" [] f == [65, 66, 67]
-## ```
-walkScalars : Str, state, (state, U32 -> state) -> state
-walkScalars = \string, init, step ->
-    walkScalarsHelp string init step 0 (Str.countUtf8Bytes string)
-
-walkScalarsHelp : Str, state, (state, U32 -> state), Nat, Nat -> state
-walkScalarsHelp = \string, state, step, index, length ->
-    if index < length then
-        { scalar, bytesParsed } = getScalarUnsafe string index
-        newState = step state scalar
-
-        walkScalarsHelp string newState step (Num.addWrap index bytesParsed) length
-    else
-        state
-
-## Walks over the unicode [U32] values for the given [Str] and calls a function
-## to update state for each.
-## ```
-## f : List U32, U32 -> [Break (List U32), Continue (List U32)]
-## f = \state, scalar ->
-##     check = 66
-##     if scalar == check then
-##         Break [check]
-##     else
-##         Continue (List.append state scalar)
-## expect Str.walkScalarsUntil "ABC" [] f == [66]
-## expect Str.walkScalarsUntil "AxC" [] f == [65, 120, 67]
-## ```
-walkScalarsUntil : Str, state, (state, U32 -> [Break state, Continue state]) -> state
-walkScalarsUntil = \string, init, step ->
-    walkScalarsUntilHelp string init step 0 (Str.countUtf8Bytes string)
-
-walkScalarsUntilHelp : Str, state, (state, U32 -> [Break state, Continue state]), Nat, Nat -> state
-walkScalarsUntilHelp = \string, state, step, index, length ->
-    if index < length then
-        { scalar, bytesParsed } = getScalarUnsafe string index
-
-        when step state scalar is
-            Continue newState ->
-                walkScalarsUntilHelp string newState step (Num.addWrap index bytesParsed) length
-
-            Break newState ->
-                newState
-    else
-        state
-
 strToNum : Str -> { berrorcode : U8, aresult : Num * }
 
 strToNumHelp : Str -> Result (Num a) [InvalidNumStr]
@@ -994,14 +1035,14 @@ strToNumHelp = \string ->
         Err InvalidNumStr
 
 ## Adds a prefix to the given [Str].
-## ```
+## ```roc
 ## expect Str.withPrefix "Awesome" "Roc" == "RocAwesome"
 ## ```
 withPrefix : Str, Str -> Str
 withPrefix = \str, prefix -> Str.concat prefix str
 
 ## Determines whether or not the first Str contains the second.
-## ```
+## ```roc
 ## expect Str.contains "foobarbaz" "bar"
 ## expect !(Str.contains "apple" "orange")
 ## expect Str.contains "anything" ""

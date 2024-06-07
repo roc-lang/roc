@@ -383,7 +383,7 @@ pub fn refcount_reset_proc_body<'a>(
     };
 
     // Constant for unique refcount
-    let refcount_1_encoded = match root.target_info.ptr_width() {
+    let refcount_1_encoded = match root.target.ptr_width() {
         PtrWidth::Bytes4 => i32::MIN as i128,
         PtrWidth::Bytes8 => i64::MIN as i128,
     }
@@ -407,7 +407,7 @@ pub fn refcount_reset_proc_body<'a>(
     );
 
     let mask_lower_bits = match layout_interner.get_repr(layout) {
-        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target_info),
+        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target),
         _ => false,
     };
 
@@ -508,7 +508,7 @@ pub fn refcount_resetref_proc_body<'a>(
     };
 
     // Constant for unique refcount
-    let refcount_1_encoded = match root.target_info.ptr_width() {
+    let refcount_1_encoded = match root.target.ptr_width() {
         PtrWidth::Bytes4 => i32::MIN as i128,
         PtrWidth::Bytes8 => i64::MIN as i128,
     }
@@ -532,7 +532,7 @@ pub fn refcount_resetref_proc_body<'a>(
     );
 
     let mask_lower_bits = match layout_interner.get_repr(layout) {
-        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target_info),
+        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target),
         _ => false,
     };
 
@@ -617,7 +617,7 @@ fn rc_ptr_from_data_ptr_help<'a>(
     // Pointer size constant
     let ptr_size_sym = root.create_symbol(ident_ids, "ptr_size");
     let ptr_size_expr = Expr::Literal(Literal::Int(
-        (root.target_info.ptr_width() as i128).to_ne_bytes(),
+        (root.target.ptr_width() as i128).to_ne_bytes(),
     ));
     let ptr_size_stmt = |next| Stmt::Let(ptr_size_sym, ptr_size_expr, root.layout_isize, next);
 
@@ -630,7 +630,7 @@ fn rc_ptr_from_data_ptr_help<'a>(
         },
         arguments: root.arena.alloc([addr_sym, ptr_size_sym]),
     });
-    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, Layout::usize(root.target_info), next);
+    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, Layout::usize(root.target), next);
 
     // Typecast the refcount address from integer to pointer
     let cast_expr = Expr::Call(Call {
@@ -697,7 +697,7 @@ fn modify_refcount<'a>(
         }
 
         HelperOp::Dec | HelperOp::DecRef(_) => {
-            debug_assert!(alignment >= root.target_info.ptr_width() as u32);
+            debug_assert!(alignment >= root.target.ptr_width() as u32);
 
             let (op, ptr) = match ptr {
                 Pointer::ToData(s) => (LowLevel::RefCountDecDataPtr, s),
@@ -780,7 +780,7 @@ fn refcount_str<'a>(
     };
     let length_stmt = |next| Stmt::Let(length, length_expr, layout_isize, next);
 
-    let alignment = root.target_info.ptr_width() as u32;
+    let alignment = root.target.ptr_width() as u32;
 
     // let is_slice = lowlevel NumLt length zero
     let is_slice = root.create_symbol(ident_ids, "is_slice");
@@ -926,7 +926,7 @@ fn refcount_list<'a>(
     //
 
     let len = root.create_symbol(ident_ids, "len");
-    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLen, &[structure], next);
+    let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLenUsize, &[structure], next);
 
     // let zero = 0
     let zero = root.create_symbol(ident_ids, "zero");
@@ -1032,7 +1032,7 @@ fn refcount_list<'a>(
     //
 
     let alignment = Ord::max(
-        root.target_info.ptr_width() as u32,
+        root.target.ptr_width() as u32,
         layout_interner.alignment_bytes(elem_layout),
     );
 

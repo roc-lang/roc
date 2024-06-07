@@ -9,8 +9,8 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern,
-    RecordBuilderField, WhenBranch,
+    is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
+    Pattern, RecordBuilderField, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -31,22 +31,26 @@ impl<'a> Formattable for Expr<'a> {
                 true
             }
 
+            MalformedSuffixed(loc_expr) => loc_expr.is_multiline(),
+
             // These expressions never have newlines
             Float(..)
             | Num(..)
             | NonBase10Int { .. }
             | SingleQuote(_)
-            | RecordAccess(_, _)
             | AccessorFunction(_)
-            | TupleAccess(_, _)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | IngestedFile(_, _)
+            | EmptyDefsFinal
             | Crash => false,
+
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+                inner.is_multiline()
+            }
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -416,6 +420,9 @@ impl<'a> Formattable for Expr<'a> {
                                 indent,
                             );
                         }
+                        EmptyDefsFinal => {
+                            // no need to print anything
+                        }
                         _ => {
                             buf.ensure_ends_with_newline();
                             buf.indent(indent);
@@ -431,6 +438,9 @@ impl<'a> Formattable for Expr<'a> {
                     buf.indent(indent);
                     buf.push(')');
                 }
+            }
+            EmptyDefsFinal => {
+                // no need to print anything
             }
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
@@ -503,15 +513,22 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
+            TaskAwaitBang(expr) => {
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                buf.push('!');
+            }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
                 buf.push_str(str)
+            }
+            MalformedSuffixed(loc_expr) => {
+                buf.indent(indent);
+                loc_expr.format_with_options(buf, parens, newlines, indent);
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
-            IngestedFile(_, _) => {}
         }
     }
 }
@@ -612,9 +629,9 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             buf.push('\\');
             buf.push(escaped.to_parsed_char());
         }
-        Interpolated(loc_expr) => {
-            buf.push_str("\\(");
-            // e.g. (name) in "Hi, \(name)!"
+        DeprecatedInterpolated(loc_expr) | Interpolated(loc_expr) => {
+            buf.push_str("$(");
+            // e.g. (name) in "Hi, $(name)!"
             loc_expr.value.format_with_options(
                 buf,
                 Parens::NotNeeded, // We already printed parens!
@@ -721,14 +738,32 @@ fn fmt_binops<'a>(
         || loc_right_side.value.is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
+    let is_any_lefts_suffixed = lefts.iter().any(|(left, _)| is_expr_suffixed(&left.value));
+    let is_right_suffixed = is_expr_suffixed(&loc_right_side.value);
+    let is_any_suffixed = is_any_lefts_suffixed || is_right_suffixed;
+
+    let mut is_first = false;
+    let mut adjusted_indent = indent;
+
+    if is_any_suffixed {
+        // we only want to indent the remaining lines if this is a suffixed expression.
+        is_first = true;
+    }
+
     for (loc_left_side, loc_binop) in lefts {
         let binop = loc_binop.value;
 
-        loc_left_side.format_with_options(buf, Parens::InOperator, Newlines::No, indent);
+        loc_left_side.format_with_options(buf, Parens::InOperator, Newlines::No, adjusted_indent);
+
+        if is_first {
+            // indent the remaining lines, but only if the expression is suffixed.
+            is_first = false;
+            adjusted_indent = indent + 4;
+        }
 
         if is_multiline {
             buf.ensure_ends_with_newline();
-            buf.indent(indent);
+            buf.indent(adjusted_indent);
         } else {
             buf.spaces(1);
         }
@@ -738,7 +773,7 @@ fn fmt_binops<'a>(
         buf.spaces(1);
     }
 
-    loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, indent);
+    loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, adjusted_indent);
 }
 
 fn format_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], newlines: Newlines, indent: u16) {

@@ -12,7 +12,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocStr, I128, U128};
 
 #[test]
 fn str_split_empty_delimiter() {
@@ -23,28 +23,7 @@ fn str_split_empty_delimiter() {
             "#
         ),
         1,
-        usize
-    );
-}
-
-// This test produces an app that exposes nothing to the host!
-#[test]
-#[ignore]
-fn str_split_empty_delimiter_broken() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when List.first (Str.split "JJJ" "") is
-                    Ok str ->
-                        Str.countGraphemes str
-
-                    _ ->
-                        -1
-
-            "#
-        ),
-        3,
-        usize
+        u64
     );
 }
 
@@ -57,28 +36,7 @@ fn str_split_bigger_delimiter_small_str() {
             "#
         ),
         1,
-        usize
-    );
-}
-
-// This test produces an app that exposes nothing to the host!
-#[test]
-#[ignore]
-fn str_split_bigger_delimiter_small_str_broken() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when List.first (Str.split "JJJ" "JJJJ there") is
-                    Ok str ->
-                        Str.countGraphemes str
-
-                    _ ->
-                        -1
-
-            "#
-        ),
-        3,
-        usize
+        u64
     );
 }
 
@@ -218,7 +176,7 @@ fn str_split_small_str_big_delimiter() {
                 "#
         ),
         3,
-        usize
+        u64
     );
 
     assert_evals_to!(
@@ -415,43 +373,10 @@ fn str_starts_with() {
 }
 
 #[test]
-fn str_starts_with_scalar() {
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "foobar" {}"#, 'f' as u32),
-        true,
-        bool
-    );
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "zoobar" {}"#, 'f' as u32),
-        false,
-        bool
-    );
-}
-
-#[test]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
     assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
-}
-
-#[test]
-fn str_count_graphemes_small_str() {
-    assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
-}
-
-#[test]
-fn str_count_graphemes_three_js() {
-    assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
-}
-
-#[test]
-fn str_count_graphemes_big_str() {
-    assert_evals_to!(
-        r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
-        45,
-        usize
-    );
 }
 
 #[test]
@@ -758,12 +683,14 @@ fn str_to_utf8() {
 }
 
 #[test]
-fn str_from_utf8_range() {
+fn str_from_utf8() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { count: 5,  start: 0 }  is
+            bytes =
+                Str.toUtf8 "hello"
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
@@ -774,12 +701,15 @@ fn str_from_utf8_range() {
 }
 
 #[test]
-fn str_from_utf8_range_slice() {
+fn str_from_utf8_slice() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { count: 4,  start: 1 }  is
+            bytes =
+                Str.toUtf8 "hello"
+                |> List.sublist { start: 1, len: 4 }
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
@@ -790,12 +720,15 @@ fn str_from_utf8_range_slice() {
 }
 
 #[test]
-fn str_from_utf8_range_slice_not_end() {
+fn str_from_utf8_slice_not_end() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { count: 3,  start: 1 }  is
+            bytes =
+                Str.toUtf8 "hello"
+                |> List.sublist { start: 1, len: 3 }
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
@@ -806,68 +739,20 @@ fn str_from_utf8_range_slice_not_end() {
 }
 
 #[test]
-fn str_from_utf8_range_order_does_not_matter() {
+fn str_from_utf8_order_does_not_matter() {
     assert_evals_to!(
         indoc!(
             r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 1,  count: 3 }  is
+            bytes =
+                Str.toUtf8 "hello"
+                |> List.sublist { start: 1, len: 3 }
+
+            when Str.fromUtf8 bytes is
                    Ok utf8String -> utf8String
                    _ -> ""
             "#
         ),
         RocStr::from("ell"),
-        RocStr
-    );
-}
-
-#[test]
-fn str_from_utf8_range_out_of_bounds_start_value() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 7,  count: 3 }  is
-                   Ok _ -> ""
-                   Err (BadUtf8 _ _) -> ""
-                   Err OutOfBounds -> "out of bounds"
-            "#
-        ),
-        RocStr::from("out of bounds"),
-        RocStr
-    );
-}
-
-#[test]
-fn str_from_utf8_range_count_too_high() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 0,  count: 6 }  is
-                   Ok _ -> ""
-                   Err (BadUtf8 _ _) -> ""
-                   Err OutOfBounds -> "out of bounds"
-            "#
-        ),
-        RocStr::from("out of bounds"),
-        RocStr
-    );
-}
-
-#[test]
-fn str_from_utf8_range_count_too_high_for_start() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            bytes = Str.toUtf8 "hello"
-            when Str.fromUtf8Range bytes { start: 4,  count: 3 }  is
-                   Ok _ -> ""
-                   Err (BadUtf8 _ _) -> ""
-                   Err OutOfBounds -> "out of bounds"
-            "#
-        ),
-        RocStr::from("out of bounds"),
         RocStr
     );
 }
@@ -1104,21 +989,6 @@ fn str_trim_end_small_to_small_shared() {
 }
 
 #[test]
-fn str_to_nat() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-             when Str.toNat "1" is
-                 Ok n -> n
-                 Err _ -> 0
-                "#
-        ),
-        1,
-        usize
-    );
-}
-
-#[test]
 fn str_to_i128() {
     assert_evals_to!(
         indoc!(
@@ -1128,8 +998,8 @@ fn str_to_i128() {
                  Err _ -> 0
                 "#
         ),
-        1,
-        i128
+        I128::from(1),
+        I128
     );
 }
 
@@ -1143,8 +1013,8 @@ fn str_to_u128() {
                  Err _ -> 0
                 "#
         ),
-        1,
-        u128
+        U128::from(1),
+        U128
     );
 }
 
@@ -1312,18 +1182,5 @@ fn str_to_dec() {
         ),
         RocDec::from_str("1.0").unwrap(),
         RocDec
-    );
-}
-
-#[test]
-fn str_walk_scalars() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.walkScalars "abcd" [] List.append
-            "#
-        ),
-        RocList::from_slice(&['a', 'b', 'c', 'd']),
-        RocList<char>
     );
 }

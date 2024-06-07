@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { TextDecoder } = require('util');
 
-const wasmFilename = './roc-app.wasm';
+const wasmFilename = './main.wasm';
 const moduleBytes = fs.readFileSync(wasmFilename);
 const wasmModule = new WebAssembly.Module(moduleBytes);
 
@@ -24,6 +24,11 @@ function hello() {
                     console.error(`Exited with code ${code}`);
                 }
                 exitCode = code;
+            },
+            random_get: (bufPtr, bufLen) => {
+                const buf = wasmMemoryBuffer.subarray(bufPtr, bufPtr + bufLen);
+                crypto.getRandomValues(buf);
+                return 0;
             },
             fd_write: (x) => {
                 console.error(`fd_write not supported: ${x}`);

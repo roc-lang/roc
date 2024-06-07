@@ -1,47 +1,44 @@
-interface Inspect
-    exposes [
-        Inspect,
-        Inspector,
-        InspectFormatter,
-        ElemWalker,
-        KeyValWalker,
-        inspect,
-        init,
-        list,
-        set,
-        dict,
-        tag,
-        tuple,
-        record,
-        bool,
-        str,
-        function,
-        opaque,
-        u8,
-        i8,
-        u16,
-        i16,
-        u32,
-        i32,
-        u64,
-        i64,
-        u128,
-        i128,
-        nat,
-        f32,
-        f64,
-        dec,
-        custom,
-        apply,
-        toInspector,
-        toStr,
-    ]
-    imports [
-        Bool.{ Bool },
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec, Nat },
-        List,
-        Str,
-    ]
+module [
+    Inspect,
+    Inspector,
+    InspectFormatter,
+    ElemWalker,
+    KeyValWalker,
+    inspect,
+    init,
+    list,
+    set,
+    dict,
+    tag,
+    tuple,
+    record,
+    bool,
+    str,
+    function,
+    opaque,
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+    f32,
+    f64,
+    dec,
+    custom,
+    apply,
+    toInspector,
+    toStr,
+]
+
+import Bool exposing [Bool]
+import Num exposing [U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec]
+import List
+import Str
 
 KeyValWalker state collection key val : collection, state, (state, key, val -> state) -> state
 ElemWalker state collection elem : collection, state, (state, elem -> state) -> state
@@ -77,7 +74,6 @@ InspectFormatter implements
     i64 : I64 -> Inspector f where f implements InspectFormatter
     u128 : U128 -> Inspector f where f implements InspectFormatter
     i128 : I128 -> Inspector f where f implements InspectFormatter
-    nat : Nat -> Inspector f where f implements InspectFormatter
     f32 : F32 -> Inspector f where f implements InspectFormatter
     f64 : F64 -> Inspector f where f implements InspectFormatter
     dec : Dec -> Inspector f where f implements InspectFormatter
@@ -131,7 +127,6 @@ DbgFormatter := { data : Str }
             i64: dbgI64,
             u128: dbgU128,
             i128: dbgI128,
-            nat: dbgNat,
             f32: dbgF32,
             f64: dbgF64,
             dec: dbgDec,
@@ -323,11 +318,6 @@ dbgU128 = \num ->
 
 dbgI128 : I128 -> Inspector DbgFormatter
 dbgI128 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
-
-dbgNat : Nat -> Inspector DbgFormatter
-dbgNat = \num ->
     f0 <- custom
     dbgWrite f0 (num |> Num.toStr)
 

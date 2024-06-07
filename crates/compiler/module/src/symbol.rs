@@ -1,4 +1,4 @@
-use crate::ident::{Ident, ModuleName};
+use crate::ident::{Ident, Lowercase, ModuleName};
 use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
@@ -113,6 +113,15 @@ impl Symbol {
             // low-level implementation.
             &Self::BOOL_STRUCTURAL_EQ
         )
+    }
+
+    pub fn is_automatically_imported(self) -> bool {
+        let module_id = self.module_id();
+
+        module_id.is_automatically_imported()
+            && Self::builtin_types_in_scope(module_id)
+                .iter()
+                .any(|(_, (s, _))| *s == self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -384,6 +393,11 @@ impl ModuleId {
             .get_name(self)
             .unwrap_or_else(|| internal_error!("Could not find ModuleIds for {:?}", self))
     }
+
+    pub fn is_automatically_imported(self) -> bool {
+        // The deprecated TotallyNotJson module is not automatically imported.
+        self.is_builtin() && self != ModuleId::JSON
+    }
 }
 
 impl fmt::Debug for ModuleId {
@@ -446,6 +460,15 @@ impl<'a, T> PackageQualified<'a, T> {
         match self {
             PackageQualified::Unqualified(name) => name,
             PackageQualified::Qualified(_, name) => name,
+        }
+    }
+
+    pub fn map_module<B>(&self, f: impl FnOnce(&T) -> B) -> PackageQualified<'a, B> {
+        match self {
+            PackageQualified::Unqualified(name) => PackageQualified::Unqualified(f(name)),
+            PackageQualified::Qualified(package, name) => {
+                PackageQualified::Qualified(package, f(name))
+            }
         }
     }
 }
@@ -593,6 +616,68 @@ impl ModuleIds {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ScopeModules {
+    modules: VecMap<ModuleName, ModuleId>,
+    sources: VecMap<ModuleId, ScopeModuleSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
+}
+
+impl ScopeModules {
+    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
+        self.modules.get(module_name).copied()
+    }
+
+    pub fn has_id(&self, module_id: ModuleId) -> bool {
+        self.sources.contains_key(&module_id)
+    }
+
+    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
+        self.modules.keys()
+    }
+
+    pub fn insert(
+        &mut self,
+        module_name: ModuleName,
+        module_id: ModuleId,
+        region: Region,
+    ) -> Result<(), ScopeModuleSource> {
+        if let Some(existing_module_id) = self.modules.get(&module_name) {
+            if *existing_module_id == module_id {
+                return Ok(());
+            }
+
+            return Err(*self.sources.get(existing_module_id).unwrap());
+        }
+
+        self.modules.insert(module_name, module_id);
+        self.sources
+            .insert(module_id, ScopeModuleSource::Import(region));
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.modules.len(), self.sources.len());
+        self.modules.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
+        self.modules.is_empty()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.modules.truncate(len);
+        self.sources.truncate(len);
+    }
+}
+
 /// An ID that is assigned to interned string identifiers within a module.
 /// By turning these strings into numbers, post-canonicalization processes
 /// like unification and optimization can run a lot faster.
@@ -696,6 +781,13 @@ impl IdentIds {
 
     pub fn is_empty(&self) -> bool {
         self.interner.is_empty()
+    }
+
+    pub fn exposed_values(&self) -> Vec<Lowercase> {
+        self.ident_strs()
+            .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
+            .map(|(_, ident)| Lowercase::from(ident))
+            .collect()
     }
 }
 
@@ -876,7 +968,6 @@ macro_rules! define_builtins {
                         module_id.register_debug_idents(&ident_ids);
                     }
 
-
                     exposed_idents_by_module.insert(
                         module_id,
                         ident_ids
@@ -924,6 +1015,32 @@ macro_rules! define_builtins {
                 )+
 
                 ModuleIds {  by_id }
+            }
+        }
+
+        impl ScopeModules {
+            pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
+                // +1 because the user will be compiling at least 1 non-builtin module!
+                let capacity = $total + 1;
+
+                let mut modules = VecMap::with_capacity(capacity);
+                let mut sources = VecMap::with_capacity(capacity);
+
+                modules.insert(home_name, home_id);
+                sources.insert(home_id, ScopeModuleSource::Current);
+
+                let mut insert_both = |id: ModuleId, name_str: &'static str| {
+                    let name: ModuleName = name_str.into();
+
+                    modules.insert(name, id);
+                    sources.insert(id, ScopeModuleSource::Builtin);
+                };
+
+                $(
+                    insert_both(ModuleId::$module_const, $module_name);
+                )+
+
+                ScopeModules { modules, sources }
             }
         }
 
@@ -1015,27 +1132,6 @@ macro_rules! define_builtins {
                     )+
                     m => roc_error_macros::internal_error!("{:?} is not a builtin module!", m),
                 }
-            }
-
-            /// Symbols that should be added to the default scope, for hints as suggestions of
-            /// names you might want to use.
-            ///
-            /// TODO: this is a hack to get tag names to show up in error messages as suggestions,
-            /// really we should be extracting tag names from candidate type aliases in scope.
-            pub fn symbols_in_scope_for_hints() -> VecMap<Ident, (Symbol, Region)> {
-                let mut scope = VecMap::default();
-
-                $(
-                    $(
-                        $(
-                            if $in_scope_for_hints {
-                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
-                            }
-                        )?
-                    )*
-                )+
-
-                scope
             }
         }
     };
@@ -1192,19 +1288,19 @@ define_builtins! {
         80 NUM_MUL_SATURATED: "mulSaturated"
         81 NUM_INT: "Int" exposed_type=true
         82 NUM_FRAC: "Frac" exposed_type=true
-        83 NUM_NATURAL: "Natural" exposed_type=true
-        84 NUM_NAT: "Nat" exposed_type=true
-        85 NUM_INT_CAST: "intCast"
+        83 NUM_E: "e"
+        84 NUM_PI: "pi"
+        85 NUM_TAU: "tau"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         87 NUM_DECIMAL: "Decimal" exposed_type=true
         88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
-        89 NUM_BYTES_TO_U16: "bytesToU16"
-        90 NUM_BYTES_TO_U32: "bytesToU32"
-        91 NUM_BYTES_TO_U64: "bytesToU64"
-        92 NUM_BYTES_TO_U128: "bytesToU128"
-        93 NUM_CAST_TO_NAT: "#castToNat"
-        94 NUM_DIV_CEIL: "divCeil"
-        95 NUM_DIV_CEIL_CHECKED: "divCeilChecked"
+        89 NUM_COUNT_ONE_BITS: "countOneBits"
+        90 NUM_ABS_DIFF: "absDiff"
+        91 NUM_IS_NAN: "isNaN"
+        92 NUM_IS_INFINITE: "isInfinite"
+        93 NUM_IS_FINITE: "isFinite"
+        94 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
+        95 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
         96 NUM_TO_STR: "toStr"
         97 NUM_MIN_I8: "minI8"
         98 NUM_MAX_I8: "maxI8"
@@ -1246,8 +1342,8 @@ define_builtins! {
         134 NUM_TO_U64_CHECKED: "toU64Checked"
         135 NUM_TO_U128: "toU128"
         136 NUM_TO_U128_CHECKED: "toU128Checked"
-        137 NUM_TO_NAT: "toNat"
-        138 NUM_TO_NAT_CHECKED: "toNatChecked"
+        137 NUM_DIV_CEIL: "divCeil"
+        138 NUM_DIV_CEIL_CHECKED: "divCeilChecked"
         139 NUM_TO_F32: "toF32"
         140 NUM_TO_F32_CHECKED: "toF32Checked"
         141 NUM_TO_F64: "toF64"
@@ -1257,23 +1353,27 @@ define_builtins! {
         145 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
         146 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
         147 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
-        148 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
-        149 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
-        150 NUM_BYTES_TO_U64_LOWLEVEL: "bytesToU64Lowlevel"
-        151 NUM_BYTES_TO_U128_LOWLEVEL: "bytesToU128Lowlevel"
-        152 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
-        153 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
-        154 NUM_COUNT_ONE_BITS: "countOneBits"
-        155 NUM_ABS_DIFF: "absDiff"
-        156 NUM_IS_NAN: "isNaN"
-        157 NUM_IS_INFINITE: "isInfinite"
-        158 NUM_IS_FINITE: "isFinite"
-        159 NUM_MIN: "min"
-        160 NUM_MAX: "max"
-        161 NUM_E: "e"
-        162 NUM_PI: "pi"
-        163 NUM_TAU: "tau"
-        164 NUM_BITWISE_NOT: "bitwiseNot"
+        148 NUM_MIN: "min"
+        149 NUM_MAX: "max"
+        150 NUM_BITWISE_NOT: "bitwiseNot"
+        151 NUM_INT_CAST: "intCast"
+        152 NUM_IS_APPROX_EQ: "isApproxEq"
+        153 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        154 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        155 NUM_BYTES_TO_U64_LOWLEVEL: "bytesToU64Lowlevel"
+        156 NUM_BYTES_TO_U128_LOWLEVEL: "bytesToU128Lowlevel"
+        157 NUM_DIV_TRUNC_UNCHECKED: "divTruncUnchecked" // traps on division by zero
+        158 NUM_REM_UNCHECKED: "remUnchecked" // traps on division by zero
+        159 NUM_WITHOUT_DECIMAL_POINT: "withoutDecimalPoint"
+        160 NUM_WITH_DECIMAL_POINT: "withDecimalPoint"
+        161 NUM_F32_TO_PARTS: "f32ToParts"
+        162 NUM_F64_TO_PARTS: "f64ToParts"
+        163 NUM_F32_FROM_PARTS: "f32FromParts"
+        164 NUM_F64_FROM_PARTS: "f64FromParts"
+        165 NUM_NAN_F32: "nanF32"
+        166 NUM_NAN_F64: "nanF64"
+        167 NUM_INFINITY_F32: "infinityF32"
+        168 NUM_INFINITY_F64: "infinityF64"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1297,24 +1397,24 @@ define_builtins! {
         3 STR_CONCAT: "concat"
         4 STR_JOIN_WITH: "joinWith"
         5 STR_SPLIT: "split"
-        6 STR_COUNT_GRAPHEMES: "countGraphemes"
+        6 STR_WITH_PREFIX: "withPrefix"
         7 STR_STARTS_WITH: "startsWith"
         8 STR_ENDS_WITH: "endsWith"
         9 STR_FROM_UTF8: "fromUtf8"
         10 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         11 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         12 STR_TO_UTF8: "toUtf8"
-        13 STR_STARTS_WITH_SCALAR: "startsWithScalar"
+        13 STR_WALK_UTF8: "walkUtf8"
         14 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         15 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         16 STR_REPEAT: "repeat"
         17 STR_TRIM: "trim"
         18 STR_TRIM_START: "trimStart"
         19 STR_TRIM_END: "trimEnd"
-        20 STR_TO_DEC: "toDec"
+        20 STR_WITH_CAPACITY: "withCapacity"
         21 STR_TO_F64: "toF64"
         22 STR_TO_F32: "toF32"
-        23 STR_TO_NAT: "toNat"
+        23 STR_TO_DEC: "toDec"
         24 STR_TO_U128: "toU128"
         25 STR_TO_I128: "toI128"
         26 STR_TO_U64: "toU64"
@@ -1325,7 +1425,7 @@ define_builtins! {
         31 STR_TO_I16: "toI16"
         32 STR_TO_U8: "toU8"
         33 STR_TO_I8: "toI8"
-        34 STR_TO_SCALARS: "toScalars"
+        34 STR_CONTAINS: "contains"
         35 STR_GET_UNSAFE: "getUnsafe"
         36 STR_COUNT_UTF8_BYTES: "countUtf8Bytes"
         37 STR_SUBSTRING_UNSAFE: "substringUnsafe"
@@ -1333,24 +1433,13 @@ define_builtins! {
         39 STR_SPLIT_LAST: "splitLast"
         40 STR_WALK_UTF8_WITH_INDEX: "walkUtf8WithIndex"
         41 STR_RESERVE: "reserve"
-        42 STR_APPEND_SCALAR_UNSAFE: "appendScalarUnsafe"
-        43 STR_APPEND_SCALAR: "appendScalar"
-        44 STR_GET_SCALAR_UNSAFE: "getScalarUnsafe"
-        45 STR_WALK_SCALARS: "walkScalars"
-        46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
-        47 STR_TO_NUM: "strToNum"
-        48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
-        49 STR_CAPACITY: "capacity"
-        50 STR_REPLACE_EACH: "replaceEach"
-        51 STR_REPLACE_FIRST: "replaceFirst"
-        52 STR_REPLACE_LAST: "replaceLast"
-        53 STR_WITH_CAPACITY: "withCapacity"
-        54 STR_WITH_PREFIX: "withPrefix"
-        55 STR_GRAPHEMES: "graphemes"
-        56 STR_IS_VALID_SCALAR: "isValidScalar"
-        57 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
-        58 STR_WALK_UTF8: "walkUtf8"
-        59 STR_CONTAINS: "contains"
+        42 STR_TO_NUM: "strToNum"
+        43 STR_FROM_UTF8_LOWLEVEL: "fromUtf8Lowlevel"
+        44 STR_CAPACITY: "capacity"
+        45 STR_REPLACE_EACH: "replaceEach"
+        46 STR_REPLACE_FIRST: "replaceFirst"
+        47 STR_REPLACE_LAST: "replaceLast"
+        48 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1359,7 +1448,7 @@ define_builtins! {
         3 LIST_SET: "set"
         4 LIST_APPEND: "append"
         5 LIST_MAP: "map"
-        6 LIST_LEN: "len"
+        6 LIST_LEN_U64: "len"
         7 LIST_WALK_BACKWARDS: "walkBackwards"
         8 LIST_CONCAT: "concat"
         9 LIST_FIRST: "first"
@@ -1439,18 +1528,19 @@ define_builtins! {
         83 LIST_WALK_WITH_INDEX: "walkWithIndex"
         84 LIST_APPEND_IF_OK: "appendIfOk"
         85 LIST_PREPEND_IF_OK: "prependIfOk"
+        86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
+        87 LIST_CLONE: "clone"
+        88 LIST_LEN_USIZE: "lenUsize"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
-        1 RESULT_OK: "Ok" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
-        2 RESULT_ERR: "Err" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
+        1 RESULT_IS_ERR: "isErr"
+        2 RESULT_ON_ERR: "onErr"
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
         6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
-        8 RESULT_IS_ERR: "isErr"
-        9 RESULT_ON_ERR: "onErr"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
@@ -1487,6 +1577,7 @@ define_builtins! {
         27 DICT_KEEP_IF: "keepIf"
         28 DICT_DROP_IF: "dropIf"
         29 DICT_RESERVE: "reserve"
+        30 DICT_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1513,6 +1604,7 @@ define_builtins! {
         21 SET_DROP_IF: "dropIf"
         22 SET_WITH_CAPACITY: "withCapacity"
         23 SET_RESERVE: "reserve"
+        24 SET_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
@@ -1595,13 +1687,12 @@ define_builtins! {
         12 HASH_HASH_I32: "hashI32"
         13 HASH_HASH_I64: "hashI64"
         14 HASH_HASH_I128: "hashI128"
-        15 HASH_HASH_NAT: "hashNat"
+        15 HASH_HASH_UNORDERED: "hashUnordered"
         16 I128_OF_DEC: "i128OfDec"
         17 HASH_HASH_DEC: "hashDec"
         18 HASH_COMPLETE: "complete"
         19 HASH_HASH_STR_BYTES: "hashStrBytes"
         20 HASH_HASH_LIST: "hashList"
-        21 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 INSPECT: "Inspect" => {
         0 INSPECT_INSPECT_ABILITY: "Inspect" exposed_type=true
@@ -1637,8 +1728,7 @@ define_builtins! {
         30 INSPECT_CUSTOM: "custom"
         31 INSPECT_APPLY: "apply"
         32 INSPECT_TO_INSPECTOR: "toInspector"
-        33 INSPECT_NAT: "nat"
-        34 INSPECT_TO_STR: "toStr"
+        33 INSPECT_TO_STR: "toStr"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"

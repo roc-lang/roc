@@ -1,172 +1,173 @@
-interface Num
-    exposes [
-        Num,
-        Int,
-        Frac,
-        Integer,
-        FloatingPoint,
-        I128,
-        I64,
-        I32,
-        I16,
-        I8,
-        U128,
-        U64,
-        U32,
-        U16,
-        U8,
-        Signed128,
-        Signed64,
-        Signed32,
-        Signed16,
-        Signed8,
-        Unsigned128,
-        Unsigned64,
-        Unsigned32,
-        Unsigned16,
-        Unsigned8,
-        Nat,
-        Dec,
-        F64,
-        F32,
-        Natural,
-        Decimal,
-        Binary32,
-        Binary64,
-        e,
-        pi,
-        tau,
-        abs,
-        absDiff,
-        neg,
-        add,
-        sub,
-        mul,
-        min,
-        max,
-        isLt,
-        isLte,
-        isGt,
-        isGte,
-        sin,
-        cos,
-        tan,
-        atan,
-        acos,
-        asin,
-        isZero,
-        isEven,
-        isOdd,
-        toFrac,
-        isPositive,
-        isNegative,
-        isNaN,
-        isInfinite,
-        isFinite,
-        rem,
-        remChecked,
-        div,
-        divChecked,
-        sqrt,
-        sqrtChecked,
-        log,
-        logChecked,
-        round,
-        ceiling,
-        floor,
-        compare,
-        pow,
-        powInt,
-        countLeadingZeroBits,
-        countTrailingZeroBits,
-        countOneBits,
-        addWrap,
-        addChecked,
-        addSaturated,
-        bitwiseAnd,
-        bitwiseXor,
-        bitwiseOr,
-        bitwiseNot,
-        shiftLeftBy,
-        shiftRightBy,
-        shiftRightZfBy,
-        subWrap,
-        subChecked,
-        subSaturated,
-        mulWrap,
-        mulSaturated,
-        mulChecked,
-        intCast,
-        bytesToU16,
-        bytesToU32,
-        bytesToU64,
-        bytesToU128,
-        divCeil,
-        divCeilChecked,
-        divTrunc,
-        divTruncChecked,
-        toStr,
-        isMultipleOf,
-        minI8,
-        maxI8,
-        minU8,
-        maxU8,
-        minI16,
-        maxI16,
-        minU16,
-        maxU16,
-        minI32,
-        maxI32,
-        minU32,
-        maxU32,
-        minI64,
-        maxI64,
-        minU64,
-        maxU64,
-        minI128,
-        maxI128,
-        minU128,
-        maxU128,
-        minF32,
-        maxF32,
-        minF64,
-        maxF64,
-        toI8,
-        toI8Checked,
-        toI16,
-        toI16Checked,
-        toI32,
-        toI32Checked,
-        toI64,
-        toI64Checked,
-        toI128,
-        toI128Checked,
-        toU8,
-        toU8Checked,
-        toU16,
-        toU16Checked,
-        toU32,
-        toU32Checked,
-        toU64,
-        toU64Checked,
-        toU128,
-        toU128Checked,
-        toNat,
-        toNatChecked,
-        toF32,
-        toF32Checked,
-        toF64,
-        toF64Checked,
-    ]
-    imports [
-        Bool.{ Bool },
-        Result.{ Result },
-    ]
+module [
+    Num,
+    Int,
+    Frac,
+    Integer,
+    FloatingPoint,
+    I128,
+    I64,
+    I32,
+    I16,
+    I8,
+    U128,
+    U64,
+    U32,
+    U16,
+    U8,
+    Signed128,
+    Signed64,
+    Signed32,
+    Signed16,
+    Signed8,
+    Unsigned128,
+    Unsigned64,
+    Unsigned32,
+    Unsigned16,
+    Unsigned8,
+    Dec,
+    F64,
+    F32,
+    Decimal,
+    Binary32,
+    Binary64,
+    e,
+    pi,
+    tau,
+    abs,
+    absDiff,
+    neg,
+    add,
+    sub,
+    mul,
+    min,
+    max,
+    isLt,
+    isLte,
+    isGt,
+    isGte,
+    isApproxEq,
+    sin,
+    cos,
+    tan,
+    atan,
+    acos,
+    asin,
+    isZero,
+    isEven,
+    isOdd,
+    toFrac,
+    isPositive,
+    isNegative,
+    isNaN,
+    isInfinite,
+    isFinite,
+    rem,
+    remChecked,
+    div,
+    divChecked,
+    sqrt,
+    sqrtChecked,
+    log,
+    logChecked,
+    round,
+    ceiling,
+    floor,
+    compare,
+    pow,
+    powInt,
+    countLeadingZeroBits,
+    countTrailingZeroBits,
+    countOneBits,
+    addWrap,
+    addChecked,
+    addSaturated,
+    bitwiseAnd,
+    bitwiseXor,
+    bitwiseOr,
+    bitwiseNot,
+    shiftLeftBy,
+    shiftRightBy,
+    shiftRightZfBy,
+    subWrap,
+    subChecked,
+    subSaturated,
+    mulWrap,
+    mulSaturated,
+    mulChecked,
+    intCast,
+    divCeil,
+    divCeilChecked,
+    divTrunc,
+    divTruncChecked,
+    toStr,
+    isMultipleOf,
+    minI8,
+    maxI8,
+    minU8,
+    maxU8,
+    minI16,
+    maxI16,
+    minU16,
+    maxU16,
+    minI32,
+    maxI32,
+    minU32,
+    maxU32,
+    minI64,
+    maxI64,
+    minU64,
+    maxU64,
+    minI128,
+    maxI128,
+    minU128,
+    maxU128,
+    minF32,
+    maxF32,
+    minF64,
+    maxF64,
+    toI8,
+    toI8Checked,
+    toI16,
+    toI16Checked,
+    toI32,
+    toI32Checked,
+    toI64,
+    toI64Checked,
+    toI128,
+    toI128Checked,
+    toU8,
+    toU8Checked,
+    toU16,
+    toU16Checked,
+    toU32,
+    toU32Checked,
+    toU64,
+    toU64Checked,
+    toU128,
+    toU128Checked,
+    toF32,
+    toF32Checked,
+    toF64,
+    toF64Checked,
+    withoutDecimalPoint,
+    withDecimalPoint,
+    f32ToParts,
+    f64ToParts,
+    f32FromParts,
+    f64FromParts,
+    nanF32,
+    nanF64,
+    infinityF32,
+    infinityF64,
+]
+
+import Bool exposing [Bool]
+import Result exposing [Result]
 
 ## Represents a number that could be either an [Int] or a [Frac].
 ##
 ## This is useful for functions that can work on either, for example [Num.add], whose type is:
-## ```
+## ```roc
 ## add : Num a, Num a -> Num a
 ## ```
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
@@ -192,9 +193,9 @@ interface Num
 ## a more specific type based on how they're used.
 ##
 ## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
-## but because `List.len` returns a `Nat`, the `1` ends up changing from
-## `Num *` to the more specific `Nat`, and the expression as a whole
-## ends up having the type `Nat`.
+## but because `List.len` returns a `U64`, the `1` ends up changing from
+## `Num *` to the more specific `U64`, and the expression as a whole
+## ends up having the type `U64`.
 ##
 ## Sometimes number literals don't become more specific. For example,
 ## the `Num.toStr` function has the type `Num * -> Str`. This means that
@@ -206,7 +207,7 @@ interface Num
 ##
 ## If this default of [I64] is not big enough for your purposes,
 ## you can add an `i128` to the end of the number literal, like so:
-## ```
+## ```roc
 ## Num.toStr 5_000_000_000i128
 ## ```
 ## This `i128` suffix specifies that you want this number literal to be
@@ -216,7 +217,6 @@ interface Num
 ## * `215u8` is a `215` value of type [U8]
 ## * `76.4f32` is a `76.4` value of type [F32]
 ## * `123.45dec` is a `123.45` value of type [Dec]
-## * `12345nat` is a `12345` value of type [Nat]
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
@@ -276,7 +276,7 @@ Num range := range
 ##
 ## You can optionally put underscores in your [Int] literals.
 ## They have no effect on the number's value, but can make large numbers easier to read.
-## ```
+## ```roc
 ## 1_000_000
 ## ```
 ## Integers come in two flavors: *signed* and *unsigned*.
@@ -326,16 +326,6 @@ Num range := range
 ## | ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
-## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
-## 32-bit system, it's the same as [U32].
-##
-## A common use for [Nat] is to store the length ("len" for short) of a
-## collection like a [List]. 64-bit systems can represent longer
-## lists in memory than 32-bit systems, which is why the length of a list
-## is represented as a [Nat] in Roc.
-##
 ## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Num.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
@@ -353,14 +343,14 @@ Int range : Num (Integer range)
 ##
 ## If you don't specify a type, Roc will default to using [Dec] because it's
 ## the least error-prone overall. For example, suppose you write this:
-## ```
+## ```roc
 ## wasItPrecise = 0.1 + 0.2 == 0.3
 ## ```
 ## The value of `wasItPrecise` here will be `Bool.true`, because Roc uses [Dec]
 ## by default when there are no types specified.
 ##
 ## In contrast, suppose we use `f32` or `f64` for one of these numbers:
-## ```
+## ```roc
 ## wasItPrecise = 0.1f64 + 0.2 == 0.3
 ## ```
 ## Here, `wasItPrecise` will be `Bool.false` because the entire calculation will have
@@ -425,8 +415,6 @@ Unsigned32 := []
 Unsigned16 := []
 Unsigned8 := []
 
-Natural := []
-
 Integer range := range
 
 I128 : Num (Integer Signed128)
@@ -442,18 +430,6 @@ U64 : Num (Integer Unsigned64)
 U32 : Num (Integer Unsigned32)
 U16 : Num (Integer Unsigned16)
 U8 : Num (Integer Unsigned8)
-
-## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
-## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
-## on 32-bit systems, and so on.
-##
-## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data structures
-## can hold is also system-specific. For example, the maximum number of elements
-## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
-## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
-## good fit for [List.len] regardless of system.
-Nat : Num (Integer Natural)
 
 Decimal := []
 Binary64 := []
@@ -560,67 +536,19 @@ tau = 2 * pi
 # ------- Functions
 ## Convert a number to a [Str].
 ##
-## This is the same as calling `Num.format {}` - so for more details on
-## exact formatting, see `Num.format`.
-## ```
+## ```roc
 ## Num.toStr 42
 ## ```
 ## Only [Frac] values will include a decimal point, and they will always include one.
-## ```
+## ```roc
 ## Num.toStr 4.2
 ## Num.toStr 4.0
 ## ```
 ## When this function is given a non-[finite](Num.isFinite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
-## To get strings in hexadecimal, octal, or binary format, use `Num.format`.
 toStr : Num * -> Str
 intCast : Int a -> Int b
-
-bytesToU16Lowlevel : List U8, Nat -> U16
-bytesToU32Lowlevel : List U8, Nat -> U32
-bytesToU64Lowlevel : List U8, Nat -> U64
-bytesToU128Lowlevel : List U8, Nat -> U128
-
-bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
-bytesToU16 = \bytes, index ->
-    # we need at least 1 more byte
-    offset = 1
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU16Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
-bytesToU32 = \bytes, index ->
-    # we need at least 3 more bytes
-    offset = 3
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU32Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU64 : List U8, Nat -> Result U64 [OutOfBounds]
-bytesToU64 = \bytes, index ->
-    # we need at least 7 more bytes
-    offset = 7
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU64Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU128 : List U8, Nat -> Result U128 [OutOfBounds]
-bytesToU128 = \bytes, index ->
-    # we need at least 15 more bytes
-    offset = 15
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU128Lowlevel bytes index)
-    else
-        Err OutOfBounds
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
@@ -630,7 +558,7 @@ compare : Num a, Num a -> [LT, EQ, GT]
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-## ```
+## ```roc
 ## 5
 ##     |> Num.isLt 6
 ## ```
@@ -642,7 +570,7 @@ isLt : Num a, Num a -> Bool
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-## ```
+## ```roc
 ## 6
 ##     |> Num.isGt 5
 ## ```
@@ -663,6 +591,20 @@ isLte : Num a, Num a -> Bool
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
+
+## Returns `Bool.true` if the first number and second number are within a specific threshold
+##
+## A specific relative and absolute tolerance can be provided to change the threshold
+##
+## This function is symmetric: `Num.isApproxEq a b == Num.isApproxEq b a`
+##
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
+isApproxEq = \x, y, { rtol ? 0.00001, atol ? 0.00000001 } ->
+    eq = x <= y && x >= y
+    meetsTolerance = Num.absDiff x y <= Num.max atol (rtol * Num.max (Num.abs x) (Num.abs y))
+    eq || meetsTolerance
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
@@ -691,14 +633,14 @@ toFrac : Num * -> Frac *
 
 ## Returns `Bool.true` if the [Frac] is not a number as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
-## ```
+## ```roc
 ## Num.isNaN (0 / 0)
 ## ```
 isNaN : Frac * -> Bool
 
 ## Returns `Bool.true` if the [Frac] is positive or negative infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
-## ```
+## ```roc
 ## Num.isInfinite (1 / 0)
 ##
 ## Num.isInfinite (-1 / 0)
@@ -707,7 +649,7 @@ isInfinite : Frac * -> Bool
 
 ## Returns `Bool.true` if the [Frac] is not an infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ##
-## ```
+## ```roc
 ## Num.isFinite 42
 ## ```
 isFinite : Frac * -> Bool
@@ -717,7 +659,7 @@ isFinite : Frac * -> Bool
 ## * For a positive number, returns the same number.
 ## * For a negative number, returns the same number except positive.
 ## * For zero, returns zero.
-## ```
+## ```roc
 ## Num.abs 4
 ##
 ## Num.abs -2.5
@@ -737,7 +679,7 @@ abs : Num a -> Num a
 
 ## Returns the absolute difference between two numbers.
 ##
-## ```
+## ```roc
 ## Num.absDiff 5 3
 ##
 ## Num.absDiff -3 5
@@ -757,7 +699,7 @@ absDiff = \a, b ->
         b - a
 
 ## Returns a negative number when given a positive one, and vice versa.
-## ```
+## ```roc
 ## Num.neg 5
 ##
 ## Num.neg -2.5
@@ -782,13 +724,13 @@ neg : Num a -> Num a
 ## (To add an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
-## ```
+## ```roc
 ## 5 + 7
 ##
 ## Num.add 5 7
 ## ```
 ## `Num.add` can be convenient in pipelines.
-## ```
+## ```roc
 ## Frac.pi
 ##     |> Num.add 1.0
 ## ```
@@ -803,13 +745,13 @@ add : Num a, Num a -> Num a
 ## (To subtract an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
-## ```
+## ```roc
 ## 7 - 5
 ##
 ## Num.sub 7 5
 ## ```
 ## `Num.sub` can be convenient in pipelines.
-## ```
+## ```roc
 ## Frac.pi
 ##     |> Num.sub 2.0
 ## ```
@@ -824,7 +766,7 @@ sub : Num a, Num a -> Num a
 ## (To multiply an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
-## ```
+## ```roc
 ## 5 * 7
 ##
 ## Num.mul 5 7
@@ -832,7 +774,7 @@ sub : Num a, Num a -> Num a
 ##
 ## `Num.mul` can be convenient in pipelines.
 ##
-## ```
+## ```roc
 ## Frac.pi
 ##     |> Num.mul 2.0
 ## ```
@@ -844,7 +786,7 @@ mul : Num a, Num a -> Num a
 
 ## Obtains the smaller between two numbers of the same type.
 ##
-## ```
+## ```roc
 ## Num.min 100 0
 ##
 ## Num.min 3.0 -3.0
@@ -858,7 +800,7 @@ min = \a, b ->
 
 ## Obtains the greater between two numbers of the same type.
 ##
-## ```
+## ```roc
 ## Num.max 100 0
 ##
 ## Num.max 3.0 -3.0
@@ -894,7 +836,7 @@ atan : Frac a -> Frac a
 ## > this standard, deviating from these rules has a significant performance
 ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
-## ```
+## ```roc
 ## Num.sqrt 4.0
 ##
 ## Num.sqrt 1.5
@@ -943,13 +885,13 @@ logChecked = \x ->
 ##
 ## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
 ## one of the functions in this module like #toDec.
-## ```
+## ```roc
 ## 5.0 / 7.0
 ##
 ## Num.div 5 7
 ## ```
 ## `Num.div` can be convenient in pipelines.
-## ```
+## ```roc
 ## Num.pi
 ##     |> Num.div 2.0
 ## ```
@@ -978,7 +920,7 @@ divCeilChecked = \a, b ->
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denominator to this function! If you do,
 ## it will crash.
-## ```
+## ```roc
 ## 5 // 7
 ##
 ## Num.divTrunc 5 7
@@ -988,18 +930,26 @@ divCeilChecked = \a, b ->
 ## Num.divTrunc 8 -3
 ## ```
 divTrunc : Int a, Int a -> Int a
+divTrunc = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.divTruncUnchecked a b
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divTruncChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.divTrunc a b)
+        Ok (Num.divTruncUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+divTruncUnchecked : Int a, Int a -> Int a
 
 ## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
 ## `a % b` is shorthand for `Num.rem a b`.
-## ```
+## ```roc
 ## 5 % 7
 ##
 ## Num.rem 5 7
@@ -1009,13 +959,21 @@ divTruncChecked = \a, b ->
 ## Num.rem -8 -3
 ## ```
 rem : Int a, Int a -> Int a
+rem = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.remUnchecked a b
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]
 remChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.rem a b)
+        Ok (Num.remUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+remUnchecked : Int a, Int a -> Int a
 
 isMultipleOf : Int a, Int a -> Bool
 
@@ -1042,10 +1000,10 @@ bitwiseNot = \n ->
 ##
 ## The least significant bits always become 0. This means that shifting left is
 ## like multiplying by factors of two for unsigned integers.
-## ```
+## ```roc
 ## shiftLeftBy 0b0000_0011 2 == 0b0000_1100
 ##
-## 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
+## 0b0000_0101 |> shiftLeftBy 2 == 0b0001_0100
 ## ```
 ## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
 shiftLeftBy : Int a, U8 -> Int a
@@ -1053,7 +1011,7 @@ shiftLeftBy : Int a, U8 -> Int a
 ## Bitwise arithmetic shift of a number by another
 ##
 ## The most significant bits are copied from the current.
-## ```
+## ```roc
 ## shiftRightBy 0b0000_1100 2 == 0b0000_0011
 ##
 ## 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
@@ -1067,7 +1025,7 @@ shiftRightBy : Int a, U8 -> Int a
 ##
 ## The most significant bits always become 0. This means that shifting right is
 ## like dividing by factors of two for unsigned integers.
-## ```
+## ```roc
 ## shiftRightZfBy 0b0010_1000 2 == 0b0000_1010
 ##
 ## 0b0010_1000 |> shiftRightZfBy 2 == 0b0000_1010
@@ -1103,7 +1061,7 @@ powInt : Int a, Int a -> Int a
 
 ## Counts the number of most-significant (leading in a big-Endian sense) zeroes in an integer.
 ##
-## ```
+## ```roc
 ## Num.countLeadingZeroBits 0b0001_1100u8
 ##
 ## 3
@@ -1116,7 +1074,7 @@ countLeadingZeroBits : Int a -> U8
 
 ## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
 ##
-## ```
+## ```roc
 ## Num.countTrailingZeroBits 0b0001_1100u8
 ##
 ## 2
@@ -1129,7 +1087,7 @@ countTrailingZeroBits : Int a -> U8
 
 ## Counts the number of set bits in an integer.
 ##
-## ```
+## ```roc
 ## Num.countOneBits 0b0001_1100u8
 ##
 ## 3
@@ -1433,22 +1391,6 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated!
-## Since [Nat] has a different maximum number depending on the system you're building
-## for, this may give a different answer on different systems.
-##
-## For example, on a 32-bit system, calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
-## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
-##
-## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
-## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to `Num.maxU64`, and 9_000_000_000 is lower than `Num.maxU64`.
-##
-## To convert a [Frac] to a [Nat], first call either `Num.round`, `Num.ceil`, or `Num.floor`
-## on it, then call this on the resulting [Int].
-toNat : Int * -> Nat
-
 ## Converts a [Num] to an [F32]. If the given number can't be precisely represented in an [F32],
 ## the returned number may be different from the given number.
 toF32 : Num * -> F32
@@ -1470,6 +1412,44 @@ toU16Checked : Int * -> Result U16 [OutOfBounds]
 toU32Checked : Int * -> Result U32 [OutOfBounds]
 toU64Checked : Int * -> Result U64 [OutOfBounds]
 toU128Checked : Int * -> Result U128 [OutOfBounds]
-toNatChecked : Int * -> Result Nat [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
+
+## Turns a [Dec] into its [I128] representation by removing the decimal point.
+## This is equivalent to multiplying the [Dec] by 10^18.
+withoutDecimalPoint : Dec -> I128
+
+## Turns a [I128] into the coresponding [Dec] by adding the decimal point.
+## This is equivalent to dividing the [I128] by 10^18.
+withDecimalPoint : I128 -> Dec
+
+## Splits a [F32] into its components according to IEEE 754 standard.
+f32ToParts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
+
+## Splits a [F64] into its components according to IEEE 754 standard.
+f64ToParts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
+
+## Combine parts of a [F32] according to IEEE 754 standard.
+## The fraction should not be bigger than 0x007F_FFFF, any bigger value will be truncated.
+f32FromParts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
+
+## Combine parts of a [F64] according to IEEE 754 standard.
+## The fraction should not be bigger than 0x000F_FFFF_FFFF_FFFF, any bigger value will be truncated.
+## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
+f64FromParts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
+
+## The value for not-a-number for a [F32] according to the IEEE 754 standard.
+nanF32 : F32
+nanF32 = 0.0f32 / 0.0
+
+## The value for not-a-number for a [F64] according to the IEEE 754 standard.
+nanF64 : F64
+nanF64 = 0.0f64 / 0.0
+
+## The value for infinity for a [F32] according to the IEEE 754 standard.
+infinityF32 : F32
+infinityF32 = 1.0f32 / 0.0
+
+## The value for infinity for a [F64] according to the IEEE 754 standard.
+infinityF64 : F64
+infinityF64 = 1.0f64 / 0.0

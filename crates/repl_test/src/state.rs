@@ -4,7 +4,6 @@ use roc_repl_cli::{evaluate, ReplHelper};
 use roc_repl_ui::is_incomplete;
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_reporting::report::DEFAULT_PALETTE;
-use roc_target::TargetInfo;
 use rustyline::Editor;
 use target_lexicon::Triple;
 
@@ -128,9 +127,8 @@ fn partial_record_definition() {
 fn tips() {
     assert!(!is_incomplete(""));
     let arena = Bump::new();
-    let target = Triple::host();
-    let target_info = TargetInfo::from(&target);
-    let action = ReplState::default().step(&arena, "", target_info, DEFAULT_PALETTE);
+    let target = Triple::host().into();
+    let action = ReplState::default().step(&arena, "", target, DEFAULT_PALETTE);
     assert!(matches!(action, ReplAction::Help));
 }
 
@@ -142,9 +140,8 @@ fn standalone_annotation() {
     incomplete(&mut input);
     assert!(!is_incomplete(&input));
     let arena = Bump::new();
-    let target = Triple::host();
-    let target_info = TargetInfo::from(&target);
-    let action = state.step(&arena, &input, target_info, DEFAULT_PALETTE);
+    let target = Triple::host().into();
+    let action = state.step(&arena, &input, target, DEFAULT_PALETTE);
     assert!(matches!(action, ReplAction::Nothing));
 }
 
@@ -153,16 +150,15 @@ fn standalone_annotation() {
 fn complete(input: &str, state: &mut ReplState, expected_start: &str) {
     assert!(!is_incomplete(input));
     let arena = Bump::new();
-    let target = Triple::host();
-    let target_info = TargetInfo::from(&target);
-    let action = state.step(&arena, input, target_info, DEFAULT_PALETTE);
+    let target = Triple::host().into();
+    let action = state.step(&arena, input, target, DEFAULT_PALETTE);
     let repl_helper = ReplHelper::default();
     let mut editor = Editor::<ReplHelper>::new();
     editor.set_helper(Some(repl_helper));
 
     match action {
         ReplAction::Eval { opt_mono, problems } => {
-            let string = evaluate(opt_mono, problems, &target);
+            let string = evaluate(opt_mono, problems, target);
             let escaped =
                 std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap())
                     .unwrap();
@@ -190,16 +186,15 @@ fn incomplete(input: &mut String) {
 fn error(input: &str, state: &mut ReplState, expected_step_result: String) {
     assert!(!is_incomplete(input));
     let arena = Bump::new();
-    let target = Triple::host();
-    let target_info = TargetInfo::from(&target);
-    let action = state.step(&arena, input, target_info, DEFAULT_PALETTE);
+    let target = Triple::host().into();
+    let action = state.step(&arena, input, target, DEFAULT_PALETTE);
     let repl_helper = ReplHelper::default();
     let mut editor = Editor::<ReplHelper>::new();
     editor.set_helper(Some(repl_helper));
 
     match action {
         ReplAction::Eval { opt_mono, problems } => {
-            let string = evaluate(opt_mono, problems, &target);
+            let string = evaluate(opt_mono, problems, target);
             let escaped =
                 std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap())
                     .unwrap();

@@ -1,14 +1,14 @@
 use object::write;
 use object::{Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope};
 use roc_error_macros::internal_error;
+use roc_target::Target;
 use std::path::Path;
 use std::process::Command;
-use target_lexicon::Triple;
 
 // TODO: Eventually do this from scratch and in memory instead of with ld.
 pub fn create_dylib_macho(
     custom_names: &[String],
-    triple: &Triple,
+    target: Target,
 ) -> object::read::Result<Vec<u8>> {
     let dummy_obj_file = tempfile::Builder::new()
         .prefix("roc_lib")
@@ -19,9 +19,9 @@ pub fn create_dylib_macho(
     let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.so");
 
     let obj_target = BinaryFormat::MachO;
-    let obj_arch = match triple.architecture {
-        target_lexicon::Architecture::X86_64 => Architecture::X86_64,
-        target_lexicon::Architecture::Aarch64(_) => Architecture::Aarch64,
+    let obj_arch = match target.architecture() {
+        roc_target::Architecture::X86_64 => Architecture::X86_64,
+        roc_target::Architecture::Aarch64 => Architecture::Aarch64,
         _ => {
             // We should have verified this via supported() before calling this function
             unreachable!()

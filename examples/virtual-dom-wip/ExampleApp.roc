@@ -1,8 +1,6 @@
-interface ExampleApp
-    exposes [exampleApp, State]
-    imports [
-        pf.Html.{ App, Html, html, head, body, div, text, h1 },
-    ]
+module [exampleApp, State]
+
+import pf.Html exposing [App, Html, html, head, body, div, text, h1]
 
 State : {
     answer : U32,
@@ -28,7 +26,7 @@ render = \state ->
         head [] [],
         body [] [
             h1 [] [text "The app"],
-            div [] [text "The answer is \(num)"],
+            div [] [text "The answer is $(num)"],
         ],
     ]
 

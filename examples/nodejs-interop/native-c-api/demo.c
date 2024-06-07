@@ -357,7 +357,7 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
     // roc_panic needs a napi_env in order to throw a Node exception, so we provide this
     // one globally in case roc_panic gets called during the execution of our Roc function.
     //
-    // According do the docs - https://nodejs.org/api/n-api.html#napi_env -
+    // According to the docs - https://nodejs.org/api/n-api.html#napi_env -
     // it's very important that the napi_env that was passed into "the initial
     // native function" is the one that's "passed to any subsequent nested Node-API calls,"
     // so we must override this every time we call this function (as opposed to, say,

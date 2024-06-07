@@ -1,0 +1,36 @@
+Module {
+    comments: [],
+    header: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: Some(
+                ModuleParams {
+                    params: [
+                        @8-12 Identifier {
+                            ident: "echo",
+                        },
+                        @14-18 Identifier {
+                            ident: "read",
+                        },
+                    ],
+                    before_arrow: [],
+                    after_arrow: [],
+                },
+            ),
+            exposes: [
+                @25-33 ExposedName(
+                    "mainMenu",
+                ),
+                @39-46 SpaceBefore(
+                    ExposedName(
+                        "credits",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            interface_imports: None,
+        },
+    ),
+}

@@ -1,7 +1,10 @@
-app "false"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task.{ Task }, pf.Stdout, pf.Stdin, Context.{ Context }, Variable.{ Variable }]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
+
+import pf.Task exposing [Task]
+import pf.Stdout
+import pf.Stdin
+import Context exposing [Context]
+import Variable exposing [Variable]
 
 # An interpreter for the False programming language: https://strlen.com/false-language/
 # This is just a silly example to test this variety of program.
@@ -21,7 +24,7 @@ InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, Invali
 main : Str -> Task {} []
 main = \filename ->
     interpretFile filename
-    |> Task.onFail \StringErr e -> Stdout.line "Ran into problem:\n\(e)\n"
+    |> Task.onFail \StringErr e -> Stdout.line "Ran into problem:\n$(e)\n"
 
 interpretFile : Str -> Task {} [StringErr Str]
 interpretFile = \filename ->
@@ -44,7 +47,7 @@ interpretFile = \filename ->
             Task.fail (StringErr "Ran into an invalid boolean that was neither false (0) or true (-1)")
 
         Err (InvalidChar char) ->
-            Task.fail (StringErr "Ran into an invalid character with ascii code: \(char)")
+            Task.fail (StringErr "Ran into an invalid character with ascii code: $(char)")
 
         Err MaxInputNumber ->
             Task.fail (StringErr "Like the original false compiler, the max input number is 320,000")

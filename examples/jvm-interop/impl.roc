@@ -1,11 +1,8 @@
-app "rocdemo"
-    packages { pf: "platform.roc" }
-    imports []
-    provides [program] to pf
+app [program] { pf: platform "platform.roc" }
 
 interpolateString : Str -> Str
 interpolateString = \name ->
-    "Hello from Roc \(name)!!!🤘🤘🤘"
+    "Hello from Roc $(name)!!!🤘🤘🤘"
 
 # jint is i32
 mulArrByScalar : List I32, I32 -> List I32

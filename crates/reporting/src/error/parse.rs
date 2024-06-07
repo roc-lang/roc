@@ -540,22 +540,8 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Record(_erecord, pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([alloc.reflow("TODO provide more context.")]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "RECORD PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
-            }
+        EExpr::Record(erecord, pos) => {
+            to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
         EExpr::OptionalValueInRecordBuilder(region) => {
@@ -670,6 +656,9 @@ fn to_expr_report<'a>(
         EExpr::Dbg(e_expect, _position) => {
             to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
         }
+        EExpr::Import(e_import, position) => {
+            to_import_report(alloc, lines, filename, e_import, *position)
+        }
         EExpr::TrailingOperator(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
@@ -687,7 +676,49 @@ fn to_expr_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+        EExpr::UnexpectedComma(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am trying to parse an expression, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("This comma in an invalid position.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNEXPECTED COMMA".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
+    }
+}
+
+fn to_record_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    _parse_problem: &roc_parse::parser::ERecord<'a>,
+    pos: Position,
+    start: Position,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.concat([alloc.reflow("TODO provide more context.")]),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "RECORD PARSE PROBLEM".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -974,7 +1005,7 @@ fn to_str_report<'a>(
                         suggestion("An escaped quote: ", "\\\""),
                         suggestion("An escaped backslash: ", "\\\\"),
                         suggestion("A unicode code point: ", "\\u(00FF)"),
-                        suggestion("An interpolated string: ", "\\(myVariable)"),
+                        suggestion("An interpolated string: ", "$(myVariable)"),
                     ])
                     .indent(4),
             ]);
@@ -1021,7 +1052,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("\"The count is \\(count\\)\""),
+                    alloc.parser_suggestion("\"The count is $(count)\""),
                     alloc.reflow("."),
                 ]),
             ]);
@@ -1098,9 +1129,9 @@ fn to_str_report<'a>(
                 ESingleQuote::InterpolationNotAllowed => {
                     alloc.stack([
                         alloc.concat([
-                            alloc.reflow("I am part way through parsing this scalar literal (character literal), "),
-                            alloc.reflow("but I encountered a string interpolation like \"\\(this)\", which is not "),
-                            alloc.reflow("allowed in scalar literals."),
+                            alloc.reflow("I am part way through parsing this single-quote literal, "),
+                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region),
                         alloc.concat([
@@ -1419,6 +1450,237 @@ fn to_dbg_or_expect_report<'a>(
         }
 
         roc_parse::parser::EExpect::IndentCondition(_) => todo!(),
+    }
+}
+
+fn to_import_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EImport<'a>,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EImport::*;
+    use roc_parse::parser::EImportParams;
+
+    match parse_problem {
+        Import(_pos) => unreachable!("another branch would be taken"),
+        IndentStart(pos)
+        | PackageShorthand(pos)
+        | PackageShorthandDot(pos)
+        | ModuleName(pos)
+        | IndentIngestedPath(pos)
+        | IngestedPath(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see a module name, like:"),
+                alloc.parser_suggestion("import BigNum").indent(4),
+                alloc.reflow("Or a package module name, like:"),
+                alloc.parser_suggestion("import pf.Stdout").indent(4),
+                alloc.reflow("Or a file path to ingest, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
+        Params(EImportParams::Indent(pos), _)
+        | IndentAs(pos)
+        | As(pos)
+        | IndentExposing(pos)
+        | Exposing(pos)
+        | EndNewline(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.concat([
+                    alloc.reflow("I was expecting to see the "),
+                    alloc.keyword("as"),
+                    alloc.reflow(" keyword, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("import svg.Path as SvgPath")
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow("Or the "),
+                    alloc.keyword("exposing"),
+                    alloc.reflow(" keyword, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("import svg.Path exposing [arc, rx]")
+                    .indent(4),
+                alloc.reflow("Or module params, like:"),
+                alloc
+                    .parser_suggestion("import Menu { echo, read }")
+                    .indent(4),
+            ]),
+        ),
+        Params(EImportParams::Record(problem, pos), _) => {
+            to_record_report(alloc, lines, filename, problem, *pos, start)
+        }
+        Params(EImportParams::RecordApplyFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("This looks like a record builder field, but those are not allowed in module params."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        Params(EImportParams::RecordUpdateFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("It looks like you're trying to update a record, but module params require a standalone record literal."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD UPDATE IN MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat([
+                alloc.reflow("I just saw the "),
+                alloc.keyword("as"),
+                alloc.reflow(" keyword, so I was expecting to see an alias next."),
+            ]),
+        ),
+        LowercaseAlias(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow(r"This import is using a lowercase alias:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"Module names and aliases must start with an uppercase letter."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "LOWERCASE ALIAS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        ExposingListStart(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.concat([
+                alloc.reflow("I just saw the "),
+                alloc.keyword("exposing"),
+                alloc.reflow(" keyword, so I was expecting to see "),
+                alloc.keyword("["),
+                alloc.reflow(" next."),
+            ]),
+        ),
+        ExposedName(pos) | ExposingListEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I'm partway through parsing an exposing list, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"I was expecting a type, value, or function name next, like:"),
+                alloc
+                    .parser_suggestion("import Svg exposing [Path, arc, rx]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSING".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        IndentIngestedName(pos) | IngestedName(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see a name next, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
+        Annotation(problem, pos) => to_type_report(alloc, lines, filename, problem, *pos),
+        IndentAnnotation(pos) | IndentColon(pos) | Colon(pos) => to_unfinished_import_report(
+            alloc,
+            lines,
+            filename,
+            *pos,
+            start,
+            alloc.stack([
+                alloc.reflow("I was expecting to see an annotation next, like:"),
+                alloc
+                    .parser_suggestion("import \"users.json\" as users : Str")
+                    .indent(4),
+            ]),
+        ),
+        Space(problem, pos) | Params(EImportParams::Space(problem, pos), _) => {
+            to_space_report(alloc, lines, filename, problem, *pos)
+        }
+    }
+}
+
+fn to_unfinished_import_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    pos: Position,
+    start: Position,
+    message: RocDocBuilder<'a>,
+) -> Report<'a> {
+    let surroundings = Region::new(start, pos);
+    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow(r"I was partway through parsing an "),
+            alloc.keyword("import"),
+            alloc.reflow(r", but I got stuck here:"),
+        ]),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        message,
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNFINISHED IMPORT".to_string(),
+        severity: Severity::RuntimeError,
     }
 }
 
@@ -3188,6 +3450,8 @@ fn to_header_report<'a>(
             to_provides_report(alloc, lines, filename, provides, *pos)
         }
 
+        EHeader::Params(params, pos) => to_params_report(alloc, lines, filename, params, *pos),
+
         EHeader::Exposes(exposes, pos) => to_exposes_report(alloc, lines, filename, exposes, *pos),
 
         EHeader::Imports(imports, pos) => to_imports_report(alloc, lines, filename, imports, *pos),
@@ -3582,6 +3846,48 @@ fn to_provides_report<'a>(
     }
 }
 
+fn to_params_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::EParams<'a>,
+    start: Position,
+) -> Report<'a> {
+    use roc_parse::parser::EParams;
+
+    match parse_problem {
+        EParams::Pattern(error, pos) => to_precord_report(alloc, lines, filename, error, *pos),
+
+        EParams::BeforeArrow(pos) | EParams::Arrow(pos) | EParams::AfterArrow(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I am partway through parsing a module header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting "),
+                    alloc.keyword("->"),
+                    alloc.reflow(" next, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("module { echo, read } -> [menu]")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD MODULE PARAMS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EParams::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
+    }
+}
+
 fn to_exposes_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
@@ -3604,7 +3910,7 @@ fn to_exposes_report<'a>(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
-                    .parser_suggestion("exposes [Animal, default, tame]")
+                    .parser_suggestion("[Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3629,7 +3935,7 @@ fn to_exposes_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("exposes [Animal, default, tame]")
+                    .parser_suggestion("[Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3910,6 +4216,28 @@ fn to_packages_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+        EPackages::ListEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a list of packages, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
+                alloc
+                    .parser_suggestion("packages { package_name: \"url-or-path\", }")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PACKAGES LIST".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
@@ -3933,7 +4261,9 @@ fn to_space_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow("I encountered a tab character:"),
                 alloc.region(region),
-                alloc.reflow("Tab characters are not allowed, use spaces instead."),
+                alloc.reflow(
+                    "Tab characters are not allowed in Roc code. Please use spaces instead!",
+                ),
             ]);
 
             Report {

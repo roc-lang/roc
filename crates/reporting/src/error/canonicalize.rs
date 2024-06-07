@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::DERIVABLE_ABILITIES;
+use roc_module::symbol::{ScopeModuleSource, DERIVABLE_ABILITIES};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
@@ -20,8 +20,12 @@ const NAMING_PROBLEM: &str = "NAMING PROBLEM";
 const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
+const IMPORT_NAME_CONFLICT: &str = "IMPORT NAME CONFLICT";
+const EXPLICIT_BUILTIN_IMPORT: &str = "EXPLICIT BUILTIN IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
-const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
+const UNDECLARED_TYPE_VARIABLE: &str = "UNDECLARED TYPE VARIABLE";
+const WILDCARD_NOT_ALLOWED: &str = "WILDCARD NOT ALLOWED HERE";
+const UNDERSCORE_NOT_ALLOWED: &str = "UNDERSCORE NOT ALLOWED HERE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
 const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
@@ -32,6 +36,7 @@ pub const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
+const INGESTED_FILE_ERROR: &str = "INGESTED FILE ERROR";
 const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
@@ -107,9 +112,8 @@ pub fn can_problem<'b>(
         Problem::UnusedModuleImport(module_id, region) => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("Nothing from "),
                     alloc.module(module_id),
-                    alloc.reflow(" is used in this module."),
+                    alloc.reflow(" is imported but not used."),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
@@ -121,6 +125,127 @@ pub fn can_problem<'b>(
 
             title = UNUSED_IMPORT.to_string();
         }
+        Problem::ImportNameConflict {
+            name,
+            is_alias,
+            new_module_id,
+            new_import_region,
+            existing_import,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.module(new_module_id),
+                    if is_alias {
+                        alloc.concat([
+                            alloc.reflow(" was imported as "),
+                            alloc.module_name(name.clone()),
+                            alloc.reflow(":"),
+                        ])
+                    } else {
+                        alloc.reflow(" was imported here: ")
+                    },
+                ]),
+                alloc.region(lines.convert_region(new_import_region)),
+
+                match existing_import {
+                    ScopeModuleSource::Import(exsting_import_region) => {
+                        alloc.stack([
+                            alloc.concat([
+                                alloc.reflow("but "),
+                                alloc.module_name(name.clone()),
+                                alloc.reflow(" is already used by a previous import:"),
+                            ]),
+                            alloc.region(lines.convert_region(exsting_import_region)),
+                        ])
+                    }
+                    ScopeModuleSource::Builtin => {
+                        alloc.concat([
+                            alloc.reflow("but "),
+                            alloc.module_name(name),
+                            alloc.reflow(" is also the name of a builtin."),
+                        ])
+                    }
+                    ScopeModuleSource::Current => {
+                        alloc.concat([
+                            alloc.reflow("but "),
+                            alloc.module_name(name),
+                            alloc.reflow(" is also the name of the current module."),
+                        ])
+                    }
+                },
+                alloc.reflow("Using the same name for both can make it hard to tell which module you are referring to."),
+                if is_alias {
+                    alloc.reflow("Make sure each import has a unique alias or none at all.")
+                } else {
+                    alloc.stack([
+                        alloc.reflow("You can assign a different name to a module like this:"),
+                        alloc.reflow("import JsonDecode as JD").indent(4),
+                    ])
+                },
+            ]);
+            title = IMPORT_NAME_CONFLICT.to_string();
+        }
+
+        Problem::ExplicitBuiltinImport(module_id, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The builtin "),
+                    alloc.module(module_id),
+                    alloc.reflow(" was imported here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Builtins are imported automatically, so you can remove this import."),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+            ]);
+
+            title = EXPLICIT_BUILTIN_IMPORT.to_string();
+        }
+
+        Problem::ExplicitBuiltinTypeImport(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" was imported here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("All types from builtins are automatically exposed, so you can remove "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" from the exposing list.")
+                ]),
+                alloc.reflow("Tip: Learn more about builtins in the tutorial:\n\n<https://www.roc-lang.org/tutorial#builtin-modules>"),
+            ]);
+
+            title = EXPLICIT_BUILTIN_IMPORT.to_string();
+        }
+
+        Problem::ImportShadowsSymbol {
+            region,
+            new_symbol,
+            existing_symbol_region,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This import exposes "),
+                    alloc.symbol_qualified(new_symbol),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("However, the name "),
+                    alloc.symbol_unqualified(new_symbol),
+                    alloc.reflow(" was already used here:"),
+                ]),
+                alloc.region(lines.convert_region(existing_symbol_region)),
+                alloc.concat([
+                    alloc.reflow("You can rename it, or use the qualified name: "),
+                    alloc.symbol_qualified(new_symbol),
+                ]),
+            ]);
+
+            title = DUPLICATE_NAME.to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),
@@ -334,41 +459,132 @@ pub fn can_problem<'b>(
 
             title = UNUSED_ALIAS_PARAM.to_string();
         }
-        Problem::UnboundTypeVariable {
+        Problem::WildcardNotAllowed {
             typ: alias,
-            num_unbound,
+            num_wildcards,
             one_occurrence,
             kind,
         } => {
             let mut stack = Vec::with_capacity(4);
-            if num_unbound == 1 {
+            if num_wildcards == 1 {
                 stack.push(alloc.concat([
                     alloc.reflow("The definition of "),
                     alloc.symbol_unqualified(alias),
-                    alloc.reflow(" has an unbound type variable:"),
+                    alloc.reflow(" includes a wildcard ("),
+                    alloc.keyword("*"),
+                    alloc.reflow(") type variable:"),
                 ]));
             } else {
                 stack.push(alloc.concat([
                     alloc.reflow("The definition of "),
                     alloc.symbol_unqualified(alias),
-                    alloc.reflow(" has "),
-                    text!(alloc, "{}", num_unbound),
-                    alloc.reflow(" unbound type variables."),
+                    alloc.reflow(" includes "),
+                    text!(alloc, "{}", num_wildcards),
+                    alloc.reflow(" wildcard ("),
+                    alloc.keyword("*"),
+                    alloc.reflow(") type variables. Here is one of them:"),
                 ]));
-                stack.push(alloc.reflow("Here is one occurrence:"));
             }
             stack.push(alloc.region(lines.convert_region(one_occurrence)));
-            stack.push(alloc.tip().append(alloc.concat([
-                alloc.reflow("Type variables must be bound before the "),
-                alloc.keyword(match kind {
-                    AliasKind::Structural => ":",
-                    AliasKind::Opaque => ":=",
+            stack.push(alloc.concat([
+                alloc.reflow(match kind {
+                    AliasKind::Structural => "Type alias",
+                    AliasKind::Opaque => "Opaque type",
                 }),
-                alloc.reflow(". Perhaps you intended to add a type parameter to this type?"),
+                alloc.reflow(" definitions may not use wildcard ("),
+                alloc.keyword("*"),
+                alloc.reflow(") type variables. Only named type variables are allowed."),
+            ]));
+            doc = alloc.stack(stack);
+
+            title = WILDCARD_NOT_ALLOWED.to_string();
+        }
+        Problem::UnderscoreNotAllowed {
+            typ: alias,
+            num_underscores,
+            one_occurrence,
+            kind,
+        } => {
+            let mut stack = Vec::with_capacity(4);
+            if num_underscores == 1 {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes an inferred ("),
+                    alloc.keyword("_"),
+                    alloc.reflow(") type:"),
+                ]));
+            } else {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes "),
+                    text!(alloc, "{}", num_underscores),
+                    alloc.reflow(" inferred ("),
+                    alloc.keyword("_"),
+                    alloc.reflow(") types:"),
+                ]));
+                stack.push(alloc.reflow("Here is one of them:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
+            stack.push(alloc.concat([
+                alloc.reflow(match kind {
+                    AliasKind::Structural => "Type alias",
+                    AliasKind::Opaque => "Opaque type",
+                }),
+                alloc.reflow(" definitions may not use inferred types ("),
+                alloc.keyword("_"),
+                alloc.reflow(")."),
+            ]));
+            doc = alloc.stack(stack);
+
+            title = UNDERSCORE_NOT_ALLOWED.to_string();
+        }
+        Problem::UndeclaredTypeVar {
+            typ: alias,
+            num_unbound,
+            one_occurrence,
+            kind,
+        } => {
+            let decl_symbol = match kind {
+                AliasKind::Structural => ":",
+                AliasKind::Opaque => ":=",
+            };
+            let mut stack = Vec::with_capacity(4);
+
+            if num_unbound == 1 {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes an undeclared type variable:"),
+                ]));
+            } else {
+                stack.push(alloc.concat([
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" includes "),
+                    text!(alloc, "{}", num_unbound),
+                    alloc.reflow(" undeclared type variables."),
+                ]));
+                stack.push(alloc.reflow("Here is one of them:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
+            stack.push(alloc.concat([
+                alloc.reflow("All type variables in "),
+                alloc.reflow(match kind {
+                    AliasKind::Structural => "type alias",
+                    AliasKind::Opaque => "opaque type",
+                }),
+                alloc.reflow(" definitions must be declared."),
+            ]));
+            stack.push(alloc.tip().append(alloc.concat([
+                alloc.reflow("You can declare type variables by putting them right before the "),
+                alloc.keyword(decl_symbol),
+                alloc.reflow(" symbol, separated by spaces."),
             ])));
             doc = alloc.stack(stack);
 
-            title = UNBOUND_TYPE_VARIABLE.to_string();
+            title = UNDECLARED_TYPE_VARIABLE.to_string();
         }
         Problem::BadRecursion(entries) => {
             doc = to_circular_def_doc(alloc, lines, &entries);
@@ -1090,7 +1306,7 @@ pub fn can_problem<'b>(
             title = "OVERAPPLIED CRASH".to_string();
         }
         Problem::FileProblem { filename, error } => {
-            let report = to_file_problem_report(alloc, &filename, error);
+            let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;
             title = report.title;
         }
@@ -1741,6 +1957,16 @@ fn pretty_runtime_error<'b>(
 
             title = MODULE_NOT_IMPORTED;
         }
+        RuntimeError::ReadIngestedFileError {
+            filename,
+            error,
+            region: _,
+        } => {
+            let report = to_file_problem_report(alloc, filename, error);
+
+            doc = report.doc;
+            title = INGESTED_FILE_ERROR;
+        }
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem
             unreachable!();
@@ -1768,6 +1994,9 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::MalformedClosure(_) => {
             todo!("");
+        }
+        RuntimeError::MalformedSuffixed(_) => {
+            todo!("error for malformed suffix");
         }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {

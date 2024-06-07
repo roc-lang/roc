@@ -5,9 +5,9 @@ use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{
-    incrementing_elem_loop, list_capacity_or_ref_ptr, list_refcount_ptr, load_list,
+    incrementing_elem_loop, list_allocation_ptr, list_capacity_or_ref_ptr, load_list,
 };
-use crate::llvm::build_str::str_refcount_ptr;
+use crate::llvm::build_str::str_allocation_ptr;
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use crate::llvm::struct_::RocStruct;
 use bumpalo::collections::Vec;
@@ -80,7 +80,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = match env.target_info.ptr_width() {
+        let one = match env.target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => {
                 env.context.i32_type().const_int(i32::MIN as u64, false)
             }
@@ -128,7 +128,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     ) {
         let alignment = layout
             .allocation_alignment_bytes(layout_interner)
-            .max(env.target_info.ptr_width() as u32);
+            .max(env.target.ptr_width() as u32);
 
         let context = env.context;
         let block = env.builder.get_insert_block().expect("to be in a function");
@@ -866,7 +866,7 @@ fn modify_refcount_list_help<'a, 'ctx>(
     }
 
     let refcount_ptr =
-        PointerToRefcount::from_ptr_to_data(env, list_refcount_ptr(env, original_wrapper));
+        PointerToRefcount::from_ptr_to_data(env, list_allocation_ptr(env, original_wrapper));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 
@@ -973,7 +973,7 @@ fn modify_refcount_str_help<'a, 'ctx>(
     builder.new_build_conditional_branch(is_big_and_non_empty, modification_block, cont_block);
     builder.position_at_end(modification_block);
 
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, arg_val));
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, str_allocation_ptr(env, arg_val));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(
         call_mode,
@@ -1034,7 +1034,7 @@ pub fn build_header_help<'ctx>(
 
     // this should be `Linkage::Private`, but that will remove all of the code for the inc/dec
     // functions on windows. LLVM just does not emit the assembly for them. Investigate why this is
-    let linkage = if let roc_target::OperatingSystem::Windows = env.target_info.operating_system {
+    let linkage = if let roc_target::OperatingSystem::Windows = env.target.operating_system() {
         Linkage::External
     } else {
         Linkage::Private
@@ -1162,7 +1162,7 @@ fn build_rec_union_help<'a, 'ctx>(
 
     debug_assert!(arg_val.is_pointer_value());
     let current_tag_id = get_tag_id(env, layout_interner, fn_val, &union_layout, arg_val);
-    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.target_info) {
+    let value_ptr = if union_layout.stores_tag_id_in_pointer(env.target) {
         tag_pointer_clear_tag_id(env, arg_val.into_pointer_value())
     } else {
         arg_val.into_pointer_value()
@@ -1295,14 +1295,24 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
             _ => tag_id,
         };
 
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        env.builder.position_at_end(block);
+
         // if none of the fields are or contain anything refcounted, just move on
         if fields_need_no_refcounting(layout_interner, field_layouts) {
+            // Still make sure to decrement the refcount of the union as a whole.
+            if let DecOrReuse::Dec = decrement_or_reuse {
+                let union_layout = LayoutRepr::Union(union_layout);
+                refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
+            }
+
+            // this function returns void
+            builder.new_build_return(None);
+
+            cases.push((tag_id_int_type.const_int(tag_id as u64, false), block));
+
             continue;
         }
-
-        let block = env.context.append_basic_block(parent, "tag_id_decrement");
-
-        env.builder.position_at_end(block);
 
         let fields_struct = LayoutRepr::struct_(field_layouts);
         let wrapper_type = basic_type_from_layout(env, layout_interner, fields_struct);
@@ -1370,12 +1380,9 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
         // and store them on the stack, then modify (and potentially free) the current cell, then
         // actually inc/dec the fields.
 
-        match decrement_or_reuse {
-            DecOrReuse::Reuse => {}
-            DecOrReuse::Dec => {
-                let union_layout = LayoutRepr::Union(union_layout);
-                refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
-            }
+        if let DecOrReuse::Dec = decrement_or_reuse {
+            let union_layout = LayoutRepr::Union(union_layout);
+            refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
         }
 
         for (field, field_layout) in deferred_nonrec {

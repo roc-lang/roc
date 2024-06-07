@@ -128,7 +128,7 @@ macro_rules! run_jit_function {
             Err((error_msg, _)) => {
                 eprintln!("This Roc code crashed with: \"{error_msg}\"");
 
-                Expr::MalformedClosure
+                Expr::REPL_RUNTIME_CRASH
             }
         }
     }};
@@ -165,10 +165,10 @@ macro_rules! run_jit_function_dynamic_type {
             let result = Result::from(call_result);
 
             match result {
-                Ok(()) => $transform(output.add(CALL_RESULT_WIDTH) as usize),
-                Err((msg, _crash_tag)) => {
-                    eprintln!("{}", msg);
-                    panic!("Roc hit an error");
+                Ok(()) => Some($transform(output.add(CALL_RESULT_WIDTH) as usize)),
+                Err((error_msg, _)) => {
+                    eprintln!("This Roc code crashed with: \"{error_msg}\"");
+                    None
                 }
             }
         }

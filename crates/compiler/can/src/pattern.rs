@@ -265,7 +265,7 @@ pub fn canonicalize_def_header_pattern<'a>(
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
-        Identifier(name) => {
+        Identifier { ident: name } => {
             match scope.introduce_or_shadow_ability_member(
                 pending_abilities_in_scope,
                 (*name).into(),
@@ -373,7 +373,7 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => {
+        Identifier { ident: name } => {
             match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
                 Ok(symbol) => Pattern::Identifier(symbol),
                 Err(pattern) => pattern,
@@ -446,7 +446,10 @@ pub fn canonicalize_pattern<'a>(
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
 
-                            output.references.insert_type_lookup(opaque);
+                            output.references.insert_type_lookup(
+                                opaque,
+                                crate::procedure::QualifiedReference::Unqualified,
+                            );
 
                             Pattern::UnwrappedOpaque {
                                 whole_var: var_store.fresh(),
@@ -628,7 +631,7 @@ pub fn canonicalize_pattern<'a>(
 
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
-                    Identifier(label) => {
+                    Identifier { ident: label } => {
                         match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
                                 output.references.insert_bound(symbol);
@@ -1071,7 +1074,7 @@ fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
                 Unicode(loc_digits) => {
                     todo!("parse unicode digits {:?}", loc_digits);
                 }
-                Interpolated(loc_expr) => {
+                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
                     return Pattern::UnsupportedPattern(loc_expr.region);
                 }
                 EscapedChar(escaped) => buf.push(escaped.unescape()),

@@ -13,12 +13,11 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     pointer: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let layout = LayoutRepr::Struct(env.arena.alloc([
-        Layout::usize(env.target_info),
-        Layout::STR,
-        Layout::BOOL,
-        Layout::U8,
-    ]));
+    let layout =
+        LayoutRepr::Struct(
+            env.arena
+                .alloc([Layout::U64, Layout::STR, Layout::BOOL, Layout::U8]),
+        );
 
     load_roc_value(
         env,
@@ -48,7 +47,7 @@ pub(crate) fn str_equal<'ctx>(
 
 // Gets a pointer to just after the refcount for a list or seamless slice.
 // The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn str_refcount_ptr<'ctx>(
+pub(crate) fn str_allocation_ptr<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     value: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
@@ -57,7 +56,7 @@ pub(crate) fn str_refcount_ptr<'ctx>(
         &[value],
         &[],
         BitcodeReturns::Basic,
-        bitcode::STR_REFCOUNT_PTR,
+        bitcode::STR_ALLOCATION_PTR,
     )
     .into_pointer_value()
 }

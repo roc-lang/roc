@@ -12,12 +12,12 @@ When(
                             "@Add",
                         ),
                         [
-                            @17-18 Identifier(
-                                "n",
-                            ),
-                            @19-20 Identifier(
-                                "m",
-                            ),
+                            @17-18 Identifier {
+                                ident: "n",
+                            },
+                            @19-20 Identifier {
+                                ident: "m",
+                            },
                         ],
                     ),
                     [

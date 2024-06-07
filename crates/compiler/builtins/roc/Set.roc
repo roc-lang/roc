@@ -1,36 +1,35 @@
-interface Set
-    exposes [
-        Set,
-        empty,
-        withCapacity,
-        reserve,
-        single,
-        walk,
-        walkUntil,
-        keepIf,
-        dropIf,
-        insert,
-        len,
-        isEmpty,
-        capacity,
-        remove,
-        contains,
-        toList,
-        fromList,
-        union,
-        intersection,
-        difference,
-        map,
-        joinMap,
-    ]
-    imports [
-        List,
-        Bool.{ Bool, Eq },
-        Dict.{ Dict },
-        Num.{ Nat },
-        Hash.{ Hash, Hasher },
-        Inspect.{ Inspect, Inspector, InspectFormatter },
-    ]
+module [
+    Set,
+    empty,
+    withCapacity,
+    reserve,
+    releaseExcessCapacity,
+    single,
+    walk,
+    walkUntil,
+    keepIf,
+    dropIf,
+    insert,
+    len,
+    isEmpty,
+    capacity,
+    remove,
+    contains,
+    toList,
+    fromList,
+    union,
+    intersection,
+    difference,
+    map,
+    joinMap,
+]
+
+import List
+import Bool exposing [Bool, Eq]
+import Dict
+import Num exposing [U64]
+import Hash exposing [Hash, Hasher]
+import Inspect exposing [Inspect, Inspector, InspectFormatter]
 
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering
@@ -67,7 +66,7 @@ toInspectorSet = \set ->
     Inspect.apply (Inspect.set set walk Inspect.toInspector) fmt
 
 ## Creates a new empty `Set`.
-## ```
+## ```roc
 ## emptySet = Set.empty {}
 ## countValues = Set.len emptySet
 ##
@@ -79,17 +78,24 @@ empty = \{} -> @Set (Dict.empty {})
 ## Return a set with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Set *
+withCapacity : U64 -> Set *
 withCapacity = \cap ->
     @Set (Dict.withCapacity cap)
 
-# Enlarge the set for at least capacity additional elements
-reserve : Set k, Nat -> Set k
+## Enlarge the set for at least capacity additional elements
+reserve : Set k, U64 -> Set k
 reserve = \@Set dict, requested ->
     @Set (Dict.reserve dict requested)
 
+## Shrink the memory footprint of a set such that capacity is as small as possible.
+## This function will require regenerating the metadata if the size changes.
+## There will still be some overhead due to dictionary metadata always being a power of 2.
+releaseExcessCapacity : Set k -> Set k
+releaseExcessCapacity = \@Set dict ->
+    @Set (Dict.releaseExcessCapacity dict)
+
 ## Creates a new `Set` with a single value.
-## ```
+## ```roc
 ## singleItemSet = Set.single "Apple"
 ## countValues = Set.len singleItemSet
 ##
@@ -100,7 +106,7 @@ single = \key ->
     Dict.single key {} |> @Set
 
 ## Insert a value into a `Set`.
-## ```
+## ```roc
 ## fewItemSet =
 ##     Set.empty {}
 ##     |> Set.insert "Apple"
@@ -133,7 +139,7 @@ expect
     expected == actual
 
 ## Counts the number of values in a given `Set`.
-## ```
+## ```roc
 ## fewItemSet =
 ##     Set.empty {}
 ##     |> Set.insert "Apple"
@@ -144,24 +150,24 @@ expect
 ##
 ## expect countValues == 3
 ## ```
-len : Set * -> Nat
+len : Set * -> U64
 len = \@Set dict ->
     Dict.len dict
 
 ## Returns the max number of elements the set can hold before requiring a rehash.
-## ```
+## ```roc
 ## foodSet =
 ##     Set.empty {}
 ##     |> Set.insert "apple"
 ##
 ## capacityOfSet = Set.capacity foodSet
 ## ```
-capacity : Set * -> Nat
+capacity : Set * -> U64
 capacity = \@Set dict ->
     Dict.capacity dict
 
 ## Check if the set is empty.
-## ```
+## ```roc
 ## Set.isEmpty (Set.empty {} |> Set.insert 42)
 ##
 ## Set.isEmpty (Set.empty {})
@@ -183,7 +189,7 @@ expect
     actual == 3
 
 ## Removes the value from the given `Set`.
-## ```
+## ```roc
 ## numbers =
 ##     Set.empty {}
 ##     |> Set.insert 10
@@ -201,7 +207,7 @@ remove = \@Set dict, key ->
     Dict.remove dict key |> @Set
 
 ## Test if a value is in the `Set`.
-## ```
+## ```roc
 ## Fruit : [Apple, Pear, Banana]
 ##
 ## fruit : Set Fruit
@@ -220,7 +226,7 @@ contains = \@Set dict, key ->
     Dict.contains dict key
 
 ## Retrieve the values in a `Set` as a `List`.
-## ```
+## ```roc
 ## numbers : Set U64
 ## numbers = Set.fromList [1,2,3,4,5]
 ##
@@ -233,7 +239,7 @@ toList = \@Set dict ->
     Dict.keys dict
 
 ## Create a `Set` from a `List` of values.
-## ```
+## ```roc
 ## values =
 ##     Set.empty {}
 ##     |> Set.insert Banana
@@ -253,7 +259,7 @@ fromList = \list ->
 ## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the values pairs. This means that all of the values in both `Set`s
 ## will be combined.
-## ```
+## ```roc
 ## set1 = Set.single Left
 ## set2 = Set.single Right
 ##
@@ -266,7 +272,7 @@ union = \@Set dict1, @Set dict2 ->
 ## Combine two `Set`s by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the values pairs. This means that we keep only those values that are
 ## in both `Set`s.
-## ```
+## ```roc
 ## set1 = Set.fromList [Left, Other]
 ## set2 = Set.fromList [Left, Right]
 ##
@@ -280,7 +286,7 @@ intersection = \@Set dict1, @Set dict2 ->
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
 ## of the values. This means that we will be left with only those values that
 ## are in the first and not in the second.
-## ```
+## ```roc
 ## first = Set.fromList [Left, Right, Up, Down]
 ## second = Set.fromList [Left, Right]
 ##
@@ -291,7 +297,7 @@ difference = \@Set dict1, @Set dict2 ->
     Dict.removeAll dict1 dict2 |> @Set
 
 ## Iterate through the values of a given `Set` and build a value.
-## ```
+## ```roc
 ## values = Set.fromList ["March", "April", "May"]
 ##
 ## startsWithLetterM = \month ->
@@ -337,7 +343,7 @@ joinMap = \set, transform ->
 
 ## Iterate through the values of a given `Set` and build a value, can stop
 ## iterating part way through the collection.
-## ```
+## ```roc
 ## numbers = Set.fromList [1,2,3,4,5,6,42,7,8,9,10]
 ##
 ## find42 = \state, k ->
@@ -356,7 +362,7 @@ walkUntil = \@Set dict, state, step ->
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.true`.
-## ```
+## ```roc
 ## expect Set.fromList [1,2,3,4,5]
 ##     |> Set.keepIf \k -> k >= 3
 ##     |> Bool.isEq (Set.fromList [3,4,5])
@@ -367,7 +373,7 @@ keepIf = \@Set dict, predicate ->
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.false`.
-## ```
+## ```roc
 ## expect Set.fromList [1,2,3,4,5]
 ##     |> Set.dropIf \k -> k >= 3
 ##     |> Bool.isEq (Set.fromList [1,2])
@@ -454,22 +460,22 @@ expect
     x == fromList (toList x)
 
 expect
-    orderOne : Set Nat
+    orderOne : Set U64
     orderOne =
         single 1
         |> insert 2
 
-    orderTwo : Set Nat
+    orderTwo : Set U64
     orderTwo =
         single 2
         |> insert 1
 
-    wrapperOne : Set (Set Nat)
+    wrapperOne : Set (Set U64)
     wrapperOne =
         single orderOne
         |> insert orderTwo
 
-    wrapperTwo : Set (Set Nat)
+    wrapperTwo : Set (Set U64)
     wrapperTwo =
         single orderTwo
         |> insert orderOne

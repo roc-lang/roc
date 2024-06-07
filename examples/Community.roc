@@ -1,19 +1,17 @@
-interface Community
-    exposes [
-        Community,
-        empty,
-        addPerson,
-        addFriend,
-        Person,
-        walkFriendNames,
-    ]
-    imports []
+module [
+    Community,
+    empty,
+    addPerson,
+    addFriend,
+    Person,
+    walkFriendNames,
+]
 
 ## Datatype representing a community for demonstration purposes in inspect-gui.roc and inspect-logging.roc
 
 Community := {
     people : List Person,
-    friends : List (Set Nat),
+    friends : List (Set U64),
 }
     implements [Inspect]
 
@@ -81,4 +79,3 @@ walkFriendNames = \@Community { people, friends }, s0, nextFn ->
 
         (nextFn s1 personName friendNames, id + 1)
     out
-

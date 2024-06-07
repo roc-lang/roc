@@ -55,7 +55,9 @@ impl<'a> Ident<'a> {
 
         match self {
             Tag(string) | OpaqueRef(string) => string.len(),
-            Access { module_name, parts } => {
+            Access {
+                module_name, parts, ..
+            } => {
                 let mut len = if module_name.is_empty() {
                     0
                 } else {
@@ -200,6 +202,8 @@ pub fn parse_ident<'a>(
                         }
                     }
                 }
+
+                return Ok((MadeProgress, Ident::Access { module_name, parts }, state));
             }
 
             Ok((MadeProgress, ident, state))
@@ -368,6 +372,12 @@ impl<'a> Accessor<'a> {
             Accessor::TupleIndex(name) => name,
         }
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Suffix<'a> {
+    Accessor(Accessor<'a>),
+    TaskAwaitBang,
 }
 
 /// a `.foo` or `.1` accessor function
@@ -541,14 +551,17 @@ fn chomp_identifier_chain<'a>(
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
         Ok((chomped as u32, Ident::Tag(value)))
     } else {
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
         let ident = Ident::Access {
             module_name: "",
             parts: arena.alloc([Accessor::RecordField(value)]),
         };
+
         Ok((chomped as u32, ident))
     }
 }

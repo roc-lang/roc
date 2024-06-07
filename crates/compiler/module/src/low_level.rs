@@ -9,13 +9,11 @@ pub enum LowLevel {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithScalar,
     StrEndsWith,
     StrSplit,
-    StrCountGraphemes,
     StrCountUtf8Bytes,
     StrFromInt,
-    StrFromUtf8Range,
+    StrFromUtf8,
     StrToUtf8,
     StrRepeat,
     StrFromFloat,
@@ -23,17 +21,13 @@ pub enum LowLevel {
     StrTrimStart,
     StrTrimEnd,
     StrToNum,
-    StrToScalars,
     StrGetUnsafe,
     StrSubstringUnsafe,
     StrReserve,
-    StrAppendScalar,
-    StrGetScalarUnsafe,
-    StrGetCapacity,
     StrWithCapacity,
-    StrGraphemes,
     StrReleaseExcessCapacity,
-    ListLen,
+    ListLenUsize,
+    ListLenU64,
     ListWithCapacity,
     ListReserve,
     ListReleaseExcessCapacity,
@@ -50,8 +44,9 @@ pub enum LowLevel {
     ListSublist,
     ListDropAt,
     ListSwap,
-    ListIsUnique,
     ListGetCapacity,
+    ListIsUnique,
+    ListClone,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -93,10 +88,6 @@ pub enum LowLevel {
     NumAtan,
     NumAcos,
     NumAsin,
-    NumBytesToU16,
-    NumBytesToU32,
-    NumBytesToU64,
-    NumBytesToU128,
     NumBitwiseAnd,
     NumBitwiseXor,
     NumBitwiseOr,
@@ -111,7 +102,12 @@ pub enum LowLevel {
     NumCountLeadingZeroBits,
     NumCountTrailingZeroBits,
     NumCountOneBits,
-    I128OfDec,
+    NumWithoutDecimalPoint,
+    NumWithDecimalPoint,
+    NumF32ToParts,
+    NumF64ToParts,
+    NumF32FromParts,
+    NumF64FromParts,
     Eq,
     NotEq,
     And,
@@ -263,34 +259,29 @@ map_symbol_to_lowlevel! {
     StrJoinWith <= STR_JOIN_WITH;
     StrIsEmpty <= STR_IS_EMPTY;
     StrStartsWith <= STR_STARTS_WITH;
-    StrStartsWithScalar <= STR_STARTS_WITH_SCALAR;
     StrEndsWith <= STR_ENDS_WITH;
     StrSplit <= STR_SPLIT;
-    StrCountGraphemes <= STR_COUNT_GRAPHEMES;
     StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
-    StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL;
+    StrFromUtf8 <= STR_FROM_UTF8_LOWLEVEL;
     StrToUtf8 <= STR_TO_UTF8;
     StrRepeat <= STR_REPEAT;
     StrTrim <= STR_TRIM;
     StrTrimStart <= STR_TRIM_START;
     StrTrimEnd <= STR_TRIM_END;
-    StrToScalars <= STR_TO_SCALARS;
     StrGetUnsafe <= STR_GET_UNSAFE;
     StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE;
     StrReserve <= STR_RESERVE;
-    StrAppendScalar <= STR_APPEND_SCALAR_UNSAFE;
-    StrGetScalarUnsafe <= STR_GET_SCALAR_UNSAFE;
     StrToNum <= STR_TO_NUM;
-    StrGetCapacity <= STR_CAPACITY;
     StrWithCapacity <= STR_WITH_CAPACITY;
-    StrGraphemes <= STR_GRAPHEMES;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
-    ListLen <= LIST_LEN;
+    ListLenU64 <= LIST_LEN_U64;
+    ListLenUsize <= LIST_LEN_USIZE;
     ListGetCapacity <= LIST_CAPACITY;
     ListWithCapacity <= LIST_WITH_CAPACITY;
     ListReserve <= LIST_RESERVE;
     ListReleaseExcessCapacity <= LIST_RELEASE_EXCESS_CAPACITY;
     ListIsUnique <= LIST_IS_UNIQUE;
+    ListClone <= LIST_CLONE;
     ListAppendUnsafe <= LIST_APPEND_UNSAFE;
     ListPrepend <= LIST_PREPEND;
     ListGetUnsafe <= LIST_GET_UNSAFE, DICT_LIST_GET_UNSAFE;
@@ -318,8 +309,8 @@ map_symbol_to_lowlevel! {
     NumCompare <= NUM_COMPARE;
     NumDivFrac <= NUM_DIV_FRAC;
     NumDivCeilUnchecked <= NUM_DIV_CEIL;
-    NumDivTruncUnchecked <= NUM_DIV_TRUNC;
-    NumRemUnchecked <= NUM_REM;
+    NumDivTruncUnchecked <= NUM_DIV_TRUNC_UNCHECKED;
+    NumRemUnchecked <= NUM_REM_UNCHECKED;
     NumIsMultipleOf <= NUM_IS_MULTIPLE_OF;
     NumAbs <= NUM_ABS;
     NumNeg <= NUM_NEG;
@@ -340,10 +331,6 @@ map_symbol_to_lowlevel! {
     NumAtan <= NUM_ATAN;
     NumAcos <= NUM_ACOS;
     NumAsin <= NUM_ASIN;
-    NumBytesToU16 <= NUM_BYTES_TO_U16_LOWLEVEL;
-    NumBytesToU32 <= NUM_BYTES_TO_U32_LOWLEVEL;
-    NumBytesToU64 <= NUM_BYTES_TO_U64_LOWLEVEL;
-    NumBytesToU128 <= NUM_BYTES_TO_U128_LOWLEVEL;
     NumBitwiseAnd <= NUM_BITWISE_AND;
     NumBitwiseXor <= NUM_BITWISE_XOR;
     NumBitwiseOr <= NUM_BITWISE_OR;
@@ -354,7 +341,12 @@ map_symbol_to_lowlevel! {
     NumCountLeadingZeroBits <= NUM_COUNT_LEADING_ZERO_BITS;
     NumCountTrailingZeroBits <= NUM_COUNT_TRAILING_ZERO_BITS;
     NumCountOneBits <= NUM_COUNT_ONE_BITS;
-    I128OfDec <= I128_OF_DEC;
+    NumWithoutDecimalPoint <= NUM_WITHOUT_DECIMAL_POINT;
+    NumWithDecimalPoint <= NUM_WITH_DECIMAL_POINT;
+    NumF32ToParts <= NUM_F32_TO_PARTS;
+    NumF64ToParts <= NUM_F64_TO_PARTS;
+    NumF32FromParts <= NUM_F32_FROM_PARTS;
+    NumF64FromParts <= NUM_F64_FROM_PARTS;
     Eq <= BOOL_STRUCTURAL_EQ;
     NotEq <= BOOL_STRUCTURAL_NOT_EQ;
     And <= BOOL_AND;

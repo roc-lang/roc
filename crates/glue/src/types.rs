@@ -20,7 +20,7 @@ use roc_mono::{
         InLayout, Layout, LayoutCache, LayoutInterner, LayoutRepr, TLLayoutInterner, UnionLayout,
     },
 };
-use roc_target::{Architecture, OperatingSystem, TargetInfo};
+use roc_target::{Architecture, OperatingSystem, Target};
 use roc_types::{
     subs::{Content, FlatType, GetSubsSlice, Label, Subs, SubsSlice, UnionLabels, Variable},
     types::{AliasKind, RecordField},
@@ -65,13 +65,13 @@ pub struct Types {
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
     deps: VecMap<TypeId, Vec<TypeId>>,
-    target: TargetInfo,
+    target: Target,
 }
 
 impl Types {
     const UNIT: TypeId = TypeId(0);
 
-    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
+    pub fn with_capacity(cap: usize, target: Target) -> Self {
         let mut types = Vec::with_capacity(cap);
         let mut sizes = Vec::with_capacity(cap);
         let mut aligns = Vec::with_capacity(cap);
@@ -81,7 +81,7 @@ impl Types {
         aligns.push(1);
 
         Self {
-            target: target_info,
+            target,
             types,
             sizes,
             aligns,
@@ -98,7 +98,7 @@ impl Types {
         interns: &'a Interns,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
-        target: TargetInfo,
+        target: Target,
         mut entry_points: MutMap<Symbol, Variable>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
@@ -639,7 +639,7 @@ impl Types {
         }
     }
 
-    pub fn target(&self) -> TargetInfo {
+    pub fn target(&self) -> Target {
         self.target
     }
 }
@@ -905,11 +905,11 @@ impl From<&Option<TypeId>> for roc_type::U1 {
     }
 }
 
-impl From<TargetInfo> for roc_type::Target {
-    fn from(target: TargetInfo) -> Self {
+impl From<Target> for roc_type::Target {
+    fn from(target: Target) -> Self {
         roc_type::Target {
-            architecture: target.architecture.into(),
-            operatingSystem: target.operating_system.into(),
+            architecture: target.architecture().into(),
+            operatingSystem: target.operating_system().into(),
         }
     }
 }
@@ -928,10 +928,12 @@ impl From<Architecture> for roc_type::Architecture {
 
 impl From<OperatingSystem> for roc_type::OperatingSystem {
     fn from(os: OperatingSystem) -> Self {
+        // TODO: Update Glue to new OS Tags.
         match os {
             OperatingSystem::Windows => roc_type::OperatingSystem::Windows,
-            OperatingSystem::Unix => roc_type::OperatingSystem::Unix,
-            OperatingSystem::Wasi => roc_type::OperatingSystem::Wasi,
+            OperatingSystem::Linux => roc_type::OperatingSystem::Linux,
+            OperatingSystem::Mac => roc_type::OperatingSystem::Mac,
+            OperatingSystem::Freestanding => roc_type::OperatingSystem::Freestanding,
         }
     }
 }
@@ -1179,7 +1181,7 @@ impl<'a> Env<'a> {
         interns: &'a Interns,
         layout_interner: TLLayoutInterner<'a>,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-        target: TargetInfo,
+        target: Target,
     ) -> Self {
         Env {
             arena,
@@ -2282,7 +2284,7 @@ fn tag_to_type<'a, D: Display>(
             // this isn't recursive and there's 1 payload item, so it doesn't
             // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
             // can have payloads of plain old Str, no struct wrapper needed.
-            let payload_var = payload_vars.get(0).unwrap();
+            let payload_var = payload_vars.first().unwrap();
             let payload_layout = env
                 .layout_cache
                 .from_var(env.arena, *payload_var, env.subs)

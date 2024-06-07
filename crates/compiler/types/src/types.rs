@@ -1300,17 +1300,21 @@ mod debug_types {
         Arg,
     }
 
+    fn always_true() -> bool {
+        true
+    }
+
     macro_rules! maybe_paren {
         ($paren_if_above:expr, $my_prec:expr, $doc:expr) => {
-            maybe_paren!($paren_if_above, $my_prec, || true, $doc)
+            maybe_paren!($paren_if_above, $my_prec, always_true, $doc)
         };
-        ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {
+        ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {{
             if $my_prec > $paren_if_above && $extra_cond() {
                 $doc.parens().group()
             } else {
                 $doc
             }
-        };
+        }};
     }
 
     fn typ<'a>(
@@ -1549,7 +1553,6 @@ mod debug_types {
             U32 | I32 => "32",
             U64 | I64 => "64",
             U128 | I128 => "128",
-            Nat => "Nat",
             F32 => "F32",
             F64 => "F64",
             Dec => "Dec",

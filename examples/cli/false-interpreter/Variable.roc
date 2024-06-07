@@ -1,12 +1,10 @@
-interface Variable
-    exposes [Variable, fromUtf8, toIndex, totalCount, toStr]
-    imports []
+module [Variable, fromUtf8, toIndex, totalCount, toStr]
 
 # Variables in False can only be single letters. Thus, the valid variables are "a" to "z".
 # This opaque type deals with ensure we always have valid variables.
 Variable := U8
 
-totalCount : Nat
+totalCount : U64
 totalCount =
     0x7A # "z"
     - 0x61 # "a"
@@ -30,7 +28,7 @@ fromUtf8 = \char ->
     else
         Err InvalidVariableUtf8
 
-toIndex : Variable -> Nat
+toIndex : Variable -> U64
 toIndex = \@Variable char ->
     Num.intCast (char - 0x61) # "a"
 # List.first (Str.toUtf8 "a")

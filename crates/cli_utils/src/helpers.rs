@@ -98,22 +98,6 @@ pub fn path_to_binary(binary_name: &str) -> PathBuf {
     path
 }
 
-pub fn strip_colors(str: &str) -> String {
-    use roc_reporting::report::ANSI_STYLE_CODES;
-
-    str.replace(ANSI_STYLE_CODES.red, "")
-        .replace(ANSI_STYLE_CODES.green, "")
-        .replace(ANSI_STYLE_CODES.yellow, "")
-        .replace(ANSI_STYLE_CODES.blue, "")
-        .replace(ANSI_STYLE_CODES.magenta, "")
-        .replace(ANSI_STYLE_CODES.cyan, "")
-        .replace(ANSI_STYLE_CODES.white, "")
-        .replace(ANSI_STYLE_CODES.bold, "")
-        .replace(ANSI_STYLE_CODES.underline, "")
-        .replace(ANSI_STYLE_CODES.reset, "")
-        .replace(ANSI_STYLE_CODES.color_reset, "")
-}
-
 pub fn run_roc_with_stdin<I, S>(args: I, stdin_vals: &[&str]) -> Out
 where
     I: IntoIterator<Item = S>,
@@ -255,7 +239,12 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{cmd_name}` in CLI test"));
+        .unwrap_or_else(|err| {
+            panic!(
+                "Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}",
+                err, cmd_str
+            )
+        });
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -269,7 +258,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
 
     let output = child
         .wait_with_output()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{cmd_name}` in CLI test"));
+        .unwrap_or_else(|_| panic!("Failed to execute cmd:\n\t`{:?}`", cmd_str));
 
     Out {
         cmd_str,
@@ -415,14 +404,15 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
     Ok(answer)
 }
 
-// start the dir with crates/cli_testing_examples
+// start the dir with crates/cli/tests
 #[allow(dead_code)]
 pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
     // Descend into examples/{dir_name}
     path.push("crates");
-    path.push("cli_testing_examples");
+    path.push("cli");
+    path.push("tests");
     path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path

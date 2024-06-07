@@ -322,43 +322,6 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
     simple_eat_until_control_character(&bytes[i..]) + i
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    #[test]
-    fn test_eat_whitespace_simple() {
-        let bytes = &[0, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
-    }
-
-    proptest! {
-        #[test]
-        fn test_eat_whitespace(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
-            prop_assert_eq!(simple_eat_whitespace(&bytes), fast_eat_whitespace(&bytes));
-        }
-    }
-
-    #[test]
-    fn test_eat_until_control_character_simple() {
-        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(
-            simple_eat_until_control_character(bytes),
-            fast_eat_until_control_character(bytes)
-        );
-    }
-
-    proptest! {
-        #[test]
-        fn test_eat_until_control_character(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
-            prop_assert_eq!(
-                simple_eat_until_control_character(&bytes),
-                fast_eat_until_control_character(&bytes));
-        }
-    }
-}
-
 pub fn space0_e<'a, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
@@ -437,11 +400,8 @@ where
             Some(b'#') => {
                 state.advance_mut(1);
 
-                let is_doc_comment = state.bytes().first() == Some(&b'#')
-                    && (state.bytes().get(1) == Some(&b' ')
-                        || state.bytes().get(1) == Some(&b'\n')
-                        || begins_with_crlf(&state.bytes()[1..])
-                        || Option::is_none(&state.bytes().get(1)));
+                let is_doc_comment =
+                    state.bytes().first() == Some(&b'#') && state.bytes().get(1) != Some(&b'#');
 
                 if is_doc_comment {
                     state.advance_mut(1);
@@ -516,4 +476,41 @@ where
     }
 
     Ok((progress, state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_eat_whitespace_simple() {
+        let bytes = &[0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_whitespace(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(simple_eat_whitespace(&bytes), fast_eat_whitespace(&bytes));
+        }
+    }
+
+    #[test]
+    fn test_eat_until_control_character_simple() {
+        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            simple_eat_until_control_character(bytes),
+            fast_eat_until_control_character(bytes)
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_until_control_character(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(
+                simple_eat_until_control_character(&bytes),
+                fast_eat_until_control_character(&bytes));
+        }
+    }
 }

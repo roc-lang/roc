@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-4 Identifier(
-                    "main",
-                ),
+                @0-4 Identifier {
+                    ident: "main",
+                },
                 @11-71 SpaceBefore(
                     Defs(
                         Defs {
@@ -38,14 +38,14 @@ Defs(
                             type_defs: [],
                             value_defs: [
                                 Body(
-                                    @11-15 Identifier(
-                                        "task",
-                                    ),
+                                    @11-15 Identifier {
+                                        ident: "task",
+                                    },
                                     @18-62 Backpassing(
                                         [
-                                            @18-22 Identifier(
-                                                "file",
-                                            ),
+                                            @18-22 Identifier {
+                                                ident: "file",
+                                            },
                                         ],
                                         @43-46 SpaceBefore(
                                             Var {

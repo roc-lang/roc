@@ -310,10 +310,9 @@ impl RocDec {
             }
         };
 
-        let opt_after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES => Some(answer),
-            _ => None,
-        };
+        let opt_after_point = parts
+            .next()
+            .map(|answer| &answer[..Ord::min(answer.len(), Self::DECIMAL_PLACES)]);
 
         // There should have only been one "." in the string!
         if parts.next().is_some() {
@@ -376,10 +375,6 @@ impl RocDec {
             Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
             None => None,
         }
-    }
-
-    pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
-        Self::from_str(val).unwrap().as_i128()
     }
 
     /// This is private because RocDec being an i128 is an implementation detail
@@ -495,7 +490,7 @@ impl PartialEq for I128 {
 
 impl PartialOrd for I128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        i128::from(*self).partial_cmp(&i128::from(*other))
+        Some(self.cmp(other))
     }
 }
 
@@ -547,7 +542,7 @@ impl PartialEq for U128 {
 
 impl PartialOrd for U128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        u128::from(*self).partial_cmp(&u128::from(*other))
+        Some(self.cmp(other))
     }
 }
 

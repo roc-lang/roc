@@ -1,32 +1,42 @@
-interface Hash
-    exposes [
-        Hash,
-        Hasher,
-        hash,
-        addBytes,
-        addU8,
-        addU16,
-        addU32,
-        addU64,
-        addU128,
-        hashBool,
-        hashI8,
-        hashI16,
-        hashI32,
-        hashI64,
-        hashI128,
-        hashNat,
-        hashDec,
-        complete,
-        hashStrBytes,
-        hashList,
-        hashUnordered,
-    ] imports [
-        Bool.{ Bool, isEq },
-        List,
-        Str,
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, Nat, Dec },
-    ]
+module [
+    Hash,
+    Hasher,
+    hash,
+    addBytes,
+    addU8,
+    addU16,
+    addU32,
+    addU64,
+    addU128,
+    hashBool,
+    hashI8,
+    hashI16,
+    hashI32,
+    hashI64,
+    hashI128,
+    hashDec,
+    complete,
+    hashStrBytes,
+    hashList,
+    hashUnordered,
+]
+
+import Bool exposing [Bool]
+import List
+import Str
+import Num exposing [
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Dec,
+]
 
 ## A value that can be hashed.
 Hash implements
@@ -98,27 +108,9 @@ hashI64 = \hasher, n -> addU64 hasher (Num.toU64 n)
 hashI128 : a, I128 -> a where a implements Hasher
 hashI128 = \hasher, n -> addU128 hasher (Num.toU128 n)
 
-## Adds a single Nat to a hasher.
-hashNat : a, Nat -> a where a implements Hasher
-hashNat = \hasher, n ->
-    isPlatform32bit =
-        x : Nat
-        x = 0xffff_ffff
-        y = Num.addWrap x 1
-
-        y == 0
-
-    if isPlatform32bit then
-        addU32 hasher (Num.toU32 n)
-    else
-        addU64 hasher (Num.toU64 n)
-
-## LOWLEVEL get the i128 representation of a Dec.
-i128OfDec : Dec -> I128
-
 ## Adds a single [Dec] to a hasher.
 hashDec : a, Dec -> a where a implements Hasher
-hashDec = \hasher, n -> hashI128 hasher (i128OfDec n)
+hashDec = \hasher, n -> hashI128 hasher (Num.withoutDecimalPoint n)
 
 ## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
 ## The container is iterated using the walk method passed in.

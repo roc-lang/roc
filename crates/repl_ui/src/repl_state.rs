@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+use std::{fs, io};
+
 use bumpalo::Bump;
 use roc_collections::MutSet;
 use roc_load::MonomorphizedModule;
-use roc_parse::ast::{Expr, Pattern, TypeDef, TypeHeader, ValueDef};
+use roc_parse::ast::{Expr, Pattern, StrLiteral, TypeDef, TypeHeader, ValueDef};
 use roc_parse::expr::{parse_single_def, ExprParseOptions, SingleDef};
 use roc_parse::parser::Parser;
 use roc_parse::parser::{EClosure, EExpr, EPattern};
@@ -11,12 +14,12 @@ use roc_parse::{join_alias_to_body, join_ann_to_body};
 use roc_region::all::Loc;
 use roc_repl_eval::gen::{compile_to_mono, Problems};
 use roc_reporting::report::Palette;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 #[derive(Debug, Clone, PartialEq)]
-struct PastDef {
-    ident: String,
-    src: String,
+enum PastDef {
+    Def { ident: String, src: String },
+    Import(String),
 }
 
 pub struct ReplState {
@@ -39,6 +42,10 @@ pub enum ReplAction<'a> {
     },
     Exit,
     Help,
+    FileProblem {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
     Nothing,
 }
 
@@ -54,7 +61,7 @@ impl ReplState {
         &mut self,
         arena: &'a Bump,
         line: &str,
-        target_info: TargetInfo,
+        target: Target,
         palette: Palette,
     ) -> ReplAction<'a> {
         let pending_past_def;
@@ -73,7 +80,8 @@ impl ReplState {
                 match value_def {
                     ValueDef::Annotation(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident },
                             ..
                         },
                         _,
@@ -87,7 +95,8 @@ impl ReplState {
                     }
                     ValueDef::Body(
                         Loc {
-                            value: Pattern::Identifier(ident),
+                            // TODO is this right for suffixed
+                            value: Pattern::Identifier { ident },
                             ..
                         },
                         _,
@@ -95,7 +104,8 @@ impl ReplState {
                     | ValueDef::AnnotatedBody {
                         body_pattern:
                             Loc {
-                                value: Pattern::Identifier(ident),
+                                // TODO is this right for suffixed
+                                value: Pattern::Identifier { ident },
                                 ..
                             },
                         ..
@@ -120,7 +130,9 @@ impl ReplState {
                     ValueDef::Annotation(_, _)
                     | ValueDef::Body(_, _)
                     | ValueDef::AnnotatedBody { .. } => {
-                        todo!("handle pattern other than identifier (which repl doesn't support)")
+                        todo!("handle pattern other than identifier (which repl doesn't support).\
+                              \nTip: this error can be triggered when trying to define a variable with a character that is not allowed, \
+                              like starting with an uppercase character or using underdash (_).")
                     }
                     ValueDef::Dbg { .. } => {
                         todo!("handle receiving a `dbg` - what should the repl do for that?")
@@ -131,6 +143,50 @@ impl ReplState {
                     ValueDef::ExpectFx { .. } => {
                         todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                     }
+                    ValueDef::ModuleImport(import) => match import.name.value.package {
+                        Some(_) => {
+                            todo!("handle importing a module from a package")
+                        }
+                        None => {
+                            let mut filename = PathBuf::new();
+
+                            for part in import.name.value.name.parts() {
+                                filename.push(part);
+                            }
+
+                            filename.set_extension("roc");
+
+                            // Check we can read the file before we add it to past defs.
+                            // If we didn't do this, the bad import would remain in past_defs
+                            // and we'd report it on every subsequent evaluation.
+                            if let Err(err) = fs::metadata(&filename) {
+                                return ReplAction::FileProblem {
+                                    filename,
+                                    error: err.kind(),
+                                };
+                            }
+
+                            self.past_defs.push(PastDef::Import(line.to_string()));
+
+                            return ReplAction::Nothing;
+                        }
+                    },
+                    ValueDef::IngestedFileImport(file) => {
+                        if let StrLiteral::PlainLine(path) = file.path.value {
+                            let filename = PathBuf::from(path);
+                            if let Err(err) = fs::metadata(&filename) {
+                                return ReplAction::FileProblem {
+                                    filename,
+                                    error: err.kind(),
+                                };
+                            }
+                        }
+
+                        self.past_defs.push(PastDef::Import(line.to_string()));
+
+                        return ReplAction::Nothing;
+                    }
+                    ValueDef::Stmt(_) => todo!(),
                 }
             }
             ParseOutcome::TypeDef(TypeDef::Alias {
@@ -168,9 +224,12 @@ impl ReplState {
 
         let (opt_mono, problems) = compile_to_mono(
             arena,
-            self.past_defs.iter().map(|def| def.src.as_str()),
+            self.past_defs.iter().map(|past_def| match past_def {
+                PastDef::Def { ident: _, src } => src.as_str(),
+                PastDef::Import(src) => src.as_str(),
+            }),
             src,
-            target_info,
+            target,
             palette,
         );
 
@@ -186,7 +245,7 @@ impl ReplState {
 
         existing_idents.insert(ident.clone());
 
-        self.past_defs.push(PastDef { ident, src });
+        self.past_defs.push(PastDef::Def { ident, src });
     }
 }
 
@@ -216,6 +275,9 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
 
             match roc_parse::expr::loc_expr(true).parse(arena, State::new(src_bytes), 0) {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
+                Err((roc_parse::parser::Progress::MadeProgress, EExpr::Start(_))) => {
+                    ParseOutcome::Empty
+                }
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _)))
                 | Err((_, EExpr::When(EWhen::Pattern(EPattern::Start(_), _), _)))
@@ -265,6 +327,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                             Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
                                         region,
                                         spaces_before,
+                                        spaces_after: _,
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {
@@ -313,6 +376,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                                             Either::Second(ValueDef::Body(loc_pattern, loc_def_expr)),
                                         region,
                                         spaces_before,
+                                        spaces_after: _,
                                     }),
                                     _,
                                 )) if spaces_before.len() <= 1 => {

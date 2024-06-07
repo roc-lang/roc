@@ -28,11 +28,11 @@ fn basic_float() {
 fn branch_first_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 1.23f64 is
                     1.23 -> 12
                     _ -> 34
-            "#
+            "
         ),
         12,
         i64
@@ -44,11 +44,11 @@ fn branch_first_float() {
 fn branch_second_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 2.34 is
                     1.23 -> 63
                     _ -> 48
-            "#
+            "
         ),
         48,
         i64
@@ -60,12 +60,12 @@ fn branch_second_float() {
 fn branch_third_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                when 10.0 is
                    1.0 -> 63
                    2.0 -> 48
                    _ -> 112
-            "#
+            "
         ),
         112,
         i64
@@ -77,11 +77,11 @@ fn branch_third_float() {
 fn branch_first_int() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 1 is
                     1 -> 12
                     _ -> 34
-            "#
+            "
         ),
         12,
         i64
@@ -93,11 +93,11 @@ fn branch_first_int() {
 fn branch_second_int() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 2 is
                     1 -> 63
                     _ -> 48
-            "#
+            "
         ),
         48,
         i64
@@ -109,12 +109,12 @@ fn branch_second_int() {
 fn branch_third_int() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 10 is
                     1 -> 63
                     2 -> 48
                     _ -> 112
-            "#
+            "
         ),
         112,
         i64
@@ -126,11 +126,11 @@ fn branch_third_int() {
 fn branch_store_variable() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 0 is
                     1 -> 12
                     a -> a
-            "#
+            "
         ),
         0,
         i64
@@ -142,13 +142,13 @@ fn branch_store_variable() {
 fn when_one_element_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : [Pair (Int a) (Int a)]
             x = Pair 0x2 0x3
 
             when x is
                 Pair l r -> l + r
-            "#
+            "
         ),
         5,
         i64
@@ -160,14 +160,14 @@ fn when_one_element_tag() {
 fn when_two_element_tag_first() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : [A (Int a), B (Int a)]
             x = A 0x2
 
             when x is
                 A v -> v
                 B v -> v
-            "#
+            "
         ),
         2,
         i64
@@ -179,14 +179,14 @@ fn when_two_element_tag_first() {
 fn when_two_element_tag_second() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : [A (Int a), B (Int a)]
             x = B 0x3
 
             when x is
                 A v -> v
                 B v -> v
-            "#
+            "
         ),
         3,
         i64
@@ -198,10 +198,10 @@ fn when_two_element_tag_second() {
 fn gen_when_one_branch() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when 1.23 is
                     _ -> 23
-            "#
+            "
         ),
         23,
         i64
@@ -213,7 +213,7 @@ fn gen_when_one_branch() {
 fn gen_large_when_int() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 foo = \num ->
                     when num is
                         0 -> 200
@@ -224,7 +224,7 @@ fn gen_large_when_int() {
                         _ -> 1000
 
                 foo -3
-            "#
+            "
         ),
         111,
         i64
@@ -236,7 +236,7 @@ fn gen_large_when_int() {
 fn gen_large_when_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 foo = \num ->
                     when num is
                         0.5f64 -> 200.1
@@ -247,7 +247,7 @@ fn gen_large_when_float() {
                         _ -> 1000.6f64
 
                 foo -3.6
-            "#
+            "
         ),
         111.2,
         f64
@@ -259,11 +259,11 @@ fn gen_large_when_float() {
 fn or_pattern() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when 2 is
                 1 | 2 -> 42
                 _ -> 1
-            "#
+            "
         ),
         42,
         i64
@@ -275,11 +275,11 @@ fn or_pattern() {
 fn apply_identity() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 identity = \a -> a
 
                 identity 5
-            "#
+            "
         ),
         5,
         i64
@@ -291,12 +291,12 @@ fn apply_identity() {
 fn apply_unnamed_identity() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             wrapper = \{} ->
                 (\a -> a) 5
 
             wrapper {}
-            "#
+            "
         ),
         5,
         i64
@@ -308,7 +308,7 @@ fn apply_unnamed_identity() {
 fn return_unnamed_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             wrapper = \{} ->
                 alwaysFloatIdentity : Int * -> (Frac a -> Frac a)
                 alwaysFloatIdentity = \_ ->
@@ -317,7 +317,7 @@ fn return_unnamed_fn() {
                 (alwaysFloatIdentity 2) 1.23f64
 
             wrapper {}
-            "#
+            "
         ),
         1.23,
         f64
@@ -329,7 +329,7 @@ fn return_unnamed_fn() {
 fn gen_when_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 limitedNegate = \num ->
                     when num is
                         1 -> -1
@@ -337,7 +337,7 @@ fn gen_when_fn() {
                         _ -> num
 
                 limitedNegate 1
-            "#
+            "
         ),
         -1,
         i64
@@ -349,11 +349,11 @@ fn gen_when_fn() {
 fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 answer = 42
 
                 answer
-            "#
+            "
         ),
         42,
         i64
@@ -361,11 +361,11 @@ fn gen_basic_def() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 float = 1.23f64
 
                 float
-            "#
+            "
         ),
         1.23,
         f64
@@ -377,13 +377,13 @@ fn gen_basic_def() {
 fn gen_multiple_defs() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 answer = 42
 
                 float = 1.23f64
 
                 if float > 3 then answer else answer
-            "#
+            "
         ),
         42,
         i64
@@ -391,13 +391,13 @@ fn gen_multiple_defs() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 answer = 42
 
                 float = 1.23f64
 
                 if answer > 3 then float else float
-            "#
+            "
         ),
         1.23,
         f64
@@ -411,7 +411,7 @@ fn gen_multiple_defs() {
 //    fn gen_chained_defs() {
 //        assert_evals_to!(
 //            indoc!(
-//                r#"
+//                r"
 //                    x = i1
 //                    i3 = i2
 //                    i1 = 1337
@@ -419,7 +419,7 @@ fn gen_multiple_defs() {
 //                    y = 12.4
 //
 //                    i3
-//                "#
+//                "
 //            ),
 //            1337,
 //            i64
@@ -431,7 +431,7 @@ fn gen_multiple_defs() {
 //    fn gen_nested_defs_old() {
 //        assert_evals_to!(
 //            indoc!(
-//                r#"
+//                r"
 //                    x = 5
 //
 //                    answer =
@@ -461,7 +461,7 @@ fn gen_multiple_defs() {
 //                    y = 12.4
 //
 //                    answer
-//                "#
+//                "
 //            ),
 //            1337,
 //            i64
@@ -473,7 +473,7 @@ fn gen_multiple_defs() {
 //    fn let_x_in_x() {
 //        assert_evals_to!(
 //            indoc!(
-//                r#"
+//                r"
 //                    x = 5
 //
 //                    answer =
@@ -484,7 +484,7 @@ fn gen_multiple_defs() {
 //                        nested
 //
 //                    answer
-//                "#
+//                "
 //            ),
 //            1337,
 //            i64
@@ -496,7 +496,7 @@ fn gen_multiple_defs() {
 fn factorial() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             factorial = \n, accum ->
                 when n is
                     0 ->
@@ -506,7 +506,7 @@ fn factorial() {
                         factorial (n - 1) (n * accum)
 
             factorial 10 1
-            "#
+            "
         ),
         3628800,
         i64
@@ -518,7 +518,7 @@ fn factorial() {
 fn peano1() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Peano : [S Peano, Z]
 
                 three : Peano
@@ -527,7 +527,7 @@ fn peano1() {
                 when three is
                     Z -> 2
                     S _ -> 1
-                "#
+                "
         ),
         1,
         i64
@@ -539,7 +539,7 @@ fn peano1() {
 fn peano2() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Peano : [S Peano, Z]
 
                 three : Peano
@@ -549,7 +549,7 @@ fn peano2() {
                     S (S _) -> 1
                     S (_) -> 0
                     Z -> 0
-                "#
+                "
         ),
         1,
         i64
@@ -833,7 +833,7 @@ fn linked_list_map() {
 fn when_nested_maybe() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Maybe a : [Nothing, Just a]
 
             x : Maybe (Maybe (Int a))
@@ -842,7 +842,7 @@ fn when_nested_maybe() {
             when x is
                 Just (Just v) -> v + 0x1
                 _ -> 0x1
-                "#
+                "
         ),
         42,
         i64
@@ -850,7 +850,7 @@ fn when_nested_maybe() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Maybe a : [Nothing, Just a]
 
             x : Maybe (Maybe (Int *))
@@ -860,7 +860,7 @@ fn when_nested_maybe() {
                 Just (Just v) -> v + 0x1
                 Just Nothing -> 0x2
                 Nothing -> 0x1
-                "#
+                "
         ),
         2,
         i64
@@ -868,7 +868,7 @@ fn when_nested_maybe() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Maybe a : [Nothing, Just a]
 
             x : Maybe (Maybe (Int *))
@@ -878,7 +878,7 @@ fn when_nested_maybe() {
                 Just (Just v) -> v + 0x1
                 Just Nothing -> 0x2
                 Nothing -> 0x1
-                "#
+                "
         ),
         1,
         i64
@@ -890,7 +890,7 @@ fn when_nested_maybe() {
 fn when_peano() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Peano : [S Peano, Z]
 
                 three : Peano
@@ -900,7 +900,7 @@ fn when_peano() {
                     S (S _) -> 1
                     S (_) -> 2
                     Z -> 3
-                "#
+                "
         ),
         1,
         i64
@@ -908,7 +908,7 @@ fn when_peano() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Peano : [S Peano, Z]
 
                 three : Peano
@@ -918,7 +918,7 @@ fn when_peano() {
                     S (S _) -> 1
                     S (_) -> 2
                     Z -> 3
-                "#
+                "
         ),
         2,
         i64
@@ -926,7 +926,7 @@ fn when_peano() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Peano : [S Peano, Z]
 
                 three : Peano
@@ -936,7 +936,7 @@ fn when_peano() {
                     S (S _) -> 1
                     S (_) -> 2
                     Z -> 3
-                "#
+                "
         ),
         3,
         i64
@@ -955,7 +955,7 @@ fn when_peano() {
 fn overflow_frees_list() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             myList = [1,2,3]
 
             # integer overflow; must use the list so it is defined before the overflow
@@ -963,11 +963,11 @@ fn overflow_frees_list() {
             n : I64
             n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
 
-            index : Nat
+            index : U64
             index = Num.intCast n
 
             List.get myList index
-                 "#
+                 "
         ),
         (3, 0),
         (i64, i8)
@@ -980,12 +980,12 @@ fn overflow_frees_list() {
 fn undefined_variable() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                  if Bool.true then
                      x + z
                  else
                      y + z
-                 "#
+                 "
         ),
         3,
         i64
@@ -1016,12 +1016,12 @@ fn a_crash() {
 fn annotation_without_body() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             foo : Int *
 
 
             foo
-            "#
+            "
         ),
         3,
         i64
@@ -1367,6 +1367,7 @@ fn linked_list_is_empty_2() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
+
     assert_evals_to!(
         indoc!(
             r#"
@@ -2022,11 +2023,11 @@ fn hof_conditional() {
     // exposed issue with the if condition being just a symbol
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 passTrue = \f -> f Bool.true
 
                 passTrue (\trueVal -> if trueVal then Bool.false else Bool.true)
-            "#
+            "
         ),
         0,
         u8
@@ -2041,12 +2042,12 @@ fn hof_conditional() {
 fn pattern_shadowing() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x = 4
 
             when 4 is
                 x -> x
-            "#
+            "
         ),
         0,
         i64
@@ -2060,11 +2061,11 @@ fn pattern_shadowing() {
 fn unsupported_pattern_str_interp() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             { x: 4 } = { x : 4 }
 
             x
-            "#
+            "
         ),
         0,
         i64
@@ -2120,14 +2121,14 @@ fn case_or_pattern() {
     // it is currently duplicated
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : [Red, Green, Blue]
             x = Red
 
             when x is
                 Red | Green -> 0
                 Blue -> 1
-            "#
+            "
         ),
         0,
         i64
@@ -2517,11 +2518,11 @@ fn backpassing_result() {
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x = 3
 
                 (\x -> x) 42
-            "#
+            "
         ),
         3,
         i64
@@ -2534,12 +2535,12 @@ fn function_malformed_pattern() {
 fn call_invalid_layout() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 f : I64 -> I64
                 f = \x -> x
 
                 f {}
-            "#
+            "
         ),
         3,
         i64,
@@ -3197,7 +3198,7 @@ fn recursively_build_effect() {
                 hi = "Hello"
                 name = "World"
 
-                "\(hi), \(name)!"
+                "$(hi), $(name)!"
 
             main =
                 when nestHelp 4 is
@@ -3261,12 +3262,12 @@ fn polymophic_expression_captured_inside_closure() {
 fn issue_2322() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             double = \x -> x * 2
             doubleBind = \x -> (\_ -> double x)
             doubleThree = doubleBind 3
             doubleThree {}
-            "#
+            "
         ),
         6,
         i64
@@ -3312,14 +3313,14 @@ fn box_and_unbox_big_string() {
 fn box_and_unbox_nonrecursive_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result U64 U64
             result = Ok 42
 
             result
             |> Box.box
             |> Box.unbox
-            "#
+            "
         ),
         roc_std::RocResult::ok(42),
         roc_std::RocResult<u64, u64>
@@ -3409,9 +3410,9 @@ fn box_and_unbox_f32() {
 fn box_and_unbox_record_2_u64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Box.unbox (Box.box { a: 15u64, b: 27u64 })
-            "#
+            "
         ),
         (15, 27),
         (u64, u64)
@@ -3423,9 +3424,9 @@ fn box_and_unbox_record_2_u64() {
 fn box_and_unbox_record_3_u64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Box.unbox (Box.box { a: 15u64, b: 27u64, c: 34u64 })
-            "#
+            "
         ),
         (15, 27, 34),
         (u64, u64, u64)
@@ -3437,9 +3438,9 @@ fn box_and_unbox_record_3_u64() {
 fn box_and_unbox_record_2_u8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Box.unbox (Box.box { a: 15u8, b: 27u8 })
-            "#
+            "
         ),
         (15, 27),
         (u8, u8)
@@ -3451,9 +3452,9 @@ fn box_and_unbox_record_2_u8() {
 fn box_and_unbox_record_3_u8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Box.unbox (Box.box { a: 15u8, b: 27u8, c: 34u8 })
-            "#
+            "
         ),
         (15, 27, 34),
         (u8, u8, u8)
@@ -3465,12 +3466,12 @@ fn box_and_unbox_record_3_u8() {
 fn box_and_unbox_tag_union() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             v : [A U8, B U8] # usually stack allocated
             v = B 27u8
 
             Box.unbox (Box.box v)
-            "#
+            "
         ),
         (27, 1),
         (u8, u8)
@@ -3534,7 +3535,7 @@ fn issue_2894() {
 fn polymorphic_def_used_in_closure() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             a : I64 -> _
             a = \g ->
                 f = { r: g, h: 32 }
@@ -3543,7 +3544,7 @@ fn polymorphic_def_used_in_closure() {
                 h1 = (\{} -> f.h) {}
                 h1
             a 1
-            "#
+            "
         ),
         32,
         u64
@@ -3555,13 +3556,13 @@ fn polymorphic_def_used_in_closure() {
 fn polymorphic_lambda_set_usage() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             id1 = \x -> x
             id2 = \y -> y
             id = if Bool.true then id1 else id2
 
             id 9u8
-            "#
+            "
         ),
         9,
         u8
@@ -3573,7 +3574,7 @@ fn polymorphic_lambda_set_usage() {
 fn polymorphic_lambda_set_multiple_specializations() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             id1 = \x -> x
             id2 = \y -> y
             id = \z ->
@@ -3581,7 +3582,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
                 f z
 
             (id 9u8) + Num.toU8 (id 16u16)
-            "#
+            "
         ),
         25,
         u8
@@ -3642,14 +3643,14 @@ fn mutual_recursion_top_level_defs() {
 fn polymorphic_lambda_captures_polymorphic_value() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x = 2
 
             f1 = \_ -> x
 
             f = if Bool.true then f1 else f1
             f {}
-            "#
+            "
         ),
         2,
         u64
@@ -3661,7 +3662,7 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 fn lambda_capture_niche_u64_vs_u8_capture() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             capture : _ -> ({} -> Str)
             capture = \val ->
                 \{} ->
@@ -3677,7 +3678,7 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
                     capture 18u8
 
             fun {}
-            "#
+            "
         ),
         RocStr::from("123"),
         RocStr
@@ -3789,14 +3790,14 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 fn recursive_call_capturing_function() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             a = \b ->
                 c = \d ->
                     if d == 7 then d else c (d + b)
                 c 1
 
             a 6
-            "#
+            "
         ),
         7,
         i64
@@ -3808,13 +3809,13 @@ fn recursive_call_capturing_function() {
 fn shared_pattern_variable_in_when_branches() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f = \t ->
                 when t is
                     A x | B x -> x
 
             {a: f (A 15u8), b: (B 31u8)}
-            "#
+            "
         ),
         (15u8, 31u8),
         (u8, u8)
@@ -3826,12 +3827,12 @@ fn shared_pattern_variable_in_when_branches() {
 fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f = \t -> when t is
                         A x | B y -> 31u8
 
             {a: f (A 15u8), b: f (B 15u8)}
-            "#
+            "
         ),
         (31u8, 31u8),
         (u8, u8),
@@ -3845,10 +3846,10 @@ fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
 fn symbol_not_bound_in_all_patterns_runs_when_bound_pattern_reached() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when A 15u8 is
                 A x | B y -> x
-            "#
+            "
         ),
         15u8,
         u8,
@@ -3865,10 +3866,10 @@ fn symbol_not_bound_in_all_patterns_runs_when_bound_pattern_reached() {
 fn runtime_error_when_degenerate_pattern_reached() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when B 15u8 is
                 A x | B y -> x + 5u8
-            "#
+            "
         ),
         15u8,
         u8,
@@ -3953,8 +3954,8 @@ fn compose_recursive_lambda_set_productive_toplevel() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             main =
                 res: Str -> Str
@@ -3976,8 +3977,8 @@ fn compose_recursive_lambda_set_productive_nested() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             res: Str -> Str
             res = List.walk [ exclaim, whisper ] identity compose
@@ -3998,8 +3999,8 @@ fn compose_recursive_lambda_set_productive_inferred() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             res = List.walk [ exclaim, whisper ] identity compose
             res "hello"
@@ -4024,8 +4025,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
                 else \x -> f (g x)
 
              identity = \x -> x
-             exclame = \s -> "\(s)!"
-             whisper = \s -> "(\(s))"
+             exclame = \s -> "$(s)!"
+             whisper = \s -> "($(s))"
 
              main =
                  res: Str -> Str
@@ -4399,7 +4400,7 @@ fn pattern_as_of_symbol() {
 fn function_specialization_information_in_lambda_set_thunk() {
     assert_evals_to!(
         indoc!(
-            r###"
+            r#"
             app "test" provides [main] to "./platform"
 
             andThen = \{} ->
@@ -4409,7 +4410,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
             between = andThen {}
 
             main = between \{} -> between \{} -> 10u8
-            "###
+            "#
         ),
         30,
         u8
@@ -4421,7 +4422,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
 fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     assert_evals_to!(
         indoc!(
-            r###"
+            r#"
             app "test" provides [main] to "./platform"
 
             andThen = \{} ->
@@ -4433,7 +4434,7 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
             between2 = andThen {}
 
             main = between1 \{} -> between2 \{} -> 10u8
-            "###
+            "#
         ),
         30,
         u8
@@ -4526,7 +4527,7 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
 fn reset_recursive_type_wraps_in_named_type() {
     assert_evals_to!(
         indoc!(
-            r###"
+            r#"
             app "test" provides [main] to "./platform"
 
             main : Str
@@ -4552,8 +4553,8 @@ fn reset_recursive_type_wraps_in_named_type() {
                 Cons x xs ->
                   strX = f x
                   strXs = printLinkedList xs f
-                  "Cons \(strX) (\(strXs))"
-            "###
+                  "Cons $(strX) ($(strXs))"
+            "#
         ),
         RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
         RocStr
@@ -4590,7 +4591,7 @@ fn linked_list_trmc() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            repeat : a, Nat -> LinkedList a
+            repeat : a, U64 -> LinkedList a
             repeat = \value, n ->
                 when n is
                     0 -> Nil
@@ -4619,12 +4620,12 @@ fn many_arguments() {
     // exhausts all argument registers on x86 and aarch
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             fun = \a,b,c,d, e,f,g,h, i ->
                 (a + b + c + d) + (e + f + g + h) + i
 
             fun 0i64 1 2 3 4 5 6 7 8
-            "#
+            "
         ),
         1 + 2 + 3 + 4 + 5 + 6 + 7 + 8,
         i64
@@ -4636,9 +4637,9 @@ fn many_arguments() {
 fn multiple_uses_of_bool_true_record() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             (Bool.true, Bool.true).0
-            "#
+            "
         ),
         true,
         bool
@@ -4650,14 +4651,14 @@ fn multiple_uses_of_bool_true_record() {
 fn multiple_uses_of_bool_true_tag_union() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : [ One Bool Bool, Empty ]
             x = One Bool.true Bool.true
 
             when x is
                 One a _ -> a
                 Empty -> Bool.false
-            "#
+            "
         ),
         true,
         bool

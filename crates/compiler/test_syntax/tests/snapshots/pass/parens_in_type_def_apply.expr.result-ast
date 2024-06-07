@@ -19,13 +19,13 @@ Defs(
                     name: @0-1 "U",
                     vars: [
                         @2-5 Apply(
-                            @2-3 Identifier(
-                                "b",
-                            ),
+                            @2-3 Identifier {
+                                ident: "b",
+                            },
                             [
-                                @4-5 Identifier(
-                                    "a",
-                                ),
+                                @4-5 Identifier {
+                                    ident: "a",
+                                },
                             ],
                         ),
                     ],

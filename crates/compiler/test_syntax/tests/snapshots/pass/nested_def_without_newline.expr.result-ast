@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                },
                 @2-7 Defs(
                     Defs {
                         tags: [
@@ -37,9 +37,9 @@ Defs(
                         type_defs: [],
                         value_defs: [
                             Annotation(
-                                @2-3 Identifier(
-                                    "a",
-                                ),
+                                @2-3 Identifier {
+                                    ident: "a",
+                                },
                                 @4-5 BoundVariable(
                                     "n",
                                 ),
