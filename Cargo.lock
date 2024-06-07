@@ -3062,6 +3062,9 @@ dependencies = [
 [[package]]
 name = "roc_scope"
 version = "0.0.1"
+dependencies = [
+ "bumpalo",
+]
 
 [[package]]
 name = "roc_serialize"
