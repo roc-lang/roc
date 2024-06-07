@@ -5324,16 +5324,9 @@ fn parse<'a>(
 
     // Make sure the module_ids has ModuleIds for all our deps,
     // then record those ModuleIds in can_module_ids for later.
-    let mut scope: MutMap<Ident, (Symbol, Region)> = HashMap::with_hasher(default_hasher());
-    let symbols_from_requires;
-
-    let ident_ids = {
+    {
         // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-
-        // Ensure this module has an entry in the ident_ids_by_module map.
-        ident_ids_by_module.get_or_insert(header.module_id);
+        let mut module_ids = module_ids.lock();
 
         // For each of our imports, add an entry to deps_by_name
         //
@@ -5342,13 +5335,22 @@ fn parse<'a>(
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, region) in imported.into_iter() {
             let pq_module_name = qualified_module_name.into_pq_module_name(header.opt_shorthand);
-
             let module_id = module_ids.get_or_insert(&pq_module_name);
 
             available_modules.insert(module_id, region);
-
             deps_by_name.insert(pq_module_name, module_id);
         }
+    }
+
+    let mut scope: MutMap<Ident, (Symbol, Region)> = HashMap::with_hasher(default_hasher());
+    let symbols_from_requires;
+
+    let ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        // Ensure this module has an entry in the ident_ids_by_module map.
+        ident_ids_by_module.get_or_insert(header.module_id);
 
         symbols_from_requires = if let HeaderType::Platform {
             requires,
