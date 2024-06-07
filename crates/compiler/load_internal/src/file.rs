@@ -1145,16 +1145,8 @@ impl<'a> LoadStart<'a> {
 
                     match header_type {
                         Module { .. } | Builtin { .. } | Hosted { .. } => {
-                            let main_path = opt_main_path.or_else(|| loop {
-                                match src_dir.join("main.roc").canonicalize() {
-                                    Ok(path) => break Some(path),
-                                    Err(_) => {
-                                        if !src_dir.pop() {
-                                            break None;
-                                        }
-                                    }
-                                }
-                            });
+                            let main_path =
+                                opt_main_path.or_else(|| find_main_roc_recursively(&mut src_dir));
 
                             let cache_dir = roc_cache_dir.as_persistent_path();
 
@@ -1180,7 +1172,7 @@ impl<'a> LoadStart<'a> {
                     }
                 }
 
-                header_output
+                adjust_header_paths(header_output, &mut src_dir)
             }
 
             Err(problem) => {
@@ -1254,6 +1246,23 @@ impl<'a> LoadStart<'a> {
             root_msg,
             opt_platform_shorthand: opt_platform_id,
         })
+    }
+}
+
+fn find_main_roc_recursively(src_dir: &mut PathBuf) -> Option<PathBuf> {
+    let original_src_dir = src_dir.clone();
+
+    loop {
+        match src_dir.join("main.roc").canonicalize() {
+            Ok(main_roc) => break Some(main_roc),
+            Err(_) => {
+                if !src_dir.pop() {
+                    // reached the root, no main.roc found
+                    *src_dir = original_src_dir;
+                    break None;
+                }
+            }
+        }
     }
 }
 
