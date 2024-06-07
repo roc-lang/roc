@@ -113,11 +113,11 @@ pub struct LoadConfig {
 #[derive(Debug, Clone, Copy)]
 pub enum ExecutionMode {
     Check,
+    ExecutableIgnoreErrors,
+    /// Like [`ExecutionMode::ExecutableIgnoreErrors`], but stops in the presence of type errors.
     Executable,
-    /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
-    ExecutableIfCheck,
-    /// Test is like [`ExecutionMode::ExecutableIfCheck`], but rather than producing a proper
-    /// executable, run tests.
+    TestIgnoreErrors,
+    /// Like [`ExecutionMode::TestIgnoreErrors`], but stops in the presence of type errors.
     Test,
 }
 
@@ -126,13 +126,17 @@ impl ExecutionMode {
         use ExecutionMode::*;
 
         match self {
-            Executable => Phase::MakeSpecializations,
-            Check | ExecutableIfCheck | Test => Phase::SolveTypes,
+            ExecutableIgnoreErrors | TestIgnoreErrors => Phase::MakeSpecializations,
+            Check | Executable | Test => Phase::SolveTypes,
         }
     }
 
     fn build_if_checks(&self) -> bool {
-        matches!(self, Self::ExecutableIfCheck | Self::Test)
+        matches!(self, Self::Executable | Self::Test)
+    }
+
+    fn build_tests(&self) -> bool {
+        matches!(self, Self::Test | Self::TestIgnoreErrors)
     }
 }
 
@@ -397,8 +401,7 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
-                let build_expects =
-                    matches!(state.exec_mode, ExecutionMode::Test) && expectations.is_some();
+                let build_expects = state.exec_mode.build_tests() && expectations.is_some();
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -2575,7 +2578,7 @@ fn update<'a>(
 
             let add_to_host_exposed = is_host_exposed &&
                 // During testing, we don't need to expose anything to the host.
-                !matches!(state.exec_mode, ExecutionMode::Test);
+                !state.exec_mode.build_tests();
 
             if add_to_host_exposed {
                 state.exposed_to_host.top_level_values.extend(
@@ -3152,8 +3155,8 @@ fn finish_specialization<'a>(
     let entry_point = {
         let interns: &mut Interns = &mut interns;
         match state.exec_mode {
-            ExecutionMode::Test => Ok(EntryPoint::Test),
-            ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
+            ExecutionMode::Test | ExecutionMode::TestIgnoreErrors => Ok(EntryPoint::Test),
+            ExecutionMode::ExecutableIgnoreErrors | ExecutionMode::Executable => {
                 use PlatformPath::*;
 
                 let platform_path = match &state.platform_path {

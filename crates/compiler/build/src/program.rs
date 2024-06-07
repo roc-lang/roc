@@ -692,8 +692,8 @@ pub fn standard_load_config(
     threading: Threading,
 ) -> LoadConfig {
     let exec_mode = match order {
-        BuildOrdering::BuildIfChecks => ExecutionMode::ExecutableIfCheck,
-        BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
+        BuildOrdering::BuildIfChecks => ExecutionMode::Executable,
+        BuildOrdering::AlwaysBuild => ExecutionMode::ExecutableIgnoreErrors,
     };
 
     // UNSTABLE(lambda-erasure)

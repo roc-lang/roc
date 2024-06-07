@@ -72,6 +72,7 @@ pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
 pub const FLAG_FUZZ: &str = "fuzz";
+pub const FLAG_IGNORE_BUILD_ERRORS: &str = "ignore-build-errors";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -146,6 +147,12 @@ pub fn build_app() -> Command {
     let flag_fuzz = Arg::new(FLAG_FUZZ)
         .long(FLAG_FUZZ)
         .help("Instrument the roc binary for fuzzing with roc-fuzz")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
+    let flag_ignore_build_errors = Arg::new(FLAG_IGNORE_BUILD_ERRORS)
+        .long(FLAG_IGNORE_BUILD_ERRORS)
+        .help("Run tests even if there were build errors")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -237,6 +244,7 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(flag_fuzz.clone())
+            .arg(flag_ignore_build_errors.clone())
             .arg(
                 Arg::new(FLAG_VERBOSE)
                     .long(FLAG_VERBOSE)
@@ -496,6 +504,12 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;
 
+    let exec_mode = if matches.get_flag(FLAG_IGNORE_BUILD_ERRORS) {
+        ExecutionMode::TestIgnoreErrors
+    } else {
+        ExecutionMode::Test
+    };
+
     // Step 1: compile the app and generate the .o file
     let load_config = LoadConfig {
         target,
@@ -504,7 +518,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
-        exec_mode: ExecutionMode::Test,
+        exec_mode,
     };
     let load_result = roc_load::load_and_monomorphize(
         arena,
@@ -541,10 +555,12 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
 
     // Print warnings before running tests.
     {
-        debug_assert_eq!(
-            problems.errors, 0,
-            "if there were errors, we would have already exited."
-        );
+        if matches!(exec_mode, ExecutionMode::Test) {
+            debug_assert_eq!(
+                problems.errors, 0,
+                "if there were errors, we would have already exited."
+            );
+        }
         if problems.warnings > 0 {
             problems.print_error_warning_count(start_time.elapsed());
             println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));

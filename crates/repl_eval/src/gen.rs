@@ -67,7 +67,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
             render: roc_reporting::report::RenderTarget::ColorTerminal,
             palette,
             threading: Threading::Single,
-            exec_mode: ExecutionMode::Executable,
+            exec_mode: ExecutionMode::ExecutableIgnoreErrors,
         },
     );
 
