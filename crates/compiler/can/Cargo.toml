@@ -8,7 +8,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_scope = { path = "../../scope" }
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
 roc_exhaustive = { path = "../exhaustive" }

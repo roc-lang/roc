@@ -66,8 +66,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         "TestPath".into(),
         IdentIds::default(),
         Default::default(),
-        core::iter::empty(),
-        core::iter::empty(),
     );
     scope.add_alias(
         Symbol::NUM_INT,

@@ -290,9 +290,6 @@ pub fn canonicalize_module_defs<'a>(
     opt_shorthand: Option<&'a str>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-    let top_level_lowercase = core::iter::empty(); // TODO
-    let top_level_uppercase = core::iter::empty(); // TODO
-
     let mut scope = Scope::new(
         home,
         qualified_module_ids
@@ -302,8 +299,6 @@ pub fn canonicalize_module_defs<'a>(
             .to_owned(),
         exposed_ident_ids,
         imported_abilities_state,
-        top_level_lowercase,
-        top_level_uppercase,
     );
     let mut env = Env::new(
         arena,
