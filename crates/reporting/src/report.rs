@@ -857,6 +857,13 @@ impl<'a> RocDocAllocator<'a> {
         }
         self.text(result.chars().rev().collect::<String>())
     }
+
+    pub fn file_path(&'a self, path: &Path) -> DocBuilder<'a, Self, Annotation> {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_path = path.strip_prefix(cwd).unwrap_or(path).to_str().unwrap();
+
+        self.text(relative_path.to_string())
+    }
 }
 
 #[derive(Copy, Clone, Debug)]

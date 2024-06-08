@@ -196,6 +196,7 @@ fn start_phase<'a>(
                     arc_shorthands: Arc::clone(&state.arc_shorthands),
                     module_ids: Arc::clone(&state.arc_modules),
                     ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                    root_type: state.root_type.clone(),
                 }
             }
             Phase::CanonicalizeAndConstrain => {
@@ -687,6 +688,7 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub root_path: PathBuf,
+    pub root_type: RootType,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
     pub opt_platform_shorthand: Option<&'a str>,
@@ -756,6 +758,7 @@ impl<'a> State<'a> {
     fn new(
         root_id: ModuleId,
         root_path: PathBuf,
+        root_type: RootType,
         opt_platform_shorthand: Option<&'a str>,
         target: Target,
         function_kind: FunctionKind,
@@ -776,6 +779,7 @@ impl<'a> State<'a> {
             root_id,
             root_path,
             root_subs: None,
+            root_type,
             opt_platform_shorthand,
             cache_dir,
             target,
@@ -870,6 +874,7 @@ enum BuildTask<'a> {
         arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
+        root_type: RootType,
     },
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
@@ -987,8 +992,20 @@ pub enum LoadingProblem<'a> {
 #[derive(Debug)]
 pub enum AvailableShorthands<'a> {
     FromRoot(Vec<&'a str>),
-    FromMain(&'a Path, Vec<&'a str>),
+    FromMain(PathBuf, Vec<&'a str>),
     UnknownMain,
+}
+
+impl<'a> AvailableShorthands<'a> {
+    fn new(root_type: RootType, shorthands: Vec<&'a str>) -> Self {
+        match root_type {
+            RootType::Main => AvailableShorthands::FromRoot(shorthands),
+            RootType::Module { main_path } => match main_path {
+                None => AvailableShorthands::UnknownMain,
+                Some(main_path) => AvailableShorthands::FromMain(main_path, shorthands),
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1115,8 +1132,15 @@ pub struct LoadStart<'a> {
     root_id: ModuleId,
     root_path: PathBuf,
     root_msg: Msg<'a>,
+    root_type: RootType,
     opt_platform_shorthand: Option<&'a str>,
     src_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+enum RootType {
+    Main,
+    Module { main_path: Option<PathBuf> },
 }
 
 impl<'a> LoadStart<'a> {
@@ -1149,7 +1173,7 @@ impl<'a> LoadStart<'a> {
             root_start_time,
         );
 
-        let header_output = match res_loaded {
+        let (header_output, root_type) = match res_loaded {
             Ok(mut header_output) => {
                 if let Msg::Header(ModuleHeader {
                     module_id: header_id,
@@ -1168,7 +1192,9 @@ impl<'a> LoadStart<'a> {
 
                             let cache_dir = roc_cache_dir.as_persistent_path();
 
-                            if let (Some(main_path), Some(cache_dir)) = (main_path, cache_dir) {
+                            if let (Some(main_path), Some(cache_dir)) =
+                                (main_path.clone(), cache_dir)
+                            {
                                 let mut messages = Vec::with_capacity(4);
                                 messages.push(header_output.msg);
 
@@ -1185,12 +1211,18 @@ impl<'a> LoadStart<'a> {
 
                                 header_output.msg = Msg::Many(messages);
                             }
-                        }
-                        App { .. } | Package { .. } | Platform { .. } => {}
-                    }
-                }
 
-                adjust_header_paths(header_output, &mut src_dir)
+                            let header_output = adjust_header_paths(header_output, &mut src_dir);
+
+                            (header_output, RootType::Module { main_path })
+                        }
+                        App { .. } | Package { .. } | Platform { .. } => {
+                            (header_output, RootType::Main)
+                        }
+                    }
+                } else {
+                    (header_output, RootType::Main)
+                }
             }
 
             Err(problem) => {
@@ -1217,6 +1249,7 @@ impl<'a> LoadStart<'a> {
             root_id: header_output.module_id,
             root_path: filename,
             root_msg: header_output.msg,
+            root_type,
             opt_platform_shorthand: header_output.opt_platform_shorthand,
         })
     }
@@ -1262,6 +1295,8 @@ impl<'a> LoadStart<'a> {
             root_id,
             root_path: filename,
             root_msg,
+            // todo(agus): could be module
+            root_type: RootType::Main,
             opt_platform_shorthand: opt_platform_id,
         })
     }
@@ -1519,6 +1554,7 @@ pub fn load_single_threaded<'a>(
         root_id,
         root_path,
         root_msg,
+        root_type,
         src_dir,
         opt_platform_shorthand,
         ..
@@ -1534,6 +1570,7 @@ pub fn load_single_threaded<'a>(
     let mut state = State::new(
         root_id,
         root_path,
+        root_type,
         opt_platform_shorthand,
         target,
         function_kind,
@@ -1918,6 +1955,7 @@ fn load_multi_threaded<'a>(
         root_id,
         root_path,
         root_msg,
+        root_type,
         src_dir,
         opt_platform_shorthand,
         ..
@@ -1948,6 +1986,7 @@ fn load_multi_threaded<'a>(
     let mut state = State::new(
         root_id,
         root_path,
+        root_type,
         opt_platform_shorthand,
         target,
         function_kind,
@@ -5328,6 +5367,7 @@ fn parse<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    root_type: RootType,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = Instant::now();
@@ -5405,8 +5445,8 @@ fn parse<'a>(
 
         for (shorthand, region) in used_shorthands {
             if !shorthands.contains_key(shorthand) {
-                // todo(agus): Handle module root
-                let available = AvailableShorthands::FromRoot(shorthands.keys().cloned().collect());
+                let available =
+                    AvailableShorthands::new(root_type, shorthands.keys().copied().collect());
 
                 return Err(LoadingProblem::UnknownPackageShorthand {
                     filename: header.module_path,
@@ -6328,12 +6368,14 @@ fn run_task<'a>(
             arc_shorthands,
             module_ids,
             ident_ids_by_module,
+            root_type,
         } => parse(
             arena,
             header,
             arc_shorthands,
             module_ids,
             ident_ids_by_module,
+            root_type,
         ),
         CanonicalizeAndConstrain {
             parsed,
@@ -6684,14 +6726,13 @@ fn to_unknown_package_shorthand_report(
     };
     let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
 
-    let details = match available {
+    let help = match available {
         AvailableShorthands::FromRoot(options) => {
             let mut suggestions = suggest::sort(shorthand, options);
             suggestions.truncate(4);
 
             if suggestions.is_empty() {
                 alloc.reflow("A lowercase name indicates a package shorthand, but no packages have been specified.")
-                // todo(agus): "in this app/package"
             } else {
                 alloc.stack([
                     alloc.reflow("A lowercase name indicates a package shorthand, but I don't recognize this one. Did you mean one of these?"),
@@ -6700,10 +6741,46 @@ fn to_unknown_package_shorthand_report(
                         .indent(4),
                 ])
             }
-
-            // todo(agus): "You can add a package like this"
         }
-        _ => todo!("agus"),
+        AvailableShorthands::FromMain(main_path, options) => {
+            let mut suggestions = suggest::sort(shorthand, options);
+            suggestions.truncate(4);
+
+            let suggestions = if suggestions.is_empty() {
+                alloc.reflow("A lowercase name indicates a package shorthand, but no packages have been specified.")
+            } else {
+                alloc.stack([
+                    alloc.reflow("A lowercase name indicates a package shorthand, but I don't recognize this one. Did you mean one of these?"),
+                    alloc
+                        .vcat(suggestions.into_iter().map(|v| alloc.shorthand(v)))
+                        .indent(4),
+                ])
+            };
+
+            alloc.stack([
+                suggestions,
+                alloc.note("I'm using the following module to resolve package shorthands:"),
+                alloc.file_path(&main_path).indent(4),
+                alloc.concat([
+                    alloc.reflow("You can specify a different one with the "),
+                    alloc.keyword("--main"),
+                    alloc.reflow(" flag.")
+                ]),
+            ])
+        }
+        AvailableShorthands::UnknownMain => {
+            alloc.stack([
+                alloc.reflow("A lowercase name indicates a package shorthand, but I don't know which packages are available."),
+                alloc.concat([
+                    alloc.reflow("When checking a module directly, I look for a `main.roc` app or package to resolve shorthands from."),
+                ]),
+                alloc.concat([
+                    alloc.reflow("You can create it, or specify an existing one with the "),
+                   alloc.keyword("--main"),
+                    alloc.reflow(" flag."),
+                ])
+            ])
+        }
     };
 
     let doc = alloc.stack([
@@ -6713,7 +6790,7 @@ fn to_unknown_package_shorthand_report(
             alloc.reflow("`:"),
         ]),
         alloc.region(lines.convert_region(region)),
-        details,
+        help,
     ]);
 
     let report = Report {
