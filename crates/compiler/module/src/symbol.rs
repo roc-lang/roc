@@ -463,6 +463,13 @@ impl<'a, T> PackageQualified<'a, T> {
         }
     }
 
+    pub fn package_shorthand(&self) -> Option<&'a str> {
+        match self {
+            PackageQualified::Unqualified(_) => None,
+            PackageQualified::Qualified(package, _) => Some(package),
+        }
+    }
+
     pub fn map_module<B>(&self, f: impl FnOnce(&T) -> B) -> PackageQualified<'a, B> {
         match self {
             PackageQualified::Unqualified(name) => PackageQualified::Unqualified(f(name)),

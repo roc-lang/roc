@@ -56,6 +56,7 @@ use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
+use roc_reporting::error::r#type::suggest;
 #[cfg(not(target_family = "wasm"))]
 use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
@@ -192,6 +193,7 @@ fn start_phase<'a>(
 
                 BuildTask::Parse {
                     header,
+                    arc_shorthands: Arc::clone(&state.arc_shorthands),
                     module_ids: Arc::clone(&state.arc_modules),
                     ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
                 }
@@ -865,6 +867,7 @@ enum BuildTask<'a> {
     },
     Parse {
         header: ModuleHeader<'a>,
+        arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
     },
@@ -960,6 +963,14 @@ pub enum LoadingProblem<'a> {
         source: &'a [u8],
         region: Region,
     },
+    UnknownPackageShorthand {
+        filename: PathBuf,
+        module_id: ModuleId,
+        source: &'a str,
+        region: Region,
+        shorthand: &'a str,
+        available: AvailableShorthands<'a>,
+    },
 
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -971,6 +982,13 @@ pub enum LoadingProblem<'a> {
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
     ChannelProblem(ChannelProblem),
+}
+
+#[derive(Debug)]
+pub enum AvailableShorthands<'a> {
+    FromRoot(Vec<&'a str>),
+    FromMain(&'a Path, Vec<&'a str>),
+    UnknownMain,
 }
 
 #[derive(Debug)]
@@ -1755,6 +1773,30 @@ fn state_thread_step<'a>(
                             );
                             return Err(LoadingProblem::FormattedReport(buf));
                         }
+                        Err(LoadingProblem::UnknownPackageShorthand {
+                            filename,
+                            module_id,
+                            source,
+                            region,
+                            shorthand,
+                            available,
+                        }) => {
+                            let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_unknown_package_shorthand_report(
+                                module_ids,
+                                root_exposed_ident_ids,
+                                module_id,
+                                filename,
+                                region,
+                                source,
+                                shorthand,
+                                available,
+                                render,
+                            );
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
                         Err(e) => Err(e),
                     }
                 }
@@ -1832,6 +1874,24 @@ pub fn report_loading_problem(
             filename,
             region,
             source,
+            render,
+        ),
+        LoadingProblem::UnknownPackageShorthand {
+            filename,
+            module_id,
+            region,
+            source,
+            shorthand,
+            available,
+        } => to_unknown_package_shorthand_report(
+            module_ids,
+            IdentIds::exposed_builtins(0),
+            module_id,
+            filename,
+            region,
+            source,
+            shorthand,
+            available,
             render,
         ),
         err => todo!("Loading error: {:?}", err),
@@ -2143,6 +2203,9 @@ fn worker_task_step<'a>(
                             Err(LoadingProblem::IncorrectModuleName(err)) => {
                                 msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
                             }
+                            Err(err @ LoadingProblem::UnknownPackageShorthand { .. }) => {
+                                msg_tx.send(Msg::FailedToLoad(err)).unwrap();
+                            }
                             Err(other) => {
                                 return Err(other);
                             }
@@ -2241,6 +2304,9 @@ fn worker_task<'a>(
                         }
                         Err(LoadingProblem::IncorrectModuleName(err)) => {
                             msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
+                        }
+                        Err(err @ LoadingProblem::UnknownPackageShorthand { .. }) => {
+                            msg_tx.send(Msg::FailedToLoad(err)).unwrap();
                         }
                         Err(other) => {
                             return Err(other);
@@ -5259,6 +5325,7 @@ fn canonicalize_and_constrain<'a>(
 fn parse<'a>(
     arena: &'a Bump,
     header: ModuleHeader<'a>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
@@ -5278,6 +5345,11 @@ fn parse<'a>(
             ));
         }
     };
+
+    // SAFETY: By this point we've already incrementally verified that there
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
+    // we'd have bailed out before now.
+    let src = unsafe { from_utf8_unchecked(source) };
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
@@ -5314,12 +5386,40 @@ fn parse<'a>(
     };
 
     let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
+    let mut used_shorthands = VecMap::default();
 
     for (def, region) in ast::RecursiveValueDefIter::new(&parsed_defs) {
         if let ValueDef::ModuleImport(import) = def {
             imported.push((import.name.value.into(), *region));
+
+            if let Some(shorthand) = import.name.value.package {
+                used_shorthands.insert(shorthand, import.name.region);
+            }
         }
     }
+
+    // THEORY: a significant number of modules do not import from packages
+    // so we can avoid locking the shorthands in those cases
+    if !used_shorthands.is_empty() {
+        let shorthands = arc_shorthands.lock();
+
+        for (shorthand, region) in used_shorthands {
+            if !shorthands.contains_key(shorthand) {
+                // todo(agus): Handle module root
+                let available = AvailableShorthands::FromRoot(shorthands.keys().cloned().collect());
+
+                return Err(LoadingProblem::UnknownPackageShorthand {
+                    filename: header.module_path,
+                    module_id: header.module_id,
+                    source: src,
+                    region,
+                    shorthand,
+                    available,
+                });
+            }
+        }
+    }
+
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
@@ -5493,11 +5593,6 @@ fn parse<'a>(
         .iter()
         .map(|(pq_module_name, module_id)| pq_module_name.map_module(|_| *module_id))
         .collect();
-
-    // SAFETY: By this point we've already incrementally verified that there
-    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
-    // we'd have bailed out before now.
-    let src = unsafe { from_utf8_unchecked(source) };
 
     let ModuleHeader {
         module_id,
@@ -6230,9 +6325,16 @@ fn run_task<'a>(
         .map(|HeaderOutput { msg, .. }| msg),
         Parse {
             header,
+            arc_shorthands,
             module_ids,
             ident_ids_by_module,
-        } => parse(arena, header, module_ids, ident_ids_by_module),
+        } => parse(
+            arena,
+            header,
+            arc_shorthands,
+            module_ids,
+            ident_ids_by_module,
+        ),
         CanonicalizeAndConstrain {
             parsed,
             qualified_module_ids,
@@ -6550,6 +6652,74 @@ fn to_multiple_platform_packages_report(
         filename,
         doc,
         title: "MULTIPLE PLATFORMS".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
+fn to_unknown_package_shorthand_report(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    module_id: ModuleId,
+    filename: PathBuf,
+    region: Region,
+    src: &str,
+    shorthand: &str,
+    available: AvailableShorthands,
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let details = match available {
+        AvailableShorthands::FromRoot(options) => {
+            let mut suggestions = suggest::sort(shorthand, options);
+            suggestions.truncate(4);
+
+            if suggestions.is_empty() {
+                alloc.reflow("A lowercase name indicates a package shorthand, but no packages have been specified.")
+                // todo(agus): "in this app/package"
+            } else {
+                alloc.stack([
+                    alloc.reflow("A lowercase name indicates a package shorthand, but I don't recognize this one. Did you mean one of these?"),
+                    alloc
+                        .vcat(suggestions.into_iter().map(|v| alloc.shorthand(v)))
+                        .indent(4),
+                ])
+            }
+
+            // todo(agus): "You can add a package like this"
+        }
+        _ => todo!("agus"),
+    };
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow("This module is trying to import from `"),
+            alloc.shorthand(shorthand),
+            alloc.reflow("`:"),
+        ]),
+        alloc.region(lines.convert_region(region)),
+        details,
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "UNKNOWN PACKAGE".to_string(),
         severity: Severity::RuntimeError,
     };
 
