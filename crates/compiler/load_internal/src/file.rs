@@ -1081,6 +1081,7 @@ pub fn load_and_typecheck_str<'a>(
     filename: PathBuf,
     source: &'a str,
     src_dir: PathBuf,
+    opt_main_path: Option<PathBuf>,
     exposed_types: ExposedByModule,
     target: Target,
     function_kind: FunctionKind,
@@ -1091,7 +1092,14 @@ pub fn load_and_typecheck_str<'a>(
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source, roc_cache_dir, src_dir)?;
+    let load_start = LoadStart::from_str(
+        arena,
+        filename,
+        opt_main_path,
+        source,
+        roc_cache_dir,
+        src_dir,
+    )?;
 
     // this function is used specifically in the case
     // where we want to regenerate the cached data
@@ -1161,7 +1169,7 @@ impl<'a> LoadStart<'a> {
         // Load the root module synchronously; we can't proceed until we have its id.
         let root_start_time = Instant::now();
 
-        let res_loaded = load_filename(
+        let load_result = load_filename(
             arena,
             filename.clone(),
             true,
@@ -1173,57 +1181,22 @@ impl<'a> LoadStart<'a> {
             root_start_time,
         );
 
-        let (header_output, root_type) = match res_loaded {
-            Ok(mut header_output) => {
-                if let Msg::Header(ModuleHeader {
-                    module_id: header_id,
-                    header_type,
-                    ..
-                }) = &header_output.msg
-                {
-                    debug_assert_eq!(*header_id, header_output.module_id);
+        let load_result = match load_result {
+            Ok(header_output) => handle_root_type(
+                arena,
+                Arc::clone(&arc_shorthands),
+                Arc::clone(&arc_modules),
+                Arc::clone(&ident_ids_by_module),
+                roc_cache_dir,
+                header_output,
+                opt_main_path,
+                &mut src_dir,
+            ),
+            Err(problem) => Err(problem),
+        };
 
-                    use HeaderType::*;
-
-                    match header_type {
-                        Module { .. } | Builtin { .. } | Hosted { .. } => {
-                            let main_path =
-                                opt_main_path.or_else(|| find_main_roc_recursively(&mut src_dir));
-
-                            let cache_dir = roc_cache_dir.as_persistent_path();
-
-                            if let (Some(main_path), Some(cache_dir)) =
-                                (main_path.clone(), cache_dir)
-                            {
-                                let mut messages = Vec::with_capacity(4);
-                                messages.push(header_output.msg);
-
-                                load_packages_from_main(
-                                    arena,
-                                    src_dir.clone(),
-                                    main_path,
-                                    &mut messages,
-                                    Arc::clone(&arc_modules),
-                                    Arc::clone(&ident_ids_by_module),
-                                    Arc::clone(&arc_shorthands),
-                                    cache_dir,
-                                )?;
-
-                                header_output.msg = Msg::Many(messages);
-                            }
-
-                            let header_output = adjust_header_paths(header_output, &mut src_dir);
-
-                            (header_output, RootType::Module { main_path })
-                        }
-                        App { .. } | Package { .. } | Platform { .. } => {
-                            (header_output, RootType::Main)
-                        }
-                    }
-                } else {
-                    (header_output, RootType::Main)
-                }
-            }
+        let (header_output, root_type) = match load_result {
+            Ok(header_output) => header_output,
 
             Err(problem) => {
                 let module_ids = Arc::try_unwrap(arc_modules)
@@ -1257,6 +1230,7 @@ impl<'a> LoadStart<'a> {
     pub fn from_str(
         arena: &'a Bump,
         filename: PathBuf,
+        opt_main_path: Option<PathBuf>,
         src: &'a str,
         roc_cache_dir: RocCacheDir<'_>,
         mut src_dir: PathBuf,
@@ -1267,25 +1241,34 @@ impl<'a> LoadStart<'a> {
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
         // Load the root module synchronously; we can't proceed until we have its id.
+        let root_start_time = Instant::now();
+
+        let header_output = load_from_str(
+            arena,
+            filename.clone(),
+            src,
+            Arc::clone(&arc_modules),
+            Arc::clone(&ident_ids_by_module),
+            roc_cache_dir,
+            root_start_time,
+        )?;
+
+        let (header_output, root_type) = handle_root_type(
+            arena,
+            Arc::clone(&arc_shorthands),
+            Arc::clone(&arc_modules),
+            Arc::clone(&ident_ids_by_module),
+            roc_cache_dir,
+            header_output,
+            opt_main_path,
+            &mut src_dir,
+        )?;
+
         let HeaderOutput {
             module_id: root_id,
             msg: root_msg,
             opt_platform_shorthand: opt_platform_id,
-        } = {
-            let root_start_time = Instant::now();
-
-            let header_output = load_from_str(
-                arena,
-                filename.clone(),
-                src,
-                Arc::clone(&arc_modules),
-                Arc::clone(&ident_ids_by_module),
-                roc_cache_dir,
-                root_start_time,
-            )?;
-
-            adjust_header_paths(header_output, &mut src_dir)
-        };
+        } = header_output;
 
         Ok(LoadStart {
             arc_modules,
@@ -1295,10 +1278,62 @@ impl<'a> LoadStart<'a> {
             root_id,
             root_path: filename,
             root_msg,
-            // todo(agus): could be module
-            root_type: RootType::Main,
+            root_type,
             opt_platform_shorthand: opt_platform_id,
         })
+    }
+}
+
+fn handle_root_type<'a>(
+    arena: &'a Bump,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
+    arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+    roc_cache_dir: RocCacheDir<'_>,
+    mut header_output: HeaderOutput<'a>,
+    opt_main_path: Option<PathBuf>,
+    src_dir: &mut PathBuf,
+) -> Result<(HeaderOutput<'a>, RootType), LoadingProblem<'a>> {
+    if let Msg::Header(ModuleHeader {
+        module_id: header_id,
+        header_type,
+        ..
+    }) = &header_output.msg
+    {
+        debug_assert_eq!(*header_id, header_output.module_id);
+
+        use HeaderType::*;
+
+        match header_type {
+            Module { .. } | Builtin { .. } | Hosted { .. } => {
+                let main_path = opt_main_path.or_else(|| find_main_roc_recursively(src_dir));
+
+                let cache_dir = roc_cache_dir.as_persistent_path();
+
+                if let (Some(main_path), Some(cache_dir)) = (main_path.clone(), cache_dir) {
+                    let mut messages = Vec::with_capacity(4);
+                    messages.push(header_output.msg);
+
+                    load_packages_from_main(
+                        arena,
+                        src_dir.clone(),
+                        main_path,
+                        &mut messages,
+                        Arc::clone(&arc_modules),
+                        Arc::clone(&ident_ids_by_module),
+                        Arc::clone(&arc_shorthands),
+                        cache_dir,
+                    )?;
+
+                    header_output.msg = Msg::Many(messages);
+                }
+
+                Ok((header_output, RootType::Module { main_path }))
+            }
+            App { .. } | Package { .. } | Platform { .. } => Ok((header_output, RootType::Main)),
+        }
+    } else {
+        Ok((header_output, RootType::Main))
     }
 }
 
@@ -1351,7 +1386,7 @@ fn load_packages_from_main<'a>(
             unspace(arena, packages.value.items)
         }
         Platform(PlatformHeader { packages, .. }) => unspace(arena, packages.item.items),
-        Module(_) | Hosted(_) => todo!("agus: report bad main"),
+        Module(_) | Hosted(_) => todo!("expected {} to be an app or package", filename.display()),
     };
 
     load_packages(
@@ -1380,35 +1415,6 @@ fn load_packages_from_main<'a>(
         &src_dir,
         cache_dir,
     )
-}
-
-fn adjust_header_paths<'a>(
-    header_output: HeaderOutput<'a>,
-    src_dir: &mut PathBuf,
-) -> HeaderOutput<'a> {
-    if let Msg::Header(ModuleHeader {
-        module_id: header_id,
-        header_type,
-        ..
-    }) = &header_output.msg
-    {
-        debug_assert_eq!(*header_id, header_output.module_id);
-
-        if let HeaderType::Module { name, .. } = header_type {
-            // [modules-revamp] TODO: Privacy changes
-            // Modules can have names like Foo.Bar.Baz,
-            // in which case we need to adjust the src_dir to
-            // remove the "Bar/Baz" directories in order to correctly
-            // resolve this interface module's imports!
-            let dirs_to_pop = name.as_str().matches('.').count();
-
-            for _ in 0..dirs_to_pop {
-                src_dir.pop();
-            }
-        }
-    }
-
-    header_output
 }
 
 pub enum LoadResult<'a> {

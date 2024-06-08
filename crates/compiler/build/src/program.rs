@@ -1303,6 +1303,7 @@ pub fn build_str_test<'a>(
         PathBuf::from("valgrind_test.roc"),
         app_module_source,
         app_module_path.to_path_buf(),
+        None,
         roc_cache_dir,
         load_config,
     )
