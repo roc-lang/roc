@@ -1,0 +1,4 @@
+target/
+platform/*.a
+build
+app

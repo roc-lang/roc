@@ -1,0 +1,6 @@
+zig-out/
+zig-cache/
+build
+host/glue/
+expects
+platform/*.a

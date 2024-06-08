@@ -1,0 +1,7 @@
+zig-cache/
+zig-out/
+host/glue/
+
+build
+
+*.a

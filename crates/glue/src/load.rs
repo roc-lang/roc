@@ -86,7 +86,6 @@ pub fn generate(
                     false,
                     link_type,
                     linking_strategy,
-                    true,
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     load_config,

@@ -1,0 +1,5 @@
+zig-cache/
+platform/*.wasm
+zig-out/
+build
+rocLovesWebAssembly

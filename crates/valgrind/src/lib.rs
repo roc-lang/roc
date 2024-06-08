@@ -7,7 +7,6 @@ static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(target_os = "linux")]
 fn build_host() {
-    use roc_build::program::build_and_preprocess_host;
     use roc_linker::preprocessed_host_filename;
 
     let platform_main_roc =
@@ -26,16 +25,32 @@ fn build_host() {
         std::env::set_var("NO_AVX512", "1");
     }
 
-    build_and_preprocess_host(
-        roc_mono::ir::OptLevel::Normal,
-        target,
-        &platform_main_roc,
-        &preprocessed_host_path,
-        roc_linker::ExposedSymbols {
-            top_level_values: vec![String::from("mainForHost")],
-            exported_closure_types: vec![],
-        },
-    );
+    let zig_glue_path = roc_command_utils::root_dir().join("crates/glue/src/ZigGlue.roc");
+    let glue_path = roc_command_utils::root_dir().join("crates/valgrind/zig-platform/glue");
+
+    // generate glue
+    std::process::Command::new("roc")
+        .args(&[
+            zig_glue_path.display().to_string(),
+            glue_path.display().to_string(),
+            platform_main_roc.display().to_string(),
+        ])
+        .status()
+        .unwrap();
+
+    let femit_arg = format!("-femit-bin={}", preprocessed_host_path.display());
+    let host_path = roc_command_utils::root_dir().join("crates/valgrind/zig-platform/host.zig");
+
+    // generate host
+    std::process::Command::new("zig")
+        .args(&[
+            "build-lib",
+            "-lc",
+            femit_arg.as_str(),
+            &host_path.display().to_string(),
+        ])
+        .status()
+        .unwrap();
 }
 
 fn valgrind_test(source: &str) {
