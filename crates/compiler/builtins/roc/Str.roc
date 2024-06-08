@@ -367,7 +367,6 @@ module [
     withCapacity,
     withPrefix,
     contains,
-    concatUtf8,
 ]
 
 import Bool exposing [Bool]
@@ -560,14 +559,6 @@ FromUtf8Result : {
 }
 
 fromUtf8Lowlevel : List U8 -> FromUtf8Result
-
-## Concatenates the bytes of a string encoded as utf8 to a list of bytes.
-## ```roc
-## expect (Str.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
-## ```
-concatUtf8 : List U8, Str -> List U8
-
-expect (Str.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
 
 ## Check if the given [Str] starts with a value.
 ## ```roc

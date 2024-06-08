@@ -1288,7 +1288,7 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         StrGetUnsafe | ListGetUnsafe => &[BORROWED, IRRELEVANT],
         ListConcat => &[OWNED, OWNED],
         StrConcat => &[OWNED, BORROWED],
-        StrConcatUtf8 => &[OWNED, BORROWED],
+        ListConcatUtf8 => &[OWNED, BORROWED],
         StrSubstringUnsafe => &[OWNED, IRRELEVANT, IRRELEVANT],
         StrReserve => &[OWNED, IRRELEVANT],
         StrTrim => &[OWNED],

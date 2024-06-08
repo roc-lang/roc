@@ -1704,9 +1704,9 @@ trait Backend<'a> {
 
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
-            LowLevel::StrConcatUtf8 => self.build_fn_call(
+            LowLevel::ListConcatUtf8 => self.build_fn_call(
                 sym,
-                bitcode::STR_CONCAT_UTF8.to_string(),
+                bitcode::LIST_CONCAT_UTF8.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

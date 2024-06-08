@@ -4123,3 +4123,15 @@ mod pattern_match {
         )
     }
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_concat_utf8() {
+    assert_evals_to!(
+        r#"
+        List.concatUtf8 [1, 2, 3, 4] "🐦"
+        "#,
+        RocList::from_slice(&[1u8, 2, 3, 4, 240, 159, 144, 166]),
+        RocList<u8>
+    )
+}

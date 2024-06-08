@@ -69,11 +69,12 @@ module [
     walkBackwardsUntil,
     countIf,
     chunksOf,
+    concatUtf8,
 ]
 
 import Bool exposing [Bool, Eq]
 import Result exposing [Result]
-import Num exposing [U64, Num]
+import Num exposing [U64, Num, U8]
 
 ## ## Types
 ##
@@ -1324,3 +1325,12 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
             Break b -> Break b
     else
         Continue state
+
+## Concatenates the bytes of a string encoded as utf8 to a list of bytes.
+## ```roc
+## expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
+## ```
+concatUtf8 : List U8, Str -> List U8
+
+expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
+

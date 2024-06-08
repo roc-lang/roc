@@ -85,6 +85,7 @@ comptime {
     exportListFn(list.listCapacity, "capacity");
     exportListFn(list.listAllocationPtr, "allocation_ptr");
     exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
+    exportListFn(list.listConcatUtf8, "concat_utf8");
 }
 
 // Num Module
@@ -210,7 +211,6 @@ comptime {
     exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
-    exportStrFn(str.strConcatUtf8, "concat_utf8");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

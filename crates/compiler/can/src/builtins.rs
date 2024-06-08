@@ -128,7 +128,6 @@ map_symbol_to_lowlevel_and_arity! {
     StrToNum; STR_TO_NUM; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
-    StrConcatUtf8; STR_CONCAT_UTF8; 2,
 
     ListLenUsize; LIST_LEN_USIZE; 1,
     ListLenU64; LIST_LEN_U64; 1,
@@ -151,6 +150,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
     ListReleaseExcessCapacity; LIST_RELEASE_EXCESS_CAPACITY; 1,
+    ListConcatUtf8; LIST_CONCAT_UTF8; 2,
 
     ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 

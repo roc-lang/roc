@@ -369,7 +369,6 @@ pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
 pub const STR_ALLOCATION_PTR: &str = "roc_builtins.str.allocation_ptr";
 pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
-pub const STR_CONCAT_UTF8: &str = "roc_builtins.str.concat_utf8";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
@@ -391,6 +390,7 @@ pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";
 pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
 pub const LIST_ALLOCATION_PTR: &str = "roc_builtins.list.allocation_ptr";
 pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
+pub const LIST_CONCAT_UTF8: &str = "roc_builtins.list.concat_utf8";
 
 pub const DEC_ABS: &str = "roc_builtins.dec.abs";
 pub const DEC_ACOS: &str = "roc_builtins.dec.acos";

@@ -26,7 +26,6 @@ pub enum LowLevel {
     StrReserve,
     StrWithCapacity,
     StrReleaseExcessCapacity,
-    StrConcatUtf8,
     ListLenUsize,
     ListLenU64,
     ListWithCapacity,
@@ -48,6 +47,7 @@ pub enum LowLevel {
     ListGetCapacity,
     ListIsUnique,
     ListClone,
+    ListConcatUtf8,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -275,7 +275,6 @@ map_symbol_to_lowlevel! {
     StrToNum <= STR_TO_NUM;
     StrWithCapacity <= STR_WITH_CAPACITY;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
-    StrConcatUtf8 <= STR_CONCAT_UTF8;
     ListLenU64 <= LIST_LEN_U64;
     ListLenUsize <= LIST_LEN_USIZE;
     ListGetCapacity <= LIST_CAPACITY;
@@ -292,6 +291,7 @@ map_symbol_to_lowlevel! {
     ListSublist <= LIST_SUBLIST_LOWLEVEL;
     ListDropAt <= LIST_DROP_AT;
     ListSwap <= LIST_SWAP;
+    ListConcatUtf8 <= LIST_CONCAT_UTF8;
     NumAdd <= NUM_ADD;
     NumAddWrap <= NUM_ADD_WRAP;
     NumAddChecked <= NUM_ADD_CHECKED_LOWLEVEL;

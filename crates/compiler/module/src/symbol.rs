@@ -1440,7 +1440,6 @@ define_builtins! {
         46 STR_REPLACE_FIRST: "replaceFirst"
         47 STR_REPLACE_LAST: "replaceLast"
         48 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
-        49 STR_CONCAT_UTF8: "concatUtf8"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1532,6 +1531,7 @@ define_builtins! {
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
         87 LIST_CLONE: "clone"
         88 LIST_LEN_USIZE: "lenUsize"
+        89 LIST_CONCAT_UTF8: "concatUtf8"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

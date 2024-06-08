@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const str = @import("str.zig");
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 const math = std.math;
@@ -1032,4 +1033,35 @@ test "listConcat: non-unique with unique overlapping" {
     defer wanted.decref(@sizeOf(u8));
 
     try expect(concatted.eql(wanted));
+}
+
+pub fn listConcatUtf8(
+    list: RocList,
+    string: str.RocStr,
+) callconv(.C) RocList {
+    if (string.len() == 0) {
+        return list;
+    } else {
+        const combined_length = list.len() + string.len();
+
+        // List U8 has alignment 1 and element_width 1
+        var result = list.reallocate(1, combined_length, 1);
+        // We just allocated combined_length, which is > 0 because string.len() > 0
+        var bytes = result.bytes orelse unreachable;
+        @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
+
+        return result;
+    }
+}
+
+test "listConcatUtf8" {
+    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 });
+    defer list.decref(1);
+    const string_bytes = "🐦";
+    const string = str.RocStr.init(string_bytes, string_bytes.len);
+    defer string.decref();
+    const ret = listConcatUtf8(list, string);
+    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 });
+    defer expected.decref(1);
+    try expect(ret.eql(expected));
 }
