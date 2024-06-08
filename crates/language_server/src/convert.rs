@@ -163,8 +163,8 @@ pub(crate) mod diag {
                         roc_packaging::cache::roc_cache_dir().display()
                     )
                 }
-                LoadingProblem::UnknownPackageShorthand { shorthand, .. } => {
-                    format!("Unknown package shorthand: {}", shorthand)
+                LoadingProblem::UnrecognizedPackageShorthand { shorthand, .. } => {
+                    format!("Unrecognized package shorthand: {}", shorthand)
                 }
             };
 

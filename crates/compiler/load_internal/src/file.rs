@@ -968,7 +968,7 @@ pub enum LoadingProblem<'a> {
         source: &'a [u8],
         region: Region,
     },
-    UnknownPackageShorthand {
+    UnrecognizedPackageShorthand {
         filename: PathBuf,
         module_id: ModuleId,
         source: &'a str,
@@ -1810,7 +1810,7 @@ fn state_thread_step<'a>(
                             );
                             return Err(LoadingProblem::FormattedReport(buf));
                         }
-                        Err(LoadingProblem::UnknownPackageShorthand {
+                        Err(LoadingProblem::UnrecognizedPackageShorthand {
                             filename,
                             module_id,
                             source,
@@ -1821,7 +1821,7 @@ fn state_thread_step<'a>(
                             let module_ids = arc_modules.lock().clone().into_module_ids();
 
                             let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                            let buf = to_unknown_package_shorthand_report(
+                            let buf = to_unrecognized_package_shorthand_report(
                                 module_ids,
                                 root_exposed_ident_ids,
                                 module_id,
@@ -1913,14 +1913,14 @@ pub fn report_loading_problem(
             source,
             render,
         ),
-        LoadingProblem::UnknownPackageShorthand {
+        LoadingProblem::UnrecognizedPackageShorthand {
             filename,
             module_id,
             region,
             source,
             shorthand,
             available,
-        } => to_unknown_package_shorthand_report(
+        } => to_unrecognized_package_shorthand_report(
             module_ids,
             IdentIds::exposed_builtins(0),
             module_id,
@@ -2242,7 +2242,7 @@ fn worker_task_step<'a>(
                             Err(LoadingProblem::IncorrectModuleName(err)) => {
                                 msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
                             }
-                            Err(err @ LoadingProblem::UnknownPackageShorthand { .. }) => {
+                            Err(err @ LoadingProblem::UnrecognizedPackageShorthand { .. }) => {
                                 msg_tx.send(Msg::FailedToLoad(err)).unwrap();
                             }
                             Err(other) => {
@@ -2344,7 +2344,7 @@ fn worker_task<'a>(
                         Err(LoadingProblem::IncorrectModuleName(err)) => {
                             msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
                         }
-                        Err(err @ LoadingProblem::UnknownPackageShorthand { .. }) => {
+                        Err(err @ LoadingProblem::UnrecognizedPackageShorthand { .. }) => {
                             msg_tx.send(Msg::FailedToLoad(err)).unwrap();
                         }
                         Err(other) => {
@@ -5448,7 +5448,7 @@ fn parse<'a>(
                 let available =
                     AvailableShorthands::new(root_type, shorthands.keys().copied().collect());
 
-                return Err(LoadingProblem::UnknownPackageShorthand {
+                return Err(LoadingProblem::UnrecognizedPackageShorthand {
                     filename: header.module_path,
                     module_id: header.module_id,
                     source: src,
@@ -6703,7 +6703,7 @@ fn to_multiple_platform_packages_report(
     buf
 }
 
-fn to_unknown_package_shorthand_report(
+fn to_unrecognized_package_shorthand_report(
     module_ids: ModuleIds,
     all_ident_ids: IdentIdsByModule,
     module_id: ModuleId,
@@ -6796,7 +6796,7 @@ fn to_unknown_package_shorthand_report(
     let report = Report {
         filename,
         doc,
-        title: "UNKNOWN PACKAGE".to_string(),
+        title: "UNRECOGNIZED PACKAGE".to_string(),
         severity: Severity::RuntimeError,
     };
 

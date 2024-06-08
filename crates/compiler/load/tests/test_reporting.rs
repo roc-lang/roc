@@ -11680,7 +11680,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r###"
-    ── UNKNOWN PACKAGE in tmp/unknown_shorthand_no_deps/Test.roc ───────────────────
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_no_deps/Test.roc ───────────────────
 
     This module is trying to import from `foo`:
 
@@ -11705,7 +11705,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r###"
-    ── UNKNOWN PACKAGE in tmp/unknown_shorthand_in_app/Test.roc ────────────────────
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_in_app/Test.roc ────────────────────
 
     This module is trying to import from `foo`:
 

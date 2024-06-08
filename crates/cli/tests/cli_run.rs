@@ -671,7 +671,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN PACKAGE in tests/module_imports_pkg/Module.roc ──────────────────────
+                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
 
                 This module is trying to import from `pkg`:
 
@@ -698,7 +698,7 @@ mod cli_run {
             &["--main", "tests/module_imports_pkg/app.roc"],
             indoc!(
                 r#"
-                ── UNKNOWN PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ───────────
+                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
 
                 This module is trying to import from `cli`:
 
