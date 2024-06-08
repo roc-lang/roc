@@ -95,6 +95,9 @@ const ROC_FILE_EXTENSION: &str = "roc";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
+/// Default name for the main module
+const DEFAULT_MAIN_NAME: &str = "main.roc";
+
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 macro_rules! log {
@@ -1341,7 +1344,7 @@ fn find_main_roc_recursively(src_dir: &mut PathBuf) -> Option<PathBuf> {
     let original_src_dir = src_dir.clone();
 
     loop {
-        match src_dir.join("main.roc").canonicalize() {
+        match src_dir.join(DEFAULT_MAIN_NAME).canonicalize() {
             Ok(main_roc) => break Some(main_roc),
             Err(_) => {
                 if !src_dir.pop() {
@@ -3278,8 +3281,11 @@ fn register_package_shorthands<'a>(
                         let root_module_dir = cache_dir
                             .join(url_metadata.cache_subdir)
                             .join(url_metadata.content_hash);
-                        let root_module = root_module_dir
-                            .join(url_metadata.root_module_filename.unwrap_or("main.roc"));
+                        let root_module = root_module_dir.join(
+                            url_metadata
+                                .root_module_filename
+                                .unwrap_or(DEFAULT_MAIN_NAME),
+                        );
 
                         ShorthandPath::FromHttpsUrl {
                             root_module_dir,
@@ -4329,7 +4335,7 @@ fn load_packages<'a>(
                         // (defaults to main.roc)
                         match opt_root_module {
                             Some(root_module) => package_dir.join(root_module),
-                            None => package_dir.join("main.roc"),
+                            None => package_dir.join(DEFAULT_MAIN_NAME),
                         }
                     }
                     Err(problem) => {
@@ -6778,7 +6784,9 @@ fn to_unrecognized_package_shorthand_report(
             alloc.stack([
                 alloc.reflow("A lowercase name indicates a package shorthand, but I don't know which packages are available."),
                 alloc.concat([
-                    alloc.reflow("When checking a module directly, I look for a `main.roc` app or package to resolve shorthands from."),
+                    alloc.reflow("When checking a module directly, I look for a `"),
+                    alloc.reflow(DEFAULT_MAIN_NAME),
+                    alloc.reflow("` app or package to resolve shorthands from."),
                 ]),
                 alloc.concat([
                     alloc.reflow("You can create it, or specify an existing one with the "),
