@@ -69,6 +69,8 @@ module [
     walkBackwardsUntil,
     countIf,
     chunksOf,
+    Sort,
+    compare,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -1324,3 +1326,10 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
             Break b -> Break b
     else
         Continue state
+
+Sort implements
+    compare : a, a -> [LessThan, Equal, GreaterThan] where a implements Sort
+
+# INTERNAL COMPILER USE ONLY: used to lower calls to `compare` to structural
+# compare via the `Sort` low-level for derived types.
+structuralCompare : a, a -> [LessThan, Equal, GreaterThan]

@@ -2087,6 +2087,10 @@ impl<'a> LowLevelCall<'a> {
 
             Eq | NotEq => self.eq_or_neq(backend),
 
+            Compare => {
+                panic!("TODO: implement this")
+            }
+
             BoxExpr | UnboxExpr => {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
             }
