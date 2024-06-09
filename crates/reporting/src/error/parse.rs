@@ -60,25 +60,26 @@ fn to_syntax_report<'a>(
 ) -> Report<'a> {
     use SyntaxError::*;
 
+    let severity = Severity::RuntimeError;
     let report = |doc| Report {
         filename: filename.clone(),
         doc,
         title: "PARSE PROBLEM".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     match parse_problem {
         SyntaxError::ArgumentsBeforeEquals(region) => {
             let doc = alloc.stack([
                 alloc.reflow("Unexpected tokens in front of the `=` symbol:"),
-                alloc.region(lines.convert_region(*region)),
+                alloc.region(lines.convert_region(*region), severity),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         Unexpected(region) => {
@@ -93,7 +94,7 @@ fn to_syntax_report<'a>(
                     // context(alloc, &parse_problem.context_stack, "here"),
                     alloc.text(":"),
                 ]),
-                alloc.region(region),
+                alloc.region(region, severity),
             ]);
 
             report(doc)
@@ -103,27 +104,27 @@ fn to_syntax_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
-                alloc.region(region),
+                alloc.region(region, severity),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "NOT END OF FILE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         SyntaxError::Eof(region) => {
             let doc = alloc.stack([
                 alloc.reflow("End of Field"),
-                alloc.region(lines.convert_region(*region)),
+                alloc.region(lines.convert_region(*region), severity),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         SyntaxError::OutdentedTooFar => {
@@ -133,7 +134,7 @@ fn to_syntax_report<'a>(
                 filename,
                 doc,
                 title: "PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         Type(typ) => to_type_report(alloc, lines, filename, typ, Position::default()),
@@ -182,7 +183,7 @@ fn to_expr_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EExpr;
-
+    let severity = Severity::RuntimeError;
     match parse_problem {
         EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, context, if_, *pos),
         EExpr::When(when, pos) => to_when_report(alloc, lines, filename, context, when, *pos),
@@ -201,7 +202,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
                     alloc.reflow("In roc, functions are always written as a lambda, like "),
@@ -214,7 +215,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "ARGUMENTS BEFORE EQUALS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -320,6 +321,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(
                     lines.convert_region(surroundings),
                     lines.convert_region(region),
+                    severity,
                 ),
                 alloc.concat(suggestion),
             ]);
@@ -328,7 +330,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "UNKNOWN OPERATOR".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -340,9 +342,10 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am very confused by this identifier:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
-                    alloc.reflow("Are you trying to qualify a name? I am execting something like "),
+                    alloc
+                        .reflow("Are you trying to qualify a name? I am expecting something like "),
                     alloc.parser_suggestion("Json.Decode.string"),
                     alloc.reflow(". Maybe you are trying to qualify a tag? Tags like "),
                     alloc.parser_suggestion("Err"),
@@ -354,7 +357,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD IDENTIFIER".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -428,7 +431,7 @@ fn to_expr_report<'a>(
                     a_thing,
                     alloc.reflow(", but I got stuck here:"),
                 ]),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 expecting,
             ]);
 
@@ -436,7 +439,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: title.to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -446,7 +449,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("This definition is missing a final expression."),
                     alloc.reflow(" A nested definition must be followed by"),
@@ -464,7 +467,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "MISSING FINAL EXPRESSION".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -483,7 +486,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Whatever I am running into is confusing me a lot! "),
                     alloc.reflow("Normally I can give fairly specific hints, "),
@@ -495,7 +498,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "SYNTAX PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -505,7 +508,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a definition, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
                     alloc.reflow("In roc, functions are always written as a lambda, like "),
@@ -518,7 +521,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "ARGUMENTS BEFORE EQUALS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -528,7 +531,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("Looks like you are trying to define a function. ")]),
             ]);
 
@@ -536,7 +539,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "BAD BACKPASSING ARROW".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -552,7 +555,7 @@ fn to_expr_report<'a>(
                 alloc.reflow(
                     r"I am partway through parsing a record builder, and I found an optional field:",
                 ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow("Optional fields can only appear when you destructure a record."),
             ]);
 
@@ -560,7 +563,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "BAD RECORD BUILDER".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -572,7 +575,7 @@ fn to_expr_report<'a>(
                 alloc.reflow(
                     r"I am partway through parsing a record update, and I found a record builder field:",
                 ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow("Record builders cannot be updated like records."),
             ]);
 
@@ -580,7 +583,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "BAD RECORD UPDATE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -596,7 +599,8 @@ fn to_expr_report<'a>(
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
-            let snippet = alloc.region_with_subregion(lines.convert_region(surroundings), region);
+            let snippet =
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity);
 
             let doc = match context {
                 Context::InNode(Node::Dbg, _, _) => alloc.stack([
@@ -646,7 +650,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "INDENT ENDS AFTER EXPRESSION".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EExpr::Expect(e_expect, _position) => {
@@ -665,7 +669,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("TODO provide more context.")]),
             ]);
 
@@ -673,7 +677,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "TRAILING OPERATOR".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EExpr::UnexpectedComma(pos) => {
@@ -682,7 +686,7 @@ fn to_expr_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am trying to parse an expression, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("This comma in an invalid position.")]),
             ]);
 
@@ -690,7 +694,7 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "UNEXPECTED COMMA".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
@@ -708,9 +712,10 @@ fn to_record_report<'a>(
     let surroundings = Region::new(start, pos);
     let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
+    let severity = Severity::RuntimeError;
     let doc = alloc.stack([
         alloc.reflow(r"I am partway through parsing a record, but I got stuck here:"),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         alloc.concat([alloc.reflow("TODO provide more context.")]),
     ]);
 
@@ -718,7 +723,7 @@ fn to_record_report<'a>(
         filename,
         doc,
         title: "RECORD PARSE PROBLEM".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -732,6 +737,8 @@ fn to_lambda_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EClosure;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         EClosure::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
@@ -741,7 +748,7 @@ fn to_lambda_report<'a>(
                 let doc = alloc.stack([
                     alloc
                         .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow("I was expecting a "),
                         alloc.parser_suggestion("->"),
@@ -753,7 +760,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "WEIRD ARROW".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             _ => {
@@ -763,7 +770,7 @@ fn to_lambda_report<'a>(
                 let doc = alloc.stack([
                     alloc
                         .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow("I was expecting a "),
                         alloc.parser_suggestion("->"),
@@ -775,7 +782,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "MISSING ARROW".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -788,7 +795,7 @@ fn to_lambda_report<'a>(
                 let doc = alloc.stack([
                     alloc
                         .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow("I was expecting a "),
                         alloc.parser_suggestion("->"),
@@ -800,7 +807,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "WEIRD ARROW".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             _ => {
@@ -810,7 +817,7 @@ fn to_lambda_report<'a>(
                 let doc = alloc.stack([
                     alloc
                         .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow("I was expecting a "),
                         alloc.parser_suggestion("->"),
@@ -822,7 +829,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "MISSING ARROW".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -835,7 +842,7 @@ fn to_lambda_report<'a>(
                 let doc = alloc.stack([
                     alloc
                         .reflow(r"I am partway through parsing a function argument list, but I got stuck at this comma:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow("I was expecting an argument pattern before this, "),
                         alloc.reflow("so try adding an argument before the comma and see if that helps?"),
@@ -846,7 +853,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED ARGUMENT LIST".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             _ => {
@@ -856,7 +863,7 @@ fn to_lambda_report<'a>(
                 let doc = alloc.stack([
                     alloc
                         .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow("I was expecting an argument pattern before this, "),
                         alloc.reflow("so try adding an argument and see if that helps?"),
@@ -867,7 +874,7 @@ fn to_lambda_report<'a>(
                     filename,
                     doc,
                     title: "MISSING ARROW".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -934,13 +941,14 @@ fn to_unfinished_lambda_report<'a>(
 ) -> Report<'a> {
     let surroundings = Region::new(start, pos);
     let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+    let severity = Severity::RuntimeError;
 
     let doc = alloc.stack([
         alloc.concat([
             alloc.reflow(r"I was partway through parsing a "),
             alloc.reflow(r" function, but I got stuck here:"),
         ]),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         message,
     ]);
 
@@ -948,7 +956,7 @@ fn to_unfinished_lambda_report<'a>(
         filename,
         doc,
         title: "UNFINISHED FUNCTION".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -961,6 +969,7 @@ fn to_str_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EString;
+    let severity = Severity::RuntimeError;
 
     match *parse_problem {
         EString::Open(_pos) => unreachable!("another branch would be taken"),
@@ -992,6 +1001,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(
                     lines.convert_region(surroundings),
                     lines.convert_region(region),
+                    severity,
                 ),
                 alloc.concat([
                     alloc.reflow(r"This is not an escape sequence I recognize."),
@@ -1014,7 +1024,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD ESCAPE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::CodePtOpen(pos) | EString::CodePtEnd(pos) => {
@@ -1025,7 +1035,7 @@ fn to_str_report<'a>(
                 alloc.reflow(
                     r"I am partway through parsing a unicode code point, but I got stuck here:",
                 ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"I was expecting a hexadecimal number, like "),
                     alloc.parser_suggestion("\\u(1100)"),
@@ -1040,7 +1050,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD CODE POINT".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::FormatEnd(pos) => {
@@ -1049,7 +1059,7 @@ fn to_str_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I cannot find the end of this format expression:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
                     alloc.parser_suggestion("\"The count is $(count)\""),
@@ -1061,7 +1071,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS FORMAT".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::EndlessSingleQuote(pos) => {
@@ -1070,7 +1080,7 @@ fn to_str_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I cannot find the end of this scalar literal (character literal):"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
                     alloc.parser_suggestion("'a'"),
@@ -1084,7 +1094,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS SCALAR".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::InvalidSingleQuote(e, pos) => {
@@ -1098,7 +1108,7 @@ fn to_str_report<'a>(
                             alloc.reflow(r"I am part way through parsing this scalar literal (character literal), "),
                             alloc.reflow(r"but it appears to be empty - which is not a valid scalar."),
                         ]),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(r"You could change it to something like "),
                             alloc.parser_suggestion("'a'"),
@@ -1115,7 +1125,7 @@ fn to_str_report<'a>(
                             alloc.reflow(r"I am part way through parsing this scalar literal (character literal), "),
                             alloc.reflow(r"but it's too long to fit in a U32 so it's not a valid scalar."),
                         ]),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(r"You could change it to something like "),
                             alloc.parser_suggestion("'a'"),
@@ -1133,7 +1143,7 @@ fn to_str_report<'a>(
                             alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
                             alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(r"You could change it to something like "),
                             alloc.parser_suggestion("'a'"),
@@ -1150,7 +1160,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "INVALID SCALAR".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::EndlessSingleLine(pos) => {
@@ -1159,7 +1169,7 @@ fn to_str_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I cannot find the end of this string:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
                     alloc.parser_suggestion("\"to be or not to be\""),
@@ -1173,7 +1183,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS STRING".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::ExpectedDoubleQuoteGotSingleQuote(pos) => {
@@ -1182,7 +1192,7 @@ fn to_str_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I was expecting to see a string here, but I got a scalar literal."),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
                     alloc.parser_suggestion("\"to be or not to be\""),
@@ -1197,7 +1207,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "EXPECTED STRING".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::EndlessMultiLine(pos) => {
@@ -1206,7 +1216,7 @@ fn to_str_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I cannot find the end of this block string:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
                     alloc.parser_suggestion("\"\"\"to be or not to be\"\"\""),
@@ -1220,7 +1230,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "ENDLESS STRING".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EString::MultilineInsufficientIndent(pos) => {
@@ -1229,7 +1239,7 @@ fn to_str_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"This multiline string is not sufficiently indented:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"Lines in a multi-line string must be indented at least as "),
                     alloc.reflow("much as the beginning \"\"\". This extra indentation is automatically removed "),
@@ -1241,7 +1251,7 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "INSUFFICIENT INDENT IN MULTI-LINE STRING".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
     }
@@ -1255,6 +1265,7 @@ fn to_expr_in_parens_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EInParens;
+    let severity = Severity::RuntimeError;
 
     match *parse_problem {
         EInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
@@ -1272,7 +1283,7 @@ fn to_expr_in_parens_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a parenthesized expression or tuple:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"I was expecting to see an expression next."),
                     alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
@@ -1283,7 +1294,7 @@ fn to_expr_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "EMPTY PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EInParens::End(pos) => {
@@ -1293,7 +1304,7 @@ fn to_expr_in_parens_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow("I am partway through parsing a record pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(
                         r"I was expecting to see a closing parenthesis next, so try adding a ",
@@ -1307,7 +1318,7 @@ fn to_expr_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EInParens::Open(pos) => {
@@ -1318,7 +1329,7 @@ fn to_expr_in_parens_report<'a>(
                 alloc.reflow(
                     r"I just started parsing an expression in parentheses, but I got stuck here:",
                 ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"An expression in parentheses looks like "),
                     alloc.parser_suggestion("(32)"),
@@ -1332,7 +1343,7 @@ fn to_expr_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
     }
@@ -1348,6 +1359,7 @@ fn to_list_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EList;
 
+    let severity = Severity::RuntimeError;
     match *parse_problem {
         EList::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
@@ -1370,7 +1382,11 @@ fn to_list_report<'a>(
                         alloc.reflow(
                             r"I am partway through started parsing a list, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            region,
+                            severity,
+                        ),
                         alloc.concat([
                             alloc
                                 .reflow(r"I was expecting to see a list entry before this comma, "),
@@ -1382,7 +1398,7 @@ fn to_list_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED LIST".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => {
@@ -1393,7 +1409,11 @@ fn to_list_report<'a>(
                         alloc.reflow(
                             r"I am partway through started parsing a list, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            region,
+                            severity,
+                        ),
                         alloc.concat([
                             alloc.reflow(
                                 r"I was expecting to see a closing square bracket before this, ",
@@ -1415,7 +1435,7 @@ fn to_list_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED LIST".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -1462,6 +1482,7 @@ fn to_import_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EImport::*;
     use roc_parse::parser::EImportParams;
+    let severity = Severity::RuntimeError;
 
     match parse_problem {
         Import(_pos) => unreachable!("another branch would be taken"),
@@ -1530,7 +1551,7 @@ fn to_import_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow("This looks like a record builder field, but those are not allowed in module params."),
             ]);
 
@@ -1538,7 +1559,7 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         Params(EImportParams::RecordUpdateFound(region), _) => {
@@ -1547,7 +1568,7 @@ fn to_import_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow("It looks like you're trying to update a record, but module params require a standalone record literal."),
             ]);
 
@@ -1555,7 +1576,7 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "RECORD UPDATE IN MODULE PARAMS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         IndentAlias(pos) | Alias(pos) => to_unfinished_import_report(
@@ -1576,7 +1597,7 @@ fn to_import_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"This import is using a lowercase alias:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow(r"Module names and aliases must start with an uppercase letter."),
             ]);
 
@@ -1584,7 +1605,7 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "LOWERCASE ALIAS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         ExposingListStart(pos) => to_unfinished_import_report(
@@ -1608,7 +1629,7 @@ fn to_import_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow(r"I'm partway through parsing an exposing list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow(r"I was expecting a type, value, or function name next, like:"),
                 alloc
                     .parser_suggestion("import Svg exposing [Path, arc, rx]")
@@ -1619,7 +1640,7 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD EXPOSING".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         IndentIngestedName(pos) | IngestedName(pos) => to_unfinished_import_report(
@@ -1665,6 +1686,7 @@ fn to_unfinished_import_report<'a>(
 ) -> Report<'a> {
     let surroundings = Region::new(start, pos);
     let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+    let severity = Severity::RuntimeError;
 
     let doc = alloc.stack([
         alloc.concat([
@@ -1672,7 +1694,7 @@ fn to_unfinished_import_report<'a>(
             alloc.keyword("import"),
             alloc.reflow(r", but I got stuck here:"),
         ]),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         message,
     ]);
 
@@ -1680,7 +1702,7 @@ fn to_unfinished_import_report<'a>(
         filename,
         doc,
         title: "UNFINISHED IMPORT".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -1778,6 +1800,7 @@ fn to_unfinished_if_report<'a>(
 ) -> Report<'a> {
     let surroundings = Region::new(start, pos);
     let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+    let severity = Severity::RuntimeError;
 
     let doc = alloc.stack([
         alloc.concat([
@@ -1785,7 +1808,7 @@ fn to_unfinished_if_report<'a>(
             alloc.keyword("if"),
             alloc.reflow(r" expression, but I got stuck here:"),
         ]),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         message,
     ]);
 
@@ -1793,7 +1816,7 @@ fn to_unfinished_if_report<'a>(
         filename,
         doc,
         title: "UNFINISHED IF".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -1806,6 +1829,7 @@ fn to_when_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EWhen;
+    let severity = Severity::RuntimeError;
 
     match *parse_problem {
         EWhen::IfGuard(nested, pos) => {
@@ -1818,7 +1842,11 @@ fn to_when_report<'a>(
                         alloc.reflow(
                             r"I just started parsing an if guard, but there is no guard condition:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            region,
+                            severity,
+                        ),
                         alloc.concat([alloc.reflow("Try adding an expression before the arrow!")]),
                     ]);
 
@@ -1826,7 +1854,7 @@ fn to_when_report<'a>(
                         filename,
                         doc,
                         title: "IF GUARD NO CONDITION".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => to_expr_report(
@@ -1849,7 +1877,7 @@ fn to_when_report<'a>(
                     alloc.keyword("when"),
                     alloc.reflow(r" expression, but got stuck here:"),
                 ]),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("I was expecting to see an arrow next.")]),
                 note_for_when_indent_error(alloc),
             ]);
@@ -1858,7 +1886,7 @@ fn to_when_report<'a>(
                 filename,
                 doc,
                 title: "MISSING ARROW".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -1993,8 +2021,8 @@ fn to_unfinished_when_report<'a>(
 ) -> Report<'a> {
     match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
         Next::Token("->") => to_unexpected_arrow_report(alloc, lines, filename, pos, start),
-
         _ => {
+            let severity = Severity::RuntimeError;
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2004,7 +2032,7 @@ fn to_unfinished_when_report<'a>(
                     alloc.keyword("when"),
                     alloc.reflow(r" expression, but I got stuck here:"),
                 ]),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 message,
                 note_for_when_error(alloc),
             ]);
@@ -2013,7 +2041,7 @@ fn to_unfinished_when_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED WHEN".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
     }
@@ -2028,6 +2056,7 @@ fn to_unexpected_arrow_report<'a>(
 ) -> Report<'a> {
     let surroundings = Region::new(start, pos);
     let region = Region::new(pos, pos.bump_column(2));
+    let severity = Severity::RuntimeError;
 
     let doc = alloc.stack([
         alloc.concat([
@@ -2038,6 +2067,7 @@ fn to_unexpected_arrow_report<'a>(
         alloc.region_with_subregion(
             lines.convert_region(surroundings),
             lines.convert_region(region),
+            severity,
         ),
         alloc.concat([
             alloc.reflow(r"It makes sense to see arrows around here, "),
@@ -2053,7 +2083,7 @@ fn to_unexpected_arrow_report<'a>(
         filename,
         doc,
         title: "UNEXPECTED ARROW".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -2113,6 +2143,7 @@ fn to_pattern_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EPattern;
+    let severity = Severity::RuntimeError;
 
     match parse_problem {
         EPattern::Start(pos) => {
@@ -2121,7 +2152,7 @@ fn to_pattern_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I just started parsing a pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.note("I may be confused by indentation"),
             ]);
 
@@ -2129,7 +2160,7 @@ fn to_pattern_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PATTERN".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EPattern::Record(record, pos) => to_precord_report(alloc, lines, filename, record, *pos),
@@ -2153,6 +2184,8 @@ fn to_precord_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::PRecord;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         PRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
@@ -2161,7 +2194,7 @@ fn to_precord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2173,7 +2206,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD PATTERN".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             _ => {
@@ -2182,7 +2215,11 @@ fn to_precord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(
+                        lines.convert_region(surroundings),
+                        region,
+                        severity,
+                    ),
                     record_patterns_look_like(alloc),
                 ]);
 
@@ -2190,7 +2227,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD PATTERN".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -2203,7 +2240,7 @@ fn to_precord_report<'a>(
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     let doc = alloc.stack([
                         alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(
                                 r"I was expecting to see a colon, question mark, comma or closing curly brace.",
@@ -2215,13 +2252,13 @@ fn to_precord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD PATTERN".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => {
                     let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a record pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(
                         r"I was expecting to see a closing curly brace before this, so try adding a ",
@@ -2235,7 +2272,7 @@ fn to_precord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD PATTERN".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -2248,7 +2285,7 @@ fn to_precord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a record pattern, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2260,7 +2297,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD PATTERN".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             Next::Other(Some(',')) => todo!(),
@@ -2271,7 +2308,7 @@ fn to_precord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"I was expecting to see another record field defined next, so I am looking for a name like "),
                         alloc.parser_suggestion("userName"),
@@ -2285,7 +2322,7 @@ fn to_precord_report<'a>(
                     filename,
                     doc,
                     title: "PROBLEM IN RECORD PATTERN".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -2323,6 +2360,7 @@ fn to_plist_report<'a>(
     parse_problem: &PList<'a>,
     start: Position,
 ) -> Report<'a> {
+    let severity = Severity::RuntimeError;
     match *parse_problem {
         PList::Open(pos) => {
             let surroundings = Region::new(start, pos);
@@ -2330,7 +2368,7 @@ fn to_plist_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I just started parsing a list pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 list_patterns_look_like(alloc),
             ]);
 
@@ -2338,7 +2376,7 @@ fn to_plist_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED LIST PATTERN".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2347,7 +2385,7 @@ fn to_plist_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
             let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a list pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(
                         r"I was expecting to see a closing square brace before this, so try adding a ",
@@ -2360,7 +2398,7 @@ fn to_plist_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED LIST PATTERN".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2369,7 +2407,7 @@ fn to_plist_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
             let doc = alloc.stack([
                 alloc.reflow("It looks like you may trying to write a list rest pattern, but it's not the form I expect:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(
                         r"List rest patterns, which match zero or more elements in a list, are denoted with ",
@@ -2382,7 +2420,7 @@ fn to_plist_report<'a>(
                 filename,
                 doc,
                 title: "INCORRECT REST PATTERN".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2401,9 +2439,11 @@ fn to_pattern_in_parens_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::PInParens;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         PInParens::Open(pos) => {
-            // `Open` case is for exhaustiveness, this case shouldn not be reachable practically.
+            // `Open` case is for exhaustiveness, this case shouldn't not be reachable practically.
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2411,7 +2451,7 @@ fn to_pattern_in_parens_report<'a>(
                 alloc.reflow(
                     r"I just started parsing a pattern in parentheses, but I got stuck here:",
                 ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"A pattern in parentheses looks like "),
                     alloc.parser_suggestion("(Ok 32)"),
@@ -2425,17 +2465,18 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
         PInParens::Empty(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+            let severity = Severity::RuntimeError;
 
             let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a parenthesized pattern or tuple:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"I was expecting to see a pattern next."),
                     alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
@@ -2446,7 +2487,7 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "EMPTY PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2456,7 +2497,7 @@ fn to_pattern_in_parens_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a pattern in parentheses, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(
                         r"I was expecting to see a closing parenthesis before this, so try adding a ",
@@ -2470,7 +2511,7 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2488,17 +2529,18 @@ fn to_malformed_number_literal_report<'a>(
 ) -> Report<'a> {
     let surroundings = Region::new(start, start);
     let region = LineColumnRegion::from_pos(lines.convert_pos(start));
+    let severity = Severity::RuntimeError;
 
     let doc = alloc.stack([
         alloc.reflow(r"This number literal is malformed:"),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
     ]);
 
     Report {
         filename,
         doc,
         title: "INVALID NUMBER LITERAL".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -2510,6 +2552,7 @@ fn to_type_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EType;
+    let severity = Severity::RuntimeError;
 
     match parse_problem {
         EType::TRecord(record, pos) => to_trecord_report(alloc, lines, filename, record, *pos),
@@ -2530,7 +2573,7 @@ fn to_type_report<'a>(
 
                     let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a function argument type, but I encountered two commas in a row:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([alloc.reflow("Try removing one of them.")]),
                 ]);
 
@@ -2538,7 +2581,7 @@ fn to_type_report<'a>(
                         filename,
                         doc,
                         title: "DOUBLE COMMA".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => todo!(),
@@ -2551,7 +2594,7 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"I am expecting a type next, like "),
                     alloc.parser_suggestion("Bool"),
@@ -2565,7 +2608,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TYPE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2575,7 +2618,7 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.note("I may be confused by indentation"),
             ]);
 
@@ -2583,7 +2626,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TYPE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2593,7 +2636,7 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a type, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.note("I may be confused by indentation"),
             ]);
 
@@ -2601,7 +2644,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED TYPE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2611,7 +2654,7 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I just started parsing an inline type alias, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.note("I may be confused by indentation"),
             ]);
 
@@ -2619,7 +2662,7 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED INLINE ALIAS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2629,14 +2672,14 @@ fn to_type_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am expecting a type variable, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "BAD TYPE VARIABLE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2653,6 +2696,8 @@ fn to_trecord_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::ETypeRecord;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         ETypeRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
@@ -2661,7 +2706,7 @@ fn to_trecord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2673,7 +2718,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             _ => {
@@ -2682,7 +2727,11 @@ fn to_trecord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(
+                        lines.convert_region(surroundings),
+                        region,
+                        severity,
+                    ),
                     alloc.concat([
                         alloc.reflow(r"Record types look like "),
                         alloc.parser_suggestion("{ name : String, age : Int },"),
@@ -2694,7 +2743,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -2707,7 +2756,7 @@ fn to_trecord_report<'a>(
                 Next::Other(Some(c)) if c.is_alphabetic() => {
                     let doc = alloc.stack([
                         alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(
                                 r"I was expecting to see a colon, question mark, comma or closing curly brace.",
@@ -2719,13 +2768,13 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => {
                     let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a record type, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(
                         r"I was expecting to see a closing curly brace before this, so try adding a ",
@@ -2739,7 +2788,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -2752,7 +2801,7 @@ fn to_trecord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a record type, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2764,7 +2813,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED RECORD TYPE".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             Next::Other(Some(',')) => todo!(),
@@ -2775,7 +2824,7 @@ fn to_trecord_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I am partway through parsing a record type, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"I was expecting to see another record field defined next, so I am looking for a name like "),
                         alloc.parser_suggestion("userName"),
@@ -2789,7 +2838,7 @@ fn to_trecord_report<'a>(
                     filename,
                     doc,
                     title: "PROBLEM IN RECORD TYPE".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -2809,7 +2858,7 @@ fn to_trecord_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I just started parsing a record type, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"Record types look like "),
                     alloc.parser_suggestion("{ name : String, age : Int },"),
@@ -2822,7 +2871,7 @@ fn to_trecord_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED RECORD TYPE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -2836,7 +2885,7 @@ fn to_trecord_report<'a>(
                         alloc.reflow(
                             "I am partway through parsing a record type, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(surroundings, region),
+                        alloc.region_with_subregion(surroundings, region, severity),
                         alloc.concat([
                             alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -2846,7 +2895,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 None => {
@@ -2857,7 +2906,11 @@ fn to_trecord_report<'a>(
                         alloc.reflow(
                             r"I am partway through parsing a record type, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            region,
+                            severity,
+                        ),
                         alloc.concat([
                             alloc.reflow("I was expecting to see a closing curly "),
                             alloc.reflow("brace before this, so try adding a "),
@@ -2871,7 +2924,7 @@ fn to_trecord_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED RECORD TYPE".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -2898,6 +2951,8 @@ fn to_ttag_union_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::ETypeTagUnion;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         ETypeTagUnion::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
@@ -2906,7 +2961,7 @@ fn to_ttag_union_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a tag union, but I got stuck on this field name:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"Looks like you are trying to use "),
                         alloc.keyword(keyword),
@@ -2918,7 +2973,7 @@ fn to_ttag_union_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED TAG UNION TYPE".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             Next::Other(Some(c)) if c.is_alphabetic() => {
@@ -2931,7 +2986,11 @@ fn to_ttag_union_report<'a>(
                     alloc.reflow(
                         r"I am partway through parsing a tag union type, but I got stuck here:",
                     ),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(
+                        lines.convert_region(surroundings),
+                        region,
+                        severity,
+                    ),
                     alloc.reflow(r"I was expecting to see a tag name."),
                     hint_for_tag_name(alloc),
                 ]);
@@ -2940,7 +2999,7 @@ fn to_ttag_union_report<'a>(
                     filename,
                     doc,
                     title: "WEIRD TAG NAME".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             _ => {
@@ -2949,7 +3008,11 @@ fn to_ttag_union_report<'a>(
 
                 let doc = alloc.stack([
                     alloc.reflow(r"I just started parsing a tag union type, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(
+                        lines.convert_region(surroundings),
+                        region,
+                        severity,
+                    ),
                     alloc.concat([
                         alloc.reflow(r"Tag unions look like "),
                         alloc.parser_suggestion("[Many I64, None],"),
@@ -2961,7 +3024,7 @@ fn to_ttag_union_report<'a>(
                     filename,
                     doc,
                     title: "UNFINISHED TAG UNION TYPE".to_string(),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -2978,7 +3041,11 @@ fn to_ttag_union_report<'a>(
                         alloc.reflow(
                             r"I am partway through parsing a tag union type, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            region,
+                            severity,
+                        ),
                         alloc.reflow(r"I was expecting to see a tag name."),
                         hint_for_tag_name(alloc),
                     ]);
@@ -2987,13 +3054,13 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => {
                     let doc = alloc.stack([
                         alloc.reflow(r"I am partway through parsing a tag union type, but I got stuck here:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                                 alloc.reflow(
                                     r"I was expecting to see a closing square bracket before this, so try adding a ",
@@ -3007,7 +3074,7 @@ fn to_ttag_union_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED TAG UNION TYPE".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -3028,6 +3095,8 @@ fn to_tinparens_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::ETypeInParens;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         ETypeInParens::Open(pos) => {
             match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
@@ -3037,7 +3106,7 @@ fn to_tinparens_report<'a>(
 
                     let doc = alloc.stack([
                     alloc.reflow(r"I just saw an open parenthesis, so I was expecting to see a type next."),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.concat([
                         alloc.reflow(r"Something like "),
                         alloc.parser_suggestion("(List Person)"),
@@ -3050,7 +3119,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 Next::Other(Some(c)) if c.is_alphabetic() => {
@@ -3063,7 +3132,7 @@ fn to_tinparens_report<'a>(
                     alloc.reflow(
                         r"I am partway through parsing a type in parentheses, but I got stuck here:",
                     ),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                     alloc.reflow(r"I was expecting to see a tag name."),
                     hint_for_tag_name(alloc),
                 ]);
@@ -3072,7 +3141,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => {
@@ -3083,7 +3152,11 @@ fn to_tinparens_report<'a>(
                         alloc.reflow(
                             r"I just started parsing a type in parentheses, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(
+                            lines.convert_region(surroundings),
+                            region,
+                            severity,
+                        ),
                         alloc.concat([
                             alloc.reflow(r"Tag unions look like "),
                             alloc.parser_suggestion("[Many I64, None],"),
@@ -3095,7 +3168,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -3107,7 +3180,7 @@ fn to_tinparens_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow("I am partway through parsing a parenthesized type:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"I was expecting to see an expression next."),
                     alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
@@ -3118,7 +3191,7 @@ fn to_tinparens_report<'a>(
                 filename,
                 doc,
                 title: "EMPTY PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3135,7 +3208,7 @@ fn to_tinparens_report<'a>(
                         alloc.reflow(
                             r"I am partway through parsing a type in parentheses, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.reflow(r"I was expecting to see a tag name."),
                         hint_for_tag_name(alloc),
                     ]);
@@ -3144,13 +3217,13 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "WEIRD TAG NAME".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 _ => {
                     let doc = alloc.stack([
                         alloc.reflow(r"I am partway through parsing a type in parentheses, but I got stuck here:"),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                                 alloc.reflow(
                                     r"I was expecting to see a closing parenthesis before this, so try adding a ",
@@ -3164,7 +3237,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -3179,7 +3252,7 @@ fn to_tinparens_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow(r"I just started parsing a type in parentheses, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"Tag unions look like "),
                     alloc.parser_suggestion("[Many I64, None],"),
@@ -3192,7 +3265,7 @@ fn to_tinparens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3206,7 +3279,7 @@ fn to_tinparens_report<'a>(
                         alloc.reflow(
                             "I am partway through parsing a type in parentheses, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(surroundings, region),
+                        alloc.region_with_subregion(surroundings, region, severity),
                         alloc.concat([
                             alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
                         ]),
@@ -3216,7 +3289,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 None => {
@@ -3227,7 +3300,7 @@ fn to_tinparens_report<'a>(
                         alloc.reflow(
                             r"I am partway through parsing a type in parentheses, but I got stuck here:",
                         ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow("I was expecting to see a parenthesis "),
                             alloc.reflow("before this, so try adding a "),
@@ -3241,7 +3314,7 @@ fn to_tinparens_report<'a>(
                         filename,
                         doc,
                         title: "UNFINISHED PARENTHESES".to_string(),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
             }
@@ -3259,6 +3332,7 @@ fn to_tapply_report<'a>(
     _start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::ETypeApply;
+    let severity = Severity::RuntimeError;
 
     match *parse_problem {
         ETypeApply::DoubleDot(pos) => {
@@ -3266,7 +3340,7 @@ fn to_tapply_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I encountered two dots in a row:"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.concat([alloc.reflow("Try removing one of them.")]),
             ]);
 
@@ -3274,7 +3348,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "DOUBLE DOT".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         ETypeApply::TrailingDot(pos) => {
@@ -3282,7 +3356,7 @@ fn to_tapply_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I encountered a dot with nothing after it:"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.concat([
                     alloc.reflow("Dots are used to refer to a type in a qualified way, like "),
                     alloc.parser_suggestion("Num.I64"),
@@ -3296,7 +3370,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "TRAILING DOT".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         ETypeApply::StartIsNumber(pos) => {
@@ -3304,7 +3378,7 @@ fn to_tapply_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I encountered a number at the start of a qualified name segment:"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.concat([
                     alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
                     alloc.parser_suggestion("Num.I64"),
@@ -3318,7 +3392,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD QUALIFIED NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         ETypeApply::StartNotUppercase(pos) => {
@@ -3326,7 +3400,7 @@ fn to_tapply_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I encountered a lowercase letter at the start of a qualified name segment:"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.concat([
                     alloc.reflow("All parts of a qualified type name must start with an uppercase letter, like "),
                     alloc.parser_suggestion("Num.I64"),
@@ -3340,7 +3414,7 @@ fn to_tapply_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD QUALIFIED NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3351,14 +3425,14 @@ fn to_tapply_report<'a>(
                 alloc.reflow(
                     r"I reached the end of the input file while parsing a qualified type name",
                 ),
-                alloc.region(region),
+                alloc.region(region, severity),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "END OF FILE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3373,6 +3447,7 @@ fn to_talias_report<'a>(
     parse_problem: &roc_parse::parser::ETypeInlineAlias,
 ) -> Report<'a> {
     use roc_parse::parser::ETypeInlineAlias;
+    let severity = Severity::RuntimeError;
 
     match *parse_problem {
         ETypeInlineAlias::NotAnAlias(pos) => {
@@ -3384,7 +3459,7 @@ fn to_talias_report<'a>(
                     alloc.keyword("as"),
                     alloc.reflow(" is not a type alias:"),
                 ]),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.concat([
                     alloc.reflow("Inline alias types must start with an uppercase identifier and be followed by zero or more type arguments, like "),
                     alloc.type_str("Point"),
@@ -3398,7 +3473,7 @@ fn to_talias_report<'a>(
                 filename,
                 doc,
                 title: "NOT AN INLINE ALIAS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         ETypeInlineAlias::Qualified(pos) => {
@@ -3406,7 +3481,7 @@ fn to_talias_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"This type alias has a qualified name:"),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("An alias introduces a new name to the current scope, so it must be unqualified."),
             ]);
 
@@ -3414,7 +3489,7 @@ fn to_talias_report<'a>(
                 filename,
                 doc,
                 title: "QUALIFIED ALIAS NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         ETypeInlineAlias::ArgumentNotLowercase(pos) => {
@@ -3422,7 +3497,7 @@ fn to_talias_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"This alias type argument is not lowercase:"),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("All type arguments must be lowercase."),
             ]);
 
@@ -3430,7 +3505,7 @@ fn to_talias_report<'a>(
                 filename,
                 doc,
                 title: "TYPE ARGUMENT NOT LOWERCASE".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
     }
@@ -3444,6 +3519,8 @@ fn to_header_report<'a>(
     start: Position,
 ) -> Report<'a> {
     use roc_parse::parser::EHeader;
+
+    let severity = Severity::RuntimeError;
 
     match parse_problem {
         EHeader::Provides(provides, pos) => {
@@ -3470,7 +3547,7 @@ fn to_header_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("I may be confused by indentation.")]),
             ]);
 
@@ -3478,7 +3555,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "INCOMPLETE HEADER".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3494,7 +3571,11 @@ fn to_header_report<'a>(
             let preamble = if is_utf8 {
                 vec![
                     alloc.reflow(r"I am expecting a header, but got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.region_with_subregion(
+                        lines.convert_region(surroundings),
+                        region,
+                        severity,
+                    ),
                 ]
             } else {
                 vec![alloc.reflow(r"I am expecting a header, but the file is not UTF-8 encoded.")]
@@ -3516,7 +3597,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "MISSING HEADER".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3526,7 +3607,7 @@ fn to_header_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a module name next, like "),
                     alloc.parser_suggestion("BigNum"),
@@ -3540,7 +3621,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3549,7 +3630,7 @@ fn to_header_report<'a>(
                 alloc.reflow(
                     r"This module name does not correspond with the file path it is defined in:",
                 ),
-                alloc.region(lines.convert_region(*region)),
+                alloc.region(lines.convert_region(*region), severity),
                 alloc.concat([
                     alloc.reflow("Module names must correspond with the file paths they are defined in. For example, I expect to see "),
                     alloc.parser_suggestion("BigNum"),
@@ -3567,7 +3648,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3577,7 +3658,7 @@ fn to_header_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting an application name next, like "),
                     alloc.parser_suggestion("app \"main\""),
@@ -3591,7 +3672,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD APP NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3601,7 +3682,7 @@ fn to_header_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a package header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a package name next, like "),
                     alloc.parser_suggestion("\"roc/core\""),
@@ -3613,7 +3694,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "INVALID PACKAGE NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3624,7 +3705,7 @@ fn to_header_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow(r"I am partway through parsing a platform header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a platform name next, like "),
                     alloc.parser_suggestion("\"roc/core\""),
@@ -3636,7 +3717,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "INVALID PLATFORM NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3647,7 +3728,7 @@ fn to_header_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a type name next, like "),
                     alloc.parser_suggestion("Effect"),
@@ -3659,7 +3740,7 @@ fn to_header_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD GENERATED TYPE NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EHeader::GeneratesWith(generates_with, pos) => {
@@ -3677,6 +3758,8 @@ fn to_generates_with_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EGeneratesWith;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         EGeneratesWith::ListEnd(pos) | // TODO: give this its own error message
         EGeneratesWith::Identifier(pos) => {
@@ -3686,7 +3769,7 @@ fn to_generates_with_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
@@ -3699,7 +3782,7 @@ fn to_generates_with_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD GENERATES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3709,7 +3792,7 @@ fn to_generates_with_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("with"),
@@ -3724,7 +3807,7 @@ fn to_generates_with_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD GENERATES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3743,6 +3826,8 @@ fn to_provides_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EProvides;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         EProvides::ListEnd(pos) | // TODO: give this its own error message
         EProvides::Identifier(pos) => {
@@ -3752,7 +3837,7 @@ fn to_provides_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
@@ -3765,7 +3850,7 @@ fn to_provides_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PROVIDES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3775,7 +3860,7 @@ fn to_provides_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("provides"),
@@ -3790,7 +3875,7 @@ fn to_provides_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PROVIDES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3802,7 +3887,7 @@ fn to_provides_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("to"),
@@ -3817,7 +3902,7 @@ fn to_provides_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PROVIDES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3827,7 +3912,7 @@ fn to_provides_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.reflow("I am expecting the platform name next, like:"),
                 alloc
                     .parser_suggestion("to pf")
@@ -3838,7 +3923,7 @@ fn to_provides_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PROVIDES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3855,6 +3940,8 @@ fn to_params_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EParams;
 
+    let severity = Severity::RuntimeError;
+
     match parse_problem {
         EParams::Pattern(error, pos) => to_precord_report(alloc, lines, filename, error, *pos),
 
@@ -3865,7 +3952,7 @@ fn to_params_report<'a>(
             let doc = alloc.stack([
                 alloc
                     .reflow(r"I am partway through parsing a module header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting "),
                     alloc.keyword("->"),
@@ -3880,7 +3967,7 @@ fn to_params_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE PARAMS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3897,6 +3984,8 @@ fn to_exposes_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EExposes;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         EExposes::ListEnd(pos) | // TODO: give this its own error message
         EExposes::Identifier(pos) => {
@@ -3905,7 +3994,7 @@ fn to_exposes_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing an `exposes` list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
@@ -3918,7 +4007,7 @@ fn to_exposes_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD EXPOSES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3928,7 +4017,7 @@ fn to_exposes_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("exposes"),
@@ -3943,7 +4032,7 @@ fn to_exposes_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD EXPOSES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3962,6 +4051,8 @@ fn to_imports_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EImports;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         EImports::Identifier(pos) => {
             let surroundings = Region::new(start, pos);
@@ -3969,7 +4060,7 @@ fn to_imports_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a imports list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow(
                     "I was expecting a type name, value name or function name next, like ",
                 )]),
@@ -3982,7 +4073,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD IMPORTS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -3992,7 +4083,7 @@ fn to_imports_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("imports"),
@@ -4007,7 +4098,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD IMPORTS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4019,7 +4110,7 @@ fn to_imports_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a module name next, like "),
                     alloc.parser_suggestion("BigNum"),
@@ -4033,7 +4124,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD MODULE NAME".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4043,7 +4134,7 @@ fn to_imports_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a imports list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
                 alloc.parser_suggestion("imports [Shape, Vector]").indent(4),
             ]);
@@ -4052,7 +4143,7 @@ fn to_imports_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD IMPORTS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4069,6 +4160,8 @@ fn to_requires_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::ERequires;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         ERequires::Requires(pos) => {
             let surroundings = Region::new(start, pos);
@@ -4076,7 +4169,7 @@ fn to_requires_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("requires"),
@@ -4091,7 +4184,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "MISSING REQUIRES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4103,7 +4196,7 @@ fn to_requires_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("requires"),
@@ -4118,7 +4211,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "MISSING REQUIRES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4128,7 +4221,7 @@ fn to_requires_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a list of rigids like "),
                     alloc.keyword("{}"),
@@ -4147,7 +4240,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "BAD REQUIRES RIGIDS".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4157,7 +4250,7 @@ fn to_requires_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting a list of type names like "),
                     alloc.keyword("{}"),
@@ -4176,7 +4269,7 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "BAD REQUIRES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4193,6 +4286,8 @@ fn to_packages_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::EPackages;
 
+    let severity = Severity::RuntimeError;
+
     match *parse_problem {
         EPackages::Packages(pos) => {
             let surroundings = Region::new(start, pos);
@@ -4200,7 +4295,7 @@ fn to_packages_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("packages"),
@@ -4213,7 +4308,7 @@ fn to_packages_report<'a>(
                 filename,
                 doc,
                 title: "MISSING PACKAGES".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         EPackages::ListEnd(pos) => {
@@ -4224,7 +4319,7 @@ fn to_packages_report<'a>(
                 alloc.reflow(
                     r"I am partway through parsing a list of packages, but I got stuck here:",
                 ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
                 alloc
                     .parser_suggestion("packages { package_name: \"url-or-path\", }")
@@ -4235,7 +4330,7 @@ fn to_packages_report<'a>(
                 filename,
                 doc,
                 title: "WEIRD PACKAGES LIST".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4254,13 +4349,15 @@ fn to_space_report<'a>(
 ) -> Report<'a> {
     use roc_parse::parser::BadInputError;
 
+    let severity = Severity::RuntimeError;
+
     match parse_problem {
         BadInputError::HasTab => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
                 alloc.reflow("I encountered a tab character:"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.reflow(
                     "Tab characters are not allowed in Roc code. Please use spaces instead!",
                 ),
@@ -4270,7 +4367,7 @@ fn to_space_report<'a>(
                 filename,
                 doc,
                 title: "TAB CHARACTER".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4279,7 +4376,7 @@ fn to_space_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow("I encountered an ASCII control character:"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.reflow("ASCII control characters are not allowed."),
             ]);
 
@@ -4287,7 +4384,7 @@ fn to_space_report<'a>(
                 filename,
                 doc,
                 title: "ASCII CONTROL CHARACTER".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4296,7 +4393,7 @@ fn to_space_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(r"I encountered a stray carriage return (\r):"),
-                alloc.region(region),
+                alloc.region(region, severity),
                 alloc.reflow(r"A carriage return (\r) has to be followed by a newline (\n)."),
             ]);
 
@@ -4304,7 +4401,7 @@ fn to_space_report<'a>(
                 filename,
                 doc,
                 title: "MISPLACED CARRIAGE RETURN".to_string(),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -4374,10 +4471,11 @@ fn to_unfinished_ability_report<'a>(
 ) -> Report<'a> {
     let surroundings = Region::new(start, pos);
     let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+    let severity = Severity::RuntimeError;
 
     let doc = alloc.stack([
         alloc.reflow(r"I was partway through parsing an ability definition, but I got stuck here:"),
-        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
         message,
     ]);
 
@@ -4385,7 +4483,7 @@ fn to_unfinished_ability_report<'a>(
         filename,
         doc,
         title: "UNFINISHED ABILITY".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
