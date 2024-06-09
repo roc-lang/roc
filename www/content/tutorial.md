@@ -1534,10 +1534,8 @@ See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples
 You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
-imports [
-    "some-file" as someStr : Str,
-    "some-file" as someBytes : List U8,
-]
+import "some-file" as someStr : Str
+import "some-file" as someBytes : List U8
 ```
 
 See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
