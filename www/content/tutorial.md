@@ -1423,7 +1423,7 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 - **Builtins** provide functions that are automatically imported into every module.
 - **Applications** are combined with a platform and compiled into an executable.
-- **Interfaces** provide functions which can be imported into other modules.
+- **Modules** provide functions which can be imported into other modules.
 - **Packages** organise modules to share functionality across applications and platforms.
 - **Platforms** provide effects such as IO to interface with the outside world.
 - **Hosted** _note this module type is likely to be deprecated soon_.
@@ -1493,7 +1493,7 @@ You can find documentation for the `Stdout.line` function in the [Stdout](https:
 
 ### [Package Modules](#package-modules) {#package-modules}
 
-Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different modules and then including these in the `package` field of the package file structure, `package [ MyInterface ] {}`. The modules that are listed in the `package` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
+Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different modules and then including these in the `package` field of the package file structure, `package [ MyModule ] {}`. The modules that are listed in the `package` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/lukewilliamboswell/roc-parser/tree/main/package) for an example.
 
@@ -1517,11 +1517,11 @@ Including the hash solves a number of problems:
 2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
 3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.
 
-### [Interface Modules](#interface-modules) {#interface-modules}
+### [Regular Modules](#regular-modules) {#regular-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
-See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
+See [Html module](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
 
 ### [Platform Modules](#platform-modules) {#platform-modules}
 
@@ -2218,7 +2218,7 @@ See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder
 
 These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `interface`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
+`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
