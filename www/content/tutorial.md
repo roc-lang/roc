@@ -1463,11 +1463,12 @@ This is known as a _module header_. Every `.roc` file is a _module_, and there a
 
 The line `app [main]` shows that this module is a Roc application and which [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) it is built on.
 
-The `{ pf: platform "https://...tar.br" }` part says three things:
+The `{ pf: platform "https://...tar.br" }` part says four things:
 
 - We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
 - That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
+- This package is the [platform](#platform-modules-platform-modules) we have chosen for our app.
 
 The `import pf.Stdout` line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
 
