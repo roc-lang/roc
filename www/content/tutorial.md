@@ -2218,7 +2218,7 @@ See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder
 
 These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
+`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `import`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `with`, `generates`, `packages`, `requires`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
