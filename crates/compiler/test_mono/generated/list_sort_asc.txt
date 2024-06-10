@@ -1,11 +1,11 @@
 procedure List.28 (#Attr.2, #Attr.3):
-    let List.574 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
-    ret List.574;
+    let List.576 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+    ret List.576;
 
-procedure List.59 (List.329):
-    let List.573 : {} = Struct {};
-    let List.572 : List I64 = CallByName List.28 List.329 List.573;
-    ret List.572;
+procedure List.59 (List.330):
+    let List.575 : {} = Struct {};
+    let List.574 : List I64 = CallByName List.28 List.330 List.575;
+    ret List.574;
 
 procedure Num.46 (#Attr.2, #Attr.3):
     let Num.279 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;
