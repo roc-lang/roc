@@ -1423,7 +1423,7 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 - **Builtins** provide functions that are automatically imported into every module.
 - **Applications** are combined with a platform and compiled into an executable.
-- **Interfaces** provide functions which can be imported into other modules.
+- **Modules** provide functions which can be imported into other modules.
 - **Packages** organise modules to share functionality across applications and platforms.
 - **Platforms** provide effects such as IO to interface with the outside world.
 - **Hosted** _note this module type is likely to be deprecated soon_.
@@ -1463,11 +1463,12 @@ This is known as a _module header_. Every `.roc` file is a _module_, and there a
 
 The line `app [main]` shows that this module is a Roc application and which [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) it is built on.
 
-The `{ pf: platform "https://...tar.br" }` part says three things:
+The `{ pf: platform "https://...tar.br" }` part says four things:
 
 - We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
 - That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
+- This package is the [platform](#platform-modules-platform-modules) we have chosen for our app.
 
 The `import pf.Stdout` line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
 
@@ -1481,7 +1482,9 @@ Here, `main` is calling a function called `Stdout.line`. More specifically, it's
 
 When we write `import pf.Stdout`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
 
-If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
+You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
+
+If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly like this:
 
 ```roc
 import pf.Stdout
@@ -1489,11 +1492,24 @@ import AdditionalModule
 import AnotherModule
 ```
 
-You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
+You can also use the `as` keyword if you would like to use a different name:
+
+```roc
+import uuid.Generate as Uuid
+```
+
+...and the `exposing` keyword to bring values or functions into the current scope:
+
+```roc
+import pf.Stdout exposing [line]
+
+main =
+    line! "Hello, World!"
+```
 
 ### [Package Modules](#package-modules) {#package-modules}
 
-Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different modules and then including these in the `package` field of the package file structure, `package [ MyInterface ] {}`. The modules that are listed in the `package` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
+Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different modules and then including these in the `package` field of the package file structure, `package [ MyModule ] {}`. The modules that are listed in the `package` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/lukewilliamboswell/roc-parser/tree/main/package) for an example.
 
@@ -1517,11 +1533,11 @@ Including the hash solves a number of problems:
 2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
 3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.
 
-### [Interface Modules](#interface-modules) {#interface-modules}
+### [Regular Modules](#regular-modules) {#regular-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
-See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
+See [Html module](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
 
 ### [Platform Modules](#platform-modules) {#platform-modules}
 
@@ -1534,10 +1550,8 @@ See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples
 You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
-imports [
-    "some-file" as someStr : Str,
-    "some-file" as someBytes : List U8,
-]
+import "some-file" as someStr : Str
+import "some-file" as someBytes : List U8
 ```
 
 See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
@@ -2218,7 +2232,7 @@ See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder
 
 These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `interface`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
+`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `import`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `with`, `generates`, `packages`, `requires`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
