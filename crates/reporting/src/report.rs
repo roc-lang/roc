@@ -505,6 +505,10 @@ impl<'a> RocDocAllocator<'a> {
         .annotate(Annotation::Module)
     }
 
+    pub fn shorthand(&'a self, name: &'a str) -> DocBuilder<'a, Self, Annotation> {
+        self.text(name).annotate(Annotation::Shorthand)
+    }
+
     pub fn binop(
         &'a self,
         content: roc_module::called_via::BinOp,
@@ -865,6 +869,13 @@ impl<'a> RocDocAllocator<'a> {
         }
         self.text(result.chars().rev().collect::<String>())
     }
+
+    pub fn file_path(&'a self, path: &Path) -> DocBuilder<'a, Self, Annotation> {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_path = path.strip_prefix(cwd).unwrap_or(path).to_str().unwrap();
+
+        self.text(relative_path.to_string())
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -891,6 +902,7 @@ pub enum Annotation {
     TypeBlock,
     InlineTypeBlock,
     Module,
+    Shorthand,
     Typo,
     TypoSuggestion,
     Tip,
@@ -1098,6 +1110,9 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
+            Shorthand => {
+                self.write_str(self.palette.module_name)?;
+            }
             Typo => {
                 self.write_str(self.palette.typo)?;
             }
@@ -1124,8 +1139,8 @@ where
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | UnaryOp | Error
                 | GutterBar | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure
-                | CodeBlock | PlainText | LineNumber | Tip | Module | Header | Keyword
-                | Warning => {
+                | CodeBlock | PlainText | LineNumber | Tip | Module | Shorthand | Header
+                | Keyword | Warning => {
                     self.write_str(self.palette.reset)?;
                 }
 

@@ -55,6 +55,7 @@ pub(crate) fn write_compiled_ir<'a>(
         file_path,
         test_module,
         dir.path().to_path_buf(),
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );

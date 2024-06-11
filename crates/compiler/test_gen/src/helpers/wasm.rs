@@ -100,6 +100,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );

@@ -20,6 +20,17 @@ pub enum RocCacheDir<'a> {
     Temp(&'a tempfile::TempDir),
 }
 
+impl RocCacheDir<'_> {
+    pub fn as_persistent_path(&self) -> Option<&Path> {
+        match self {
+            RocCacheDir::Persistent(path) => Some(path),
+            RocCacheDir::Disallowed => None,
+            #[cfg(test)]
+            RocCacheDir::Temp(_) => None,
+        }
+    }
+}
+
 // Errors in case NixOS users try to use a dynamically linked platform
 #[cfg(target_os = "linux")]
 fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
