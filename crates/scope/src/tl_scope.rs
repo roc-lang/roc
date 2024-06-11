@@ -10,10 +10,6 @@ use crate::{
 use bumpalo::{collections::vec::Vec, Bump};
 use core::fmt::Debug;
 
-/// TODO replace this with the real Vec2 that stores 1 length as u32 etc. (We can even do u16 len.)
-type Vec2<'a, A, B> = Vec<'a, (A, B)>;
-/// TODO replace this with the real Vec3 that stores 1 length as u32 etc. (We can even do u16 len.)
-type Vec3<'a, A, B, C> = Vec<'a, (A, B, C)>;
 /// TODO replace this with the real Vec4 that stores 1 length as u32 etc. (We can even do u16 len.)
 type Vec4<'a, A, B, C, D> = Vec<'a, (A, B, C, D)>;
 
@@ -327,6 +323,33 @@ impl<
 
     pub(crate) fn num_imports(&self) -> usize {
         self.imports.len()
+    }
+
+    pub fn unused_lc(&'a self) -> impl Iterator<Item = (LcStrId, Region)> + 'a {
+        self.lc_bindings.iter().filter_map(
+            |(_module_id, str_id, region, is_unused)| match is_unused {
+                IsUsed::Used => None,
+                IsUsed::Unused => Some((*str_id, *region)),
+            },
+        )
+    }
+
+    pub fn unused_uc(&'a self) -> impl Iterator<Item = (UcStrId, Region)> + 'a {
+        self.uc_bindings.iter().filter_map(
+            |(_module_id, str_id, region, is_unused)| match is_unused {
+                IsUsed::Used => None,
+                IsUsed::Unused => Some((*str_id, *region)),
+            },
+        )
+    }
+
+    pub fn unused_imports(&'a self) -> impl Iterator<Item = (ModuleStrId, Region)> + 'a {
+        self.imports
+            .iter()
+            .filter_map(|(_shorthand, str_id, region, is_unused)| match is_unused {
+                IsUsed::Used => None,
+                IsUsed::Unused => Some((*str_id, *region)),
+            })
     }
 }
 

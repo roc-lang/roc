@@ -11,15 +11,11 @@ use bumpalo::{collections::vec::Vec, Bump};
 use core::fmt::Debug;
 
 #[derive(Debug, Clone, Copy)]
-enum IsUnused {
+enum IsUsed {
     Used,
     Unused,
 }
 
-/// TODO replace this with the real Vec2 that stores 1 length as u32 etc. (We can even do u16 len.)
-type Vec2<'a, A, B> = Vec<'a, (A, B)>;
-/// TODO replace this with the real Vec3 that stores 1 length as u32 etc. (We can even do u16 len.)
-type Vec3<'a, A, B, C> = Vec<'a, (A, B, C)>;
 /// TODO replace this with the real Vec4 that stores 1 length as u32 etc. (We can even do u16 len.)
 type Vec4<'a, A, B, C, D> = Vec<'a, (A, B, C, D)>;
 
@@ -40,14 +36,10 @@ pub struct DeclScope<'a, LcStrId, UcStrId, ShorthandStrId, ModuleStrId, Region> 
     next_uc_id: u32,
     next_module_id: u32,
 
-    /// These lowercase bindings may shadow, since they aren't top-level.
-    lc_bindings: Vec4<'a, ModuleId, LcStrId, Region, IsUnused>,
-
-    /// Uppercase bindings may not shadow.
-    uc_bindings: Vec4<'a, ModuleId, UcStrId, Region, IsUnused>,
-
-    /// Module names may not shadow.
-    imports: Vec3<'a, ModuleStrId, Region, IsUnused>,
+    /// Lowercase bindings may shadow, but uppercase ones and module imports may not.
+    lc_bindings: Vec4<'a, ModuleId, LcStrId, Region, IsUsed>,
+    uc_bindings: Vec4<'a, ModuleId, UcStrId, Region, IsUsed>,
+    imports: Vec4<'a, Option<ShorthandStrId>, ModuleStrId, Region, IsUsed>,
 
     // Anything before this is considered out of scope, and the lookup will fail.
     // At the end of each declaration, we move these up to next_lc_id (etc.) so that
@@ -155,7 +147,7 @@ impl<
 
         self.next_lc_id += 1;
         self.lc_bindings
-            .push((module_id, str_id, region, IsUnused::Unused));
+            .push((module_id, str_id, region, IsUsed::Unused));
 
         lc_id
     }
@@ -197,7 +189,7 @@ impl<
 
                 self.next_uc_id += 1;
                 self.uc_bindings
-                    .push((module_id, str_id, region, IsUnused::Unused));
+                    .push((module_id, str_id, region, IsUsed::Unused));
 
                 Ok(uc_id)
             }
@@ -211,7 +203,12 @@ impl<
     ///
     /// If this would shadow an existing import that's already in scope, returns Err with
     /// the original import's Region.
-    pub fn import(&mut self, str_id: ModuleStrId, region: Region) -> Result<ModuleId, Region> {
+    pub fn import(
+        &mut self,
+        shorthand: Option<ShorthandStrId>,
+        str_id: ModuleStrId,
+        region: Region,
+    ) -> Result<ModuleId, Region> {
         // Increment the current scope lengths. This is needed so that when we pop
         // a scope, we pop the correct number of bindings.
         match self.scope_lengths.last_mut() {
@@ -237,7 +234,8 @@ impl<
                 let module_id = ModuleId(self.next_module_id as u16);
 
                 self.next_module_id += 1;
-                self.imports.push((str_id, region, IsUnused::Unused));
+                self.imports
+                    .push((shorthand, str_id, region, IsUsed::Unused));
 
                 Ok(module_id)
             }
@@ -247,26 +245,24 @@ impl<
 
     pub fn lookup_lc_unqualified(&mut self, str_id: LcStrId) -> Option<(LowercaseId, Region)> {
         // Start searching at lc_start; anything before that is the previous decl's bindings!
-        let bindings = &mut self.lc_bindings[(self.lc_start as usize)..];
+        let lc_start = self.lc_start as usize;
+        let bindings_in_decl = &mut self.lc_bindings[lc_start..];
+        let mut index = self.tl_scope.num_lc_bindings() + self.lc_bindings.len(); // index starts at the very end.
 
-        for (index, (_haystack_module_id, haystack_str_id, region, is_unused)) in bindings
+        for (_haystack_module_id, haystack_str_id, region, is_used) in bindings_in_decl
             .iter_mut()
-            .enumerate()
-            // Search in reverse because of shadowing; if we find a match,
-            // we must prefer the *last* binding!
+            // Search in reverse because of shadowing; if we find a match, prefer the *last* binding!
             .rev()
         {
+            // Do this at the start of each iteration because index is initialized to len, not len - 1
+            index -= 1;
+
             // Since this is unqualified, we ignore the module_id.
             if *haystack_str_id == str_id {
                 // Since a lookup found it, this binding has now been used.
-                *is_unused = IsUnused::Used;
+                *is_used = IsUsed::Used;
 
-                return Some((
-                    LowercaseId(
-                        (index + self.tl_scope.num_lc_bindings() + self.lc_start as usize) as u16,
-                    ),
-                    *region,
-                ));
+                return Some((LowercaseId(index as u16), *region));
             }
         }
 
@@ -287,26 +283,23 @@ impl<
 
     pub fn lookup_uc_unqualified(&self, str_id: UcStrId) -> Option<(UppercaseId, Region)> {
         // Start searching at uc_start; anything before that is the previous decl's bindings!
-        let bindings = &mut self.uc_bindings[(self.uc_start as usize)..];
+        let uc_start = self.uc_start as usize;
+        let bindings_in_decl = &mut self.uc_bindings[uc_start..];
+        let mut index = self.tl_scope.num_lc_bindings() + uc_start;
 
         // Unlike lookup_lc_unqualified, we don't need to bother searching in reverse here,
         // because uppercase bindings can't be shadowed. The hardware is usually faster
         // at searching forward (maybe because of prefetching heuristics), so prefer that.
-        for (index, (_haystack_module_id, haystack_str_id, region, is_unused)) in
-            bindings.iter_mut().enumerate()
-        {
+        for (_haystack_module_id, haystack_str_id, region, is_used) in bindings_in_decl.iter_mut() {
             // Since this is unqualified, we ignore the module_id.
             if *haystack_str_id == str_id {
                 // Since a lookup found it, this binding has now been used.
-                *is_unused = IsUnused::Used;
+                *is_used = IsUsed::Used;
 
-                return Some((
-                    UppercaseId(
-                        (index + self.tl_scope.num_uc_bindings() + self.uc_start as usize) as u16,
-                    ),
-                    *region,
-                ));
+                return Some((UppercaseId(index as u16), *region));
             }
+
+            index += 1;
         }
 
         // We didn't find it in our decl, so fall back on searching the top-level scope.
@@ -326,15 +319,17 @@ impl<
 
     pub fn lookup_module(&self, str_id: ModuleStrId) -> Option<(ModuleId, Region)> {
         // Start searching at imports_start; anything before that is the previous decl's bindings!
-        let bindings = &mut self.imports[(self.imports_start as usize)..];
+        let imports_start = self.imports_start as usize;
+        let imports_in_decl = &mut self.imports[imports_start..];
+        let mut index = self.tl_scope.num_imports() + imports_start;
 
         // Unlike lookup_lc_unqualified, we don't need to bother searching in reverse here,
         // because imported module names can't be shadowed. The hardware is usually faster
         // at searching forward (maybe because of prefetching heuristics), so prefer that.
-        for (index, (haystack_str_id, region, is_unused)) in bindings.iter_mut().enumerate() {
+        for (_shorthand, haystack_str_id, region, is_used) in imports_in_decl.iter_mut() {
             if *haystack_str_id == str_id {
                 // Since a lookup found it, this import has now been used.
-                *is_unused = IsUnused::Used;
+                *is_used = IsUsed::Used;
 
                 return Some((
                     ModuleId(
@@ -343,58 +338,102 @@ impl<
                     *region,
                 ));
             }
+
+            index += 1;
         }
 
         // We didn't find it in our decl, so fall back on searching the top-level scope.
         self.tl_scope.lookup_module(str_id)
     }
 
-    pub fn region_from_lc_id(&self, lc_id: LowercaseId) -> Option<Region> {
-        self.lc_bindings
+    pub fn region_from_lc_id(&self, lc_id: LowercaseId) -> Region {
+        match self
+            .lc_bindings
             .get(lc_id.to_index() + self.tl_scope.num_lc_bindings())
-            .map(|(_module_id, _str_id, region, _is_unused)| *region)
+        {
+            Some((_module_id, _str_id, region, _is_used)) => *region,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn str_id_from_lc_id(&self, lc_id: LowercaseId) -> Option<LcStrId> {
-        self.lc_bindings
+    pub fn str_id_from_lc_id(&self, lc_id: LowercaseId) -> LcStrId {
+        match self
+            .lc_bindings
             .get(lc_id.to_index() + self.tl_scope.num_lc_bindings())
-            .map(|(_module_id, str_id, _region, _is_unused)| *str_id)
+        {
+            Some((_module_id, str_id, _region, _is_used)) => *str_id,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn module_id_from_lc_id(&self, lc_id: LowercaseId) -> Option<ModuleId> {
-        self.lc_bindings
+    pub fn module_id_from_lc_id(&self, lc_id: LowercaseId) -> ModuleId {
+        match self
+            .lc_bindings
             .get(lc_id.to_index() + self.tl_scope.num_lc_bindings())
-            .map(|(module_id, _str_id, _region, _is_unused)| *module_id)
+        {
+            Some((module_id, _str_id, _region, _is_used)) => *module_id,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn region_from_uc_id(&self, uc_id: UppercaseId) -> Option<Region> {
-        self.uc_bindings
+    pub fn region_from_uc_id(&self, uc_id: UppercaseId) -> Region {
+        match self
+            .uc_bindings
             .get(uc_id.to_index() + self.tl_scope.num_uc_bindings())
-            .map(|(_module_id, _str_id, region, _is_unused)| *region)
+        {
+            Some((_module_id, _str_id, region, _is_used)) => *region,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn str_id_from_uc_id(&self, uc_id: UppercaseId) -> Option<UcStrId> {
-        self.uc_bindings
+    pub fn str_id_from_uc_id(&self, uc_id: UppercaseId) -> UcStrId {
+        match self
+            .uc_bindings
             .get(uc_id.to_index() + self.tl_scope.num_uc_bindings())
-            .map(|(_module_id, str_id, _region, _is_unused)| *str_id)
+        {
+            Some((_module_id, str_id, _region, _is_used)) => *str_id,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn module_id_from_uc_id(&self, uc_id: UppercaseId) -> Option<ModuleId> {
-        self.uc_bindings
+    pub fn module_id_from_uc_id(&self, uc_id: UppercaseId) -> ModuleId {
+        match self
+            .uc_bindings
             .get(uc_id.to_index() + self.tl_scope.num_uc_bindings())
-            .map(|(module_id, _str_id, _region, _is_unused)| *module_id)
+        {
+            Some((module_id, _str_id, _region, _is_used)) => *module_id,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn region_from_module_id(&self, module_id: ModuleId) -> Option<Region> {
-        self.imports
+    pub fn shorthand_from_module_id(&self, module_id: ModuleId) -> Option<ShorthandStrId> {
+        match self
+            .imports
             .get(module_id.to_index() + self.tl_scope.num_imports())
-            .map(|(_str_id, region, _is_unused)| *region)
+        {
+            Some((shorthand, _str_id, _region, _is_used)) => *shorthand,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
-    pub fn str_id_from_module_id(&self, module_id: ModuleId) -> Option<ModuleStrId> {
-        self.imports
+    pub fn region_from_module_id(&self, module_id: ModuleId) -> Region {
+        match self
+            .imports
             .get(module_id.to_index() + self.tl_scope.num_imports())
-            .map(|(str_id, _region, _is_unused)| *str_id)
+        {
+            Some((_shorthand, _str_id, region, _is_used)) => *region,
+            None => unreachable!(), // TODO this should never happen!
+        }
+    }
+
+    pub fn str_id_from_module_id(&self, module_id: ModuleId) -> ModuleStrId {
+        match self
+            .imports
+            .get(module_id.to_index() + self.tl_scope.num_imports())
+        {
+            Some((_shorthand, str_id, _region, _is_used)) => *str_id,
+            None => unreachable!(), // TODO this should never happen!
+        }
     }
 
     /// Make sure we didn't overflow anything - e.g. that we didn't hand
@@ -418,5 +457,33 @@ impl<
         // syntactically, so they actually cannot overflow. Only lowercase bindings
         // can possibly overflow, which could theoretically happen due to top-level destructuring.
         problems
+    }
+
+    pub fn unused_lc(&'a self) -> impl Iterator<Item = LowercaseId> + 'a {
+        self.lc_bindings.iter().enumerate().filter_map(
+            |(index, (_, _, _, is_used))| match is_used {
+                IsUsed::Used => None,
+                IsUsed::Unused => Some(LowercaseId(index as u16)),
+            },
+        )
+    }
+
+    pub fn unused_uc(&'a self) -> impl Iterator<Item = UppercaseId> + 'a {
+        self.uc_bindings.iter().enumerate().filter_map(
+            |(index, (_, _, _, is_used))| match is_used {
+                IsUsed::Used => None,
+                IsUsed::Unused => Some(UppercaseId(index as u16)),
+            },
+        )
+    }
+
+    pub fn unused_imports(&'a self) -> impl Iterator<Item = ModuleId> + 'a {
+        self.imports
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, _, _, is_used))| match is_used {
+                IsUsed::Used => None,
+                IsUsed::Unused => Some(ModuleId(index as u16)),
+            })
     }
 }
