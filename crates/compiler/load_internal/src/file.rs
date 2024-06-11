@@ -6801,13 +6801,15 @@ fn to_unrecognized_package_shorthand_report(
         }
     };
 
+    let severity = Severity::RuntimeError;
+
     let doc = alloc.stack([
         alloc.concat([
             alloc.reflow("This module is trying to import from `"),
             alloc.shorthand(shorthand),
             alloc.reflow("`:"),
         ]),
-        alloc.region(lines.convert_region(region)),
+        alloc.region(lines.convert_region(region), severity),
         help,
     ]);
 
@@ -6815,7 +6817,7 @@ fn to_unrecognized_package_shorthand_report(
         filename,
         doc,
         title: "UNRECOGNIZED PACKAGE".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
