@@ -80,7 +80,7 @@ It's one thing to actually write these functions, it's _another_ thing to let th
 
 ## Specifying how we pass args to the function
 
-### builtins/mono/src/borrow.rs
+### builtins/mono/src/inc_dec.rs
 
 After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for your builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
