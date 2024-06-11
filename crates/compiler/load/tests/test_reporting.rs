@@ -4772,7 +4772,7 @@ mod test_reporting {
     // TODO investigate this test. It was disabled in https://github.com/roc-lang/roc/pull/6634
     // as the way Defs without final expressions are handled. The changes probably shouldn't have
     // changed this error report. The exact same test_syntax test for this has not changed, so
-    // we know the parser is parsing thesame thing. Therefore the way the AST is desugared must be
+    // we know the parser is parsing the same thing. Therefore the way the AST is desugared must be
     // the cause of the change in error report.
     // test_report!(
     //     def_missing_final_expression,
@@ -8163,7 +8163,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         // TODO(opaques): error could be improved by saying that the opaque definition demands
-        // that the argument be a U8, and linking to the definitin!
+        // that the argument be a U8, and linking to the definition!
         @r#"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
@@ -13579,7 +13579,7 @@ In roc, functions are always written as a lambda, like{}
     4│      crash "" ""
                   ^^^^^
 
-    `crash` must be given exacly one message to crash with.
+    `crash` must be given exactly one message to crash with.
     "#
     );
 

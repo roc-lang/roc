@@ -6593,6 +6593,8 @@ fn to_incorrect_module_name_report<'a>(
         expected,
     } = problem;
 
+    let severity = Severity::RuntimeError;
+
     // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
     // than an incorrect module name problem (the latter can happen only after parsing).
     let src = unsafe { from_utf8_unchecked(src) };
@@ -6607,7 +6609,7 @@ fn to_incorrect_module_name_report<'a>(
 
     let doc = alloc.stack([
         alloc.reflow("This module has a different name than I expected:"),
-        alloc.region(lines.convert_region(found.region)),
+        alloc.region(lines.convert_region(found.region), severity),
         alloc.reflow("Based on the nesting and use of this module, I expect it to have name"),
         alloc.pq_module_name(expected).indent(4),
     ]);
@@ -6616,7 +6618,7 @@ fn to_incorrect_module_name_report<'a>(
         filename,
         doc,
         title: "INCORRECT MODULE NAME".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
@@ -6636,6 +6638,7 @@ fn to_no_platform_package_report(
 ) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
+    let severity = Severity::RuntimeError;
 
     // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
     // than an incorrect module name problem (the latter can happen only after parsing).
@@ -6651,7 +6654,7 @@ fn to_no_platform_package_report(
 
     let doc = alloc.stack([
         alloc.reflow("This app does not specify a platform:"),
-        alloc.region(lines.convert_region(region)),
+        alloc.region(lines.convert_region(region),severity),
         alloc.reflow("Make sure you have exactly one package specified as `platform`:"),
         alloc
             .parser_suggestion("    app [main] {\n        pf: platform \"…path or URL to platform…\"\n            ^^^^^^^^\n    }"),
@@ -6663,7 +6666,7 @@ fn to_no_platform_package_report(
         filename,
         doc,
         title: "UNSPECIFIED PLATFORM".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
@@ -6683,6 +6686,7 @@ fn to_multiple_platform_packages_report(
 ) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
+    let severity = Severity::RuntimeError;
 
     // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
     // than an incorrect module name problem (the latter can happen only after parsing).
@@ -6698,7 +6702,7 @@ fn to_multiple_platform_packages_report(
 
     let doc = alloc.stack([
         alloc.reflow("This app specifies multiple packages as `platform`:"),
-        alloc.region(lines.convert_region(region)),
+        alloc.region(lines.convert_region(region), severity),
         alloc.reflow("Roc apps must specify exactly one platform."),
     ]);
 
@@ -6706,7 +6710,7 @@ fn to_multiple_platform_packages_report(
         filename,
         doc,
         title: "MULTIPLE PLATFORMS".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
@@ -6797,13 +6801,15 @@ fn to_unrecognized_package_shorthand_report(
         }
     };
 
+    let severity = Severity::RuntimeError;
+
     let doc = alloc.stack([
         alloc.concat([
             alloc.reflow("This module is trying to import from `"),
             alloc.shorthand(shorthand),
             alloc.reflow("`:"),
         ]),
-        alloc.region(lines.convert_region(region)),
+        alloc.region(lines.convert_region(region), severity),
         help,
     ]);
 
@@ -6811,7 +6817,7 @@ fn to_unrecognized_package_shorthand_report(
         filename,
         doc,
         title: "UNRECOGNIZED PACKAGE".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
