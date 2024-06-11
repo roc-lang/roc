@@ -134,6 +134,7 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
+                None,
                 RocCacheDir::Disallowed,
                 load_config,
             );
@@ -11668,6 +11669,54 @@ In roc, functions are always written as a lambda, like{}
         ),
     @r"
     "
+    );
+    test_report!(
+        unknown_shorthand_no_deps,
+        indoc!(
+            r#"
+            import foo.Foo
+
+            Foo.foo
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_no_deps/Test.roc ──────────────
+
+    This module is trying to import from `foo`:
+
+    4│      import foo.Foo
+                   ^^^^^^^
+
+    A lowercase name indicates a package shorthand, but no packages have
+    been specified.
+    "###
+    );
+
+    test_report!(
+        unknown_shorthand_in_app,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../tests/platform.roc" }
+
+            import foo.Foo
+
+            main =
+                Foo.foo
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_in_app/Test.roc ───────────────
+
+    This module is trying to import from `foo`:
+
+    3│  import foo.Foo
+               ^^^^^^^
+
+    A lowercase name indicates a package shorthand, but I don't recognize
+    this one. Did you mean one of these?
+
+        pf
+    "###
     );
 
     test_report!(

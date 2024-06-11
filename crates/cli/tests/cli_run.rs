@@ -649,6 +649,78 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn test_module_imports_pkg_w_flag() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "Module.roc",
+            &["--main", "tests/module_imports_pkg/app.roc"],
+            indoc!(
+                r#"
+                0 failed and 1 passed in <ignored for test> ms.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn test_module_imports_pkg_no_flag() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "Module.roc",
+            &[],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
+
+                This module is trying to import from `pkg`:
+
+                3│  import pkg.Foo
+                           ^^^^^^^
+
+                A lowercase name indicates a package shorthand, but I don't know which
+                packages are available.
+
+                When checking a module directly, I look for a `main.roc` app or
+                package to resolve shorthands from.
+
+                You can create it, or specify an existing one with the --main flag."#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn test_module_imports_unknown_pkg() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "ImportsUnknownPkg.roc",
+            &["--main", "tests/module_imports_pkg/app.roc"],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
+
+                This module is trying to import from `cli`:
+
+                3│  import cli.Foo
+                           ^^^^^^^
+
+                A lowercase name indicates a package shorthand, but I don't recognize
+                this one. Did you mean one of these?
+
+                    pkg
+
+                Note: I'm using the following module to resolve package shorthands:
+
+                    tests/module_imports_pkg/app.roc
+
+                You can specify a different one with the --main flag."#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",

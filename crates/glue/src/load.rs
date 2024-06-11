@@ -414,6 +414,7 @@ pub fn load_types(
     } = roc_load::load_and_typecheck(
         arena,
         full_file_path,
+        None,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target,

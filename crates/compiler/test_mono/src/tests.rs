@@ -117,6 +117,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );
