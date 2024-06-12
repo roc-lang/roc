@@ -1139,6 +1139,8 @@ fn link_macos(
         // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/roc-lang/roc/pull/554#discussion_r496370840
         "-framework",
         "Security",
+        "-framework",
+        "SystemConfiguration",
         // Output
         "-o",
         output_path.to_str().unwrap(), // app
