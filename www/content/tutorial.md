@@ -1037,7 +1037,7 @@ The `*` is a _wildcard type_; a type that's compatible with any other type. `Lis
 
 The wildcard type also comes up with empty lists. Suppose we have one function that takes a `List Str` and another function that takes a `List Bool`. We might reasonably expect to be able to pass an empty list (that is, `[]`) to either of these functions, and we can! This is because a `[]` value has the type `List *`. It is a "list with a wildcard type parameter", or a "list whose element type could be anything."
 
-The wildcard type be difficult to grasp, heres a common gotcha to test your understanding, suppose you have a function with a signature `List * -> List *`, what would you expect the function to return?
+The wildcard type can be difficult to grasp, heres a common gotcha to test your understanding, suppose you have a function with a signature `List * -> List *`, what would you expect the function to return?
 
 If your answer was `[]` then you'd be correct! Remember, the wildcard type means **any** type, this has the consequence that our function `List * -> List *` **must** return a list that can contain **any** type. The only list that can be coerced to a `List of any type` is the empty list.
 
