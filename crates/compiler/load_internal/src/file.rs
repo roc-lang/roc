@@ -4268,7 +4268,7 @@ fn parse_header<'a>(
             let (module_id, _, header) = build_platform_header(
                 arena,
                 None,
-                false,
+                is_root_module,
                 None,
                 filename,
                 parse_state,
