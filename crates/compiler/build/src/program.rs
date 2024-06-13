@@ -1181,10 +1181,11 @@ fn build_and_preprocess_host_lowlevel(
 
     roc_linker::preprocess_host(
         target,
-        platform_main_roc,
         preprocessed_host_path,
+        platform_main_roc,
         &stub_lib,
-        stub_dll_symbols,
+        false,
+        false,
     )
 }
 

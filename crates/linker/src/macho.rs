@@ -1088,7 +1088,7 @@ fn gen_macho_le(
             }
         }
 
-        offset += dbg!(cmd_size);
+        offset += cmd_size;
     }
 
     // cmd_loc should be where the last offset ended
