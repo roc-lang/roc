@@ -90,16 +90,6 @@ impl<
         }
     }
 
-    pub fn new(arena: &'a Bump, home_module_name: ModuleStrId, home_module_region: Region) -> Self {
-        Self::from_params(
-            arena,
-            home_module_name,
-            home_module_region,
-            core::iter::empty(),
-            |_, _| {},
-        )
-    }
-
     /// If this would shadow an existing binding that's already in scope, returns Err with
     /// the original binding's Region.
     pub fn bind_lc(
