@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/compiler/*",
+    "crates/can_module",
     "crates/vendor/*",
     "crates/scope",
     "crates/glue",

@@ -2352,6 +2352,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_can_module"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "roc_scope",
+]
+
+[[package]]
 name = "roc_checkmate"
 version = "0.0.1"
 dependencies = [
