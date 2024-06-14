@@ -43,22 +43,61 @@ impl<
         Region: Copy + Debug,
     > TopLevelScope<'a, LcStrId, UcStrId, ShorthandStrId, ModuleStrId, Region>
 {
-    pub fn new(arena: &'a Bump, home_module_name: ModuleStrId, home_module_region: Region) -> Self {
-        let by_lc_id = Vec::with_capacity_in(8, arena);
-        let todo = (); // TODO populate by_uc_id with the exposed types in the builtin modules, since those are always in scope.
-        let by_uc_id = Vec::with_capacity_in(8, arena);
-        let todo = (); // TODO populate by_module_id with the builtin modules. Remember that ModuleId 0 is HOME, so start at 1!
+    /// Create a new top-level scope with module params already bound.
+    /// Report duplicate params; just like functions, there could be
+    /// no possible benefit to duplicating module params!
+    pub fn from_params(
+        arena: &'a Bump,
+        home_module_name: ModuleStrId,
+        home_module_region: Region,
+        params: impl ExactSizeIterator<Item = (LcStrId, Region)>,
+        mut report_duplicate_param: impl FnMut(Region, Region),
+    ) -> Self {
         let mut by_module_id = Vec::with_capacity_in(8, arena);
 
         // Since ModuleId exposes ModuleId::HOME, which is hardcoded to be index 0 under the hood,
         // we have to record the home module first. Otherwise, it might not end up getting index 0!
-        by_module_id.push((home_module_name, home_module_region));
+        by_module_id.push((None, home_module_name, home_module_region, IsUsed::Used));
+
+        let mut by_uc_id = Vec::with_capacity_in(8, arena);
+        let todo = (); // TODO populate by_module_id with the builtin modules. Remember that ModuleId 0 is HOME, so start at 1!
+        let mut by_lc_id = Vec::with_capacity_in(8usize.saturating_add(params.len()), arena);
+        let todo = (); // TODO populate by_uc_id with the exposed types in the builtin modules, since those are always in scope.
+
+        let first_param_idx = by_lc_id.len();
+
+        'outer: for (param, region) in params {
+            let existing_params = &by_lc_id[first_param_idx..];
+
+            // Report duplicate module params
+            for (_existing_module_id, existing_param, existing_region, _is_used) in existing_params
+            {
+                if &param == existing_param {
+                    report_duplicate_param(*existing_region, region);
+
+                    // Since this is a duplicate, we already have it in the bindings; don't add another binding.
+                    continue 'outer;
+                }
+            }
+
+            by_lc_id.push((ModuleId::HOME, param, region, IsUsed::Unused));
+        }
 
         Self {
             lc_bindings: by_lc_id,
             uc_bindings: by_uc_id,
             imports: by_module_id,
         }
+    }
+
+    pub fn new(arena: &'a Bump, home_module_name: ModuleStrId, home_module_region: Region) -> Self {
+        Self::from_params(
+            arena,
+            home_module_name,
+            home_module_region,
+            core::iter::empty(),
+            |_, _| {},
+        )
     }
 
     /// If this would shadow an existing binding that's already in scope, returns Err with

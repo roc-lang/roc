@@ -101,6 +101,12 @@ impl<'a, Shorthand, Lc, Uc, ModName, PkgPath, Region: Copy>
 {
     pub fn app(
         arena: &'a Bump,
+        // The region for the `app` keyword
+        region: Region,
+        // The module's name (relevant for self-qualified lookups)
+        name: ModName,
+        // Module params
+        params: impl ExactSizeIterator<Item = Lc>,
         // The region for the entire packages section. Used if we need to report that no packages were labeled `platform`
         packages_region: Region,
         // Note: parsing already should have verified all the paths (and kicked off loading for them) and
@@ -114,6 +120,18 @@ impl<'a, Shorthand, Lc, Uc, ModName, PkgPath, Region: Copy>
         let mut packages = Vec::with_capacity_in(parsed_packages.len(), arena);
         let mut pkg_shorthand_regions = Vec::with_capacity_in(parsed_packages.len(), arena);
         let mut platform = None;
+        let mut scope = TopLevelScope::from_params(
+            arena,
+            name,
+            region,
+            params,
+            |original_region, duplicate_region| {
+                problems.push(Problem::DuplicateModuleParam {
+                    original: original_region,
+                    duplicate: duplicate_region,
+                })
+            },
+        );
 
         for (index, pkg) in parsed_packages.enumerate() {
             // If this is a platform, set our current platform to be it.
