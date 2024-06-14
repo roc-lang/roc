@@ -109,6 +109,10 @@ pub fn run(
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
 ) -> RunSolveOutput {
+    // TODO sometime around solving (probably right at the point when we're copying all the type annotations in
+    // from the other module), we now need to verify that all lookups which reference other modules are referencing
+    // identifiers those modules actually expose! Similarly, we also need to verify that all module imports are
+    // actual real modules, including taking into account shorthand qualification.
     run_help(config, problems, subs, aliases, abilities_store)
 }
 

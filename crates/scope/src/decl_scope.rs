@@ -90,34 +90,104 @@ impl<
         }
     }
 
-    pub fn end_decl(&mut self) {
-        // Do exhaustive destructuring here so if we add a field later, we don't forget
-        // to include it in the reset.
-        let Self {
-            lc_bindings,
-            uc_bindings,
-            imports,
-            scope_lengths,
-            tl_scope: _, // Do not reset TL scope; it doesn't change when decls end!
-            next_lc_id,
-            next_uc_id,
-            next_module_id,
-            lc_start,
-            uc_start,
-            imports_start: import_start,
-        } = self;
+    pub fn end_decl(
+        &mut self,
+        // Is a lowercase identifier used, other than the lookups we already knew about?
+        // e.g. is either of these true?
+        //     scope.abilities_store.is_specialization_name(symbol)
+        //     symbol.is_exposed_for_builtin_derivers()
+        lc_is_used: impl Fn(LowercaseId) -> bool,
+        // Is an uppercase identifier used, other than the lookups we already knew about?
+        // e.g. is symbol.is_exposed_for_builtin_derivers() true?
+        uc_is_used: impl Fn(UppercaseId) -> bool,
+        // Whether the given module exposes the given lowercase ident
+        mod_exposes_lc: impl Fn(ShorthandStrId, ModuleStrId, LcStrId) -> bool,
+        // Whether the given module exposes the given uppercase ident
+        mod_exposes_uc: impl Fn(ShorthandStrId, ModuleStrId, UcStrId) -> bool,
+        // Whether the given package exposes the given module
+        pkg_exposes_module: impl Fn(ShorthandStrId, ModuleStrId) -> bool,
+        mut report_unused_lc: impl FnMut(ModuleStrId, LcStrId, Region),
+        mut report_unused_uc: impl FnMut(ModuleStrId, UcStrId, Region),
+        mut report_unused_import: impl FnMut(Option<ShorthandStrId>, ModuleStrId, Region),
+        mut report_lookup_of_unexposed_lc: impl FnMut(ShorthandStrId, ModuleStrId, LcStrId, Region),
+        mut report_lookup_of_unexposed_uc: impl FnMut(ShorthandStrId, ModuleStrId, UcStrId, Region),
+        mut report_import_of_unexposed_mod: impl FnMut(ShorthandStrId, ModuleStrId, Region),
+    ) {
+        // Report unused things
+        {
+            for (module_id, str_id, region, is_used) in self.lc_bindings {
+                let mod_str_id = self.str_id_from_module_id(module_id);
 
-        // Do not reset the next_* values; IDs should be unique across the whole module!
-        // However, we do want to update the *_start values so that future lookups treat
-        // all of these as out of scope (as they should be, since they are now in the previous decl.)
-        *lc_start = *next_lc_id as u16;
-        *uc_start = *next_uc_id as u16;
-        *import_start = *next_module_id as u16;
+                if let Some(shorthand_str_id) = self.shorthand_from_module_id(module_id) {
+                    if !mod_exposes_lc(shorthand_str_id, mod_str_id, str_id) {
+                        report_lookup_of_unexposed_lc(shorthand_str_id, mod_str_id, str_id, region);
+                    }
+                }
 
-        lc_bindings.truncate(0);
-        uc_bindings.truncate(0);
-        imports.truncate(0);
-        scope_lengths.truncate(0);
+                if let IsUsed::Unused = is_used {
+                    // It's not exposed and wasn't looked up; report it as unused!
+                    report_unused_lc(mod_str_id, str_id, region);
+                }
+            }
+
+            for (module_id, str_id, region, is_used) in self.uc_bindings {
+                let mod_str_id = self.str_id_from_module_id(module_id);
+
+                if let Some(shorthand_str_id) = self.shorthand_from_module_id(module_id) {
+                    if !mod_exposes_uc(shorthand_str_id, mod_str_id, str_id) {
+                        report_lookup_of_unexposed_uc(shorthand_str_id, mod_str_id, str_id, region);
+                    }
+                }
+
+                if let IsUsed::Unused = is_used {
+                    // It's not exposed and wasn't looked up; report it as unused!
+                    report_unused_uc(mod_str_id, str_id, region);
+                }
+            }
+
+            for (opt_shorthand_str_id, module_str_id, region, is_used) in self.imports {
+                if let Some(shorthand_str_id) = opt_shorthand_str_id {
+                    if !pkg_exposes_module(shorthand_str_id, module_str_id) {
+                        report_import_of_unexposed_mod(shorthand_str_id, module_str_id, region);
+                    }
+                }
+
+                if let IsUsed::Unused = is_used {
+                    report_unused_import(opt_shorthand_str_id, module_str_id, region);
+                }
+            }
+        }
+
+        // Reset for the next binding
+        {
+            // Do exhaustive destructuring here so if we add a field later, we don't forget
+            // to include it in the reset.
+            let Self {
+                lc_bindings,
+                uc_bindings,
+                imports,
+                scope_lengths,
+                tl_scope: _, // Do not reset TL scope; it doesn't change when decls end!
+                next_lc_id,
+                next_uc_id,
+                next_module_id,
+                lc_start,
+                uc_start,
+                imports_start: import_start,
+            } = self;
+
+            // Do not reset the next_* values; IDs should be unique across the whole module!
+            // However, we do want to update the *_start values so that future lookups treat
+            // all of these as out of scope (as they should be, since they are now in the previous decl.)
+            *lc_start = *next_lc_id as u16;
+            *uc_start = *next_uc_id as u16;
+            *import_start = *next_module_id as u16;
+
+            lc_bindings.truncate(0);
+            uc_bindings.truncate(0);
+            imports.truncate(0);
+            scope_lengths.truncate(0);
+        }
     }
 
     /// If this is from `exposes` in an `import`, this should be passed that module's ModuleId.
