@@ -5,6 +5,7 @@
 #![allow(clippy::float_cmp)]
 
 pub mod gen_abilities;
+pub mod gen_compare;
 pub mod gen_definitions;
 pub mod gen_dict;
 pub mod gen_equality;
