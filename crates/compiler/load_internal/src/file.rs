@@ -81,8 +81,8 @@ use {
     roc_packaging::https::{PackageMetadata, Problem},
 };
 
-pub use crate::work::Phase;
-use crate::work::{DepCycle, Dependencies};
+pub use roc_work::Phase;
+use roc_work::{DepCycle, Dependencies};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_instant::{Duration, Instant};
@@ -150,7 +150,8 @@ fn start_phase<'a>(
 ) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
-    use crate::work::PrepareStartPhase::*;
+    use roc_work::PrepareStartPhase::*;
+
     match state.dependencies.prepare_start_phase(module_id, phase) {
         Continue => {
             // fall through
