@@ -3711,7 +3711,7 @@ pub enum RocFileErr {
     InvalidUtf8,
 }
 
-fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), RocFileErr> {
+fn ensure_roc_file(filename: &Path, src_bytes: &[u8]) -> Result<(), RocFileErr> {
     match filename.extension() {
         Some(ext) => {
             if ext == ROC_FILE_EXTENSION {

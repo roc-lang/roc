@@ -25,12 +25,12 @@ pub enum ChannelProblem {
     FailedToEnqueueTask,
 }
 
-pub fn worker_task_step<'a, BuildTask>(
-    worker: &Worker<BuildTask>,
-    injector: &Injector<BuildTask>,
-    stealers: &[Stealer<BuildTask>],
+pub fn worker_task_step<Task>(
+    worker: &Worker<Task>,
+    injector: &Injector<Task>,
+    stealers: &[Stealer<Task>],
     worker_msg_rx: &Receiver<WorkerMsg>,
-    run_task: impl Fn(BuildTask) -> Result<(), ChannelProblem>,
+    run_task: impl Fn(Task) -> Result<(), ChannelProblem>,
 ) -> Result<ControlFlow<(), ()>, ChannelProblem> {
     match worker_msg_rx.try_recv() {
         Ok(msg) => {
@@ -69,12 +69,12 @@ pub fn worker_task_step<'a, BuildTask>(
     }
 }
 
-pub fn worker_task<'a, BuildTask>(
-    worker: Worker<BuildTask>,
-    injector: &Injector<BuildTask>,
-    stealers: &[Stealer<BuildTask>],
+pub fn worker_task<Task>(
+    worker: Worker<Task>,
+    injector: &Injector<Task>,
+    stealers: &[Stealer<Task>],
     worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
-    run_task: impl Fn(BuildTask) -> Result<(), ChannelProblem>,
+    run_task: impl Fn(Task) -> Result<(), ChannelProblem>,
 ) -> Result<(), ChannelProblem> {
     // Keep listening until we receive a Shutdown msg
     for msg in worker_msg_rx.iter() {
@@ -106,11 +106,11 @@ pub fn worker_task<'a, BuildTask>(
     Ok(())
 }
 
-pub fn start_tasks<'a, State, Task, Tasks: IntoIterator<Item = Task>>(
+pub fn start_tasks<State, Task, Tasks: IntoIterator<Item = Task>>(
     state: &mut State,
     work: MutSet<(ModuleId, Phase)>,
     injector: &Injector<Task>,
-    worker_listeners: &'a [Sender<WorkerMsg>],
+    worker_listeners: &[Sender<WorkerMsg>],
     mut start_phase: impl FnMut(ModuleId, Phase, &mut State) -> Tasks,
 ) -> Result<(), SendError<WorkerMsg>> {
     for (module_id, phase) in work {
