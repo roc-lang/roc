@@ -1,4 +1,4 @@
-use crate::ast::{Implements, Pattern, PatternAs, Spaceable};
+use crate::ast::{Collection, Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -45,7 +45,7 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
 
 pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state: State<'a>, min_indent| {
-        let (_, pattern, state) = loc_pattern_help_help().parse(arena, state, min_indent)?;
+        let (_, pattern, state) = loc_pattern_help_help(true).parse(arena, state, min_indent)?;
 
         let pattern_state = state.clone();
 
@@ -73,11 +73,13 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
     }
 }
 
-fn loc_pattern_help_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+fn loc_pattern_help_help<'a>(
+    can_have_arguments: bool,
+) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
         loc!(underscore_pattern_help()),
-        loc_ident_pattern_help(true),
+        loc_ident_pattern_help(can_have_arguments),
         loc!(specialize_err(
             EPattern::Record,
             crate::pattern::record_pattern_help()
@@ -134,11 +136,20 @@ fn loc_tag_pattern_arg<'a>(
             min_indent,
         )?;
 
-        let (_, loc_pat, state) = loc_parse_tag_pattern_arg().parse(arena, state, min_indent)?;
+        // Cannot have arguments here, pass `false` to make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+        let (_, loc_pat, state) = loc_pattern_help_help(false).parse(arena, state, min_indent)?;
 
         let Loc { region, value } = loc_pat;
 
-        if stop_on_has_kw && matches!(value, Pattern::Identifier(crate::keyword::IMPLEMENTS)) {
+        if stop_on_has_kw
+            && matches!(
+                value,
+                Pattern::Identifier {
+                    ident: crate::keyword::IMPLEMENTS,
+                    ..
+                }
+            )
+        {
             Err((NoProgress, EPattern::End(original_state.pos())))
         } else {
             Ok((
@@ -160,7 +171,10 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
         |_arena, state, progress, pattern| {
             if matches!(
                 pattern.value,
-                Pattern::Identifier(crate::keyword::IMPLEMENTS)
+                Pattern::Identifier {
+                    ident: crate::keyword::IMPLEMENTS,
+                    ..
+                }
             ) {
                 Ok((
                     progress,
@@ -171,21 +185,6 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
                 Err((progress, EPattern::End(state.pos())))
             }
         },
-    )
-}
-
-fn loc_parse_tag_pattern_arg<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    one_of!(
-        specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
-        loc!(underscore_pattern_help()),
-        // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-        loc_ident_pattern_help(false),
-        loc!(specialize_err(
-            EPattern::Record,
-            crate::pattern::record_pattern_help()
-        )),
-        loc!(string_like_pattern_help()),
-        loc!(number_pattern_help())
     )
 }
 
@@ -403,7 +402,7 @@ fn loc_ident_pattern_help<'a>(
                             MadeProgress,
                             Loc {
                                 region: loc_ident.region,
-                                value: Pattern::Identifier(var),
+                                value: Pattern::Identifier { ident: var },
                             },
                             state,
                         ));
@@ -469,15 +468,17 @@ fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
 
 #[inline(always)]
 fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
-    map!(
-        collection_trailing_sep_e!(
-            byte(b'{', PRecord::Open),
-            record_pattern_field(),
-            byte(b',', PRecord::End),
-            byte(b'}', PRecord::End),
-            Pattern::SpaceBefore
-        ),
-        Pattern::RecordDestructure
+    map!(record_pattern_fields(), Pattern::RecordDestructure)
+}
+
+pub fn record_pattern_fields<'a>() -> impl Parser<'a, Collection<'a, Loc<Pattern<'a>>>, PRecord<'a>>
+{
+    collection_trailing_sep_e!(
+        byte(b'{', PRecord::Open),
+        record_pattern_field(),
+        byte(b',', PRecord::End),
+        byte(b'}', PRecord::End),
+        Pattern::SpaceBefore
     )
 }
 
@@ -564,9 +565,9 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             None => {
                 let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier(value)), spaces)
+                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: value }), spaces)
                 } else {
-                    Pattern::Identifier(value)
+                    Pattern::Identifier { ident: value }
                 };
 
                 Ok((MadeProgress, Loc::at(region, value), state))

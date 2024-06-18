@@ -102,8 +102,13 @@ fn num_ceil_checked_division_success() {
 
 #[test]
 fn float_division_by_zero() {
-    expect_success("1f64 / 0", "∞ : F64");
-    expect_success("-1f64 / 0", "-∞ : F64");
+    expect_success("1f64 / 0", "Num.infinityF64 : F64");
+    expect_success("-1f64 / 0", "-Num.infinityF64 : F64");
+    expect_success("0f64 / 0", "Num.nanF64 : F64");
+
+    expect_success("1f32 / 0", "Num.infinityF32 : F32");
+    expect_success("-1f32 / 0", "-Num.infinityF32 : F32");
+    expect_success("0f32 / 0", "Num.nanF32 : F32");
 }
 
 #[test]
@@ -1197,6 +1202,22 @@ fn tag_with_type_behind_alias() {
             v"#
         ),
         r#"A "value" : T"#,
+    );
+}
+
+#[test]
+fn aliases_named_err_and_ok() {
+    expect_success(
+        indoc!(
+            r#"
+            Err : [Blah]
+            Ok : [Stuff]
+
+            v : (Err, Ok)
+            v = (Blah, Stuff)
+            v"#
+        ),
+        r#"(Blah, Stuff) : ( [Blah], [Stuff] )*"#,
     );
 }
 

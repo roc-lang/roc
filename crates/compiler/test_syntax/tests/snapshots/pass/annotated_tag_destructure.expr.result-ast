@@ -18,9 +18,9 @@ Defs(
                 header: TypeHeader {
                     name: @0-6 "UserId",
                     vars: [
-                        @7-8 Identifier(
-                            "x",
-                        ),
+                        @7-8 Identifier {
+                            ident: "x",
+                        },
                     ],
                 },
                 ann: @11-25 TagUnion {
@@ -47,9 +47,9 @@ Defs(
                         "UserId",
                     ),
                     [
-                        @7-8 Identifier(
-                            "x",
-                        ),
+                        @7-8 Identifier {
+                            ident: "x",
+                        },
                     ],
                 ),
                 ann_type: @11-25 TagUnion {
@@ -73,9 +73,9 @@ Defs(
                         "UserId",
                     ),
                     [
-                        @33-34 Identifier(
-                            "x",
-                        ),
+                        @33-34 Identifier {
+                            ident: "x",
+                        },
                     ],
                 ),
                 body_expr: @37-46 Apply(

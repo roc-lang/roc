@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
+                @0-1 Identifier {
+                    ident: "f",
+                },
                 @3-27 Function(
                     [
                         @3-13 Tuple {
@@ -55,9 +55,9 @@ Defs(
                 ),
             ),
             AnnotatedBody {
-                ann_pattern: @0-1 Identifier(
-                    "f",
-                ),
+                ann_pattern: @0-1 Identifier {
+                    ident: "f",
+                },
                 ann_type: @3-27 Function(
                     [
                         @3-13 Tuple {
@@ -93,14 +93,14 @@ Defs(
                     },
                 ),
                 comment: None,
-                body_pattern: @28-29 Identifier(
-                    "f",
-                ),
+                body_pattern: @28-29 Identifier {
+                    ident: "f",
+                },
                 body_expr: @32-39 Closure(
                     [
-                        @33-34 Identifier(
-                            "x",
-                        ),
+                        @33-34 Identifier {
+                            ident: "x",
+                        },
                     ],
                     @38-39 Var {
                         module_name: "",

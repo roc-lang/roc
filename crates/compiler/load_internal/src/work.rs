@@ -162,10 +162,6 @@ impl<'a> Dependencies<'a> {
                 output.insert((dep, Phase::LoadHeader));
             }
 
-            // to parse and generate constraints, the headers of all dependencies must be loaded!
-            // otherwise, we don't know whether an imported symbol is actually exposed
-            self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
-
             // to canonicalize a module, all its dependencies must be canonicalized
             self.add_dependency(module_id, dep, Phase::CanonicalizeAndConstrain);
 
@@ -427,10 +423,10 @@ impl<'a> Dependencies<'a> {
                 PrepareStartPhase::Recurse(new)
             }
             None => match phase {
-                Phase::LoadHeader => {
-                    // this is fine, mark header loading as pending
+                Phase::LoadHeader | Phase::Parse => {
+                    // this is fine, mark as pending
                     self.status
-                        .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
+                        .insert(Job::Step(module_id, phase), Status::Pending);
 
                     PrepareStartPhase::Continue
                 }

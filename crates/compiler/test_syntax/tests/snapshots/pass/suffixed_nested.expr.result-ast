@@ -1,5 +1,5 @@
 Apply(
-    @0-4 Suffixed(
+    @0-3 TaskAwaitBang(
         Var {
             module_name: "",
             ident: "foo",
@@ -8,7 +8,7 @@ Apply(
     [
         @9-17 ParensAround(
             Apply(
-                @9-13 Suffixed(
+                @9-12 TaskAwaitBang(
                     Var {
                         module_name: "",
                         ident: "bar",

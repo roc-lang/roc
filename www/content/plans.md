@@ -70,9 +70,3 @@ These are planned changes to how things work, which should be backwards-compatib
 This doesn't come up a lot, but [the feature](https://github.com/roc-lang/roc/issues/5504) basically means you can match on some tags in a `when`, and then have an `other ->` branch which has the tags you already matched on removed from the union. That means if you later do another `when` on the `other` value, you won't have to match on (or use `_ ->` to ignore) the tags you already matched in the first `when`, like you do today.
 
 This is planned but nobody is currently working on it. It's a quality of life improvement but doesn't unblock anything; today you can just add a `_ ->` branch to the inner `when`, which is undesirable but not a blocker.
-
-### [`Inspect` Inference](#inspect-inference) {#inspect-inference}
-
-When this lands, all Roc types will have a default `implements Inspect`, which you can override if desired. `dbg` will use it to display things, which in turn means you'll be able to customize `dbg` output. Also it will mean you can do things like turning any Roc type into a string and writing it to a log file.
-
-Note that in this design, functions will have an `Inspect` implementation which essentially renders them as `"<function>"` with no other information, and opaque types will be `"<opaque>"` by default unless you customize them. This is important because neither functions nor opaque types should expose their internal details, so that you can safely refactor them without causing regressions in distant parts of the code base because something depended on an internal implementation detail.

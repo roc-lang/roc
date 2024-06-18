@@ -117,6 +117,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -3497,6 +3498,40 @@ fn issue_6174() {
             [a {}, b {}]
 
         c {}
+        "
+    )
+}
+
+#[mono_test]
+fn issue_6606_1() {
+    indoc!(
+        r"
+        foo = \_ -> 0
+
+        f =
+            when [] is
+                [.. as rest] if Bool.false -> foo rest
+                [] -> 1
+                _ -> 2
+
+        f
+        "
+    )
+}
+
+#[mono_test]
+fn issue_6606_2() {
+    indoc!(
+        r"
+        foo = \_ -> 0
+
+        f =
+            when [] is
+                [[.. as rest]] if Bool.false -> foo rest
+                [[_]] -> 1
+                _ -> 2
+
+        f
         "
     )
 }

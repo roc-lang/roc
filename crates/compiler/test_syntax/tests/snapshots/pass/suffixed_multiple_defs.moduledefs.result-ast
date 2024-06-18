@@ -1,0 +1,121 @@
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-49,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @0-49 SpaceBefore(
+                Defs(
+                    Defs {
+                        tags: [
+                            Index(2147483648),
+                            Index(2147483649),
+                            Index(2147483650),
+                        ],
+                        regions: [
+                            @14-21,
+                            @26-39,
+                            @45-49,
+                        ],
+                        space_before: [
+                            Slice(start = 0, length = 0),
+                            Slice(start = 0, length = 1),
+                            Slice(start = 1, length = 0),
+                        ],
+                        space_after: [
+                            Slice(start = 0, length = 0),
+                            Slice(start = 1, length = 0),
+                            Slice(start = 1, length = 0),
+                        ],
+                        spaces: [
+                            Newline,
+                        ],
+                        type_defs: [],
+                        value_defs: [
+                            Stmt(
+                                @14-21 Apply(
+                                    @12-13 TaskAwaitBang(
+                                        Var {
+                                            module_name: "",
+                                            ident: "a",
+                                        },
+                                    ),
+                                    [
+                                        @16-21 Str(
+                                            PlainLine(
+                                                "Bar",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                            Body(
+                                @26-27 Identifier {
+                                    ident: "x",
+                                },
+                                @26-39 Apply(
+                                    @29-32 TaskAwaitBang(
+                                        Var {
+                                            module_name: "B",
+                                            ident: "b",
+                                        },
+                                    ),
+                                    [
+                                        @34-39 Str(
+                                            PlainLine(
+                                                "Foo",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                            Stmt(
+                                @45-49 SpaceBefore(
+                                    Apply(
+                                        @45-46 TaskAwaitBang(
+                                            Var {
+                                                module_name: "",
+                                                ident: "c",
+                                            },
+                                        ),
+                                        [
+                                            @48-49 Var {
+                                                module_name: "",
+                                                ident: "x",
+                                            },
+                                        ],
+                                        Space,
+                                    ),
+                                    [
+                                        Newline,
+                                        Newline,
+                                    ],
+                                ),
+                            ),
+                        ],
+                    },
+                    EmptyDefsFinal,
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+}

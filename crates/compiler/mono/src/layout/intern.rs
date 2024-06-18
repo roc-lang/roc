@@ -1,9 +1,4 @@
-use std::{
-    cell::RefCell,
-    hash::{BuildHasher, Hasher},
-    marker::PhantomData,
-    sync::Arc,
-};
+use std::{cell::RefCell, hash::BuildHasher, marker::PhantomData, sync::Arc};
 
 use bumpalo::Bump;
 use parking_lot::{Mutex, RwLock};
@@ -591,12 +586,8 @@ struct LockedGlobalInterner<'a, 'r> {
 ///
 /// This uses the [default_hasher], so interner maps should also rely on [default_hasher].
 fn hash<V: std::hash::Hash>(val: V) -> u64 {
-    let mut state = roc_collections::all::BuildHasher::default().build_hasher();
-    val.hash(&mut state);
-
-    // clippy suggests a stylistic improvement but the suggested fix doesn't seem to work out
-    #[allow(clippy::manual_hash_one)]
-    state.finish()
+    let hasher = roc_collections::all::BuildHasher::default();
+    hasher.hash_one(&val)
 }
 
 #[inline(always)]

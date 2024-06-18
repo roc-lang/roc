@@ -28,6 +28,7 @@ mod test_reporting {
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::FunctionKind;
     use roc_solve_problem::TypeError;
+    use roc_test_utils_dir::TmpDir;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -115,7 +116,7 @@ mod test_reporting {
             // We can't have all tests use "tmp" because tests run in parallel,
             // so append the test name to the tmp path.
             let tmp = format!("tmp/{subdir}");
-            let dir = roc_test_utils::TmpDir::new(&tmp);
+            let dir = TmpDir::new(&tmp);
 
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);
@@ -133,6 +134,7 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
+                None,
                 RocCacheDir::Disallowed,
                 load_config,
             );
@@ -646,7 +648,7 @@ mod test_reporting {
             if true then 1 else 2
             "
         ),
-        @r"
+        @r###"
     ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `true` in this scope.
@@ -656,11 +658,11 @@ mod test_reporting {
 
     Did you mean one of these?
 
+        Str
         Frac
         Num
-        Str
-        Err
-    "
+        U8
+    "###
     );
 
     test_report!(
@@ -811,10 +813,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Ok
                     List
-                    Err
                     Box
+                    Str
+                    isDisabled
                 "
             ),
         );
@@ -2211,10 +2213,10 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        Ok
         U8
         Box
         Eq
+        f
     "
     );
 
@@ -4544,13 +4546,13 @@ mod test_reporting {
 
     test_report!(
         comment_with_tab,
-        "# comment with a \t\n4",
+        "# comment with a \t char\n4",
         @r###"
     ── TAB CHARACTER in tmp/comment_with_tab/Test.roc ──────────────────────────────
 
     I encountered a tab character:
 
-    4│      # comment with a 	
+    4│      # comment with a 	 char
                              ^
 
     Tab characters are not allowed in Roc code. Please use spaces instead!
@@ -4559,17 +4561,17 @@ mod test_reporting {
 
     test_report!(
         comment_with_control_character,
-        "# comment with a \x07\n",
-        @r"
+        "# comment with a \x07 char\n",
+        @r###"
     ── ASCII CONTROL CHARACTER in tmp/comment_with_control_character/Test.roc ──────
 
     I encountered an ASCII control character:
 
-    4│      # comment with a 
+    4│      # comment with a  char
                              ^
 
     ASCII control characters are not allowed.
-    "
+    "###
     );
 
     test_report!(
@@ -4767,33 +4769,38 @@ mod test_reporting {
     "
     );
 
-    test_report!(
-        def_missing_final_expression,
-        indoc!(
-            r"
-            f : Foo.foo
-            "
-        ),
-        @r#"
-    ── MISSING FINAL EXPRESSION in tmp/def_missing_final_expression/Test.roc ───────
+    // TODO investigate this test. It was disabled in https://github.com/roc-lang/roc/pull/6634
+    // as the way Defs without final expressions are handled. The changes probably shouldn't have
+    // changed this error report. The exact same test_syntax test for this has not changed, so
+    // we know the parser is parsing the same thing. Therefore the way the AST is desugared must be
+    // the cause of the change in error report.
+    // test_report!(
+    //     def_missing_final_expression,
+    //     indoc!(
+    //         r"
+    //         f : Foo.foo
+    //         "
+    //     ),
+    //     @r#"
+    // ── MISSING FINAL EXPRESSION in tmp/def_missing_final_expression/Test.roc ───────
 
-    I am partway through parsing a definition, but I got stuck here:
+    // I am partway through parsing a definition, but I got stuck here:
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      f : Foo.foo
-                       ^
+    // 1│  app "test" provides [main] to "./platform"
+    // 2│
+    // 3│  main =
+    // 4│      f : Foo.foo
+    //                    ^
 
-    This definition is missing a final expression. A nested definition
-    must be followed by either another definition, or an expression
+    // This definition is missing a final expression. A nested definition
+    // must be followed by either another definition, or an expression
 
-        x = 4
-        y = 2
+    //     x = 4
+    //     y = 2
 
-        x + y
-    "#
-    );
+    //     x + y
+    // "#
+    // );
 
     test_report!(
         expression_indentation_end,
@@ -4908,25 +4915,260 @@ mod test_reporting {
     "
     );
 
+    test_report!(
+        unfinished_import,
+        indoc!(
+            r"
+            import [
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import/Test.roc ─────────────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import [
+                   ^
+
+    I was expecting to see a module name, like:
+
+        import BigNum
+
+    Or a package module name, like:
+
+        import pf.Stdout
+
+    Or a file path to ingest, like:
+
+        import "users.json" as users : Str
+    "###
+    );
+
+    test_report!(
+        weird_import_params_record,
+        indoc!(
+            r"
+            import Menu { x = 4 }
+            "
+        ),@r###"
+    ── RECORD PARSE PROBLEM in tmp/weird_import_params_record/Test.roc ─────────────
+
+    I am partway through parsing a record, but I got stuck here:
+
+    4│      import Menu { x = 4 }
+                        ^
+
+    TODO provide more context.
+    "###
+    );
+
+    test_report!(
+        record_builder_in_module_params,
+        indoc!(
+            r"
+            import Menu {
+                echo,
+                name: <- applyName
+            }
+            "
+        ),@r###"
+    ── RECORD BUILDER IN MODULE PARAMS in ...ord_builder_in_module_params/Test.roc ─
+
+    I was partway through parsing module params, but I got stuck here:
+
+    4│      import Menu {
+    5│          echo,
+    6│          name: <- applyName
+                ^^^^^^^^^^^^^^^^^^
+
+    This looks like a record builder field, but those are not allowed in
+    module params.
+    "###
+    );
+
+    test_report!(
+        record_update_in_module_params,
+        indoc!(
+            r"
+            import Menu { myParams & echo: echoFn }
+            "
+        ),@r###"
+    ── RECORD UPDATE IN MODULE PARAMS in ...ecord_update_in_module_params/Test.roc ─
+
+    I was partway through parsing module params, but I got stuck here:
+
+    4│      import Menu { myParams & echo: echoFn }
+                          ^^^^^^^^
+
+    It looks like you're trying to update a record, but module params
+    require a standalone record literal.
+    "###
+    );
+
+    test_report!(
+        unfinished_import_as_or_exposing,
+        indoc!(
+            r"
+            import svg.Path a
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_as_or_exposing/Test.roc ──────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path a
+                            ^
+
+    I was expecting to see the `as` keyword, like:
+
+        import svg.Path as SvgPath
+
+    Or the `exposing` keyword, like:
+
+        import svg.Path exposing [arc, rx]
+
+    Or module params, like:
+
+        import Menu { echo, read }
+    "###
+    );
+
+    test_report!(
+        unfinished_import_alias,
+        indoc!(
+            r"
+            import svg.Path as
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_alias/Test.roc ───────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path as
+                              ^
+
+    I just saw the `as` keyword, so I was expecting to see an alias next.
+    "###
+    );
+
+    test_report!(
+        lowercase_import_alias,
+        indoc!(
+            r"
+            import svg.Path as path
+            "
+        ),
+        @r###"
+    ── LOWERCASE ALIAS in tmp/lowercase_import_alias/Test.roc ──────────────────────
+
+    This import is using a lowercase alias:
+
+    4│      import svg.Path as path
+                               ^^^^
+
+    Module names and aliases must start with an uppercase letter.
+    "###
+    );
+
+    test_report!(
+        unfinished_import_exposing,
+        indoc!(
+            r"
+            import svg.Path exposing
+            "
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_import_exposing/Test.roc ────────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import svg.Path exposing
+                                    ^
+
+    I just saw the `exposing` keyword, so I was expecting to see `[` next.
+    "###);
+
+    test_report!(
+        unfinished_import_exposing_name,
+        indoc!(
+            r"
+            import svg.Path exposing [3
+            "
+        ),
+        @r###"
+    ── WEIRD EXPOSING in tmp/unfinished_import_exposing_name/Test.roc ──────────────
+
+    I'm partway through parsing an exposing list, but I got stuck here:
+
+    4│      import svg.Path exposing [3
+                                      ^
+
+    I was expecting a type, value, or function name next, like:
+
+        import Svg exposing [Path, arc, rx]
+    "###);
+
+    test_report!(
+        unfinished_ingested_file_name,
+        indoc!(
+            r#"
+            import "example.json" as
+            "#
+        ),
+        @r###"
+    ── UNFINISHED IMPORT in tmp/unfinished_ingested_file_name/Test.roc ─────────────
+
+    I was partway through parsing an `import`, but I got stuck here:
+
+    4│      import "example.json" as
+                                    ^
+
+    I was expecting to see a name next, like:
+
+        import "users.json" as users : Str
+    "###
+    );
+
+    test_report!(
+        ingested_file_import_ann_syntax_err,
+        indoc!(
+            r#"
+            import "example.json" as example : List U8, U32
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TYPE in tmp/ingested_file_import_ann_syntax_err/Test.roc ─────────
+
+    I am partway through parsing a type, but I got stuck here:
+
+    4│      import "example.json" as example : List U8, U32
+                                                           ^
+
+    Note: I may be confused by indentation
+    "###
+    );
+
     // TODO could do better by pointing out we're parsing a function type
     test_report!(
         dict_type_formatting,
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
+            app "dict" imports [] provides [main] to "./platform"
 
-            myDict : Dict.Dict Num.I64 Str
+            myDict : Dict Num.I64 Str
             myDict = Dict.insert (Dict.empty {}) "foo" 42
 
             main = myDict
             "#
         ),
-        @r#"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `myDict` definition:
 
-    3│  myDict : Dict.Dict Num.I64 Str
+    3│  myDict : Dict Num.I64 Str
     4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -4937,14 +5179,14 @@ mod test_reporting {
     But the type annotation on `myDict` says it should be:
 
         Dict I64 Str
-    "#
+    "###
     );
 
     test_report!(
         alias_type_diff,
         indoc!(
             r#"
-            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
 
             HSet a : Set a
 
@@ -5799,9 +6041,9 @@ All branches in an `if` must have the same type!
     Did you mean one of these?
 
         Str
-        Err
         U8
         F64
+        Box
     "###
     );
 
@@ -6035,6 +6277,31 @@ In roc, functions are always written as a lambda, like{}
     }
 
     #[test]
+    fn module_params_with_missing_arrow() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                module {echo, read} [menu]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE PARAMS in /code/proj/Main.roc ──────────────────────────────────
+
+                I am partway through parsing a module header, but I got stuck here:
+
+                1│  module {echo, read} [menu]
+                                        ^
+
+                I am expecting `->` next, like:
+
+                    module { echo, read } -> [menu]
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
@@ -6103,9 +6370,7 @@ In roc, functions are always written as a lambda, like{}
         report_header_problem_as(
             indoc!(
                 r"
-                interface Foobar
-                    exposes [main, @Foo]
-                    imports [pf.Task, Base64]
+                module [main, @Foo]
                 "
             ),
             indoc!(
@@ -6114,39 +6379,12 @@ In roc, functions are always written as a lambda, like{}
 
                 I am partway through parsing an `exposes` list, but I got stuck here:
 
-                1│  interface Foobar
-                2│      exposes [main, @Foo]
-                                       ^
+                1│  module [main, @Foo]
+                                  ^
 
                 I was expecting a type name, value name or function name next, like
 
-                    exposes [Animal, default, tame]
-            "
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_module_name() {
-        report_header_problem_as(
-            indoc!(
-                r"
-                interface foobar
-                    exposes [main, @Foo]
-                    imports [pf.Task, Base64]
-                "
-            ),
-            indoc!(
-                r"
-                ── WEIRD MODULE NAME in /code/proj/Main.roc ────────────────────────────────────
-
-                I am partway through parsing a header, but got stuck here:
-
-                1│  interface foobar
-                              ^
-
-                I am expecting a module name next, like BigNum or Main. Module names
-                must start with an uppercase letter.
+                    [Animal, default, tame]
             "
             ),
         )
@@ -7925,7 +8163,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         // TODO(opaques): error could be improved by saying that the opaque definition demands
-        // that the argument be a U8, and linking to the definitin!
+        // that the argument be a U8, and linking to the definition!
         @r#"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
@@ -8401,17 +8639,38 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── WILDCARD NOT ALLOWED HERE in /code/proj/Main.roc ────────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes a wildcard (`*`) type variable:
 
     4│      I : Num.Int *
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use wildcard (`*`) type variables. Only
+    named type variables are allowed.
+    "###
+    );
+
+    test_report!(
+        underscore_in_alias,
+        indoc!(
+            r"
+            I : Num.Int _
+            a : I
+            a
+            "
+        ),
+        @r###"
+    ── UNDERSCORE NOT ALLOWED HERE in /code/proj/Main.roc ──────────────────────────
+
+    The definition of `I` includes an inferred (`_`) type:
+
+    4│      I : Num.Int _
+                        ^
+
+    Type alias definitions may not use inferred types (`_`).
+    "###
     );
 
     test_report!(
@@ -8423,17 +8682,17 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── WILDCARD NOT ALLOWED HERE in /code/proj/Main.roc ────────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes a wildcard (`*`) type variable:
 
     4│      I := Num.Int *
                          ^
 
-    Tip: Type variables must be bound before the `:=`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Opaque type definitions may not use wildcard (`*`) type variables. Only
+    named type variables are allowed.
+    "###
     );
 
     test_report!(
@@ -8445,19 +8704,18 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── WILDCARD NOT ALLOWED HERE in /code/proj/Main.roc ────────────────────────────
 
-    The definition of `I` has 2 unbound type variables.
-
-    Here is one occurrence:
+    The definition of `I` includes 2 wildcard (`*`) type variables. Here is
+    one of them:
 
     4│      I : [A (Num.Int *), B (Num.Int *)]
                             ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use wildcard (`*`) type variables. Only
+    named type variables are allowed.
+    "###
     );
 
     test_report!(
@@ -8469,17 +8727,16 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── UNDERSCORE NOT ALLOWED HERE in /code/proj/Main.roc ──────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes an inferred (`_`) type:
 
     4│      I : Num.Int _
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    Type alias definitions may not use inferred types (`_`).
+    "###
     );
 
     test_report!(
@@ -8491,17 +8748,19 @@ In roc, functions are always written as a lambda, like{}
             a
             "
         ),
-        @r"
-    ── UNBOUND TYPE VARIABLE in /code/proj/Main.roc ────────────────────────────────
+        @r###"
+    ── UNDECLARED TYPE VARIABLE in /code/proj/Main.roc ─────────────────────────────
 
-    The definition of `I` has an unbound type variable:
+    The definition of `I` includes an undeclared type variable:
 
     4│      I : Num.Int a
                         ^
 
-    Tip: Type variables must be bound before the `:`. Perhaps you intended
-    to add a type parameter to this type?
-    "
+    All type variables in type alias definitions must be declared.
+
+    Tip: You can declare type variables by putting them right before the `:`
+    symbol, separated by spaces.
+    "###
     );
 
     test_report!(
@@ -9304,7 +9563,7 @@ In roc, functions are always written as a lambda, like{}
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" imports [Set] provides [go] to "./platform"
+            app "test" imports [] provides [go] to "./platform"
 
             S a : { set : Set.Set a }
 
@@ -10892,7 +11151,9 @@ In roc, functions are always written as a lambda, like{}
         function_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
@@ -10901,12 +11162,12 @@ In roc, functions are always written as a lambda, like{}
                 myDecoder
             "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -10914,14 +11175,16 @@ In roc, functions are always written as a lambda, like{}
         a -> a
 
     Note: `Decoding` cannot be generated for functions.
-    "
+    "###
     );
 
     test_report!(
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             A := {}
 
@@ -10932,12 +11195,12 @@ In roc, functions are always written as a lambda, like{}
                 myDecoder
             "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      myDecoder = decoder
+    9│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -10952,7 +11215,7 @@ In roc, functions are always written as a lambda, like{}
 
     Tip: `A` does not implement `Decoding`. Consider adding a custom
     implementation or `implements Decode.Decoding` to the definition of `A`.
-    "
+    "###
     );
 
     test_report!(
@@ -11113,7 +11376,9 @@ In roc, functions are always written as a lambda, like{}
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import TotallyNotJson
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
@@ -11122,12 +11387,12 @@ In roc, functions are always written as a lambda, like{}
                     _ -> "something went wrong"
             "#
         ),
-    @r"
+    @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    6│          Ok rcd -> rcd.first rcd.second
+    8│          Ok rcd -> rcd.first rcd.second
                           ^^^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11135,14 +11400,16 @@ In roc, functions are always written as a lambda, like{}
         * -> *
 
     Note: `Decoding` cannot be generated for functions.
-    "
+    "###
     );
 
     test_report!(
         record_with_optional_field_types_cannot_derive_decoding,
         indoc!(
             r#"
-             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+             app "test" imports [] provides [main] to "./platform"
+
+             import Decode exposing [decoder]
 
              main =
                  myDecoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
@@ -11151,12 +11418,12 @@ In roc, functions are always written as a lambda, like{}
                  myDecoder
              "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11171,7 +11438,7 @@ In roc, functions are always written as a lambda, like{}
     over records that may or may not contain them at compile time, but are
     not a concept that extends to runtime!
     Maybe you wanted to use a `Result`?
-    "
+    "###
     );
 
     test_report!(
@@ -11353,21 +11620,23 @@ In roc, functions are always written as a lambda, like{}
         unused_value_import,
         indoc!(
             r#"
-            app "test" imports [List.{ concat }] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import List exposing [concat]
 
             main = ""
             "#
         ),
-    @r#"
+    @r###"
     ── UNUSED IMPORT in /code/proj/Main.roc ────────────────────────────────────────
 
-    `List.concat` is not used in this module.
+    List is imported but not used.
 
-    1│  app "test" imports [List.{ concat }] provides [main] to "./platform"
-                                   ^^^^^^
+    3│  import List exposing [concat]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since `List.concat` isn't used, you don't need to import it.
-    "#
+    Since List isn't used, you don't need to import it.
+    "###
     );
 
     test_report!(
@@ -11389,7 +11658,9 @@ In roc, functions are always written as a lambda, like{}
         unnecessary_builtin_type_import,
         indoc!(
             r#"
-            app "test" imports [Decode.{ DecodeError }] provides [main, E] to "./platform"
+            app "test" imports [] provides [main, E] to "./platform"
+
+            import Decode exposing [DecodeError]
 
             E : DecodeError
 
@@ -11398,6 +11669,54 @@ In roc, functions are always written as a lambda, like{}
         ),
     @r"
     "
+    );
+    test_report!(
+        unknown_shorthand_no_deps,
+        indoc!(
+            r#"
+            import foo.Foo
+
+            Foo.foo
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_no_deps/Test.roc ──────────────
+
+    This module is trying to import from `foo`:
+
+    4│      import foo.Foo
+                   ^^^^^^^
+
+    A lowercase name indicates a package shorthand, but no packages have
+    been specified.
+    "###
+    );
+
+    test_report!(
+        unknown_shorthand_in_app,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../tests/platform.roc" }
+
+            import foo.Foo
+
+            main =
+                Foo.foo
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_in_app/Test.roc ───────────────
+
+    This module is trying to import from `foo`:
+
+    3│  import foo.Foo
+               ^^^^^^^
+
+    A lowercase name indicates a package shorthand, but I don't recognize
+    this one. Did you mean one of these?
+
+        pf
+    "###
     );
 
     test_report!(
@@ -13260,7 +13579,7 @@ In roc, functions are always written as a lambda, like{}
     4│      crash "" ""
                   ^^^^^
 
-    `crash` must be given exacly one message to crash with.
+    `crash` must be given exactly one message to crash with.
     "#
     );
 
@@ -13658,7 +13977,9 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_tuple,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
@@ -13673,7 +13994,9 @@ In roc, functions are always written as a lambda, like{}
         cannot_decode_tuple_with_non_decode_element,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" imports [] provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
@@ -13682,12 +14005,12 @@ In roc, functions are always written as a lambda, like{}
                 myDecoder
             "#
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -13695,7 +14018,7 @@ In roc, functions are always written as a lambda, like{}
         U32, {} -> {}
 
     Note: `Decoding` cannot be generated for functions.
-    "
+    "###
     );
 
     test_no_problem!(

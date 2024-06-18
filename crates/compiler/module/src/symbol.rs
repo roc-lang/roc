@@ -1,4 +1,4 @@
-use crate::ident::{Ident, ModuleName};
+use crate::ident::{Ident, Lowercase, ModuleName};
 use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
@@ -113,6 +113,15 @@ impl Symbol {
             // low-level implementation.
             &Self::BOOL_STRUCTURAL_EQ
         )
+    }
+
+    pub fn is_automatically_imported(self) -> bool {
+        let module_id = self.module_id();
+
+        module_id.is_automatically_imported()
+            && Self::builtin_types_in_scope(module_id)
+                .iter()
+                .any(|(_, (s, _))| *s == self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -384,6 +393,11 @@ impl ModuleId {
             .get_name(self)
             .unwrap_or_else(|| internal_error!("Could not find ModuleIds for {:?}", self))
     }
+
+    pub fn is_automatically_imported(self) -> bool {
+        // The deprecated TotallyNotJson module is not automatically imported.
+        self.is_builtin() && self != ModuleId::JSON
+    }
 }
 
 impl fmt::Debug for ModuleId {
@@ -446,6 +460,22 @@ impl<'a, T> PackageQualified<'a, T> {
         match self {
             PackageQualified::Unqualified(name) => name,
             PackageQualified::Qualified(_, name) => name,
+        }
+    }
+
+    pub fn package_shorthand(&self) -> Option<&'a str> {
+        match self {
+            PackageQualified::Unqualified(_) => None,
+            PackageQualified::Qualified(package, _) => Some(package),
+        }
+    }
+
+    pub fn map_module<B>(&self, f: impl FnOnce(&T) -> B) -> PackageQualified<'a, B> {
+        match self {
+            PackageQualified::Unqualified(name) => PackageQualified::Unqualified(f(name)),
+            PackageQualified::Qualified(package, name) => {
+                PackageQualified::Qualified(package, f(name))
+            }
         }
     }
 }
@@ -593,6 +623,68 @@ impl ModuleIds {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ScopeModules {
+    modules: VecMap<ModuleName, ModuleId>,
+    sources: VecMap<ModuleId, ScopeModuleSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
+}
+
+impl ScopeModules {
+    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
+        self.modules.get(module_name).copied()
+    }
+
+    pub fn has_id(&self, module_id: ModuleId) -> bool {
+        self.sources.contains_key(&module_id)
+    }
+
+    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
+        self.modules.keys()
+    }
+
+    pub fn insert(
+        &mut self,
+        module_name: ModuleName,
+        module_id: ModuleId,
+        region: Region,
+    ) -> Result<(), ScopeModuleSource> {
+        if let Some(existing_module_id) = self.modules.get(&module_name) {
+            if *existing_module_id == module_id {
+                return Ok(());
+            }
+
+            return Err(*self.sources.get(existing_module_id).unwrap());
+        }
+
+        self.modules.insert(module_name, module_id);
+        self.sources
+            .insert(module_id, ScopeModuleSource::Import(region));
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.modules.len(), self.sources.len());
+        self.modules.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
+        self.modules.is_empty()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.modules.truncate(len);
+        self.sources.truncate(len);
+    }
+}
+
 /// An ID that is assigned to interned string identifiers within a module.
 /// By turning these strings into numbers, post-canonicalization processes
 /// like unification and optimization can run a lot faster.
@@ -696,6 +788,13 @@ impl IdentIds {
 
     pub fn is_empty(&self) -> bool {
         self.interner.is_empty()
+    }
+
+    pub fn exposed_values(&self) -> Vec<Lowercase> {
+        self.ident_strs()
+            .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
+            .map(|(_, ident)| Lowercase::from(ident))
+            .collect()
     }
 }
 
@@ -876,7 +975,6 @@ macro_rules! define_builtins {
                         module_id.register_debug_idents(&ident_ids);
                     }
 
-
                     exposed_idents_by_module.insert(
                         module_id,
                         ident_ids
@@ -924,6 +1022,32 @@ macro_rules! define_builtins {
                 )+
 
                 ModuleIds {  by_id }
+            }
+        }
+
+        impl ScopeModules {
+            pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
+                // +1 because the user will be compiling at least 1 non-builtin module!
+                let capacity = $total + 1;
+
+                let mut modules = VecMap::with_capacity(capacity);
+                let mut sources = VecMap::with_capacity(capacity);
+
+                modules.insert(home_name, home_id);
+                sources.insert(home_id, ScopeModuleSource::Current);
+
+                let mut insert_both = |id: ModuleId, name_str: &'static str| {
+                    let name: ModuleName = name_str.into();
+
+                    modules.insert(name, id);
+                    sources.insert(id, ScopeModuleSource::Builtin);
+                };
+
+                $(
+                    insert_both(ModuleId::$module_const, $module_name);
+                )+
+
+                ScopeModules { modules, sources }
             }
         }
 
@@ -1015,27 +1139,6 @@ macro_rules! define_builtins {
                     )+
                     m => roc_error_macros::internal_error!("{:?} is not a builtin module!", m),
                 }
-            }
-
-            /// Symbols that should be added to the default scope, for hints as suggestions of
-            /// names you might want to use.
-            ///
-            /// TODO: this is a hack to get tag names to show up in error messages as suggestions,
-            /// really we should be extracting tag names from candidate type aliases in scope.
-            pub fn symbols_in_scope_for_hints() -> VecMap<Ident, (Symbol, Region)> {
-                let mut scope = VecMap::default();
-
-                $(
-                    $(
-                        $(
-                            if $in_scope_for_hints {
-                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
-                            }
-                        )?
-                    )*
-                )+
-
-                scope
             }
         }
     };
@@ -1274,6 +1377,10 @@ define_builtins! {
         162 NUM_F64_TO_PARTS: "f64ToParts"
         163 NUM_F32_FROM_PARTS: "f32FromParts"
         164 NUM_F64_FROM_PARTS: "f64FromParts"
+        165 NUM_NAN_F32: "nanF32"
+        166 NUM_NAN_F64: "nanF64"
+        167 NUM_INFINITY_F32: "infinityF32"
+        168 NUM_INFINITY_F64: "infinityF64"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1431,18 +1538,17 @@ define_builtins! {
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
         87 LIST_CLONE: "clone"
         88 LIST_LEN_USIZE: "lenUsize"
+        89 LIST_CONCAT_UTF8: "concatUtf8"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
-        1 RESULT_OK: "Ok" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
-        2 RESULT_ERR: "Err" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
+        1 RESULT_IS_ERR: "isErr"
+        2 RESULT_ON_ERR: "onErr"
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
         6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
-        8 RESULT_IS_ERR: "isErr"
-        9 RESULT_ON_ERR: "onErr"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias

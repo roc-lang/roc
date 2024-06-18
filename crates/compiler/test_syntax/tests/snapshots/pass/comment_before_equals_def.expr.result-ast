@@ -17,9 +17,9 @@ Defs(
         value_defs: [
             Body(
                 @0-1 SpaceAfter(
-                    Identifier(
-                        "t",
-                    ),
+                    Identifier {
+                        ident: "t",
+                    },
                     [
                         LineComment(
                             "",

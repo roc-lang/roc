@@ -845,6 +845,27 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
         }
+        ListConcatUtf8 => {
+            // List.concatUtf8: List U8, Str -> List U8
+            arguments!(list, string);
+
+            match env.target.ptr_width() {
+                PtrWidth::Bytes4 => call_str_bitcode_fn(
+                    env,
+                    &[list, string],
+                    &[],
+                    BitcodeReturns::List,
+                    bitcode::LIST_CONCAT_UTF8,
+                ),
+                PtrWidth::Bytes8 => call_list_bitcode_fn(
+                    env,
+                    &[list.into_struct_value()],
+                    &[string],
+                    BitcodeReturns::List,
+                    bitcode::LIST_CONCAT_UTF8,
+                ),
+            }
+        }
         NumToStr => {
             // Num.toStr : Num a -> Str
             arguments_with_layouts!((num, num_layout));

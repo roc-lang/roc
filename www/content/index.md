@@ -5,8 +5,8 @@
 </svg>
 
 <p id="homepage-tagline">A fast, friendly, functional language.</p>
-<pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
-    <span class="string">"Artist: </span><span class="kw">$(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+<pre id="first-code-sample"><samp class="code-snippet">credits <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
+    <span class="string">"Performed by </span><span class="kw">$(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
 </div>
 </div>
 
@@ -73,7 +73,7 @@ Here are some examples of how it can be used today.
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Command-Line Interfaces</h3>
     <pre><samp class="code-snippet">main <span class="kw">=</span>
-    Stdout<span class="punctuation section">.</span>line <span class="literal">"Hello!"</span></samp></pre>
+    Stdout<span class="punctuation section">.</span>line<span class="punctuation section">!</span> <span class="literal">"Hello!"</span></samp></pre>
         <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
         <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/main.roc">the code for it</a> in the main Roc code repository.</p>
         <p>If you’re looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular <a href="/platforms">platform</a> to check out.</p>
@@ -98,17 +98,19 @@ log(<span class="string">`Roc says </span><span class="kw">${</span>fn()<span cl
 </div>
 
 ### [Other Examples](#other-examples) {#other-examples}
-You can find more use cases and examples on the [examples page](/examples)!
-</section>
 
+You can find more use cases and examples on the [examples page](/examples)!
+
+</section>
 
 ## [Code Sample with Explanations](#code-sample) {#code-sample}
 
 Here's a code sample that shows a few different aspects of Roc:
-* File I/O and HTTP requests
-* Pattern matching for error handling
-* JSON deserialization via type inference
-* Common syntax sugar: string interpolation, pipelines, and backpassing
+
+- File I/O and HTTP requests
+- Pattern matching for error handling
+- JSON deserialization via type inference
+- Common syntax sugar: string interpolation, pipelines, and backpassing
 
 The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives a brief overview.
 
@@ -146,12 +148,16 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
-    <li><a href="https://github.com/krzysztofgb">Krzysztof G.</a>
-    <li><a href="https://github.com/smores56">Sam Mohr</a>
-    <li><a href="https://github.com/megakilo">Steven Chen</a>
-    <li><a href="https://github.com/asteroidb612">Drew Lazzeri</a>
-    <li><a href="https://github.com/mrmizz">Alex Binaei</a>
-    <li><a href="https://github.com/jonomallanyk">Jono Mallanyk</a>
+    <li><a href="https://github.com/jluckyiv">Jackson Lucky</a></li>
+    <li><a href="https://github.com/agu-z">Agus Zubiaga</a></li>
+    <li><a href="https://github.com/AngeloChecked">Angelo Ceccato</a></li>
+    <li><a href="https://github.com/noverby">Niclas Overby</a></li>
+    <li><a href="https://github.com/krzysztofgb">Krzysztof G.</a></li>
+    <li><a href="https://github.com/smores56">Sam Mohr</a></li>
+    <li><a href="https://github.com/megakilo">Steven Chen</a></li>
+    <li><a href="https://github.com/asteroidb612">Drew Lazzeri</a></li>
+    <li><a href="https://github.com/mrmizz">Alex Binaei</a></li>
+    <li><a href="https://github.com/jonomallanyk">Jono Mallanyk</a></li>
     <li><a href="https://github.com/chris-packett">Chris Packett</a></li>
     <li><a href="https://github.com/jamesbirtles">James Birtles</a></li>
     <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>
@@ -168,6 +174,7 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 Thank you all for your contributions! Roc would not be what it is without your generosity. 💜
 
 We are currently trying to raise $4,000 USD/month in donations to fund one longtime Roc contributor to continue his work on Roc full-time. We are a small group trying to do big things, and every donation helps! You can donate using:
+
 - [GitHub Sponsors](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 

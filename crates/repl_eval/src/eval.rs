@@ -367,6 +367,22 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
+    macro_rules! f64_helper {
+        ($ty:ty) => {
+            app.call_function(main_fn_name, |_, num: $ty| {
+                f64_literal_to_ast(env.arena, num)
+            })
+        };
+    }
+
+    macro_rules! f32_helper {
+        ($ty:ty) => {
+            app.call_function(main_fn_name, |_, num: $ty| {
+                f32_literal_to_ast(env.arena, num)
+            })
+        };
+    }
+
     let expr = match env.layout_cache.get_repr(layout) {
         LayoutRepr::Builtin(Builtin::Bool) => {
             app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
@@ -404,8 +420,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             use FloatWidth::*;
 
             match float_width {
-                F32 => num_helper!(f32),
-                F64 => num_helper!(f64),
+                F32 => f32_helper!(f32),
+                F64 => f64_helper!(f64),
             }
         }
         LayoutRepr::Builtin(Builtin::Decimal) => num_helper!(RocDec),
@@ -1481,17 +1497,47 @@ fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
+fn f64_literal_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
+    use std::fmt::Write;
+
+    if num.is_nan() {
+        Expr::Num("Num.nanF64")
+    } else if num.is_infinite() {
+        if num.is_sign_positive() {
+            Expr::Num("Num.infinityF64")
+        } else {
+            Expr::Num("-Num.infinityF64")
+        }
+    } else {
+        let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
+        write!(string, "{num}").unwrap();
+        Expr::Num(string.into_bump_str())
+    }
+}
+
+fn f32_literal_to_ast(arena: &Bump, num: f32) -> Expr<'_> {
+    use std::fmt::Write;
+
+    if num.is_nan() {
+        Expr::Num("Num.nanF32")
+    } else if num.is_infinite() {
+        if num.is_sign_positive() {
+            Expr::Num("Num.infinityF32")
+        } else {
+            Expr::Num("-Num.infinityF32")
+        }
+    } else {
+        let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
+        write!(string, "{num}").unwrap();
+        Expr::Num(string.into_bump_str())
+    }
+}
+
 fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
     use std::fmt::Write;
 
     let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
     write!(string, "{num}").unwrap();
 
-    if string == "inf" {
-        Expr::Num("∞")
-    } else if string == "-inf" {
-        Expr::Num("-∞")
-    } else {
-        Expr::Num(string.into_bump_str())
-    }
+    Expr::Num(string.into_bump_str())
 }

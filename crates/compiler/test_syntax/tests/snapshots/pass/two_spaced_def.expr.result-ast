@@ -23,17 +23,17 @@ SpaceBefore(
             type_defs: [],
             value_defs: [
                 Body(
-                    @18-19 Identifier(
-                        "x",
-                    ),
+                    @18-19 Identifier {
+                        ident: "x",
+                    },
                     @22-23 Num(
                         "5",
                     ),
                 ),
                 Body(
-                    @24-25 Identifier(
-                        "y",
-                    ),
+                    @24-25 Identifier {
+                        ident: "y",
+                    },
                     @28-29 Num(
                         "6",
                     ),

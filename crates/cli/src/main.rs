@@ -5,7 +5,7 @@ use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
     FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
     GLUE_SPEC, ROC_FILE,
 };
@@ -200,9 +200,12 @@ fn main() -> io::Result<()> {
                 Some(n) => Threading::AtMost(*n),
             };
 
+            let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
+
             match check_file(
                 &arena,
                 roc_file_path.to_owned(),
+                opt_main_path.cloned(),
                 emit_timings,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 threading,

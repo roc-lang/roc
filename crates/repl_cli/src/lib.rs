@@ -9,7 +9,7 @@ use roc_repl_eval::gen::Problems;
 use roc_repl_ui::colors::{CYAN, END_COL};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
-use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
+use roc_reporting::report::{to_file_problem_report_string, ANSI_STYLE_CODES, DEFAULT_PALETTE};
 use roc_target::Target;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -73,6 +73,9 @@ pub fn main() -> i32 {
                     }
                     ReplAction::Exit => {
                         return 0;
+                    }
+                    ReplAction::FileProblem { filename, error } => {
+                        println!("{}", to_file_problem_report_string(filename, error));
                     }
                     ReplAction::Help => {
                         println!("{TIPS}");

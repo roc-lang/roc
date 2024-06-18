@@ -8,7 +8,7 @@ use crate::num::{
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
-use crate::procedure::References;
+use crate::procedure::{QualifiedReference, References};
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
@@ -27,8 +27,6 @@ use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
-use std::fs::File;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{char, u32};
@@ -623,6 +621,9 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
+        &ast::Expr::EmptyDefsFinal => {
+            internal_error!("EmptyDefsFinal should have been desugared")
+        }
         &ast::Expr::Num(str) => {
             let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
@@ -739,48 +740,6 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
 
-        ast::Expr::IngestedFile(file_path, _) => match File::open(file_path) {
-            Ok(mut file) => {
-                let mut bytes = vec![];
-                match file.read_to_end(&mut bytes) {
-                    Ok(_) => (
-                        Expr::IngestedFile(
-                            file_path.to_path_buf().into(),
-                            Arc::new(bytes),
-                            var_store.fresh(),
-                        ),
-                        Output::default(),
-                    ),
-                    Err(e) => {
-                        env.problems.push(Problem::FileProblem {
-                            filename: file_path.to_path_buf(),
-                            error: e.kind(),
-                        });
-
-                        // This will not manifest as a real runtime error and is just returned to have a value here.
-                        // The pushed FileProblem will be fatal to compilation.
-                        (
-                            Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
-                            Output::default(),
-                        )
-                    }
-                }
-            }
-            Err(e) => {
-                env.problems.push(Problem::FileProblem {
-                    filename: file_path.to_path_buf(),
-                    error: e.kind(),
-                });
-
-                // This will not manifest as a real runtime error and is just returned to have a value here.
-                // The pushed FileProblem will be fatal to compilation.
-                (
-                    Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
-                    Output::default(),
-                )
-            }
-        },
-
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();
             if let Some(char) = it.next() {
@@ -882,7 +841,9 @@ pub fn canonicalize_expr<'a>(
                         }
                         Ok((name, opaque_def)) => {
                             let argument = Box::new(args.pop().unwrap());
-                            output.references.insert_type_lookup(name);
+                            output
+                                .references
+                                .insert_type_lookup(name, QualifiedReference::Unqualified);
 
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
@@ -1166,6 +1127,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
+        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1193,7 +1155,9 @@ pub fn canonicalize_expr<'a>(
                 }
                 Ok((name, opaque_def)) => {
                     let mut output = Output::default();
-                    output.references.insert_type_lookup(name);
+                    output
+                        .references
+                        .insert_type_lookup(name, QualifiedReference::Unqualified);
 
                     let (type_arguments, lambda_set_variables, specialized_def_type) =
                         freshen_opaque_def(var_store, opaque_def);
@@ -1375,6 +1339,10 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::MalformedSuffixed(..) => {
+            use roc_problem::can::RuntimeError::*;
+            (RuntimeError(MalformedSuffixed(region)), Output::default())
+        }
         ast::Expr::MultipleRecordBuilders(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1438,12 +1406,6 @@ pub fn canonicalize_expr<'a>(
         bad_expr @ ast::Expr::UnaryOp(_, _) => {
             internal_error!(
                 "A unary operator did not get desugared somehow: {:#?}",
-                bad_expr
-            );
-        }
-        bad_expr @ ast::Expr::Suffixed(_) => {
-            internal_error!(
-                "A suffixed expression did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
@@ -1890,7 +1852,9 @@ fn canonicalize_var_lookup(
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
             Ok(symbol) => {
-                output.references.insert_value_lookup(symbol);
+                output
+                    .references
+                    .insert_value_lookup(symbol, QualifiedReference::Unqualified);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
@@ -1913,7 +1877,9 @@ fn canonicalize_var_lookup(
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
             Ok(symbol) => {
-                output.references.insert_value_lookup(symbol);
+                output
+                    .references
+                    .insert_value_lookup(symbol, QualifiedReference::Qualified);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
@@ -2424,10 +2390,10 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
-        | ast::Expr::IngestedFile(_, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
-        | ast::Expr::SpaceAfter(_, _) => false,
+        | ast::Expr::SpaceAfter(_, _)
+        | ast::Expr::EmptyDefsFinal => false,
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
@@ -2453,13 +2419,15 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
         ast::Expr::MultipleRecordBuilders(loc_expr)
+        | ast::Expr::MalformedSuffixed(loc_expr)
         | ast::Expr::UnappliedRecordBuilder(loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)
         | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
-        | ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
+        | ast::Expr::RecordAccess(sub_expr, _)
+        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
@@ -2512,7 +2480,6 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             ast::RecordBuilderField::SpaceBefore(_, _)
             | ast::RecordBuilderField::SpaceAfter(_, _) => false,
         }),
-        ast::Expr::Suffixed(_) => todo!(),
     }
 }
 

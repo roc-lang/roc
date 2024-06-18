@@ -10,9 +10,9 @@ Backpassing(
                 ),
             ],
         ),
-        @5-6 Identifier(
-            "r",
-        ),
+        @5-6 Identifier {
+            ident: "r",
+        },
     ],
     @10-11 Var {
         module_name: "",

@@ -1,6 +1,9 @@
 interface WithBuiltins
     exposes [floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2]
-    imports [Dep1, Dep2.{ two }]
+    imports []
+
+import Dep1
+import Dep2 exposing [two]
 
 floatTest = Num.maxF64
 

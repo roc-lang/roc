@@ -1,6 +1,6 @@
 use crate::expr::Expr;
 use crate::pattern::Pattern;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
@@ -46,6 +46,23 @@ impl ReferencesBitflags {
     const TYPE_LOOKUP: Self = ReferencesBitflags(2);
     const CALL: Self = ReferencesBitflags(4);
     const BOUND: Self = ReferencesBitflags(8);
+    const QUALIFIED: Self = ReferencesBitflags(16);
+    const UNQUALIFIED: Self = ReferencesBitflags(32);
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum QualifiedReference {
+    Unqualified,
+    Qualified,
+}
+
+impl QualifiedReference {
+    fn flags(&self, flags: ReferencesBitflags) -> ReferencesBitflags {
+        match self {
+            Self::Unqualified => ReferencesBitflags(flags.0 | ReferencesBitflags::UNQUALIFIED.0),
+            Self::Qualified => ReferencesBitflags(flags.0 | ReferencesBitflags::QUALIFIED.0),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -108,12 +125,12 @@ impl References {
         }
     }
 
-    pub fn insert_value_lookup(&mut self, symbol: Symbol) {
-        self.insert(symbol, ReferencesBitflags::VALUE_LOOKUP);
+    pub fn insert_value_lookup(&mut self, symbol: Symbol, qualified: QualifiedReference) {
+        self.insert(symbol, qualified.flags(ReferencesBitflags::VALUE_LOOKUP));
     }
 
-    pub fn insert_type_lookup(&mut self, symbol: Symbol) {
-        self.insert(symbol, ReferencesBitflags::TYPE_LOOKUP);
+    pub fn insert_type_lookup(&mut self, symbol: Symbol, qualified: QualifiedReference) {
+        self.insert(symbol, qualified.flags(ReferencesBitflags::TYPE_LOOKUP));
     }
 
     pub fn insert_bound(&mut self, symbol: Symbol) {
@@ -178,7 +195,24 @@ impl References {
         false
     }
 
+    pub fn has_unqualified_type_or_value_lookup(&self, symbol: Symbol) -> bool {
+        let mask = ReferencesBitflags::VALUE_LOOKUP.0 | ReferencesBitflags::TYPE_LOOKUP.0;
+        let it = self.symbols.iter().zip(self.bitflags.iter());
+
+        for (a, b) in it {
+            if *a == symbol && b.0 & mask > 0 && b.0 & ReferencesBitflags::UNQUALIFIED.0 > 0 {
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub fn references_type_def(&self, symbol: Symbol) -> bool {
         self.has_type_lookup(symbol)
+    }
+
+    pub fn has_module_lookup(&self, module_id: ModuleId) -> bool {
+        self.symbols.iter().any(|sym| sym.module_id() == module_id)
     }
 }

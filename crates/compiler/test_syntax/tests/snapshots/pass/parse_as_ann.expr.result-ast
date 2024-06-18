@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
+                @0-3 Identifier {
+                    ident: "foo",
+                },
                 @6-33 As(
                     @6-21 Apply(
                         "Foo.Bar",
@@ -36,12 +36,12 @@ Defs(
                     TypeHeader {
                         name: @25-29 "Blah",
                         vars: [
-                            @30-31 Identifier(
-                                "a",
-                            ),
-                            @32-33 Identifier(
-                                "b",
-                            ),
+                            @30-31 Identifier {
+                                ident: "a",
+                            },
+                            @32-33 Identifier {
+                                ident: "b",
+                            },
                         ],
                     },
                 ),

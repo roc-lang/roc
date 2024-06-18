@@ -9,9 +9,9 @@ When(
                 @11-16 SpaceBefore(
                     RecordDestructure(
                         [
-                            @13-14 Identifier(
-                                "y",
-                            ),
+                            @13-14 Identifier {
+                                ident: "y",
+                            },
                         ],
                     ),
                     [
@@ -29,12 +29,12 @@ When(
                 @23-31 SpaceBefore(
                     RecordDestructure(
                         [
-                            @25-26 Identifier(
-                                "z",
-                            ),
-                            @28-29 Identifier(
-                                "w",
-                            ),
+                            @25-26 Identifier {
+                                ident: "z",
+                            },
+                            @28-29 Identifier {
+                                ident: "w",
+                            },
                         ],
                     ),
                     [

@@ -18,11 +18,12 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
+rm -rf content/examples/
 # download the latest code for the examples
 echo 'Downloading latest examples...'
 curl -fL -o examples-main.zip https://github.com/roc-lang/examples/archive/refs/heads/main.zip
 rm -rf examples-main/
-unzip -o examples-main.zip
+unzip -o -q examples-main.zip
 cp -R examples-main/examples/ content/examples/
 
 # relace links in content/examples/index.md to work on the WIP site
@@ -97,7 +98,7 @@ fi
 $roc version
 
 echo 'Building site markdown content'
-$roc run www/main.roc -- www/content/ www/build/
+$roc dev www/main.roc -- www/content/ www/build/
 
 echo "Adding github link to examples' html..."
 source www/scripts/add-github-link-to-examples.sh

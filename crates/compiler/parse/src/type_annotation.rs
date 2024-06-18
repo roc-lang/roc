@@ -70,7 +70,7 @@ fn check_type_alias<'a>(
             var_names.reserve(vars.len());
             for var in vars {
                 if let TypeAnnotation::BoundVariable(v) = var.value {
-                    var_names.push(Loc::at(var.region, Pattern::Identifier(v)));
+                    var_names.push(Loc::at(var.region, Pattern::Identifier { ident: v }));
                 } else {
                     return Err(ETypeInlineAlias::ArgumentNotLowercase(var.region.start()));
                 }
@@ -392,7 +392,7 @@ fn record_type<'a>(
 
 fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map!(
-        and!(
+        indented_seq!(
             specialize_err(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`

@@ -1,55 +1,53 @@
-interface Decode
-    exposes [
-        DecodeError,
-        DecodeResult,
-        Decoder,
-        Decoding,
-        DecoderFormatting,
-        decoder,
-        u8,
-        u16,
-        u32,
-        u64,
-        u128,
-        i8,
-        i16,
-        i32,
-        i64,
-        i128,
-        f32,
-        f64,
-        dec,
-        bool,
-        string,
-        list,
-        record,
-        tuple,
-        custom,
-        decodeWith,
-        fromBytesPartial,
-        fromBytes,
-        mapResult,
-    ]
-    imports [
-        List,
-        Result.{ Result },
-        Num.{
-            U8,
-            U16,
-            U32,
-            U64,
-            U128,
-            I8,
-            I16,
-            I32,
-            I64,
-            I128,
-            F32,
-            F64,
-            Dec,
-        },
-        Bool.{ Bool },
-    ]
+module [
+    DecodeError,
+    DecodeResult,
+    Decoder,
+    Decoding,
+    DecoderFormatting,
+    decoder,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    f32,
+    f64,
+    dec,
+    bool,
+    string,
+    list,
+    record,
+    tuple,
+    custom,
+    decodeWith,
+    fromBytesPartial,
+    fromBytes,
+    mapResult,
+]
+
+import List
+import Result exposing [Result]
+import Num exposing [
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    F32,
+    F64,
+    Dec,
+]
+import Bool exposing [Bool]
 
 ## Error types when decoding a `List U8` of utf-8 bytes using a [Decoder]
 DecodeError : [TooShort]
@@ -103,7 +101,7 @@ DecoderFormatting implements
     ## `Skip` if the field is not a part of the decoded record.
     ##
     ## `finalizer` should produce the record value from the decoded `state`.
-    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
+    record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state, fmt -> Result val DecodeError) -> Decoder val fmt where fmt implements DecoderFormatting
 
     ## `tuple state stepElem finalizer` decodes a tuple element-by-element.
     ##

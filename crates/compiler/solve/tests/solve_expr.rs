@@ -169,6 +169,18 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn list_concat_utf8() {
+        infer_eq_without_problem(
+            indoc!(
+                r"
+                List.concatUtf8
+                "
+            ),
+            "List U8, Str -> List U8",
+        )
+    }
+
     // LIST
 
     #[test]
@@ -3448,7 +3460,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" imports [Result.{ Result }] provides [main] to "./platform"
+                app "test" imports [] provides [main] to "./platform"
 
                 boom = \_ -> boom {}
 

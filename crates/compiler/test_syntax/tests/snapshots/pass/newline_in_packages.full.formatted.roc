@@ -1,10 +1,7 @@
-app "hello"
-    packages {
-        pf:
-        "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br",
-    }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] {
+    pf:
+        "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
+}
 
 main =
     Stdout.line "I'm a Roc application!"

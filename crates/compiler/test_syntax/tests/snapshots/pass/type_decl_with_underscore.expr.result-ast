@@ -16,9 +16,9 @@ Defs(
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-7 Identifier(
-                    "doStuff",
-                ),
+                @0-7 Identifier {
+                    ident: "doStuff",
+                },
                 @10-30 Function(
                     [
                         @10-16 Apply(

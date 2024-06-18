@@ -38,10 +38,8 @@ The Elm equivalent would be:
 "Hi, my name is " ++ name ++ "!"
 ```
 
-This interpolation syntax comes from [Swift](https://swift.org/). Only a single
-identifier can go inside the parentheses (like `(name)` here), and the identifier
-needs to be a string already. Arbitrary expressions are not allowed, which means
-weird situations like string literals inside string literals don't come up.
+Any expression of string type can go inside the parentheses, as long as it is contained
+in a single line of code.
 
 Roc strings also have the type `Str` rather than Elm's `String`. This is to make
 common qualified operations like `Str.join` more concise; the idea is that you'll use the
@@ -771,7 +769,6 @@ All imports and exports in Roc are enumerated explicitly; there is no `..` synta
 
 > Since tags are available in all modules, Roc does not have a notion of
 > "importing variants", and there's also no `exposing (Foo(..))` equivalent.
-> (Later on, we'll talk about how opaque types work in Roc.)
 
 Like Elm, Roc does not allow shadowing.
 
@@ -1240,7 +1237,7 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 Instead of a separate testing tool, Roc has a built-in `expect` keyword, which
 you can use in conjunction with `roc test` to run tests.
 
-See [the tutorial section on testing](https://www.roc-lang.org/tutorial#tests-and-expectations)
+See [the tutorial section on testing](https://www.roc-lang.org/tutorial#testing)
 for details.
 
 ## Abilities
@@ -1252,7 +1249,7 @@ for details.
 -   `comparable` is used in Elm for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), so their keys need to be hashable but not necessarily comparable.
 
 That said, Roc's `Dict` and `Set` do have a restriction on their keys, just not `comparable`.
-See the section on Abilities in [the tutorial](https://roc-lang.org/tutorial) for details.
+See the [section on Abilities](https://www.roc-lang.org/abilities) in the language reference for details.
 
 ## Standard library
 
@@ -1302,7 +1299,7 @@ Some differences to note:
 -   No `Tuple` module, but there is syntax support for tuples which allows not only destructuring (like in Elm) but also direct field access - which looks like record field access, but with numbered indices instead of named fields. For example, the Elm code `Tuple.first ( "a", "b" )` and `Tuple.second ( "a", "b" )` could be written in Roc as `("a", "b").0` and `("a", "b").1`. Roc tuples can also have more than two fields.
 -   No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really _could_ be usefully present in Roc's standard library.
 -   No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
--   No `Debug`. Roc has a [built-in `dbg` keyword](https://www.roc-lang.org/tutorial#debugging) instead of `Debug.log` and a [`crash` keyword](https://www.roc-lang.org/tutorial#crashing) instead of `Debug.todo`.
+-   No `Debug`. Roc has a [built-in `dbg` keyword](https://www.roc-lang.org/tutorial#dbg) instead of `Debug.log` and a [`crash` keyword](https://www.roc-lang.org/tutorial#crashing) instead of `Debug.todo`.
 -   No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [Null, NonNull a]*`.
 
 ## Operator Desugaring Table

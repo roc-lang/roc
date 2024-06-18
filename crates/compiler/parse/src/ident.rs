@@ -42,7 +42,6 @@ pub enum Ident<'a> {
     Access {
         module_name: &'a str,
         parts: &'a [Accessor<'a>],
-        suffixed: bool,
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
@@ -193,10 +192,7 @@ pub fn parse_ident<'a>(
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             let state = advance_state!(state, width as usize)?;
-            if let Ident::Access {
-                module_name, parts, ..
-            } = ident
-            {
+            if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
@@ -206,21 +202,8 @@ pub fn parse_ident<'a>(
                         }
                     }
                 }
-            }
 
-            // Parse a suffixed `!` expression
-            if state.bytes().starts_with(b"!") {
-                if let Ident::Access {
-                    module_name, parts, ..
-                } = ident
-                {
-                    let new_ident = Ident::Access {
-                        module_name,
-                        parts,
-                        suffixed: true,
-                    };
-                    return Ok((MadeProgress, new_ident, state.advance(1)));
-                }
+                return Ok((MadeProgress, Ident::Access { module_name, parts }, state));
             }
 
             Ok((MadeProgress, ident, state))
@@ -391,6 +374,12 @@ impl<'a> Accessor<'a> {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Suffix<'a> {
+    Accessor(Accessor<'a>),
+    TaskAwaitBang,
+}
+
 /// a `.foo` or `.1` accessor function
 fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     // assumes the leading `.` has been chomped already
@@ -534,7 +523,6 @@ fn chomp_identifier_chain<'a>(
                 let ident = Ident::Access {
                     module_name,
                     parts: parts.into_bump_slice(),
-                    suffixed: false,
                 };
 
                 Ok((chomped as u32, ident))
@@ -563,15 +551,17 @@ fn chomp_identifier_chain<'a>(
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
         Ok((chomped as u32, Ident::Tag(value)))
     } else {
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
         let ident = Ident::Access {
             module_name: "",
             parts: arena.alloc([Accessor::RecordField(value)]),
-            suffixed: false,
         };
+
         Ok((chomped as u32, ident))
     }
 }

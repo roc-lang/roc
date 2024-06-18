@@ -15,7 +15,7 @@ nix develop
 ./www/build.sh
 # make the roc command available 
 export PATH="$(pwd)/target/release/:$PATH"
-bash build-dev-local.sh
+bash ./www/build-dev-local.sh
 ```
 
 Open http://0.0.0.0:8080 in your browser.

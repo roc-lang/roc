@@ -1,19 +1,22 @@
+use std::path::Path;
+
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
-use crate::def::{canonicalize_defs, Def};
+use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
 use crate::pattern::{BindingsFromPattern, Pattern};
+use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
@@ -127,7 +130,6 @@ pub struct Module {
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
     pub referenced_values: VecSet<Symbol>,
-    pub referenced_types: VecSet<Symbol>,
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
@@ -152,7 +154,6 @@ pub struct ModuleOutput {
     pub exposed_symbols: VecSet<Symbol>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
-    pub referenced_types: VecSet<Symbol>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
@@ -275,21 +276,38 @@ pub fn canonicalize_module_defs<'a>(
     loc_defs: &'a mut Defs<'a>,
     header_type: &roc_parse::header::HeaderType,
     home: ModuleId,
-    module_path: &str,
+    module_path: &'a str,
     src: &'a str,
-    module_ids: &'a ModuleIds,
+    qualified_module_ids: &'a PackageModuleIds<'a>,
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
-    exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    initial_scope: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
+    opt_shorthand: Option<&'a str>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
-    let mut env = Env::new(arena, home, dep_idents, module_ids);
+    let mut scope = Scope::new(
+        home,
+        qualified_module_ids
+            .get_name(home)
+            .expect("home module not found")
+            .as_inner()
+            .to_owned(),
+        exposed_ident_ids,
+        imported_abilities_state,
+    );
+    let mut env = Env::new(
+        arena,
+        home,
+        arena.alloc(Path::new(module_path)),
+        dep_idents,
+        qualified_module_ids,
+        opt_shorthand,
+    );
 
     for (name, alias) in aliases.into_iter() {
         scope.add_alias(
@@ -312,30 +330,26 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path);
+
+    crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path, true);
 
     let mut rigid_variables = RigidVariables::default();
 
-    // Exposed values are treated like defs that appear before any others, e.g.
-    //
-    // imports [Foo.{ bar, baz }]
-    //
-    // ...is basically the same as if we'd added these extra defs at the start of the module:
-    //
-    // bar = Foo.bar
-    // baz = Foo.baz
+    // Iniital scope values are treated like defs that appear before any others.
+    // They include builtin types that are automatically imported, and for a platform
+    // package, the required values from the app.
     //
     // Here we essentially add those "defs" to "the beginning of the module"
     // by canonicalizing them right before we canonicalize the actual ast::Def nodes.
-    for (ident, (symbol, region)) in exposed_imports {
+    for (ident, (symbol, region)) in initial_scope {
         let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
-            match scope.import(ident, symbol, region) {
+            match scope.import_symbol(ident, symbol, region) {
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
-                    // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
+                    // Bar exposes [baz] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
                     can_exposed_imports.insert(symbol, region);
                 }
@@ -354,7 +368,7 @@ pub fn canonicalize_module_defs<'a>(
 
             // but now we know this symbol by a different identifier, so we still need to add it to
             // the scope
-            match scope.import(ident, symbol, region) {
+            match scope.import_symbol(ident, symbol, region) {
                 Ok(()) => {
                     // here we do nothing special
                 }
@@ -368,7 +382,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, output, symbols_introduced) = canonicalize_defs(
+    let (defs, output, symbols_introduced, imports_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -409,18 +423,15 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut referenced_values = VecSet::default();
-    let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
     referenced_values.extend(output.references.value_lookups().copied());
-    referenced_types.extend(output.references.type_lookups().copied());
 
     // Gather up all the symbols that were referenced across all the defs' calls.
     referenced_values.extend(output.references.calls().copied());
 
     // Gather up all the symbols that were referenced from other modules.
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
-    referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
@@ -432,6 +443,7 @@ pub fn canonicalize_module_defs<'a>(
 
     let new_output = Output {
         aliases: output.aliases,
+        references: output.references,
         ..Default::default()
     };
 
@@ -480,6 +492,8 @@ pub fn canonicalize_module_defs<'a>(
             )
         })
         .collect();
+
+    report_unused_imports(imports_introduced, &output.references, &mut env, &mut scope);
 
     if let GeneratedInfo::Hosted {
         effect_symbol,
@@ -544,7 +558,7 @@ pub fn canonicalize_module_defs<'a>(
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
-                                references: Default::default(),
+                                references: References::new(),
                                 aliases: Default::default(),
                             };
 
@@ -602,7 +616,7 @@ pub fn canonicalize_module_defs<'a>(
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
-                                references: Default::default(),
+                                references: References::new(),
                                 aliases: Default::default(),
                             };
 
@@ -699,14 +713,12 @@ pub fn canonicalize_module_defs<'a>(
 
     // Incorporate any remaining output.lookups entries into references.
     referenced_values.extend(output.references.value_lookups().copied());
-    referenced_types.extend(output.references.type_lookups().copied());
 
     // Incorporate any remaining output.calls entries into references.
     referenced_values.extend(output.references.calls().copied());
 
     // Gather up all the symbols that were referenced from other modules.
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
-    referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
     let mut fix_closures_no_capture_symbols = VecSet::default();
     let mut fix_closures_closure_captures = VecMap::default();
@@ -802,7 +814,6 @@ pub fn canonicalize_module_defs<'a>(
         rigid_variables,
         declarations,
         referenced_values,
-        referenced_types,
         exposed_imports: can_exposed_imports,
         problems: env.problems,
         symbols_from_requires,

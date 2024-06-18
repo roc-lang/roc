@@ -481,6 +481,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT);
             }
+            ListConcatUtf8 => self.load_args_and_call_zig(backend, bitcode::LIST_CONCAT_UTF8),
 
             ListReserve => {
                 // List.reserve : List elem, U64 -> List elem

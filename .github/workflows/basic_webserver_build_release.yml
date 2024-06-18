@@ -1,5 +1,5 @@
 on:
-#  pull_request:
+  #pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -18,10 +18,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # get latest nightly releases
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
+
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v4
@@ -77,7 +83,7 @@ jobs:
             basic-webserver/platform/linux-arm64.o
 
   build-macos-x86_64-files:
-    runs-on: [macos-11] # I expect the generated files to work on macOS 12 and 13
+    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v4
