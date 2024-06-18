@@ -32,6 +32,7 @@ roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
+roc_worker = { path = "../worker" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
