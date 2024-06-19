@@ -72,7 +72,6 @@ pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
 pub const FLAG_FUZZ: &str = "fuzz";
-pub const FLAG_EXPERIMENTAL: &str = "experimental"; // This is for testing the new `docs` implementation.
 pub const FLAG_MAIN: &str = "main";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
@@ -350,12 +349,6 @@ pub fn build_app() -> Command {
                     .value_parser(value_parser!(OsString))
                     .required(false)
                     .default_value(DEFAULT_GENERATED_DOCS_DIR),
-                )
-                .arg(Arg::new(FLAG_EXPERIMENTAL)
-                    .long(FLAG_EXPERIMENTAL)
-                    .help("Use the incomplete and experimental new `docs` implementation.")
-                    .action(ArgAction::SetTrue)
-                    .required(false)
                 )
                 .arg(Arg::new(ROC_FILE)
                     .help("The package's main .roc file")

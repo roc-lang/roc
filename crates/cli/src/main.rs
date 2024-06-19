@@ -5,11 +5,10 @@ use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_EXPERIMENTAL,
-    FLAG_LIB, FLAG_MAIN, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET,
-    FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN,
+    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
+    GLUE_SPEC, ROC_FILE,
 };
-use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
@@ -231,40 +230,36 @@ fn main() -> io::Result<()> {
             let root_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
             let out_dir = matches.get_one::<OsString>(FLAG_OUTPUT).unwrap();
 
-            if matches.get_flag(FLAG_EXPERIMENTAL) {
-                let start_time = Instant::now();
-                let arena = Bump::new();
+            let start_time = Instant::now();
+            let arena = Bump::new();
 
-                let todo = (); // TODO make this a CLI flag to the `docs` subcommand instead of an env var
-                let user_specified_base_url = std::env::var("ROC_DOCS_URL_ROOT").ok();
+            let todo = (); // TODO make this a CLI flag to the `docs` subcommand instead of an env var
+            let user_specified_base_url = std::env::var("ROC_DOCS_URL_ROOT").ok();
 
-                match roc_docs_io::generate_docs_html(
-                    &arena,
-                    "DOCUMENTATION",
-                    root_path,
-                    out_dir,
-                    user_specified_base_url.as_deref(),
-                ) {
-                    Ok(()) => {
-                        let elapsed_ms = start_time.elapsed().as_millis();
-                        println!(
-                            "🎉 Docs generated into {} in {elapsed_ms} ms",
-                            Path::new(out_dir).display(),
-                        );
-                    }
-                    Err(problem) => {
-                        use roc_docs_io::Problem::*;
+            match roc_docs_io::generate_docs_html(
+                &arena,
+                "DOCUMENTATION",
+                root_path,
+                out_dir,
+                user_specified_base_url.as_deref(),
+            ) {
+                Ok(()) => {
+                    let elapsed_ms = start_time.elapsed().as_millis();
+                    println!(
+                        "🎉 Docs generated into {} in {elapsed_ms} ms",
+                        Path::new(out_dir).display(),
+                    );
+                }
+                Err(problem) => {
+                    use roc_docs_io::Problem::*;
 
-                        match problem {
-                            FailedToLoadModule => todo!(),
-                            FailedToDeleteDir(_, _) => todo!(),
-                            FailedToCreateDir(_, _) => todo!(),
-                            FailedToWrite(_, _) => todo!(),
-                        }
+                    match problem {
+                        FailedToLoadModule => todo!(),
+                        FailedToDeleteDir(_, _) => todo!(),
+                        FailedToCreateDir(_, _) => todo!(),
+                        FailedToWrite(_, _) => todo!(),
                     }
                 }
-            } else {
-                generate_docs_html(root_path.to_owned(), out_dir.as_ref());
             }
 
             Ok(0)

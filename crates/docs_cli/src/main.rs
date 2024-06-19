@@ -1,6 +1,7 @@
 //! Provides a binary that is only used for static build servers.
+use bumpalo::Bump;
 use clap::{value_parser, Arg, Command};
-use roc_docs_io::generate_docs_html;
+use roc_docs_io::Problem;
 use std::io;
 use std::path::PathBuf;
 
@@ -19,13 +20,24 @@ fn main() -> io::Result<()> {
         )
         .get_matches();
 
+    let arena = Bump::new();
+
     // Populate roc_files
-    generate_docs_html(
+    match roc_docs_io::generate_docs_html(
+        &arena,
+        "DOCUMENTATION",
         matches.get_one::<PathBuf>(ROC_FILE).unwrap().to_owned(),
         &PathBuf::from("./generated-docs"),
-    );
-
-    Ok(())
+        None,
+    ) {
+        Ok(()) => Ok(()),
+        Err(problem) => match problem {
+            Problem::FailedToLoadModule => todo!(),
+            Problem::FailedToDeleteDir(_, _) => todo!(),
+            Problem::FailedToCreateDir(_, _) => todo!(),
+            Problem::FailedToWrite(_, _) => todo!(),
+        },
+    }
 }
 
 // These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.

@@ -2518,6 +2518,7 @@ dependencies = [
 name = "roc_docs_cli"
 version = "0.0.1"
 dependencies = [
+ "bumpalo",
  "clap 4.4.6",
  "libc",
  "roc_docs_io",
