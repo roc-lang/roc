@@ -15,6 +15,7 @@ If you'd like to contribute, check out [good first issues](https://github.com/ro
 
 You can 💜 **sponsor** 💜 Roc on:
 
+- [Every.org](https://www.every.org/roc-programming-language-foundation?donateTo=roc-programming-language-foundation) (supports credit card, bank, Venmo, PayPal, cryptocurrencies, and more)
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
