@@ -146,19 +146,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         mut type_problems,
         sources,
         mut typechecked,
-        solved,
-        abilities_store,
         exposed_imports,
         mut imports,
         exposes,
         docs_by_module,
         ..
     } = module;
-
-    let mut root_module = Some(RootModule {
-        subs: solved.into_inner(),
-        abilities_store,
-    });
 
     let exposed_imports = resolve_exposed_imports(exposed_imports, &exposes);
 
@@ -168,21 +161,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         docs_by_module,
     ));
 
-    let mut declarations_by_id = MutMap::default();
-
-    for (module_id, checked) in typechecked.iter() {
-        // TODO can this decls.clone() be avoided?
-        declarations_by_id.insert(*module_id, checked.decls.clone());
-    }
-
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
         module_id_to_url: module_id_to_url_from_sources(&sources),
         can_problems: &mut can_problems,
         type_problems: &mut type_problems,
-        declarations_by_id: &mut declarations_by_id,
         typechecked: &mut typechecked,
-        root_module: &mut root_module,
         exposed_imports,
         imports: &mut imports,
         modules_info,
@@ -260,19 +244,12 @@ fn path_to_url(path: &Path) -> Url {
     }
 }
 
-struct RootModule {
-    subs: Subs,
-    abilities_store: AbilitiesStore,
-}
-
 struct AnalyzedDocumentBuilder<'a> {
     interns: &'a Interns,
     module_id_to_url: ModuleIdToUrl,
     can_problems: &'a mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: &'a mut MutMap<ModuleId, Vec<TypeError>>,
-    declarations_by_id: &'a mut MutMap<ModuleId, Declarations>,
     typechecked: &'a mut MutMap<ModuleId, CheckedModule>,
-    root_module: &'a mut Option<RootModule>,
     imports: &'a mut MutMap<ModuleId, MutSet<ModuleId>>,
     exposed_imports: HashMap<ModuleId, Vec<(Symbol, Variable)>>,
     modules_info: Arc<ModulesInfo>,
