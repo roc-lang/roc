@@ -8,7 +8,6 @@ pub mod docs;
 pub mod file;
 pub mod module;
 mod module_cache;
-mod work;
 
 #[cfg(target_family = "wasm")]
 mod wasm_instant;
