@@ -12,7 +12,7 @@ use std::cell::Cell;
 
 thread_local! {
     // we use a thread_local here so that tests consistently give the same pattern
-    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = Cell::new(0);
+    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Provide an intermediate answer expression and pattern when unwrapping a

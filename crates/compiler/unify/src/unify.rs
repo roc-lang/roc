@@ -2533,7 +2533,7 @@ enum Rec {
     None,
     Left(Variable),
     Right(Variable),
-    Both(Variable, Variable),
+    Both(Variable),
 }
 
 /// Checks if an extension type `ext1` should be permitted to grow by the `candidate_type`, if it
@@ -2995,8 +2995,8 @@ fn find_union_rec(subs: &Subs, ctx: &Context) -> Rec {
         subs.get_content_without_compacting(ctx.second),
     ) {
         (Structure(s1), Structure(s2)) => match (s1, s2) {
-            (FlatType::RecursiveTagUnion(l, _, _), FlatType::RecursiveTagUnion(r, _, _)) => {
-                Rec::Both(*l, *r)
+            (FlatType::RecursiveTagUnion(l, _, _), FlatType::RecursiveTagUnion(_r, _, _)) => {
+                Rec::Both(*l)
             }
             (FlatType::RecursiveTagUnion(l, _, _), _) => Rec::Left(*l),
             (_, FlatType::RecursiveTagUnion(r, _, _)) => Rec::Right(*r),
@@ -3160,7 +3160,7 @@ fn unify_shared_tags_merge<M: MetaCollector>(
 
     let flat_type = match recursion_var {
         Rec::None => FlatType::TagUnion(new_tags, new_ext),
-        Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {
+        Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec) => {
             debug_assert!(is_recursion_var(env, rec), "{:?}", env.dbg(rec));
             FlatType::RecursiveTagUnion(rec, new_tags, new_ext)
         }

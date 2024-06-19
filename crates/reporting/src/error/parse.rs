@@ -154,7 +154,7 @@ fn to_syntax_report<'a>(
 
 #[allow(clippy::enum_variant_names)]
 enum Context {
-    InNode(Node, Position, Box<Context>),
+    InNode(Node, Position),
     InDef(Position),
     InDefFinalExpr(Position),
 }
@@ -185,16 +185,14 @@ fn to_expr_report<'a>(
     use roc_parse::parser::EExpr;
     let severity = Severity::RuntimeError;
     match parse_problem {
-        EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, context, if_, *pos),
-        EExpr::When(when, pos) => to_when_report(alloc, lines, filename, context, when, *pos),
+        EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, if_, *pos),
+        EExpr::When(when, pos) => to_when_report(alloc, lines, filename, when, *pos),
         EExpr::Closure(lambda, pos) => {
             to_lambda_report(alloc, lines, filename, context, lambda, *pos)
         }
-        EExpr::List(list, pos) => to_list_report(alloc, lines, filename, context, list, *pos),
-        EExpr::Str(string, pos) => to_str_report(alloc, lines, filename, context, string, *pos),
-        EExpr::InParens(expr, pos) => {
-            to_expr_in_parens_report(alloc, lines, filename, context, expr, *pos)
-        }
+        EExpr::List(list, pos) => to_list_report(alloc, lines, filename, list, *pos),
+        EExpr::Str(string, pos) => to_str_report(alloc, lines, filename, string, *pos),
+        EExpr::InParens(expr, pos) => to_expr_in_parens_report(alloc, lines, filename, expr, *pos),
         EExpr::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, *pos),
         EExpr::ElmStyleFunction(region, pos) => {
             let surroundings = Region::new(start, *pos);
@@ -252,7 +250,7 @@ fn to_expr_report<'a>(
                         .indent(4),
                 ])],
                 "->" => match context {
-                    Context::InNode(Node::WhenBranch, _pos, _) => {
+                    Context::InNode(Node::WhenBranch, _pos) => {
                         return to_unexpected_arrow_report(alloc, lines, filename, *pos, start);
                     }
 
@@ -392,7 +390,7 @@ fn to_expr_report<'a>(
             };
 
             let (context_pos, a_thing) = match context {
-                Context::InNode(node, pos, _) => match node {
+                Context::InNode(node, pos) => match node {
                     Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
                         pos,
                         alloc.concat([
@@ -603,7 +601,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity);
 
             let doc = match context {
-                Context::InNode(Node::Dbg, _, _) => alloc.stack([
+                Context::InNode(Node::Dbg, _) => alloc.stack([
                     alloc.reflow(
                         r"I am partway through parsing a dbg statement, but I got stuck here:",
                     ),
@@ -616,7 +614,7 @@ fn to_expr_report<'a>(
                         ]),
                     ]),
                 ]),
-                Context::InNode(Node::Expect, _, _) => alloc.stack([
+                Context::InNode(Node::Expect, _) => alloc.stack([
                     alloc.reflow(
                         r"I am partway through parsing an expect statement, but I got stuck here:",
                     ),
@@ -964,7 +962,6 @@ fn to_str_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EString<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -977,7 +974,7 @@ fn to_str_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::StringFormat, start, Box::new(context)),
+            Context::InNode(Node::StringFormat, start),
             expr,
             pos,
         ),
@@ -1260,7 +1257,6 @@ fn to_expr_in_parens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EInParens<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1273,7 +1269,7 @@ fn to_expr_in_parens_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::InsideParens, start, Box::new(context)),
+            Context::InNode(Node::InsideParens, start),
             expr,
             pos,
         ),
@@ -1353,7 +1349,6 @@ fn to_list_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EList<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1367,7 +1362,7 @@ fn to_list_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::ListElement, start, Box::new(context)),
+            Context::InNode(Node::ListElement, start),
             expr,
             pos,
         ),
@@ -1465,7 +1460,7 @@ fn to_dbg_or_expect_report<'a>(
             to_expr_report(alloc, lines, filename, context, e_expr, *condition_start)
         }
         roc_parse::parser::EExpect::Continuation(e_expr, continuation_start) => {
-            let context = Context::InNode(node, start, Box::new(context));
+            let context = Context::InNode(node, start);
             to_expr_report(alloc, lines, filename, context, e_expr, *continuation_start)
         }
 
@@ -1710,7 +1705,6 @@ fn to_if_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EIf<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1723,7 +1717,7 @@ fn to_if_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::IfCondition, start, Box::new(context)),
+            Context::InNode(Node::IfCondition, start),
             expr,
             pos,
         ),
@@ -1732,7 +1726,7 @@ fn to_if_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::IfThenBranch, start, Box::new(context)),
+            Context::InNode(Node::IfThenBranch, start),
             expr,
             pos,
         ),
@@ -1741,7 +1735,7 @@ fn to_if_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::IfElseBranch, start, Box::new(context)),
+            Context::InNode(Node::IfElseBranch, start),
             expr,
             pos,
         ),
@@ -1824,7 +1818,6 @@ fn to_when_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EWhen<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1861,7 +1854,7 @@ fn to_when_report<'a>(
                     alloc,
                     lines,
                     filename,
-                    Context::InNode(Node::WhenIfGuard, start, Box::new(context)),
+                    Context::InNode(Node::WhenIfGuard, start),
                     nested,
                     pos,
                 ),
@@ -1896,7 +1889,7 @@ fn to_when_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::WhenBranch, start, Box::new(context)),
+            Context::InNode(Node::WhenBranch, start),
             expr,
             pos,
         ),
@@ -1905,7 +1898,7 @@ fn to_when_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::WhenCondition, start, Box::new(context)),
+            Context::InNode(Node::WhenCondition, start),
             expr,
             pos,
         ),
@@ -2340,11 +2333,7 @@ fn to_precord_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(
-                Node::RecordConditionalDefault,
-                start,
-                Box::new(Context::InDef(pos)),
-            ),
+            Context::InNode(Node::RecordConditionalDefault, start),
             expr,
             pos,
         ),
@@ -4491,6 +4480,8 @@ fn to_unfinished_ability_report<'a>(
 enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),
+    // TODO ask Folkert for unused fields str and char
+    #[allow(dead_code)]
     Close(&'a str, char),
     Token(&'a str),
     Other(Option<char>),
