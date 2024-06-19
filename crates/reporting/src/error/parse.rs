@@ -4480,7 +4480,6 @@ fn to_unfinished_ability_report<'a>(
 enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),
-    // TODO ask Folkert for unused fields str and char
     #[allow(dead_code)]
     Close(&'a str, char),
     Token(&'a str),
