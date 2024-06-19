@@ -223,6 +223,7 @@ pub struct Palette {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
+    pub warning: &'static str,
 }
 
 /// Set the default styles for various semantic elements,
@@ -250,6 +251,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         bold: codes.bold,
         underline: codes.underline,
         reset: codes.reset,
+        warning: codes.yellow,
     }
 }
 
@@ -503,6 +505,10 @@ impl<'a> RocDocAllocator<'a> {
         .annotate(Annotation::Module)
     }
 
+    pub fn shorthand(&'a self, name: &'a str) -> DocBuilder<'a, Self, Annotation> {
+        self.text(name).annotate(Annotation::Shorthand)
+    }
+
     pub fn binop(
         &'a self,
         content: roc_module::called_via::BinOp,
@@ -675,6 +681,7 @@ impl<'a> RocDocAllocator<'a> {
         &'a self,
         region: LineColumnRegion,
         sub_region: LineColumnRegion,
+        severity: Severity,
     ) -> DocBuilder<'a, Self, Annotation> {
         // debug_assert!(region.contains(&sub_region));
 
@@ -684,9 +691,14 @@ impl<'a> RocDocAllocator<'a> {
             // attempting this will recurse forever, so don't do that! Instead, give up and
             // accept that this report will take up more than 1 full screen.
             if !sub_region.contains(&region) {
-                return self.region_with_subregion(sub_region, sub_region);
+                return self.region_with_subregion(sub_region, sub_region, severity);
             }
         }
+
+        let annotation = match severity {
+            Severity::RuntimeError | Severity::Fatal => Annotation::Error,
+            Severity::Warning => Annotation::Warning,
+        };
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the region
@@ -727,7 +739,7 @@ impl<'a> RocDocAllocator<'a> {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
                     .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
-                    .append(self.text(">").annotate(Annotation::Error))
+                    .append(self.text(">").annotate(annotation))
                     .append(rest_of_line)
             } else if error_highlight_line {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
@@ -769,7 +781,7 @@ impl<'a> RocDocAllocator<'a> {
                 } else {
                     self.text(" ".repeat(sub_region.start().column as usize))
                         .indent(indent)
-                        .append(self.text(highlight_text).annotate(Annotation::Error))
+                        .append(self.text(highlight_text).annotate(annotation))
                 });
 
             result = result.append(highlight_line);
@@ -778,8 +790,12 @@ impl<'a> RocDocAllocator<'a> {
         result
     }
 
-    pub fn region(&'a self, region: LineColumnRegion) -> DocBuilder<'a, Self, Annotation> {
-        self.region_with_subregion(region, region)
+    pub fn region(
+        &'a self,
+        region: LineColumnRegion,
+        severity: Severity,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.region_with_subregion(region, region, severity)
     }
 
     pub fn region_without_error(
@@ -853,6 +869,13 @@ impl<'a> RocDocAllocator<'a> {
         }
         self.text(result.chars().rev().collect::<String>())
     }
+
+    pub fn file_path(&'a self, path: &Path) -> DocBuilder<'a, Self, Annotation> {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_path = path.strip_prefix(cwd).unwrap_or(path).to_str().unwrap();
+
+        self.text(relative_path.to_string())
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -879,11 +902,13 @@ pub enum Annotation {
     TypeBlock,
     InlineTypeBlock,
     Module,
+    Shorthand,
     Typo,
     TypoSuggestion,
     Tip,
     Header,
     ParserSuggestion,
+    Warning,
 }
 
 /// Render with minimal formatting
@@ -1085,6 +1110,9 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
+            Shorthand => {
+                self.write_str(self.palette.module_name)?;
+            }
             Typo => {
                 self.write_str(self.palette.typo)?;
             }
@@ -1093,6 +1121,9 @@ where
             }
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
+            }
+            Warning => {
+                self.write_str(self.palette.warning)?;
             }
             TypeBlock | InlineTypeBlock | Tag | RecordField | TupleElem => { /* nothing yet */ }
         }
@@ -1108,7 +1139,8 @@ where
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | UnaryOp | Error
                 | GutterBar | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure
-                | CodeBlock | PlainText | LineNumber | Tip | Module | Header | Keyword => {
+                | CodeBlock | PlainText | LineNumber | Tip | Module | Shorthand | Header
+                | Keyword | Warning => {
                     self.write_str(self.palette.reset)?;
                 }
 

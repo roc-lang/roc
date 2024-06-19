@@ -129,7 +129,7 @@ pub fn unwrap_suffixed_expression<'a>(
                 internal_error!("BinOps should have been desugared in desugar_expr");
             }
 
-            Expr::LowLevelDbg(moduel, arg, rest) => {
+            Expr::LowLevelDbg(dbg_src, arg, rest) => {
                 if is_expr_suffixed(&arg.value) {
                     // we cannot unwrap a suffixed expression within dbg
                     // e.g. dbg (foo! "bar")
@@ -140,14 +140,14 @@ pub fn unwrap_suffixed_expression<'a>(
                     Ok(unwrapped_expr) => {
                         let new_dbg = arena.alloc(Loc::at(
                             loc_expr.region,
-                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
                         ));
                         return Ok(new_dbg);
                     }
                     Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
                         let new_dbg = arena.alloc(Loc::at(
                             loc_expr.region,
-                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
                         ));
                         Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
                     }
@@ -158,10 +158,45 @@ pub fn unwrap_suffixed_expression<'a>(
                     }) => {
                         let new_dbg = arena.alloc(Loc::at(
                             loc_expr.region,
-                            LowLevelDbg(moduel, arg, unwrapped_expr),
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
                         ));
                         Err(EUnwrapped::UnwrappedSubExpr {
                             sub_arg: new_dbg,
+                            sub_pat,
+                            sub_new,
+                        })
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                }
+            }
+
+            Expr::Expect(condition, continuation) => {
+                if is_expr_suffixed(&condition.value) {
+                    // we cannot unwrap a suffixed expression within expect
+                    // e.g. expect (foo! "bar")
+                    return Err(EUnwrapped::Malformed);
+                }
+
+                match unwrap_suffixed_expression(arena, continuation, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        return Ok(new_expect);
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        Err(EUnwrapped::UnwrappedDefExpr(new_expect))
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: unwrapped_expr,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg: new_expect,
                             sub_pat,
                             sub_new,
                         })
@@ -267,16 +302,13 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
             // Any suffixed arguments will be innermost, therefore we unwrap those first
             let local_args = arena.alloc_slice_copy(apply_args);
             for arg in local_args.iter_mut() {
-                match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
+                // Args are always expressions, don't pass `maybe_def_pat`
+                match unwrap_suffixed_expression(arena, arg, None) {
                     Ok(new_arg) => {
                         *arg = new_arg;
                     }
-                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_arg)) => {
-                        *arg = unwrapped_arg;
-
-                        let new_apply = arena.alloc(Loc::at(loc_expr.region, Apply(function, local_args, called_via)));
-
-                        return Err(EUnwrapped::UnwrappedDefExpr(new_apply));
+                    Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                        internal_error!("unreachable, unwrapped arg cannot be def expression as `None` was passed as pattern");
                     }
                     Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new: new_arg }) => {
 
@@ -543,6 +575,8 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => apply_task_await(arena, branch_loc_expr.region, sub_arg, sub_pat, sub_new),
                         Err(..) => return Err(EUnwrapped::Malformed),
                     };
+
+                    // TODO: unwrap guard
 
                     let new_branch = WhenBranch{value: *unwrapped_branch_value, patterns, guard: *guard};
                     let mut new_branches = Vec::new_in(arena);

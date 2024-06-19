@@ -394,7 +394,7 @@ pub enum WrapInParens {
 }
 
 impl Indentation {
-    const INDENT_STR: &str = "    ";
+    const INDENT_STR: &'static str = "    ";
 
     pub fn increment(self) -> Self {
         Self {

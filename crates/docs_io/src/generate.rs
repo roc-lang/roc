@@ -17,6 +17,7 @@ use roc_parse::ident::{parse_ident, Accessor, Ident};
 use roc_parse::keyword;
 use roc_parse::state::State;
 use roc_region::all::Region;
+use roc_target::Target;
 use roc_types::types::{Alias, Type};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -594,7 +595,7 @@ impl<'a> AbilityImpl<'a> for AbilityAnn<'a> {
 pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     let arena = Bump::new();
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
+        target: Target::LinuxX64, // This is just type-checking for docs, so "target" doesn't matter
         function_kind: roc_solve::FunctionKind::LambdaSet,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
@@ -603,7 +604,8 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     };
     match roc_load::load_and_typecheck(
         &arena,
-        filename,
+        filename.clone(),
+        Some(filename),
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     ) {

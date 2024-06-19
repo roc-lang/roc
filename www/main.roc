@@ -1,35 +1,61 @@
-app [transformFileContent] { pf: platform "../examples/static-site-gen/platform/main.roc" }
+app [main] { pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.1.0/EMH2OFwcXCUEzbwP6gyfeRQu7Phr-slc-vE8FPPreys.tar.br" }
 
-import pf.Html exposing [Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script, br]
-import pf.Html.Attributes exposing [attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type]
+import pf.Task exposing [Task]
+import pf.SSG
+import pf.Types exposing [Args]
+import pf.Html exposing [header, nav, div, link, attribute, text, a, span, html, head, body, meta, script, footer, br]
+import pf.Html.Attributes exposing [id, ariaLabel, ariaHidden, title, href, class, rel, type, content, lang, charset, name, color]
 import InteractiveExample
+
+main : Args -> Task {} _
+main = \{ inputDir, outputDir } ->
+
+    # get the path and url of markdown files in content directory
+    files = SSG.files! inputDir
+
+    # helper Task to process each file
+    processFile = \{ path, relpath, url } ->
+
+        inHtml = SSG.parseMarkdown! path
+
+        outHtml = transform url inHtml
+
+        SSG.writeFile { outputDir, relpath, content: outHtml }
+    ## process each file
+    Task.forEach! files processFile
 
 pageData =
     Dict.empty {}
-    |> Dict.insert "abilities.html" { title: "Abilities | Roc", description: "Learn about abilities in the Roc programming language." }
-    |> Dict.insert "bdfn.html" { title: "Governance | Roc", description: "Learn about the governance model of the Roc programming language." }
-    |> Dict.insert "community.html" { title: "Community | Roc", description: "Connect with the community of the Roc programming language." }
-    |> Dict.insert "docs.html" { title: "Docs | Roc", description: "Documentation for the Roc programming language, including builtins." }
-    |> Dict.insert "donate.html" { title: "Donate | Roc", description: "Support the Roc programming language by donating or sponsoring." }
-    |> Dict.insert "faq.html" { title: "FAQ | Roc", description: "Frequently asked questions about the Roc programming language." }
-    |> Dict.insert "fast.html" { title: "Fast | Roc", description: "What does it mean that the Roc programming language is fast?" }
-    |> Dict.insert "friendly.html" { title: "Friendly | Roc", description: "What does it mean that the Roc programming language is friendly?" }
-    |> Dict.insert "functional.html" { title: "Functional | Roc", description: "What does it mean that the Roc programming language is functional?" }
-    |> Dict.insert "index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language." }
-    |> Dict.insert "install.html" { title: "Install | Roc", description: "How to install the Roc programming language." }
-    |> Dict.insert "plans.html" { title: "Planned Changes | Roc", description: "Planned changes to the Roc programming language." }
-    |> Dict.insert "platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
-    |> Dict.insert "tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
-    |> Dict.insert "repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
-    |> Dict.insert "examples/index.html" { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." }
+    |> Dict.insert "/abilities.html" { title: "Abilities | Roc", description: "Learn about abilities in the Roc programming language." }
+    |> Dict.insert "/bdfn.html" { title: "Governance | Roc", description: "Learn about the governance model of the Roc programming language." }
+    |> Dict.insert "/community.html" { title: "Community | Roc", description: "Connect with the community of the Roc programming language." }
+    |> Dict.insert "/docs.html" { title: "Docs | Roc", description: "Documentation for the Roc programming language, including builtins." }
+    |> Dict.insert "/donate.html" { title: "Donate | Roc", description: "Support the Roc programming language by donating or sponsoring." }
+    |> Dict.insert "/faq.html" { title: "FAQ | Roc", description: "Frequently asked questions about the Roc programming language." }
+    |> Dict.insert "/fast.html" { title: "Fast | Roc", description: "What does it mean that the Roc programming language is fast?" }
+    |> Dict.insert "/friendly.html" { title: "Friendly | Roc", description: "What does it mean that the Roc programming language is friendly?" }
+    |> Dict.insert "/functional.html" { title: "Functional | Roc", description: "What does it mean that the Roc programming language is functional?" }
+    |> Dict.insert "/index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language." }
+    |> Dict.insert "/install/index.html" { title: "Install | Roc", description: "How to install the Roc programming language." }
+    |> Dict.insert "/plans.html" { title: "Planned Changes | Roc", description: "Planned changes to the Roc programming language." }
+    |> Dict.insert "/platforms.html" { title: "Platforms and Apps | Roc", description: "Learn about the platforms and applications architecture in the Roc programming language." }
+    |> Dict.insert "/tutorial.html" { title: "Tutorial | Roc", description: "Learn the Roc programming language." }
+    |> Dict.insert "/repl/index.html" { title: "REPL | Roc", description: "Try the Roc programming language in an online REPL." }
+    |> Dict.insert "/examples/index.html" { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." }
+    |> Dict.insert "/install/other.html" { title: "Getting started on other systems | Roc", description: "Roc installation guide for other systems" }
+    |> Dict.insert "/install/linux_x86_64.html" { title: "Getting started on Linux x86_64 | Roc", description: "Roc installation guide for Linux x86_64" }
+    |> Dict.insert "/install/macos_apple_silicon.html" { title: "Getting started on MacOS Apple Silicon | Roc", description: "Roc installation guide for MacOS Apple Silicon" }
+    |> Dict.insert "/install/macos_x86_64.html" { title: "Getting started on MacOS x86_64 | Roc", description: "Roc installation guide for MacOS x86_64" }
+    |> Dict.insert "/install/windows.html" { title: "Getting started on Windows | Roc", description: "Roc installation guide for Windows" }
+    |> Dict.insert "/install/nix.html" { title: "Getting started with Nix | Roc", description: "Roc installation guide for Nix" }
+    |> Dict.insert "/install/getting_started.html" { title: "Getting started | Roc", description: "How to get started with Roc" }
 
 getPageInfo : Str -> { title : Str, description : Str }
 getPageInfo = \pagePathStr ->
-
     when Dict.get pageData pagePathStr is
         Ok pageInfo -> pageInfo
         Err KeyNotFound ->
-            if Str.contains pagePathStr "examples/" then
+            if Str.contains pagePathStr "/examples/" then
                 Str.split pagePathStr "/"
                 |> List.takeLast 2
                 |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
@@ -48,12 +74,13 @@ unwrapOrCrash = \result, errorMsg ->
         Err err ->
             crash "$(Inspect.toStr err): $(errorMsg)"
 
-transformFileContent : Str, Str -> Str
-transformFileContent = \pagePathStr, htmlContent ->
+transform : Str, Str -> Str
+transform = \pagePathStr, htmlContent ->
     Html.render (view pagePathStr htmlContent)
 
-preloadWoff2 : Str -> Node
+preloadWoff2 : Str -> Html.Node
 preloadWoff2 = \url ->
+
     link [
         rel "preload",
         (attribute "as") "font",
@@ -67,7 +94,7 @@ preloadWoff2 = \url ->
 view : Str, Str -> Html.Node
 view = \pagePathStr, htmlContent ->
     mainBody =
-        if pagePathStr == "index.html" then
+        if pagePathStr == "/index.html" then
             when Str.splitFirst htmlContent "<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->" is
                 Ok { before, after } -> [text before, InteractiveExample.view, text after]
                 Err NotFound -> crash "Could not find the comment where the larger example on the homepage should have been inserted. Was it removed or edited?"
@@ -76,10 +103,10 @@ view = \pagePathStr, htmlContent ->
 
     bodyAttrs =
         when pagePathStr is
-            "index.html" -> [id "homepage-main"]
-            "tutorial.html" -> [id "tutorial-main", class "article-layout"]
+            "/index.html" -> [id "homepage-main"]
+            "/tutorial.html" -> [id "tutorial-main", class "article-layout"]
             _ ->
-                if Str.startsWith pagePathStr "examples/" && pagePathStr != "examples/index.html" then
+                if Str.startsWith pagePathStr "/examples/" && pagePathStr != "/examples/index.html" then
                     # Individual examples should render wider than articles.
                     # Otherwise the width is unreasonably low for the code blocks,
                     # and those pages don't tend to have big paragraphs anyway.
@@ -119,7 +146,7 @@ view = \pagePathStr, htmlContent ->
         ],
         body bodyAttrs [
             viewNavbar pagePathStr,
-            main [] mainBody,
+            Html.main [] mainBody,
             footer [] [
                 div [id "footer"] [
                     div [id "gh-link"] [
@@ -138,7 +165,7 @@ view = \pagePathStr, htmlContent ->
 
 viewNavbar : Str -> Html.Node
 viewNavbar = \pagePathStr ->
-    isHomepage = pagePathStr == "index.html"
+    isHomepage = pagePathStr == "/index.html"
 
     homeLinkAttrs =
         [id "nav-home-link", href "/", title "The Roc Programming Language Homepage"]
@@ -178,6 +205,7 @@ rocLogo =
                 [],
         ]
 
+ghLogo : Html.Node
 ghLogo =
     (Html.element "svg")
         [

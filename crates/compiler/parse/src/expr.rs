@@ -226,8 +226,7 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
 }
 
 fn ident_seq<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    (|arena: &'a Bump, state: State<'a>, min_indent: u32| parse_ident_seq(arena, state, min_indent))
-        .trace("ident_seq")
+    parse_ident_seq.trace("ident_seq")
 }
 
 fn parse_ident_seq<'a>(
@@ -2346,10 +2345,13 @@ fn parse_expr_end<'a>(
 }
 
 pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    expr_start(ExprParseOptions {
-        accept_multi_backpassing,
-        check_for_arrow: true,
-    })
+    space0_before_e(
+        expr_start(ExprParseOptions {
+            accept_multi_backpassing,
+            check_for_arrow: true,
+        }),
+        EExpr::IndentEnd,
+    )
 }
 
 pub fn merge_spaces<'a>(

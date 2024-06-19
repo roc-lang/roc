@@ -79,6 +79,7 @@ pub fn run_load_and_infer<'a>(
             file_path,
             module_src,
             dir.path().to_path_buf(),
+            None,
             roc_target::Target::LinuxX64,
             function_kind,
             roc_reporting::report::RenderTarget::Generic,

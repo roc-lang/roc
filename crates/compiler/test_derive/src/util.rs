@@ -530,6 +530,7 @@ where
         path.file_name().unwrap().into(),
         source,
         path.parent().unwrap().to_path_buf(),
+        None,
         Default::default(),
         target,
         FunctionKind::LambdaSet,

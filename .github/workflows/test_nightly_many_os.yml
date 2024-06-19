@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ macos-11, macos-12, macos-13, ubuntu-20.04, ubuntu-22.04 ]
+        os: [ macos-12, macos-13, ubuntu-20.04, ubuntu-22.04 ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:

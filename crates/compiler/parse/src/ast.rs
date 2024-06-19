@@ -621,7 +621,9 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         }
         Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
         Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
-        Expr::When(a, _) => is_expr_suffixed(&a.value),
+        Expr::When(cond, branches) => {
+            is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
+        }
         Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
         Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
         Expr::MalformedIdent(_, _) => false,
@@ -631,6 +633,14 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::MultipleRecordBuilders(_) => false,
         Expr::UnappliedRecordBuilder(_) => false,
     }
+}
+
+fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
+    is_expr_suffixed(&branch.value.value)
+        || branch
+            .guard
+            .map(|x| is_expr_suffixed(&x.value))
+            .unwrap_or(false)
 }
 
 fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
@@ -1130,6 +1140,8 @@ impl<'a> ImportAlias<'a> {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
+    /// A collection of references by index to either `type_defs` or `value_defs`
+    /// It's an entry point for actual definitions, while `type_defs` and `value_defs` are append-only collections
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
     pub regions: std::vec::Vec<Region>,
     pub space_before: std::vec::Vec<Slice<CommentOrNewline<'a>>>,

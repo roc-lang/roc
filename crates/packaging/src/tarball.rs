@@ -1,14 +1,16 @@
 use brotli::enc::BrotliEncoderParams;
 use bumpalo::Bump;
 use flate2::write::GzEncoder;
-use roc_parse::ast::{Header, Module};
+use roc_parse::ast::{
+    Header, IngestedFileImport, Module, RecursiveValueDefIter, StrLiteral, ValueDef,
+};
 use roc_parse::header::PlatformHeader;
-use roc_parse::module::parse_header;
+use roc_parse::module::{parse_header, parse_module_defs};
 use roc_parse::state::State;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tar;
 use walkdir::WalkDir;
 
@@ -127,7 +129,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
 
     // TODO use this when finding .roc files by discovering them from the root module.
     // let other_modules: &[Module<'_>] =
-    match read_header(&arena, &mut buf, path)?.header {
+    match read_header(&arena, &mut buf, path)?.0.header {
         Header::Module(_) => {
             todo!();
             // TODO report error
@@ -141,7 +143,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
             // TODO report error
         }
         Header::Package(_) => {
-            add_dot_roc_files(root_dir, &mut builder)?;
+            add_source_files(&arena, root_dir, &mut builder)?;
         }
         Header::Platform(PlatformHeader { imports: _, .. }) => {
             // Add all the prebuilt host files to the archive.
@@ -175,7 +177,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
                 }
             }
 
-            add_dot_roc_files(root_dir, &mut builder)?;
+            add_source_files(&arena, root_dir, &mut builder)?;
         }
     };
 
@@ -220,7 +222,8 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
     builder.finish()
 }
 
-fn add_dot_roc_files<W: Write>(
+fn add_source_files<W: Write>(
+    arena: &Bump,
     root_dir: &Path,
     builder: &mut tar::Builder<W>,
 ) -> Result<(), io::Error> {
@@ -238,6 +241,8 @@ fn add_dot_roc_files<W: Write>(
         // added based on the paths of the files inside anyway. (In fact, if we don't
         // filter out directories in this step, then empty ones can sometimes be added!)
         if path.is_file() {
+            add_ingested_files(arena, root_dir, path, builder)?;
+
             builder.append_path_with_name(
                 path,
                 // Store it without the root path, so that (for example) we don't store
@@ -255,7 +260,7 @@ fn read_header<'a>(
     arena: &'a Bump,
     buf: &'a mut Vec<u8>,
     path: &'a Path,
-) -> io::Result<Module<'a>> {
+) -> io::Result<(Module<'a>, State<'a>)> {
     // Read all the bytes into the buffer.
     {
         let mut file = File::open(path)?;
@@ -269,9 +274,46 @@ fn read_header<'a>(
     // (We can't use that for the parser state and still return Module<'a> unfortunately.)
     let arena_buf = bumpalo::collections::Vec::from_iter_in(buf.iter().copied(), arena);
     let parse_state = State::new(arena_buf.into_bump_slice());
-    let (module, _) = parse_header(arena, parse_state).unwrap_or_else(|_err| {
+    parse_header(arena, parse_state).map_err(|_err| {
         todo!(); // TODO report a nice error and exit 1 - or maybe just return Err, for better testability?
+    })
+}
+
+fn add_ingested_files<W: Write>(
+    arena: &Bump,
+    root_dir: &Path,
+    dot_roc_path: &Path,
+    builder: &mut tar::Builder<W>,
+) -> io::Result<()> {
+    let mut buf = Vec::new();
+    let (module, state) = read_header(arena, &mut buf, dot_roc_path)?;
+    let (_, defs) = module.upgrade_header_imports(arena);
+
+    let defs = parse_module_defs(arena, state, defs).unwrap_or_else(|err| {
+        panic!("{} failed to parse: {:?}", dot_roc_path.display(), err);
     });
 
-    Ok(module)
+    RecursiveValueDefIter::new(&defs).try_for_each(|(def, _)| {
+        if let ValueDef::IngestedFileImport(IngestedFileImport { path, .. }) = def {
+            if let StrLiteral::PlainLine(relative_path_str) = path.value {
+                let relative_path: PathBuf = relative_path_str.into();
+
+                if relative_path_str.contains("..") {
+                    panic!(
+                        "Cannot bundle {} (imported in {}) since it contains a relative `..` which would access files outside {}.",
+                        &relative_path.display(),
+                        dot_roc_path.display(),
+                        root_dir.display()
+                    );
+                }
+
+                builder.append_path_with_name(root_dir.join(&relative_path), relative_path.display().to_string())
+
+            } else {
+                unreachable!()
+            }
+        } else {
+            Ok(())
+        }
+    })
 }

@@ -60,6 +60,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target,

@@ -134,6 +134,7 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
+                None,
                 RocCacheDir::Disallowed,
                 load_config,
             );
@@ -4771,7 +4772,7 @@ mod test_reporting {
     // TODO investigate this test. It was disabled in https://github.com/roc-lang/roc/pull/6634
     // as the way Defs without final expressions are handled. The changes probably shouldn't have
     // changed this error report. The exact same test_syntax test for this has not changed, so
-    // we know the parser is parsing thesame thing. Therefore the way the AST is desugared must be
+    // we know the parser is parsing the same thing. Therefore the way the AST is desugared must be
     // the cause of the change in error report.
     // test_report!(
     //     def_missing_final_expression,
@@ -8162,7 +8163,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         // TODO(opaques): error could be improved by saying that the opaque definition demands
-        // that the argument be a U8, and linking to the definitin!
+        // that the argument be a U8, and linking to the definition!
         @r#"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
@@ -11669,6 +11670,54 @@ In roc, functions are always written as a lambda, like{}
     @r"
     "
     );
+    test_report!(
+        unknown_shorthand_no_deps,
+        indoc!(
+            r#"
+            import foo.Foo
+
+            Foo.foo
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_no_deps/Test.roc ──────────────
+
+    This module is trying to import from `foo`:
+
+    4│      import foo.Foo
+                   ^^^^^^^
+
+    A lowercase name indicates a package shorthand, but no packages have
+    been specified.
+    "###
+    );
+
+    test_report!(
+        unknown_shorthand_in_app,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../tests/platform.roc" }
+
+            import foo.Foo
+
+            main =
+                Foo.foo
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED PACKAGE in tmp/unknown_shorthand_in_app/Test.roc ───────────────
+
+    This module is trying to import from `foo`:
+
+    3│  import foo.Foo
+               ^^^^^^^
+
+    A lowercase name indicates a package shorthand, but I don't recognize
+    this one. Did you mean one of these?
+
+        pf
+    "###
+    );
 
     test_report!(
         invalid_toplevel_cycle,
@@ -13530,7 +13579,7 @@ In roc, functions are always written as a lambda, like{}
     4│      crash "" ""
                   ^^^^^
 
-    `crash` must be given exacly one message to crash with.
+    `crash` must be given exactly one message to crash with.
     "#
     );
 

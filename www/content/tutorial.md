@@ -22,7 +22,7 @@
     </section>
     <section>
         <h2 id="installation"><a href="#installation">Installation</a></h2>
-        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="https://github.com/roc-lang/roc/tree/main/getting_started#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
+        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
 ## [REPL](#repl) {#repl}
@@ -154,10 +154,10 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Stdout, pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+import pf.Stdout
+import pf.Task
 
 main =
     Stdout.line! "I'm a Roc application!"
@@ -698,7 +698,7 @@ We can use tags with payloads to make a list that contains a mixture of differen
 List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
     when elem is
         NumElem num -> Num.isNegative num
-        StrElem str -> Str.isCapitalized str
+        StrElem str -> Str.startsWith str "A"
 # returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
 
@@ -708,7 +708,7 @@ Compare this with the example from earlier, which caused a compile-time error:
 List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 ```
 
-The version that uses tags works because we aren't trying to call `Num.isNegative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.isNegative` or `Str.isCapitalized` depending on which type we have.
+The version that uses tags works because we aren't trying to call `Num.isNegative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.isNegative` or `Str.startsWith` depending on which type we have.
 
 We could take this as far as we like, adding more different tags (e.g. `BoolElem Bool.true`) and then adding more branches to the `when` to handle them appropriately.
 
@@ -1423,7 +1423,7 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 - **Builtins** provide functions that are automatically imported into every module.
 - **Applications** are combined with a platform and compiled into an executable.
-- **Interfaces** provide functions which can be imported into other modules.
+- **Modules** provide functions which can be imported into other modules.
 - **Packages** organise modules to share functionality across applications and platforms.
 - **Platforms** provide effects such as IO to interface with the outside world.
 - **Hosted** _note this module type is likely to be deprecated soon_.
@@ -1454,53 +1454,62 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+import pf.Stdout
 ```
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.
 
-The line `app "hello"` shows that this module is a Roc application. The "hello" after the `app` keyword will be removed soon and is no longer used. If the file is named hello.roc, building this application should produce an executable named `hello`. This means when you run `roc dev`, the Roc compiler will build an executable named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable without running it by running `roc build`.
+The line `app [main]` shows that this module is a Roc application and which [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) it is built on.
 
-The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
-
-```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-imports [pf.Stdout]
-provides [main] to pf
-```
-
-The `packages { pf: "https://...tar.br" }` part says three things:
+The `{ pf: platform "https://...tar.br" }` part says four things:
 
 - We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
 - That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
+- This package is the [platform](#platform-modules-platform-modules) we have chosen for our app.
 
-The `imports [pf.Stdout]` line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
+The `import pf.Stdout` line says that we want to import the `Stdout` module from the `pf` package, and make it available in the current module.
 
 This import has a direct interaction with our definition of `main`. Let's look at that again:
 
 ```roc
-main = Stdout.line "I'm a Roc application!"
+main = Stdout.line! "I'm a Roc application!"
 ```
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
 
-When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
-
-If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
-
-```roc
-imports [pf.Stdout, AdditionalModule, AnotherModule]
-```
+When we write `import pf.Stdout`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
 
 You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
 
+If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly like this:
+
+```roc
+import pf.Stdout
+import AdditionalModule
+import AnotherModule
+```
+
+You can also use the `as` keyword if you would like to use a different name:
+
+```roc
+import uuid.Generate as Uuid
+```
+
+...and the `exposing` keyword to bring values or functions into the current scope:
+
+```roc
+import pf.Stdout exposing [line]
+
+main =
+    line! "Hello, World!"
+```
+
 ### [Package Modules](#package-modules) {#package-modules}
 
-Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
+Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different modules and then including these in the `package` field of the package file structure, `package [ MyModule ] {}`. The modules that are listed in the `package` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/lukewilliamboswell/roc-parser/tree/main/package) for an example.
 
@@ -1508,7 +1517,7 @@ Package documentation can be generated using the Roc cli with `roc docs /package
 
 Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.
 
-You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
+You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `{ .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
 
 How does the Roc cli import and download a package from a URL?
 
@@ -1524,11 +1533,11 @@ Including the hash solves a number of problems:
 2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
 3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.
 
-### [Interface Modules](#interface-modules) {#interface-modules}
+### [Regular Modules](#regular-modules) {#regular-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
-See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
+See [Html module](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
 
 ### [Platform Modules](#platform-modules) {#platform-modules}
 
@@ -1541,10 +1550,8 @@ See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples
 You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
-imports [
-    "some-file" as someStr : Str,
-    "some-file" as someBytes : List U8,
-]
+import "some-file" as someStr : Str
+import "some-file" as someBytes : List U8
 ```
 
 See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
@@ -1565,10 +1572,9 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 ```roc
-app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+import pf.Stdout
 
 main =
     Stdout.line! "Hello, World!"
@@ -1599,15 +1605,17 @@ Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Stdout, pf.Stdin, pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+
+import pf.Stdout
+import pf.Stdin
+import pf.Task
 
 main =
     Stdout.line! "Type in something and press Enter:"
     input = Stdin.line!
     Stdout.line! "Your input was: $(input)"
+
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.
@@ -1796,7 +1804,7 @@ Task.await (Stdout.line "Type in something and press Enter:") \_ ->
 
 Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
 
-If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylsitic convention in the Roc ecosystem to use `!` instead.
+If you like, you can always call `Task.await` directly instead of using `!` (since `!` is nothing more than syntax sugar for `Task.await`), but it's a stylistic convention in the Roc ecosystem to use `!` instead.
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
@@ -2224,7 +2232,7 @@ See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder
 
 These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `interface`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
+`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `import`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `with`, `generates`, `packages`, `requires`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 

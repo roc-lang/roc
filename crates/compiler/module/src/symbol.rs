@@ -463,6 +463,13 @@ impl<'a, T> PackageQualified<'a, T> {
         }
     }
 
+    pub fn package_shorthand(&self) -> Option<&'a str> {
+        match self {
+            PackageQualified::Unqualified(_) => None,
+            PackageQualified::Qualified(package, _) => Some(package),
+        }
+    }
+
     pub fn map_module<B>(&self, f: impl FnOnce(&T) -> B) -> PackageQualified<'a, B> {
         match self {
             PackageQualified::Unqualified(name) => PackageQualified::Unqualified(f(name)),
@@ -1531,6 +1538,7 @@ define_builtins! {
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
         87 LIST_CLONE: "clone"
         88 LIST_LEN_USIZE: "lenUsize"
+        89 LIST_CONCAT_UTF8: "concatUtf8"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

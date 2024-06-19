@@ -110,6 +110,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         fi,
         &doc_info.source,
         src_dir,
+        None,
         roc_target::Target::LinuxX64,
         roc_load::FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::LanguageServer,

@@ -50,6 +50,7 @@ fn load_and_typecheck(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        None,
         RenderTarget::Generic,
         RocCacheDir::Disallowed,
         DEFAULT_PALETTE,

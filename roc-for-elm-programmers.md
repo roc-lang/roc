@@ -769,7 +769,6 @@ All imports and exports in Roc are enumerated explicitly; there is no `..` synta
 
 > Since tags are available in all modules, Roc does not have a notion of
 > "importing variants", and there's also no `exposing (Foo(..))` equivalent.
-> (Later on, we'll talk about how opaque types work in Roc.)
 
 Like Elm, Roc does not allow shadowing.
 
