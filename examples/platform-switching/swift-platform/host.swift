@@ -1,62 +1,97 @@
-import Foundation
+// Build with latest Swift 6.0 using this command (adjusting for architecture):
+// swiftc -target aarch64-none-none-elf -Ounchecked -parse-as-library -enable-experimental-feature Embedded -wmo -c host.swift -o linux-arm64.o
+
+@main
+enum Main {
+    static func main() {
+        var str = RocString()
+        mainForHost(&str)
+        
+        print(str, terminator: "")
+    }
+}
+
+// Swift assumes its structs are not representable in C so the type has to be hidden
+// to get around a hardcoded safety check.
+@_extern(c, "roc__mainForHost_1_exposed_generic")
+func _mainForHost(_: UnsafeMutableRawPointer)
+func mainForHost(_ string: UnsafeMutablePointer<RocString>) { _mainForHost(UnsafeMutableRawPointer(string)) }
+
+/// NOTE: The struct layout of Swift is that of C, without padding between fields (if alignment allows)
+/// There is no way to define this in a stable way yet.
+///
+/// Only the first three fields are stored to match RocStr memory layout
+struct RocString: BitwiseCopyable {
+    private let rawData: UnsafePointer<UInt8>?
+    private let rawCount: UInt
+    private let capacityOrAllocPointer: UInt // This is a union accessed through computed properties
+    
+    private var capacity: UInt { capacityOrAllocPointer }
+    private var allocPointer: UnsafeMutableRawPointer { .init(bitPattern: capacityOrAllocPointer)! }
+    
+    private var isSmallString: Bool { Int(bitPattern: capacity) < 0 }
+    
+    private var count: Int {
+        isSmallString // Small strings encode their count in the last byte of capacity
+            ? withUnsafeBytes(of: capacity) { bytes in Int(bytes.last! ^ 0b1000_0000) }
+            : Int(bitPattern: rawCount)
+    }
+    
+    // SAFETY: Not valid for small strings
+    private var data: UnsafeBufferPointer<UInt8> {
+        assert(!isSmallString) // Assert this in debug builds
+        return if isSmallString { fatalError() } else { .init(start: rawData!, count: count) }
+    }
+    
+    @_transparent
+    internal func toString() -> String {
+        if isSmallString {
+            withUnsafeBytes(of: self) { bytes in
+                .init(unsafeUninitializedCapacity: count) { buffer in
+                    for (offset, byte) in bytes.enumerated() {
+                        buffer[offset] = byte
+                    }
+                    return count
+                }
+            }
+        } else {
+            .init(unsafeUninitializedCapacity: count) { buffer in
+                for (offset, byte) in data.enumerated() {
+                    buffer[offset] = byte
+                }
+                return count
+            }
+        }
+    }
+    
+    /// Default initializer for imported C structs (unsafe zero initialisation)
+    init() {
+        self.rawData = nil
+        self.rawCount = 0
+        self.capacityOrAllocPointer = 0
+    }
+}
+
+// RocString to String conversion
+extension String {
+    init(_ rocString: RocString) { self = rocString.toString() }
+}
+
+// Make RocString printable directly
+extension RocString: CustomStringConvertible {
+    var description: String { .init(self) }    
+}
 
 @_cdecl("roc_alloc")
-func rocAlloc(size: Int, _alignment: UInt) -> UInt  {
-    guard let ptr = malloc(size) else {
-        return 0
-    }
-    return UInt(bitPattern: ptr)
-}
+func rocAlloc(size: Int, alignment: Int) -> UnsafeMutableRawPointer { .allocate(byteCount: size, alignment: alignment) }
 
 @_cdecl("roc_dealloc")
-func rocDealloc(ptr: UInt, _alignment: UInt)  {
-    free(UnsafeMutableRawPointer(bitPattern: ptr))
-}
+func rocDealloc(pointer: UnsafeMutableRawPointer, alignment: Int) { pointer.deallocate() }
 
 @_cdecl("roc_realloc")
-func rocRealloc(ptr: UInt, _oldSize: Int, newSize: Int, _alignment: UInt) -> UInt {
-    guard let ptr = realloc(UnsafeMutableRawPointer(bitPattern: ptr), newSize) else {
-        return 0
-    }
-    return UInt(bitPattern: ptr)
-}
-
-func isSmallString(rocStr: RocStr) -> Bool {
-    return rocStr.capacity < 0
-}
-
-func getStrLen(rocStr: RocStr) -> Int {
-    if isSmallString(rocStr: rocStr) {
-        // Small String length is last in the byte of capacity.
-        var cap = rocStr.capacity
-        let count = MemoryLayout.size(ofValue: cap)
-        let bytes = Data(bytes: &cap, count: count)
-        let lastByte = bytes[count - 1]
-        return Int(lastByte ^ 0b1000_0000)
-    } else {
-        return rocStr.len
-    }
-}
-
-func getSwiftString(rocStr: RocStr) -> String {
-    let length = getStrLen(rocStr: rocStr)
-    
-    if isSmallString(rocStr: rocStr) {
-        let data: Data = withUnsafePointer(to: rocStr) { ptr in
-            Data(bytes: ptr, count: length)
-        }
-        return String(data: data, encoding: .utf8)!
-    } else {
-        let data = Data(bytes: rocStr.bytes, count: length)
-        return String(data: data, encoding: .utf8)!
-    }
-}
-
-@_cdecl("main")
-func main() -> UInt8 {
-    var rocStr = RocStr()
-    roc__mainForHost_1_exposed_generic(&rocStr)
-    
-    print(getSwiftString(rocStr: rocStr), terminator: "")
-    return 0
+func rocRealloc(pointer: UnsafeMutableRawPointer, oldSize: Int, newSize: Int, alignment: Int) -> UnsafeMutableRawPointer {
+    let new = UnsafeMutableRawPointer.allocate(byteCount: newSize, alignment: alignment)
+    new.copyMemory(from: pointer, byteCount: oldSize)
+    pointer.deallocate()
+    return new
 }
