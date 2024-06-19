@@ -1145,6 +1145,11 @@ unsafe fn roc_run_native_fast(
 enum ExecutableFile {
     #[cfg(target_os = "linux")]
     MemFd(libc::c_int, PathBuf),
+    // We store the TempDir in the onDisk variant alongside the path to the executable,
+    // so that the TempDir doesn't get dropped until after we're done with the path.
+    // If we didn't do that, then the tempdir would potentially get deleted by the
+    // TempDir's Drop impl before the file had been executed.
+    #[allow(dead_code)]
     #[cfg(not(target_os = "linux"))]
     OnDisk(TempDir, PathBuf),
 }
@@ -1306,6 +1311,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(true)
         .mode(0o777) // create the file as executable
         .open(&app_path_buf)?;
 
