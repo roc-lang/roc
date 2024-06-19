@@ -144,7 +144,6 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         interns,
         mut can_problems,
         mut type_problems,
-        mut declarations_by_id,
         sources,
         mut typechecked,
         solved,
@@ -168,6 +167,13 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         &typechecked,
         docs_by_module,
     ));
+
+    let mut declarations_by_id = MutMap::default();
+
+    for (module_id, checked) in typechecked.iter() {
+        // TODO can this decls.clone() be avoided?
+        declarations_by_id.insert(*module_id, checked.decls.clone());
+    }
 
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
@@ -284,22 +290,19 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let abilities;
         let declarations;
 
-        //lookup the type info for each import from the module where it was exposed
+        // lookup the type info for each import from the module where it was exposed
         let this_imports = self.imports.remove(&module_id).unwrap_or_default();
         let imports = self.get_symbols_for_imports(this_imports);
 
         let exposed_imports = self.exposed_imports.remove(&module_id).unwrap_or_default();
 
-        if let Some(m) = self.typechecked.remove(&module_id) {
-            subs = m.solved_subs.into_inner();
-            abilities = m.abilities_store;
-            declarations = m.decls;
-        } else {
-            let rm = self.root_module.take().unwrap();
-            subs = rm.subs;
-            abilities = rm.abilities_store;
-            declarations = self.declarations_by_id.remove(&module_id).unwrap();
-        }
+        let m = self.typechecked.remove(&module_id).unwrap_or_else(|| {
+            panic!("Could not find `typechecked` entry for module ID {module_id:?}");
+        });
+
+        subs = m.solved_subs.into_inner();
+        abilities = m.abilities_store;
+        declarations = m.decls;
 
         let analyzed_module = AnalyzedModule {
             exposed_imports,
