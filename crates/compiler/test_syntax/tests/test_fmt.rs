@@ -148,6 +148,62 @@ mod test_fmt {
     }
 
     #[test]
+    fn shebang_comment() {
+        // Correct shebangs are left alone
+        expr_formats_same(indoc!(
+            r#"
+            #!/usr/bin/env roc
+            x = 0
+
+            x
+            "#
+        ));
+
+        // Incorrect shebang formatting from the past is fixed
+        expr_formats_to(
+            indoc!(
+                r#"
+                # !/usr/bin/env roc
+                x = 0
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                #!/usr/bin/env roc
+                x = 0
+
+                x
+                "#
+            ),
+        );
+
+        // Other whitespace from the user is left alone
+        expr_formats_to(
+            &format!(
+                indoc!(
+                    r#"
+                    #  !/usr/bin/env roc{space}
+                    x = 0
+
+                    x
+                    "#
+                ),
+                space = " "
+            ),
+            indoc!(
+                r#"
+                #  !/usr/bin/env roc
+                x = 0
+
+                x
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn comment_with_trailing_space() {
         expr_formats_to(
             &format!(
