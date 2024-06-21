@@ -207,7 +207,7 @@ pub struct ListPatterns {
     ///   [ .., A, B ] -> patterns = [A, B], rest = 0
     ///   [ A, .., B ] -> patterns = [A, B], rest = 1
     ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
-    pub opt_rest: Option<(usize, Option<Symbol>)>,
+    pub opt_rest: Option<(usize, Option<Loc<Symbol>>)>,
 }
 
 impl ListPatterns {
@@ -793,7 +793,8 @@ pub fn canonicalize_pattern<'a>(
                                     pattern_as.identifier.value,
                                 ) {
                                     Ok(symbol) => {
-                                        rest_name = Some(symbol);
+                                        rest_name =
+                                            Some(Loc::at(pattern_as.identifier.region, symbol));
                                     }
                                     Err(pattern) => {
                                         opt_erroneous = Some(pattern);
@@ -997,6 +998,10 @@ impl<'a> BindingsFromPattern<'a> {
                         | OpaqueNotInScope(..) => (),
                         List { patterns, .. } => {
                             stack.extend(patterns.patterns.iter().rev().map(Pattern));
+
+                            if let Some((_, Some(rest_sym))) = &patterns.opt_rest {
+                                return Some((rest_sym.value, rest_sym.region));
+                            }
                         }
                     }
                 }
