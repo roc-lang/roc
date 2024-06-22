@@ -11,10 +11,10 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    and, backtrackable, byte, collection_trailing_sep_e, increment_min_indent, loc, map, optional,
-    reset_min_indent, skip_first, skip_second, specialize_err, two_bytes, zero_or_more, EExposes,
-    EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent,
-    Parser, SourceError, SpaceProblem, SyntaxError, map_with_arena, succeed, EParams
+    and, backtrackable, byte, collection_trailing_sep_e, increment_min_indent, loc, map,
+    map_with_arena, optional, reset_min_indent, skip_first, skip_second, specialize_err, succeed,
+    two_bytes, zero_or_more, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages,
+    EParams, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::pattern::record_pattern_fields;
 use crate::state::State;
@@ -150,14 +150,14 @@ fn interface_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
         and(
             skip_second(
                 space0_e(EHeader::IndentStart),
-                loc(module_name_help(EHeader::ModuleName))
+                loc(module_name_help(EHeader::ModuleName)),
             ),
-            specialize_err(EHeader::Exposes, exposes_kw())
+            specialize_err(EHeader::Exposes, exposes_kw()),
         ),
         |arena: &'a bumpalo::Bump,
          (before_name, kw): (&'a [CommentOrNewline<'a>], Spaces<'a, ExposesKeyword>)| {
             merge_n_spaces!(arena, before_name, kw.before, kw.after)
-        }
+        },
     );
 
     record!(ModuleHeader {
@@ -439,7 +439,7 @@ fn old_package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
                 before_packages,
                 packages: old.packages.map(|kw| kw.item),
             }
-        }
+        },
     )
     .trace("old_package_header")
 }
@@ -653,7 +653,7 @@ fn exposes_list<'a>() -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, ExposedNa
         exposes_entry(EExposes::Identifier),
         byte(b',', EExposes::ListEnd),
         byte(b']', EExposes::ListEnd),
-        Spaced::SpaceBefore
+        Spaced::SpaceBefore,
     )
 }
 
@@ -709,7 +709,7 @@ fn exposes_module_collection<'a>(
         exposes_module(EExposes::Identifier),
         byte(b',', EExposes::ListEnd),
         byte(b']', EExposes::ListEnd),
-        Spaced::SpaceBefore
+        Spaced::SpaceBefore,
     )
 }
 
@@ -757,7 +757,7 @@ fn packages_collection<'a>(
         specialize_err(EPackages::PackageEntry, loc(package_entry())),
         byte(b',', EPackages::ListEnd),
         byte(b'}', EPackages::ListEnd),
-        Spaced::SpaceBefore
+        Spaced::SpaceBefore,
     )
 }
 
@@ -877,20 +877,17 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
         Option<Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
     );
 
-    let spaced_import =
-        |((opt_shortname, module_name), opt_values): Temp<'a>| {
-            let exposed_values = opt_values.unwrap_or_else(Collection::empty);
+    let spaced_import = |((opt_shortname, module_name), opt_values): Temp<'a>| {
+        let exposed_values = opt_values.unwrap_or_else(Collection::empty);
 
-            let entry = match opt_shortname {
-                Some(shortname) => {
-                    ImportsEntry::Package(shortname, module_name, exposed_values)
-                }
+        let entry = match opt_shortname {
+            Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
 
-                None => ImportsEntry::Module(module_name, exposed_values),
-            };
-
-            Spaced::Item(entry)
+            None => ImportsEntry::Module(module_name, exposed_values),
         };
+
+        Spaced::Item(entry)
+    };
 
     one_of!(
         map(

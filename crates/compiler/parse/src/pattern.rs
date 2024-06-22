@@ -475,7 +475,7 @@ pub fn record_pattern_fields<'a>() -> impl Parser<'a, Collection<'a, Loc<Pattern
         record_pattern_field(),
         byte(b',', PRecord::End),
         byte(b'}', PRecord::End),
-        Pattern::SpaceBefore
+        Pattern::SpaceBefore,
     )
 }
 

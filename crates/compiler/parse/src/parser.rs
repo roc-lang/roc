@@ -1793,7 +1793,6 @@ pub fn indented_seq<'a, Output1, Output2, E: 'a>(
     }
 }
 
-
 /// Similar to [`and`], but we modify the `min_indent` of the second parser to be
 /// 1 greater than the `column()` at the start of the first parser.
 pub fn absolute_indented_seq<'a, Output1, Output2, E: 'a>(

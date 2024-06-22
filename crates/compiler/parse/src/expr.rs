@@ -15,11 +15,11 @@ use crate::ident::{
 use crate::module::module_name_help;
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, collection_inner,
-    collection_trailing_sep_e, either, increment_min_indent, line_min_indent, loc,
-    map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent,
-    skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more,
-    EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString, EType,
-    EWhen, Either, ParseResult, Parser, EImport, EImportParams, indented_seq_skip_first
+    collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first,
+    line_min_indent, loc, map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e,
+    set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes,
+    zero_or_more, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber,
+    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -961,9 +961,9 @@ fn import<'a>() -> impl Parser<'a, (Loc<ValueDef<'a>>, &'a [CommentOrNewline<'a>
         and(
             loc(skip_first(
                 parser::keyword(keyword::IMPORT, EImport::Import),
-                increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
+                increment_min_indent(one_of!(import_body(), import_ingested_file_body())),
             )),
-            space0_e(EImport::EndNewline)
+            space0_e(EImport::EndNewline),
         ),
         |_arena, state, progress, (import, spaces_after)| {
             if !spaces_after.is_empty() || state.has_reached_end() {
@@ -985,7 +985,7 @@ fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
             alias: optional(import_as()),
             exposed: optional(import_exposing())
         }),
-        ValueDef::ModuleImport
+        ValueDef::ModuleImport,
     )
 }
 
@@ -993,7 +993,7 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
     then(
         and(
             backtrackable(space0_e(EImportParams::Indent)),
-            specialize_err(EImportParams::Record, record_help())
+            specialize_err(EImportParams::Record, record_help()),
         ),
         |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
             if let Some(update) = record.update {
@@ -1090,7 +1090,7 @@ fn import_exposed_name<'a>(
 ) -> impl Parser<'a, crate::ast::Spaced<'a, crate::header::ExposedName<'a>>, EImport<'a>> {
     map(
         specialize_err(|_, pos| EImport::ExposedName(pos), unqualified_ident()),
-        |n| Spaced::Item(crate::header::ExposedName::new(n))
+        |n| Spaced::Item(crate::header::ExposedName::new(n)),
     )
 }
 
@@ -1106,7 +1106,7 @@ fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>>
             name: import_ingested_file_as(),
             annotation: optional(import_ingested_file_annotation())
         }),
-        ValueDef::IngestedFileImport
+        ValueDef::IngestedFileImport,
     )
 }
 
@@ -1120,10 +1120,7 @@ fn import_ingested_file_as<'a>(
             EImport::IndentAs,
             EImport::IndentIngestedName
         ),
-        item: specialize_err(
-            |(), pos| EImport::IngestedName(pos),
-            loc(lowercase_ident())
-        )
+        item: specialize_err(|(), pos| EImport::IngestedName(pos), loc(lowercase_ident()))
     })
 }
 

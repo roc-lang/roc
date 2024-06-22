@@ -5,8 +5,8 @@ use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{
-    and, byte, loc, map_with_arena, skip_second, specialize_err, EPackageEntry, EPackageName,
-    Parser, skip_first
+    and, byte, loc, map_with_arena, skip_first, skip_second, specialize_err, EPackageEntry,
+    EPackageName, Parser,
 };
 use crate::parser::{optional, then};
 use crate::string_literal;
@@ -388,10 +388,10 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
             and(
                 optional(skip_first(
                     crate::parser::keyword(crate::keyword::PLATFORM, EPackageEntry::Platform),
-                    space0_e(EPackageEntry::IndentPackage)
+                    space0_e(EPackageEntry::IndentPackage),
                 )),
-                loc(specialize_err(EPackageEntry::BadPackage, package_name()))
-            )
+                loc(specialize_err(EPackageEntry::BadPackage, package_name())),
+            ),
         ),
         move |arena, (opt_shorthand, (platform_marker, package_or_path))| {
             let entry = match opt_shorthand {
