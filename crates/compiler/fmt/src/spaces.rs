@@ -149,6 +149,14 @@ pub fn fmt_comments_only<'a, 'buf, I>(
 }
 
 fn fmt_comment(buf: &mut Buf, comment: &str) {
+    // Format shebangs without whitespace. We look for " !" as well to fix incorrect formatting from
+    // the past.
+    if buf.is_empty() && (comment.starts_with('!') || comment.starts_with(" !")) {
+        buf.push('#');
+        buf.push_str(comment.trim());
+        return;
+    }
+
     // The '#' in a comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {

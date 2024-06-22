@@ -104,12 +104,14 @@ pub fn load_and_monomorphize_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     src_dir: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src, roc_cache_dir, src_dir)?;
+    let load_start =
+        LoadStart::from_str(arena, filename, opt_main_path, src, roc_cache_dir, src_dir)?;
     let exposed_types = ExposedByModule::default();
 
     match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
@@ -121,6 +123,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
@@ -129,6 +132,7 @@ pub fn load_and_monomorphize<'a>(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        opt_main_path,
         load_config.render,
         roc_cache_dir,
         load_config.palette,
@@ -145,6 +149,7 @@ pub fn load_and_monomorphize<'a>(
 pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
@@ -153,6 +158,7 @@ pub fn load_and_typecheck<'a>(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        opt_main_path,
         load_config.render,
         roc_cache_dir,
         load_config.palette,
@@ -172,6 +178,7 @@ pub fn load_and_typecheck_str<'a>(
     filename: PathBuf,
     source: &'a str,
     src_dir: PathBuf,
+    opt_main_path: Option<PathBuf>,
     target: Target,
     function_kind: FunctionKind,
     render: RenderTarget,
@@ -180,7 +187,14 @@ pub fn load_and_typecheck_str<'a>(
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source, roc_cache_dir, src_dir)?;
+    let load_start = LoadStart::from_str(
+        arena,
+        filename,
+        opt_main_path,
+        source,
+        roc_cache_dir,
+        src_dir,
+    )?;
 
     // NOTE: this function is meant for tests, and so we use single-threaded
     // solving so we don't use too many threads per-test. That gives higher

@@ -9,7 +9,7 @@ use crate::module::{
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
 use crossbeam::channel::{bounded, Sender};
-use crossbeam::deque::{Injector, Stealer, Worker};
+use crossbeam::deque::{Injector, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
@@ -49,13 +49,14 @@ use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::{
-    self, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader, PlatformHeader,
-    To, TypedIdent,
+    self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
+    PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
+use roc_reporting::error::r#type::suggest;
 #[cfg(not(target_family = "wasm"))]
 use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
@@ -65,10 +66,10 @@ use roc_solve_problem::TypeError;
 use roc_target::Target;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
+use roc_worker::{ChannelProblem, WorkerMsg};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
-use std::iter;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -80,8 +81,8 @@ use {
     roc_packaging::https::{PackageMetadata, Problem},
 };
 
-pub use crate::work::Phase;
-use crate::work::{DepCycle, Dependencies};
+pub use roc_work::Phase;
+use roc_work::{DepCycle, Dependencies};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_instant::{Duration, Instant};
@@ -93,6 +94,9 @@ const ROC_FILE_EXTENSION: &str = "roc";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
+
+/// Default name for the main module
+const DEFAULT_MAIN_NAME: &str = "main.roc";
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -146,7 +150,8 @@ fn start_phase<'a>(
 ) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
-    use crate::work::PrepareStartPhase::*;
+    use roc_work::PrepareStartPhase::*;
+
     match state.dependencies.prepare_start_phase(module_id, phase) {
         Continue => {
             // fall through
@@ -192,8 +197,10 @@ fn start_phase<'a>(
 
                 BuildTask::Parse {
                     header,
+                    arc_shorthands: Arc::clone(&state.arc_shorthands),
                     module_ids: Arc::clone(&state.arc_modules),
                     ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                    root_type: state.root_type.clone(),
                 }
             }
             Phase::CanonicalizeAndConstrain => {
@@ -685,6 +692,7 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub root_path: PathBuf,
+    pub root_type: RootType,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
     pub opt_platform_shorthand: Option<&'a str>,
@@ -754,19 +762,20 @@ impl<'a> State<'a> {
     fn new(
         root_id: ModuleId,
         root_path: PathBuf,
+        root_type: RootType,
         opt_platform_shorthand: Option<&'a str>,
         target: Target,
         function_kind: FunctionKind,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
+        arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
         cached_types: MutMap<ModuleId, TypeState>,
         render: RenderTarget,
         palette: Palette,
         number_of_workers: usize,
         exec_mode: ExecutionMode,
     ) -> Self {
-        let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
         let cache_dir = roc_packaging::cache::roc_cache_dir();
         let dependencies = Dependencies::new(exec_mode.goal_phase());
 
@@ -774,6 +783,7 @@ impl<'a> State<'a> {
             root_id,
             root_path,
             root_subs: None,
+            root_type,
             opt_platform_shorthand,
             cache_dir,
             target,
@@ -865,8 +875,10 @@ enum BuildTask<'a> {
     },
     Parse {
         header: ModuleHeader<'a>,
+        arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
+        root_type: RootType,
     },
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
@@ -928,12 +940,6 @@ enum BuildTask<'a> {
 }
 
 #[derive(Debug)]
-enum WorkerMsg {
-    Shutdown,
-    TaskAdded,
-}
-
-#[derive(Debug)]
 pub struct IncorrectModuleName<'a> {
     pub module_id: ModuleId,
     pub found: Loc<PQModuleName<'a>>,
@@ -960,6 +966,14 @@ pub enum LoadingProblem<'a> {
         source: &'a [u8],
         region: Region,
     },
+    UnrecognizedPackageShorthand {
+        filename: PathBuf,
+        module_id: ModuleId,
+        source: &'a str,
+        region: Region,
+        shorthand: &'a str,
+        available: AvailableShorthands<'a>,
+    },
 
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -974,23 +988,22 @@ pub enum LoadingProblem<'a> {
 }
 
 #[derive(Debug)]
-pub enum ChannelProblem {
-    FailedToEnqueueTask(Box<PanicReportInfo>),
-    FailedToSendRootMsg,
-    FailedToSendWorkerShutdownMsg,
-    ChannelDisconnected,
-    FailedToSendManyMsg,
-    FailedToSendFinishedSpecializationsMsg,
-    FailedToSendTaskMsg,
-    FailedToSendFinishedTypeCheckingMsg,
+pub enum AvailableShorthands<'a> {
+    FromRoot(Vec<&'a str>),
+    FromMain(PathBuf, Vec<&'a str>),
+    UnknownMain,
 }
 
-#[derive(Debug)]
-pub struct PanicReportInfo {
-    can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: MutMap<ModuleId, Vec<TypeError>>,
-    sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
-    interns: Interns,
+impl<'a> AvailableShorthands<'a> {
+    fn new(root_type: RootType, shorthands: Vec<&'a str>) -> Self {
+        match root_type {
+            RootType::Main => AvailableShorthands::FromRoot(shorthands),
+            RootType::Module { main_path } => match main_path {
+                None => AvailableShorthands::UnknownMain,
+                Some(main_path) => AvailableShorthands::FromMain(main_path, shorthands),
+            },
+        }
+    }
 }
 
 pub enum Phases {
@@ -1007,35 +1020,13 @@ fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
     task: BuildTask<'a>,
-    state: &State<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
-        listener.send(WorkerMsg::TaskAdded).map_err(|_| {
-            let module_ids = { (*state.arc_modules).lock().clone() }.into_module_ids();
-
-            let interns = Interns {
-                module_ids,
-                all_ident_ids: state.constrained_ident_ids.clone(),
-            };
-
-            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(Box::new(
-                PanicReportInfo {
-                    can_problems: state.module_cache.can_problems.clone(),
-                    type_problems: state.module_cache.type_problems.clone(),
-                    interns,
-                    sources: state
-                        .module_cache
-                        .sources
-                        .iter()
-                        .map(|(key, (path, str_ref))| {
-                            (*key, (path.clone(), str_ref.to_string().into_boxed_str()))
-                        })
-                        .collect(),
-                },
-            )))
-        })?;
+        listener
+            .send(WorkerMsg::TaskAdded)
+            .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask))?;
     }
 
     Ok(())
@@ -1046,6 +1037,7 @@ pub fn load_and_typecheck_str<'a>(
     filename: PathBuf,
     source: &'a str,
     src_dir: PathBuf,
+    opt_main_path: Option<PathBuf>,
     exposed_types: ExposedByModule,
     target: Target,
     function_kind: FunctionKind,
@@ -1056,7 +1048,14 @@ pub fn load_and_typecheck_str<'a>(
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source, roc_cache_dir, src_dir)?;
+    let load_start = LoadStart::from_str(
+        arena,
+        filename,
+        opt_main_path,
+        source,
+        roc_cache_dir,
+        src_dir,
+    )?;
 
     // this function is used specifically in the case
     // where we want to regenerate the cached data
@@ -1093,69 +1092,93 @@ pub enum PrintTarget {
 pub struct LoadStart<'a> {
     arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     root_id: ModuleId,
     root_path: PathBuf,
     root_msg: Msg<'a>,
+    root_type: RootType,
     opt_platform_shorthand: Option<&'a str>,
     src_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+enum RootType {
+    Main,
+    Module { main_path: Option<PathBuf> },
 }
 
 impl<'a> LoadStart<'a> {
     pub fn from_path(
         arena: &'a Bump,
         filename: PathBuf,
+        opt_main_path: Option<PathBuf>,
         render: RenderTarget,
         roc_cache_dir: RocCacheDir<'_>,
         palette: Palette,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
+        let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
         let mut src_dir = filename.parent().unwrap().to_path_buf();
 
         // Load the root module synchronously; we can't proceed until we have its id.
-        let header_output = {
-            let root_start_time = Instant::now();
+        let root_start_time = Instant::now();
 
-            let res_loaded = load_filename(
+        let load_result = load_filename(
+            arena,
+            filename.clone(),
+            true,
+            None,
+            None,
+            Arc::clone(&arc_modules),
+            Arc::clone(&ident_ids_by_module),
+            roc_cache_dir,
+            root_start_time,
+        );
+
+        let load_result = match load_result {
+            Ok(header_output) => handle_root_type(
                 arena,
-                filename.clone(),
-                true,
-                None,
-                None,
+                Arc::clone(&arc_shorthands),
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 roc_cache_dir,
-                root_start_time,
-            );
+                header_output,
+                opt_main_path,
+                &mut src_dir,
+            ),
+            Err(problem) => Err(problem),
+        };
 
-            match res_loaded {
-                Ok(header_output) => adjust_header_paths(header_output, &mut src_dir),
+        let (header_output, root_type) = match load_result {
+            Ok(header_output) => header_output,
 
-                Err(problem) => {
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .into_module_ids();
+            Err(problem) => {
+                let module_ids = Arc::try_unwrap(arc_modules)
+                    .unwrap_or_else(|_| {
+                        panic!("There were still outstanding Arc references to module_ids")
+                    })
+                    .into_inner()
+                    .into_module_ids();
 
-                    let report = report_loading_problem(problem, module_ids, render, palette);
+                let report = report_loading_problem(problem, module_ids, render, palette);
 
-                    // TODO try to gracefully recover and continue
-                    // instead of changing the control flow to exit.
-                    return Err(LoadingProblem::FormattedReport(report));
-                }
+                // TODO try to gracefully recover and continue
+                // instead of changing the control flow to exit.
+                return Err(LoadingProblem::FormattedReport(report));
             }
         };
 
         Ok(LoadStart {
             arc_modules,
             ident_ids_by_module,
+            arc_shorthands,
             src_dir,
             root_id: header_output.module_id,
             root_path: filename,
             root_msg: header_output.msg,
+            root_type,
             opt_platform_shorthand: header_output.opt_platform_shorthand,
         })
     }
@@ -1163,51 +1186,70 @@ impl<'a> LoadStart<'a> {
     pub fn from_str(
         arena: &'a Bump,
         filename: PathBuf,
+        opt_main_path: Option<PathBuf>,
         src: &'a str,
         roc_cache_dir: RocCacheDir<'_>,
         mut src_dir: PathBuf,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
+        let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
         // Load the root module synchronously; we can't proceed until we have its id.
+        let root_start_time = Instant::now();
+
+        let header_output = load_from_str(
+            arena,
+            filename.clone(),
+            src,
+            Arc::clone(&arc_modules),
+            Arc::clone(&ident_ids_by_module),
+            roc_cache_dir,
+            root_start_time,
+        )?;
+
+        let (header_output, root_type) = handle_root_type(
+            arena,
+            Arc::clone(&arc_shorthands),
+            Arc::clone(&arc_modules),
+            Arc::clone(&ident_ids_by_module),
+            roc_cache_dir,
+            header_output,
+            opt_main_path,
+            &mut src_dir,
+        )?;
+
         let HeaderOutput {
             module_id: root_id,
             msg: root_msg,
             opt_platform_shorthand: opt_platform_id,
-        } = {
-            let root_start_time = Instant::now();
-
-            let header_output = load_from_str(
-                arena,
-                filename.clone(),
-                src,
-                Arc::clone(&arc_modules),
-                Arc::clone(&ident_ids_by_module),
-                roc_cache_dir,
-                root_start_time,
-            )?;
-
-            adjust_header_paths(header_output, &mut src_dir)
-        };
+        } = header_output;
 
         Ok(LoadStart {
             arc_modules,
+            arc_shorthands,
             src_dir,
             ident_ids_by_module,
             root_id,
             root_path: filename,
             root_msg,
+            root_type,
             opt_platform_shorthand: opt_platform_id,
         })
     }
 }
 
-fn adjust_header_paths<'a>(
-    header_output: HeaderOutput<'a>,
+fn handle_root_type<'a>(
+    arena: &'a Bump,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
+    arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+    roc_cache_dir: RocCacheDir<'_>,
+    mut header_output: HeaderOutput<'a>,
+    opt_main_path: Option<PathBuf>,
     src_dir: &mut PathBuf,
-) -> HeaderOutput<'a> {
+) -> Result<(HeaderOutput<'a>, RootType), LoadingProblem<'a>> {
     if let Msg::Header(ModuleHeader {
         module_id: header_id,
         header_type,
@@ -1216,21 +1258,119 @@ fn adjust_header_paths<'a>(
     {
         debug_assert_eq!(*header_id, header_output.module_id);
 
-        if let HeaderType::Module { name, .. } = header_type {
-            // [modules-revamp] TODO: Privacy changes
-            // Modules can have names like Foo.Bar.Baz,
-            // in which case we need to adjust the src_dir to
-            // remove the "Bar/Baz" directories in order to correctly
-            // resolve this interface module's imports!
-            let dirs_to_pop = name.as_str().matches('.').count();
+        use HeaderType::*;
 
-            for _ in 0..dirs_to_pop {
-                src_dir.pop();
+        match header_type {
+            Module { .. } | Builtin { .. } | Hosted { .. } => {
+                let main_path = opt_main_path.or_else(|| find_main_roc_recursively(src_dir));
+
+                let cache_dir = roc_cache_dir.as_persistent_path();
+
+                if let (Some(main_path), Some(cache_dir)) = (main_path.clone(), cache_dir) {
+                    let mut messages = Vec::with_capacity(4);
+                    messages.push(header_output.msg);
+
+                    load_packages_from_main(
+                        arena,
+                        src_dir.clone(),
+                        main_path,
+                        &mut messages,
+                        Arc::clone(&arc_modules),
+                        Arc::clone(&ident_ids_by_module),
+                        Arc::clone(&arc_shorthands),
+                        cache_dir,
+                    )?;
+
+                    header_output.msg = Msg::Many(messages);
+                }
+
+                Ok((header_output, RootType::Module { main_path }))
+            }
+            App { .. } | Package { .. } | Platform { .. } => Ok((header_output, RootType::Main)),
+        }
+    } else {
+        Ok((header_output, RootType::Main))
+    }
+}
+
+fn find_main_roc_recursively(src_dir: &mut PathBuf) -> Option<PathBuf> {
+    let original_src_dir = src_dir.clone();
+
+    loop {
+        match src_dir.join(DEFAULT_MAIN_NAME).canonicalize() {
+            Ok(main_roc) => break Some(main_roc),
+            Err(_) => {
+                if !src_dir.pop() {
+                    // reached the root, no main.roc found
+                    *src_dir = original_src_dir;
+                    break None;
+                }
             }
         }
     }
+}
 
-    header_output
+fn load_packages_from_main<'a>(
+    arena: &'a Bump,
+    src_dir: PathBuf,
+    filename: PathBuf,
+    messages: &mut Vec<Msg<'a>>,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
+    cache_dir: &Path,
+) -> Result<(), LoadingProblem<'a>> {
+    let src_bytes = fs::read(&filename).map_err(|err| LoadingProblem::FileProblem {
+        filename: filename.clone(),
+        error: err.kind(),
+    })?;
+
+    let parse_state = roc_parse::state::State::new(arena.alloc(src_bytes));
+
+    let (parsed_module, _) =
+        roc_parse::module::parse_header(arena, parse_state.clone()).map_err(|fail| {
+            LoadingProblem::ParsingFailed(
+                fail.map_problem(SyntaxError::Header)
+                    .into_file_error(filename.clone()),
+            )
+        })?;
+
+    use ast::Header::*;
+
+    let packages = match parsed_module.header {
+        App(AppHeader { packages, .. }) | Package(PackageHeader { packages, .. }) => {
+            unspace(arena, packages.value.items)
+        }
+        Platform(PlatformHeader { packages, .. }) => unspace(arena, packages.item.items),
+        Module(_) | Hosted(_) => todo!("expected {} to be an app or package", filename.display()),
+    };
+
+    load_packages(
+        packages,
+        messages,
+        RocCacheDir::Persistent(cache_dir),
+        src_dir.clone(),
+        arena,
+        None,
+        module_ids,
+        ident_ids_by_module,
+        filename.clone(),
+    );
+
+    let package_entries = packages
+        .iter()
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
+        .collect::<MutMap<_, _>>();
+
+    let mut shorthands = arc_shorthands.lock();
+
+    register_package_shorthands(
+        &mut shorthands,
+        &package_entries,
+        &filename,
+        &src_dir,
+        cache_dir,
+    )
 }
 
 pub enum LoadResult<'a> {
@@ -1372,9 +1512,11 @@ pub fn load_single_threaded<'a>(
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
+        arc_shorthands,
         root_id,
         root_path,
         root_msg,
+        root_type,
         src_dir,
         opt_platform_shorthand,
         ..
@@ -1390,12 +1532,14 @@ pub fn load_single_threaded<'a>(
     let mut state = State::new(
         root_id,
         root_path,
+        root_type,
         opt_platform_shorthand,
         target,
         function_kind,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
+        arc_shorthands,
         cached_types,
         render,
         palette,
@@ -1433,24 +1577,17 @@ pub fn load_single_threaded<'a>(
         }
 
         // then check if the worker can step
-        let control_flow = worker_task_step(
-            arena,
-            &worker,
-            &injector,
-            stealers,
-            &worker_msg_rx,
-            &msg_tx,
-            &src_dir,
-            roc_cache_dir,
-            target,
-        );
+        let control_flow =
+            roc_worker::worker_task_step(&worker, &injector, stealers, &worker_msg_rx, |task| {
+                run_task(task, arena, &src_dir, msg_tx.clone(), roc_cache_dir, target)
+            });
 
         match control_flow {
             Ok(ControlFlow::Break(())) => panic!("the worker should not break!"),
             Ok(ControlFlow::Continue(())) => {
                 // progress was made
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(LoadingProblem::ChannelProblem(e)),
         }
     }
 }
@@ -1628,6 +1765,30 @@ fn state_thread_step<'a>(
                             );
                             return Err(LoadingProblem::FormattedReport(buf));
                         }
+                        Err(LoadingProblem::UnrecognizedPackageShorthand {
+                            filename,
+                            module_id,
+                            source,
+                            region,
+                            shorthand,
+                            available,
+                        }) => {
+                            let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_unrecognized_package_shorthand_report(
+                                module_ids,
+                                root_exposed_ident_ids,
+                                module_id,
+                                filename,
+                                region,
+                                source,
+                                shorthand,
+                                available,
+                                render,
+                            );
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
                         Err(e) => Err(e),
                     }
                 }
@@ -1707,6 +1868,24 @@ pub fn report_loading_problem(
             source,
             render,
         ),
+        LoadingProblem::UnrecognizedPackageShorthand {
+            filename,
+            module_id,
+            region,
+            source,
+            shorthand,
+            available,
+        } => to_unrecognized_package_shorthand_report(
+            module_ids,
+            IdentIds::exposed_builtins(0),
+            module_id,
+            filename,
+            region,
+            source,
+            shorthand,
+            available,
+            render,
+        ),
         err => todo!("Loading error: {:?}", err),
     }
 }
@@ -1727,9 +1906,11 @@ fn load_multi_threaded<'a>(
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
+        arc_shorthands,
         root_id,
         root_path,
         root_msg,
+        root_type,
         src_dir,
         opt_platform_shorthand,
         ..
@@ -1760,12 +1941,14 @@ fn load_multi_threaded<'a>(
     let mut state = State::new(
         root_id,
         root_path,
+        root_type,
         opt_platform_shorthand,
         target,
         function_kind,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
+        arc_shorthands,
         cached_types,
         render,
         palette,
@@ -1799,11 +1982,6 @@ fn load_multi_threaded<'a>(
     let stealers = stealers.into_bump_slice();
     let it = worker_arenas.iter_mut();
 
-    let mut can_problems_recorded = MutMap::default();
-    let mut type_problems_recorded = MutMap::default();
-    let mut sources_recorded = MutMap::default();
-    let mut interns_recorded = Interns::default();
-
     {
         let thread_result = thread::scope(|thread_scope| {
             let mut worker_listeners =
@@ -1828,17 +2006,16 @@ fn load_multi_threaded<'a>(
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
                         // will process messages until we run out
-                        worker_task(
-                            worker_arena,
-                            worker,
-                            injector,
-                            stealers,
-                            worker_msg_rx,
-                            msg_tx,
-                            src_dir,
-                            roc_cache_dir,
-                            target,
-                        )
+                        roc_worker::worker_task(worker, injector, stealers, worker_msg_rx, |task| {
+                            run_task(
+                                task,
+                                worker_arena,
+                                src_dir,
+                                msg_tx.clone(),
+                                roc_cache_dir,
+                                target,
+                            )
+                        })
                     });
 
                 res_join_handle.unwrap_or_else(|_| {
@@ -1891,36 +2068,6 @@ fn load_multi_threaded<'a>(
                         state = new_state;
                         continue;
                     }
-                    Err(LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(
-                        info,
-                    ))) => {
-                        let PanicReportInfo {
-                            can_problems,
-                            type_problems,
-                            sources,
-                            interns,
-                        } = *info;
-
-                        // Record these for later.
-                        can_problems_recorded = can_problems;
-                        type_problems_recorded = type_problems;
-                        sources_recorded = sources;
-                        interns_recorded = interns;
-
-                        shut_down_worker_threads!();
-
-                        return Err(LoadingProblem::ChannelProblem(
-                            ChannelProblem::FailedToEnqueueTask(Box::new(PanicReportInfo {
-                                // This return value never gets used, so don't bother
-                                // cloning these in order to be able to return them.
-                                // Really, anything could go here.
-                                can_problems: Default::default(),
-                                type_problems: Default::default(),
-                                sources: Default::default(),
-                                interns: Default::default(),
-                            })),
-                        ));
-                    }
                     Err(e) => {
                         shut_down_worker_threads!();
 
@@ -1957,174 +2104,6 @@ fn load_multi_threaded<'a>(
     }
 }
 
-fn worker_task_step<'a>(
-    worker_arena: &'a Bump,
-    worker: &Worker<BuildTask<'a>>,
-    injector: &Injector<BuildTask<'a>>,
-    stealers: &[Stealer<BuildTask<'a>>],
-    worker_msg_rx: &crossbeam::channel::Receiver<WorkerMsg>,
-    msg_tx: &MsgSender<'a>,
-    src_dir: &Path,
-    roc_cache_dir: RocCacheDir<'_>,
-    target: Target,
-) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
-    match worker_msg_rx.try_recv() {
-        Ok(msg) => {
-            match msg {
-                WorkerMsg::Shutdown => {
-                    // We've finished all our work. It's time to
-                    // shut down the thread, so when the main thread
-                    // blocks on joining with all the worker threads,
-                    // it can finally exit too!
-                    Ok(ControlFlow::Break(()))
-                }
-                WorkerMsg::TaskAdded => {
-                    // Find a task - either from this thread's queue,
-                    // or from the main queue, or from another worker's
-                    // queue - and run it.
-                    //
-                    // There might be no tasks to work on! That could
-                    // happen if another thread is working on a task
-                    // which will later result in more tasks being
-                    // added. In that case, do nothing, and keep waiting
-                    // until we receive a Shutdown message.
-                    if let Some(task) = find_task(worker, injector, stealers) {
-                        let result = run_task(
-                            task,
-                            worker_arena,
-                            src_dir,
-                            msg_tx.clone(),
-                            roc_cache_dir,
-                            target,
-                        );
-
-                        match result {
-                            Ok(()) => {}
-                            Err(LoadingProblem::ChannelProblem(problem)) => {
-                                panic!("Channel problem: {problem:?}");
-                            }
-                            Err(LoadingProblem::ParsingFailed(problem)) => {
-                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
-                            }
-                            Err(LoadingProblem::FileProblem { filename, error }) => {
-                                msg_tx
-                                    .send(Msg::FailedToReadFile { filename, error })
-                                    .unwrap();
-                            }
-                            Err(LoadingProblem::IncorrectModuleName(err)) => {
-                                msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
-                            }
-                            Err(other) => {
-                                return Err(other);
-                            }
-                        }
-                    }
-
-                    Ok(ControlFlow::Continue(()))
-                }
-            }
-        }
-        Err(err) => match err {
-            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(())),
-            crossbeam::channel::TryRecvError::Disconnected => Ok(ControlFlow::Break(())),
-        },
-    }
-}
-
-fn worker_task<'a>(
-    worker_arena: &'a Bump,
-    worker: Worker<BuildTask<'a>>,
-    injector: &Injector<BuildTask<'a>>,
-    stealers: &[Stealer<BuildTask<'a>>],
-    worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
-    msg_tx: MsgSender<'a>,
-    src_dir: &Path,
-    roc_cache_dir: RocCacheDir<'_>,
-    target: Target,
-) -> Result<(), LoadingProblem<'a>> {
-    // Keep listening until we receive a Shutdown msg
-    for msg in worker_msg_rx.iter() {
-        match msg {
-            WorkerMsg::Shutdown => {
-                // We've finished all our work. It's time to
-                // shut down the thread, so when the main thread
-                // blocks on joining with all the worker threads,
-                // it can finally exit too!
-                return Ok(());
-            }
-            WorkerMsg::TaskAdded => {
-                // Find a task - either from this thread's queue,
-                // or from the main queue, or from another worker's
-                // queue - and run it.
-                //
-                // There might be no tasks to work on! That could
-                // happen if another thread is working on a task
-                // which will later result in more tasks being
-                // added. In that case, do nothing, and keep waiting
-                // until we receive a Shutdown message.
-                if let Some(task) = find_task(&worker, injector, stealers) {
-                    log!(
-                        ">>> {}",
-                        match &task {
-                            BuildTask::LoadModule { module_name, .. } => {
-                                format!("BuildTask::LoadModule({module_name:?})")
-                            }
-                            BuildTask::Parse { header, .. } => {
-                                format!("BuildTask::Parse({})", header.module_path.display())
-                            }
-                            BuildTask::CanonicalizeAndConstrain { parsed, .. } => format!(
-                                "BuildTask::CanonicalizeAndConstrain({})",
-                                parsed.module_path.display()
-                            ),
-                            BuildTask::Solve { module, .. } => {
-                                format!("BuildTask::Solve({:?})", module.module_id)
-                            }
-                            BuildTask::BuildPendingSpecializations { module_id, .. } => {
-                                format!("BuildTask::BuildPendingSpecializations({module_id:?})")
-                            }
-                            BuildTask::MakeSpecializations { module_id, .. } => {
-                                format!("BuildTask::MakeSpecializations({module_id:?})")
-                            }
-                        }
-                    );
-
-                    let result = run_task(
-                        task,
-                        worker_arena,
-                        src_dir,
-                        msg_tx.clone(),
-                        roc_cache_dir,
-                        target,
-                    );
-
-                    match result {
-                        Ok(()) => {}
-                        Err(LoadingProblem::ChannelProblem(problem)) => {
-                            panic!("Channel problem: {problem:?}");
-                        }
-                        Err(LoadingProblem::ParsingFailed(problem)) => {
-                            msg_tx.send(Msg::FailedToParse(problem)).unwrap();
-                        }
-                        Err(LoadingProblem::FileProblem { filename, error }) => {
-                            msg_tx
-                                .send(Msg::FailedToReadFile { filename, error })
-                                .unwrap();
-                        }
-                        Err(LoadingProblem::IncorrectModuleName(err)) => {
-                            msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
-                        }
-                        Err(other) => {
-                            return Err(other);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn start_tasks<'a>(
     arena: &'a Bump,
     state: &mut State<'a>,
@@ -2136,7 +2115,7 @@ fn start_tasks<'a>(
         let tasks = start_phase(module_id, phase, arena, state);
 
         for task in tasks {
-            enqueue_task(injector, worker_listeners, task, state)?
+            enqueue_task(injector, worker_listeners, task)?
         }
     }
 
@@ -2216,161 +2195,89 @@ fn update<'a>(
             Ok(state)
         }
         Header(header) => {
-            use HeaderType::*;
-
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
             let mut work = MutSet::default();
 
-            // Register the package's path under its shorthand
-            // (e.g. for { pf: "blah" }, register that "pf" should resolve to "blah")
-            {
-                let mut shorthands = (*state.arc_shorthands).lock();
+            // Only lock shorthands if this header has packages
+            if !header.packages.is_empty() {
+                let mut shorthands = state.arc_shorthands.lock();
 
-                for (shorthand, package_name) in header.packages.iter() {
-                    let package_str = package_name.as_str();
-                    let shorthand_path = if package_str.starts_with("https://") {
-                        #[cfg(not(target_family = "wasm"))]
-                        {
-                            let url = package_str;
-                            match PackageMetadata::try_from(url) {
-                                Ok(url_metadata) => {
-                                    // This was a valid URL
-                                    let root_module_dir = state
-                                        .cache_dir
-                                        .join(url_metadata.cache_subdir)
-                                        .join(url_metadata.content_hash);
-                                    let root_module = root_module_dir.join(
-                                        url_metadata.root_module_filename.unwrap_or("main.roc"),
-                                    );
+                register_package_shorthands(
+                    &mut shorthands,
+                    &header.packages,
+                    &header.module_path,
+                    src_dir,
+                    &state.cache_dir,
+                )?;
+            }
 
-                                    ShorthandPath::FromHttpsUrl {
-                                        root_module_dir,
-                                        root_module,
-                                    }
-                                }
-                                Err(url_err) => {
-                                    let buf = to_https_problem_report_string(
-                                        url,
-                                        Problem::InvalidUrl(url_err),
-                                        header.module_path,
-                                    );
-                                    return Err(LoadingProblem::FormattedReport(buf));
-                                }
-                            }
-                        }
+            use HeaderType::*;
 
-                        #[cfg(target_family = "wasm")]
-                        {
-                            panic!(
-                                "Specifying packages via URLs is currently unsupported in wasm."
-                            );
-                        }
+            match header.header_type {
+                App { to_platform, .. } => {
+                    state.platform_path = PlatformPath::Valid(to_platform);
+                }
+                Package {
+                    config_shorthand,
+                    exposes_ids,
+                    ..
+                } => {
+                    if header.is_root_module {
+                        state.exposed_modules = exposes_ids;
+                    }
+
+                    work.extend(state.dependencies.notify_package(config_shorthand));
+                }
+                Platform {
+                    config_shorthand,
+                    provides,
+                    exposes_ids,
+                    ..
+                } => {
+                    work.extend(state.dependencies.notify_package(config_shorthand));
+
+                    let is_prebuilt = if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsPlatformModule;
+
+                        // If the root module is this platform, then the platform is the very
+                        // thing we're rebuilding!
+                        false
                     } else {
-                        // This wasn't a URL, so it must be a filesystem path.
-                        let root_module: PathBuf = src_dir.join(package_str);
-                        let root_module_dir = root_module.parent().unwrap_or_else(|| {
-                            if root_module.is_file() {
-                                // Files must have parents!
-                                internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
-                            } else {
-                                // TODO make this a nice report
-                                todo!(
-                                    "platform module {:?} was not a file.",
-                                    package_str
-                                )
-                            }
-                        }).into();
-
-                        ShorthandPath::RelativeToSrc {
-                            root_module_dir,
-                            root_module,
-                        }
+                        // platforms from HTTPS URLs are always prebuilt
+                        matches!(
+                            state.arc_shorthands.lock().get(config_shorthand),
+                            Some(ShorthandPath::FromHttpsUrl { .. })
+                        )
                     };
 
-                    log!(
-                        "New package shorthand: {:?} => {:?}",
-                        shorthand,
-                        shorthand_path
-                    );
+                    // If we're building an app module, and this was the platform
+                    // specified in its header's `to` field, record it as our platform.
+                    if state.opt_platform_shorthand == Some(config_shorthand) {
+                        debug_assert!(state.platform_data.is_none());
 
-                    shorthands.insert(shorthand, shorthand_path);
+                        state.platform_data = Some(PlatformData {
+                            module_id: header.module_id,
+                            provides,
+                            is_prebuilt,
+                        });
+                    }
+
+                    if header.is_root_module {
+                        state.exposed_modules = exposes_ids;
+                    }
                 }
-
-                match header.header_type {
-                    App { to_platform, .. } => {
-                        state.platform_path = PlatformPath::Valid(to_platform);
+                Builtin { .. } | Module { .. } => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsModule;
                     }
-                    Package {
-                        config_shorthand,
-                        exposes_ids,
-                        ..
-                    } => {
-                        if header.is_root_module {
-                            state.exposed_modules = exposes_ids;
-                        }
-
-                        work.extend(state.dependencies.notify_package(config_shorthand));
-                    }
-                    Platform {
-                        config_shorthand,
-                        provides,
-                        exposes_ids,
-                        ..
-                    } => {
-                        work.extend(state.dependencies.notify_package(config_shorthand));
-
-                        let is_prebuilt = if header.is_root_module {
-                            debug_assert!(matches!(
-                                state.platform_path,
-                                PlatformPath::NotSpecified
-                            ));
-                            state.platform_path = PlatformPath::RootIsPlatformModule;
-
-                            // If the root module is this platform, then the platform is the very
-                            // thing we're rebuilding!
-                            false
-                        } else {
-                            // platforms from HTTPS URLs are always prebuilt
-                            matches!(
-                                shorthands.get(config_shorthand),
-                                Some(ShorthandPath::FromHttpsUrl { .. })
-                            )
-                        };
-
-                        // If we're building an app module, and this was the platform
-                        // specified in its header's `to` field, record it as our platform.
-                        if state.opt_platform_shorthand == Some(config_shorthand) {
-                            debug_assert!(state.platform_data.is_none());
-
-                            state.platform_data = Some(PlatformData {
-                                module_id: header.module_id,
-                                provides,
-                                is_prebuilt,
-                            });
-                        }
-
-                        if header.is_root_module {
-                            state.exposed_modules = exposes_ids;
-                        }
-                    }
-                    Builtin { .. } | Module { .. } => {
-                        if header.is_root_module {
-                            debug_assert!(matches!(
-                                state.platform_path,
-                                PlatformPath::NotSpecified
-                            ));
-                            state.platform_path = PlatformPath::RootIsModule;
-                        }
-                    }
-                    Hosted { .. } => {
-                        if header.is_root_module {
-                            debug_assert!(matches!(
-                                state.platform_path,
-                                PlatformPath::NotSpecified
-                            ));
-                            state.platform_path = PlatformPath::RootIsHosted;
-                        }
+                }
+                Hosted { .. } => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsHosted;
                     }
                 }
             }
@@ -3091,6 +2998,85 @@ fn update<'a>(
     }
 }
 
+fn register_package_shorthands<'a>(
+    shorthands: &mut MutMap<&'a str, ShorthandPath>,
+    package_entries: &MutMap<&'a str, header::PackageName<'a>>,
+    module_path: &Path,
+    src_dir: &Path,
+    cache_dir: &Path,
+) -> Result<(), LoadingProblem<'a>> {
+    for (shorthand, package_name) in package_entries.iter() {
+        let package_str = package_name.as_str();
+        let shorthand_path = if package_str.starts_with("https://") {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let url = package_str;
+                match PackageMetadata::try_from(url) {
+                    Ok(url_metadata) => {
+                        // This was a valid URL
+                        let root_module_dir = cache_dir
+                            .join(url_metadata.cache_subdir)
+                            .join(url_metadata.content_hash);
+                        let root_module = root_module_dir.join(
+                            url_metadata
+                                .root_module_filename
+                                .unwrap_or(DEFAULT_MAIN_NAME),
+                        );
+
+                        ShorthandPath::FromHttpsUrl {
+                            root_module_dir,
+                            root_module,
+                        }
+                    }
+                    Err(url_err) => {
+                        let buf = to_https_problem_report_string(
+                            url,
+                            Problem::InvalidUrl(url_err),
+                            module_path.to_path_buf(),
+                        );
+                        return Err(LoadingProblem::FormattedReport(buf));
+                    }
+                }
+            }
+
+            #[cfg(target_family = "wasm")]
+            {
+                panic!("Specifying packages via URLs is currently unsupported in wasm.");
+            }
+        } else {
+            // This wasn't a URL, so it must be a filesystem path.
+            let root_module: PathBuf = src_dir.join(package_str);
+            let root_module_dir = root_module.parent().unwrap_or_else(|| {
+                if root_module.is_file() {
+                    // Files must have parents!
+                    internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
+                } else {
+                    // TODO make this a nice report
+                    todo!(
+                        "platform module {:?} was not a file.",
+                        package_str
+                    )
+                }
+            }).into();
+
+            ShorthandPath::RelativeToSrc {
+                root_module_dir,
+                root_module,
+            }
+        };
+
+        log!(
+            "New package shorthand: {:?} => {:?}",
+            shorthand,
+            shorthand_path
+        );
+
+        shorthands.insert(shorthand, shorthand_path);
+    }
+
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
     let (cache_stats, raw_function_cache_stats) = layout_cache.statistics();
@@ -3361,7 +3347,7 @@ fn load_package_from_disk<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
-    app_module_id: ModuleId,
+    app_module_id: Option<ModuleId>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
@@ -3422,7 +3408,7 @@ fn load_package_from_disk<'a>(
                     let (_, _, package_module_msg) = build_package_header(
                         arena,
                         Some(shorthand),
-                        false, // since we have an app module ID, the app module must be the root
+                        false, // cannot be the root if loaded as a package
                         filename.to_path_buf(),
                         parser_state,
                         module_ids,
@@ -3452,7 +3438,8 @@ fn load_package_from_disk<'a>(
                     let (_, _, platform_module_msg) = build_platform_header(
                         arena,
                         Some(shorthand),
-                        Some(app_module_id),
+                        false, // cannot be the root if loaded as a package
+                        app_module_id,
                         filename.to_path_buf(),
                         parser_state,
                         module_ids,
@@ -3710,32 +3697,6 @@ fn module_name_to_path<'a>(
     (filename, opt_shorthand)
 }
 
-/// Find a task according to the following algorithm:
-///
-/// 1. Look in a local Worker queue. If it has a task, pop it off the queue and return it.
-/// 2. If that queue was empty, ask the global queue for a task.
-/// 3. If the global queue is also empty, iterate through each Stealer (each Worker queue has a
-///    corresponding Stealer, which can steal from it. Stealers can be shared across threads.)
-///
-/// Based on https://docs.rs/crossbeam/0.7.3/crossbeam/deque/index.html#examples
-fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]) -> Option<T> {
-    // Pop a task from the local queue, if not empty.
-    local.pop().or_else(|| {
-        // Otherwise, we need to look for a task elsewhere.
-        iter::repeat_with(|| {
-            // Try stealing a task from the global queue.
-            global
-                .steal()
-                // Or try stealing a task from one of the other threads.
-                .or_else(|| stealers.iter().map(|s| s.steal()).collect())
-        })
-        // Loop while no task was stolen and any steal operation needs to be retried.
-        .find(|s| !s.is_retry())
-        // Extract the stolen task, if there is one.
-        .and_then(|s| s.success())
-    })
-}
-
 #[derive(Debug)]
 struct HeaderOutput<'a> {
     module_id: ModuleId,
@@ -3744,14 +3705,19 @@ struct HeaderOutput<'a> {
     opt_platform_shorthand: Option<&'a str>,
 }
 
-fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
+pub enum RocFileErr {
+    InvalidExtension,
+    NotDotRocAndNoHashbangOnFirstLine,
+    InvalidUtf8,
+}
+
+fn ensure_roc_file(filename: &Path, src_bytes: &[u8]) -> Result<(), RocFileErr> {
     match filename.extension() {
         Some(ext) => {
-            if ext != ROC_FILE_EXTENSION {
-                return Err(LoadingProblem::FileProblem {
-                    filename: filename.to_path_buf(),
-                    error: io::ErrorKind::Unsupported,
-                });
+            if ext == ROC_FILE_EXTENSION {
+                Ok(())
+            } else {
+                Err(RocFileErr::InvalidExtension)
             }
         }
         None => {
@@ -3759,18 +3725,19 @@ fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingP
                 .iter()
                 .position(|a| *a == b'\n')
                 .unwrap_or(src_bytes.len());
-            let frist_line_bytes = src_bytes[0..index].to_vec();
-            if let Ok(first_line) = String::from_utf8(frist_line_bytes) {
+            let first_line_bytes = &src_bytes[0..index];
+
+            if let Ok(first_line) = core::str::from_utf8(first_line_bytes) {
                 if !(first_line.starts_with("#!") && first_line.contains("roc")) {
-                    return Err(LoadingProblem::FileProblem {
-                        filename: filename.to_path_buf(),
-                        error: std::io::ErrorKind::Unsupported,
-                    });
+                    Err(RocFileErr::NotDotRocAndNoHashbangOnFirstLine)
+                } else {
+                    Ok(())
                 }
+            } else {
+                Err(RocFileErr::InvalidUtf8)
             }
         }
     }
-    Ok(())
 }
 
 fn parse_header<'a>(
@@ -3791,7 +3758,23 @@ fn parse_header<'a>(
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
 
-    ensure_roc_file(&filename, src_bytes)?;
+    if let Err(problem) = ensure_roc_file(&filename, src_bytes) {
+        let problem = match problem {
+            // TODO we should print separate error messages for these
+            RocFileErr::InvalidExtension | RocFileErr::NotDotRocAndNoHashbangOnFirstLine => {
+                LoadingProblem::FileProblem {
+                    filename,
+                    error: io::ErrorKind::Unsupported,
+                }
+            }
+            RocFileErr::InvalidUtf8 => LoadingProblem::FileProblem {
+                filename,
+                error: io::ErrorKind::InvalidData,
+            },
+        };
+
+        return Err(problem);
+    };
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
@@ -3961,7 +3944,7 @@ fn parse_header<'a>(
                 roc_cache_dir,
                 app_file_dir,
                 arena,
-                module_id,
+                Some(module_id),
                 module_ids,
                 ident_ids_by_module,
                 filename,
@@ -4017,6 +4000,7 @@ fn parse_header<'a>(
             let (module_id, _, header) = build_platform_header(
                 arena,
                 None,
+                is_root_module,
                 None,
                 filename,
                 parse_state,
@@ -4046,7 +4030,7 @@ fn load_packages<'a>(
     roc_cache_dir: RocCacheDir,
     cwd: PathBuf,
     arena: &'a Bump,
-    module_id: ModuleId,
+    app_module_id: Option<ModuleId>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     filename: PathBuf,
@@ -4083,7 +4067,7 @@ fn load_packages<'a>(
                         // (defaults to main.roc)
                         match opt_root_module {
                             Some(root_module) => package_dir.join(root_module),
-                            None => package_dir.join("main.roc"),
+                            None => package_dir.join(DEFAULT_MAIN_NAME),
                         }
                     }
                     Err(problem) => {
@@ -4107,7 +4091,7 @@ fn load_packages<'a>(
             arena,
             &root_module_path,
             shorthand,
-            module_id,
+            app_module_id,
             module_ids.clone(),
             ident_ids_by_module.clone(),
         ) {
@@ -4884,6 +4868,7 @@ fn build_package_header<'a>(
 fn build_platform_header<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
+    is_root_module: bool,
     opt_app_module_id: Option<ModuleId>,
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
@@ -4893,10 +4878,6 @@ fn build_platform_header<'a>(
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
-    // If we have an app module, then it's the root module;
-    // otherwise, we must be the root.
-    let is_root_module = opt_app_module_id.is_none();
-
     let requires = arena.alloc([Loc::at(
         header.requires.item.signature.region,
         header.requires.item.signature.extract_spaces().item,
@@ -5127,8 +5108,10 @@ fn canonicalize_and_constrain<'a>(
 fn parse<'a>(
     arena: &'a Bump,
     header: ModuleHeader<'a>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    root_type: RootType,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = Instant::now();
@@ -5146,6 +5129,11 @@ fn parse<'a>(
             ));
         }
     };
+
+    // SAFETY: By this point we've already incrementally verified that there
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
+    // we'd have bailed out before now.
+    let src = unsafe { from_utf8_unchecked(source) };
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
@@ -5182,26 +5170,47 @@ fn parse<'a>(
     };
 
     let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
+    let mut used_shorthands = VecMap::default();
 
     for (def, region) in ast::RecursiveValueDefIter::new(&parsed_defs) {
         if let ValueDef::ModuleImport(import) = def {
             imported.push((import.name.value.into(), *region));
+
+            if let Some(shorthand) = import.name.value.package {
+                used_shorthands.insert(shorthand, import.name.region);
+            }
         }
     }
+
+    // THEORY: a significant number of modules do not import from packages
+    // so we can avoid locking the shorthands in those cases
+    if !used_shorthands.is_empty() {
+        let shorthands = arc_shorthands.lock();
+
+        for (shorthand, region) in used_shorthands {
+            if !shorthands.contains_key(shorthand) {
+                let available =
+                    AvailableShorthands::new(root_type, shorthands.keys().copied().collect());
+
+                return Err(LoadingProblem::UnrecognizedPackageShorthand {
+                    filename: header.module_path,
+                    module_id: header.module_id,
+                    source: src,
+                    region,
+                    shorthand,
+                    available,
+                });
+            }
+        }
+    }
+
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
     // then record those ModuleIds in can_module_ids for later.
-    let mut scope: MutMap<Ident, (Symbol, Region)> = HashMap::with_hasher(default_hasher());
-    let symbols_from_requires;
-
-    let ident_ids = {
+    {
         // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-
-        // Ensure this module has an entry in the ident_ids_by_module map.
-        ident_ids_by_module.get_or_insert(header.module_id);
+        let mut module_ids = module_ids.lock();
 
         // For each of our imports, add an entry to deps_by_name
         //
@@ -5210,13 +5219,22 @@ fn parse<'a>(
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, region) in imported.into_iter() {
             let pq_module_name = qualified_module_name.into_pq_module_name(header.opt_shorthand);
-
             let module_id = module_ids.get_or_insert(&pq_module_name);
 
             available_modules.insert(module_id, region);
-
             deps_by_name.insert(pq_module_name, module_id);
         }
+    }
+
+    let mut scope: MutMap<Ident, (Symbol, Region)> = HashMap::with_hasher(default_hasher());
+    let symbols_from_requires;
+
+    let ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        // Ensure this module has an entry in the ident_ids_by_module map.
+        ident_ids_by_module.get_or_insert(header.module_id);
 
         symbols_from_requires = if let HeaderType::Platform {
             requires,
@@ -5359,11 +5377,6 @@ fn parse<'a>(
         .iter()
         .map(|(pq_module_name, module_id)| pq_module_name.map_module(|_| *module_id))
         .collect();
-
-    // SAFETY: By this point we've already incrementally verified that there
-    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
-    // we'd have bailed out before now.
-    let src = unsafe { from_utf8_unchecked(source) };
 
     let ModuleHeader {
         module_id,
@@ -6075,10 +6088,10 @@ fn run_task<'a>(
     msg_tx: MsgSender<'a>,
     roc_cache_dir: RocCacheDir<'_>,
     target: Target,
-) -> Result<(), LoadingProblem<'a>> {
+) -> Result<(), ChannelProblem> {
     use BuildTask::*;
 
-    let msg = match task {
+    let msg_result = match task {
         LoadModule {
             module_name,
             module_ids,
@@ -6096,9 +6109,18 @@ fn run_task<'a>(
         .map(|HeaderOutput { msg, .. }| msg),
         Parse {
             header,
+            arc_shorthands,
             module_ids,
             ident_ids_by_module,
-        } => parse(arena, header, module_ids, ident_ids_by_module),
+            root_type,
+        } => parse(
+            arena,
+            header,
+            arc_shorthands,
+            module_ids,
+            ident_ids_by_module,
+            root_type,
+        ),
         CanonicalizeAndConstrain {
             parsed,
             qualified_module_ids,
@@ -6218,13 +6240,37 @@ fn run_task<'a>(
             derived_module,
             expectations,
         )),
-    }?;
+    };
 
-    msg_tx
-        .send(msg)
-        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendTaskMsg))?;
+    match msg_result {
+        Ok(msg) => {
+            msg_tx
+                .send(msg)
+                .map_err(|_| ChannelProblem::FailedToSendTaskMsg)?;
 
-    Ok(())
+            Ok(())
+        }
+        Err(loading_problem) => {
+            let result = match loading_problem {
+                LoadingProblem::ChannelProblem(problem) => {
+                    return Err(problem);
+                }
+                LoadingProblem::ParsingFailed(problem) => msg_tx.send(Msg::FailedToParse(problem)),
+                LoadingProblem::FileProblem { filename, error } => {
+                    msg_tx.send(Msg::FailedToReadFile { filename, error })
+                }
+                LoadingProblem::IncorrectModuleName(err) => {
+                    msg_tx.send(Msg::IncorrectModuleName(err))
+                }
+                err => msg_tx.send(Msg::FailedToLoad(err)),
+            };
+
+            match result {
+                Ok(()) => Ok(()),
+                Err(_) => Err(ChannelProblem::FailedToSendTaskMsg),
+            }
+        }
+    }
 }
 
 fn to_import_cycle_report(
@@ -6303,6 +6349,8 @@ fn to_incorrect_module_name_report<'a>(
         expected,
     } = problem;
 
+    let severity = Severity::RuntimeError;
+
     // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
     // than an incorrect module name problem (the latter can happen only after parsing).
     let src = unsafe { from_utf8_unchecked(src) };
@@ -6317,7 +6365,7 @@ fn to_incorrect_module_name_report<'a>(
 
     let doc = alloc.stack([
         alloc.reflow("This module has a different name than I expected:"),
-        alloc.region(lines.convert_region(found.region)),
+        alloc.region(lines.convert_region(found.region), severity),
         alloc.reflow("Based on the nesting and use of this module, I expect it to have name"),
         alloc.pq_module_name(expected).indent(4),
     ]);
@@ -6326,7 +6374,7 @@ fn to_incorrect_module_name_report<'a>(
         filename,
         doc,
         title: "INCORRECT MODULE NAME".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
@@ -6346,6 +6394,7 @@ fn to_no_platform_package_report(
 ) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
+    let severity = Severity::RuntimeError;
 
     // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
     // than an incorrect module name problem (the latter can happen only after parsing).
@@ -6361,7 +6410,7 @@ fn to_no_platform_package_report(
 
     let doc = alloc.stack([
         alloc.reflow("This app does not specify a platform:"),
-        alloc.region(lines.convert_region(region)),
+        alloc.region(lines.convert_region(region),severity),
         alloc.reflow("Make sure you have exactly one package specified as `platform`:"),
         alloc
             .parser_suggestion("    app [main] {\n        pf: platform \"…path or URL to platform…\"\n            ^^^^^^^^\n    }"),
@@ -6373,7 +6422,7 @@ fn to_no_platform_package_report(
         filename,
         doc,
         title: "UNSPECIFIED PLATFORM".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
     };
 
     let mut buf = String::new();
@@ -6393,6 +6442,7 @@ fn to_multiple_platform_packages_report(
 ) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
+    let severity = Severity::RuntimeError;
 
     // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
     // than an incorrect module name problem (the latter can happen only after parsing).
@@ -6408,7 +6458,7 @@ fn to_multiple_platform_packages_report(
 
     let doc = alloc.stack([
         alloc.reflow("This app specifies multiple packages as `platform`:"),
-        alloc.region(lines.convert_region(region)),
+        alloc.region(lines.convert_region(region), severity),
         alloc.reflow("Roc apps must specify exactly one platform."),
     ]);
 
@@ -6416,7 +6466,114 @@ fn to_multiple_platform_packages_report(
         filename,
         doc,
         title: "MULTIPLE PLATFORMS".to_string(),
-        severity: Severity::RuntimeError,
+        severity,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
+fn to_unrecognized_package_shorthand_report(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    module_id: ModuleId,
+    filename: PathBuf,
+    region: Region,
+    src: &str,
+    shorthand: &str,
+    available: AvailableShorthands,
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let help = match available {
+        AvailableShorthands::FromRoot(options) => {
+            let mut suggestions = suggest::sort(shorthand, options);
+            suggestions.truncate(4);
+
+            if suggestions.is_empty() {
+                alloc.reflow("A lowercase name indicates a package shorthand, but no packages have been specified.")
+            } else {
+                alloc.stack([
+                    alloc.reflow("A lowercase name indicates a package shorthand, but I don't recognize this one. Did you mean one of these?"),
+                    alloc
+                        .vcat(suggestions.into_iter().map(|v| alloc.shorthand(v)))
+                        .indent(4),
+                ])
+            }
+        }
+        AvailableShorthands::FromMain(main_path, options) => {
+            let mut suggestions = suggest::sort(shorthand, options);
+            suggestions.truncate(4);
+
+            let suggestions = if suggestions.is_empty() {
+                alloc.reflow("A lowercase name indicates a package shorthand, but no packages have been specified.")
+            } else {
+                alloc.stack([
+                    alloc.reflow("A lowercase name indicates a package shorthand, but I don't recognize this one. Did you mean one of these?"),
+                    alloc
+                        .vcat(suggestions.into_iter().map(|v| alloc.shorthand(v)))
+                        .indent(4),
+                ])
+            };
+
+            alloc.stack([
+                suggestions,
+                alloc.note("I'm using the following module to resolve package shorthands:"),
+                alloc.file_path(&main_path).indent(4),
+                alloc.concat([
+                    alloc.reflow("You can specify a different one with the "),
+                    alloc.keyword("--main"),
+                    alloc.reflow(" flag.")
+                ]),
+            ])
+        }
+        AvailableShorthands::UnknownMain => {
+            alloc.stack([
+                alloc.reflow("A lowercase name indicates a package shorthand, but I don't know which packages are available."),
+                alloc.concat([
+                    alloc.reflow("When checking a module directly, I look for a `"),
+                    alloc.reflow(DEFAULT_MAIN_NAME),
+                    alloc.reflow("` app or package to resolve shorthands from."),
+                ]),
+                alloc.concat([
+                    alloc.reflow("You can create it, or specify an existing one with the "),
+                   alloc.keyword("--main"),
+                    alloc.reflow(" flag."),
+                ])
+            ])
+        }
+    };
+
+    let severity = Severity::RuntimeError;
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow("This module is trying to import from `"),
+            alloc.shorthand(shorthand),
+            alloc.reflow("`:"),
+        ]),
+        alloc.region(lines.convert_region(region), severity),
+        help,
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "UNRECOGNIZED PACKAGE".to_string(),
+        severity,
     };
 
     let mut buf = String::new();

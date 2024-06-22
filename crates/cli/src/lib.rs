@@ -72,6 +72,7 @@ pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
 pub const FLAG_FUZZ: &str = "fuzz";
+pub const FLAG_MAIN: &str = "main";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -147,6 +148,12 @@ pub fn build_app() -> Command {
         .long(FLAG_FUZZ)
         .help("Instrument the roc binary for fuzzing with roc-fuzz")
         .action(ArgAction::SetTrue)
+        .required(false);
+
+    let flag_main = Arg::new(FLAG_MAIN)
+        .long(FLAG_MAIN)
+        .help("The .roc file of the main app/package module to resolve dependencies from")
+        .value_parser(value_parser!(PathBuf))
         .required(false);
 
     let roc_file_to_run = Arg::new(ROC_FILE)
@@ -227,6 +234,7 @@ pub fn build_app() -> Command {
         )
         .subcommand(Command::new(CMD_TEST)
             .about("Run all top-level `expect`s in a main module and any modules it imports")
+            .arg(flag_main.clone())
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -246,7 +254,7 @@ pub fn build_app() -> Command {
             )
             .arg(
                 Arg::new(ROC_FILE)
-                    .help("The .roc file for the main module")
+                    .help("The .roc file to test")
                     .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
@@ -321,11 +329,12 @@ pub fn build_app() -> Command {
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but don’t build or run it")
+            .arg(flag_main.clone())
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
             .arg(
                 Arg::new(ROC_FILE)
-                    .help("The .roc file of an app to check")
+                    .help("The .roc file to check")
                     .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
@@ -496,6 +505,8 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;
 
+    let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
+
     // Step 1: compile the app and generate the .o file
     let load_config = LoadConfig {
         target,
@@ -509,6 +520,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     let load_result = roc_load::load_and_monomorphize(
         arena,
         path.to_path_buf(),
+        opt_main_path.cloned(),
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     );
