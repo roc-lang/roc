@@ -34,7 +34,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "a",
-                    suffixed: 0,
                 },
                 @2-3 Apply(
                     "",
@@ -48,7 +47,6 @@ Defs(
         Var {
             module_name: "",
             ident: "abc",
-            suffixed: 0,
         },
         [
             Newline,

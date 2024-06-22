@@ -1,6 +1,6 @@
-interface Result
-    exposes [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
-    imports [Bool.{ Bool }]
+module [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
+
+import Bool exposing [Bool]
 
 ## The result of an operation that could fail: either the operation went
 ## okay, or else there was an error of some sort.

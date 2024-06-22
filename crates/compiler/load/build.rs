@@ -76,6 +76,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         PathBuf::from(filename),
         source,
         cwd,
+        None,
         Default::default(),
         target,
         function_kind,

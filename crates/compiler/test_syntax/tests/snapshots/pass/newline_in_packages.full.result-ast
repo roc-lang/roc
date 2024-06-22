@@ -3,80 +3,32 @@ Full {
         comments: [],
         header: App(
             AppHeader {
-                before_name: [],
-                name: @4-11 PlainLine(
-                    "hello",
-                ),
-                packages: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
+                before_provides: [],
+                provides: [
+                    @5-9 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [],
+                packages: @11-134 [
+                    @13-132 SpaceAfter(
+                        PackageEntry {
+                            shorthand: "pf",
+                            spaces_after_shorthand: [
                                 Newline,
                             ],
-                            item: PackagesKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @27-145 SpaceAfter(
-                                PackageEntry {
-                                    shorthand: "pf",
-                                    spaces_after_shorthand: [
-                                        Newline,
-                                    ],
-                                    package_name: @31-145 PackageName(
-                                        "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br",
-                                    ),
-                                },
-                                [
-                                    Newline,
-                                ],
+                            platform_marker: None,
+                            package_name: @17-132 PackageName(
+                                "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
                             ),
-                        ],
-                    },
-                ),
-                imports: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: ImportsKeyword,
-                            after: [],
                         },
-                        item: [
-                            @161-170 Package(
-                                "pf",
-                                ModuleName(
-                                    "Stdout",
-                                ),
-                                [],
-                            ),
-                        ],
-                    },
-                ),
-                provides: ProvidesTo {
-                    provides_keyword: Spaces {
-                        before: [
+                        [
                             Newline,
                         ],
-                        item: ProvidesKeyword,
-                        after: [],
-                    },
-                    entries: [
-                        @186-190 ExposedName(
-                            "main",
-                        ),
-                    ],
-                    types: None,
-                    to_keyword: Spaces {
-                        before: [],
-                        item: ToKeyword,
-                        after: [],
-                    },
-                    to: @195-197 ExistingPackage(
-                        "pf",
                     ),
-                },
+                ],
+                old_imports: None,
+                old_provides_to_new_package: None,
             },
         ),
     },
@@ -85,7 +37,7 @@ Full {
             Index(2147483648),
         ],
         regions: [
-            @199-246,
+            @136-183,
         ],
         space_before: [
             Slice(start = 0, length = 2),
@@ -100,19 +52,17 @@ Full {
         type_defs: [],
         value_defs: [
             Body(
-                @199-203 Identifier {
+                @136-140 Identifier {
                     ident: "main",
-                    suffixed: 0,
                 },
-                @210-246 SpaceBefore(
+                @147-183 SpaceBefore(
                     Apply(
-                        @210-221 Var {
+                        @147-158 Var {
                             module_name: "Stdout",
                             ident: "line",
-                            suffixed: 0,
                         },
                         [
-                            @222-246 Str(
+                            @159-183 Str(
                                 PlainLine(
                                     "I'm a Roc application!",
                                 ),

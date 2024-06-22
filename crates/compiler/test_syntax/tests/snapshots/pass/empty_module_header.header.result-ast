@@ -1,0 +1,11 @@
+Module {
+    comments: [],
+    header: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: None,
+            exposes: [],
+            interface_imports: None,
+        },
+    ),
+}

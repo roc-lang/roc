@@ -1,43 +1,41 @@
-interface Dict
-    exposes [
-        Dict,
-        empty,
-        withCapacity,
-        single,
-        clear,
-        capacity,
-        reserve,
-        releaseExcessCapacity,
-        len,
-        isEmpty,
-        get,
-        contains,
-        insert,
-        remove,
-        update,
-        walk,
-        walkUntil,
-        keepIf,
-        dropIf,
-        toList,
-        fromList,
-        keys,
-        values,
-        insertAll,
-        keepShared,
-        removeAll,
-        map,
-        joinMap,
-    ]
-    imports [
-        Bool.{ Bool, Eq },
-        Result.{ Result },
-        List,
-        Str,
-        Num.{ U64, F32, U32, U8, I8 },
-        Hash.{ Hasher, Hash },
-        Inspect.{ Inspect, Inspector, InspectFormatter },
-    ]
+module [
+    Dict,
+    empty,
+    withCapacity,
+    single,
+    clear,
+    capacity,
+    reserve,
+    releaseExcessCapacity,
+    len,
+    isEmpty,
+    get,
+    contains,
+    insert,
+    remove,
+    update,
+    walk,
+    walkUntil,
+    keepIf,
+    dropIf,
+    toList,
+    fromList,
+    keys,
+    values,
+    insertAll,
+    keepShared,
+    removeAll,
+    map,
+    joinMap,
+]
+
+import Bool exposing [Bool, Eq]
+import Result exposing [Result]
+import List
+import Str
+import Num exposing [U64, F32, U32, U8]
+import Hash exposing [Hasher, Hash]
+import Inspect exposing [Inspect, Inspector, InspectFormatter]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
 ## associate keys with values.

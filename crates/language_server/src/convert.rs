@@ -124,6 +124,18 @@ pub(crate) mod diag {
                         error
                     )
                 }
+                LoadingProblem::MultiplePlatformPackages { filename, .. } => {
+                    format!(
+                        "Multiple platform packages specified ({}). An app must specify exactly one platform.",
+                        filename.display()
+                    )
+                }
+                LoadingProblem::NoPlatformPackage { filename, .. } => {
+                    format!(
+                        "No platform package specified ({}). An app must specify exactly one platform.",
+                        filename.display()
+                    )
+                }
                 LoadingProblem::ParsingFailed(fe) => {
                     let problem = &fe.problem.problem;
                     format!("Failed to parse Roc source file: {problem:?}")
@@ -150,6 +162,9 @@ pub(crate) mod diag {
                         "Could not find Roc cache directory {}",
                         roc_packaging::cache::roc_cache_dir().display()
                     )
+                }
+                LoadingProblem::UnrecognizedPackageShorthand { shorthand, .. } => {
+                    format!("Unrecognized package shorthand: {}", shorthand)
                 }
             };
 
@@ -190,9 +205,8 @@ pub(crate) mod diag {
             );
 
             let severity = report.severity.into_lsp_severity();
-
             let mut msg = String::new();
-            report.render_ci(&mut msg, fmt.alloc);
+            report.render_language_server(&mut msg, fmt.alloc);
 
             Some(Diagnostic {
                 range,
@@ -227,7 +241,7 @@ pub(crate) mod diag {
             let severity = report.severity.into_lsp_severity();
 
             let mut msg = String::new();
-            report.render_ci(&mut msg, fmt.alloc);
+            report.render_language_server(&mut msg, fmt.alloc);
 
             Some(Diagnostic {
                 range,

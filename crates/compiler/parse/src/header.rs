@@ -1,12 +1,12 @@
 use crate::ast::{
-    Collection, CommentOrNewline, Malformed, Spaced, Spaces, StrLiteral, TypeAnnotation,
+    Collection, CommentOrNewline, Malformed, Pattern, Spaced, Spaces, StrLiteral, TypeAnnotation,
 };
 use crate::blankspace::space0_e;
 use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{
     and, byte, loc, map_with_arena, skip_second, specialize_err, EPackageEntry, EPackageName,
-    Parser,
+    Parser, skip_first
 };
 use crate::parser::{optional, then};
 use crate::string_literal;
@@ -22,7 +22,7 @@ impl<'a> HeaderType<'a> {
             }
             | HeaderType::Hosted { exposes, .. }
             | HeaderType::Builtin { exposes, .. }
-            | HeaderType::Interface { exposes, .. } => exposes,
+            | HeaderType::Module { exposes, .. } => exposes,
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
         }
     }
@@ -33,7 +33,7 @@ impl<'a> HeaderType<'a> {
             HeaderType::Builtin { .. } => "builtin",
             HeaderType::Package { .. } => "package",
             HeaderType::Platform { .. } => "platform",
-            HeaderType::Interface { .. } => "interface",
+            HeaderType::Module { .. } => "module",
         }
     }
 }
@@ -41,7 +41,6 @@ impl<'a> HeaderType<'a> {
 #[derive(Debug)]
 pub enum HeaderType<'a> {
     App {
-        output_name: StrLiteral<'a>,
         provides: &'a [Loc<ExposedName<'a>>],
         to_platform: To<'a>,
     },
@@ -76,7 +75,7 @@ pub enum HeaderType<'a> {
         /// usually `pf`
         config_shorthand: &'a str,
     },
-    Interface {
+    Module {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
     },
@@ -85,14 +84,10 @@ pub enum HeaderType<'a> {
 impl<'a> HeaderType<'a> {
     pub fn get_name(self) -> Option<&'a str> {
         match self {
-            Self::Interface { name, .. }
-            | Self::Builtin { name, .. }
-            | Self::Hosted { name, .. } => Some(name.into()),
-            Self::App {
-                output_name: StrLiteral::PlainLine(name),
-                ..
+            Self::Module { name, .. } | Self::Builtin { name, .. } | Self::Hosted { name, .. } => {
+                Some(name.into())
             }
-            | Self::Platform {
+            Self::Platform {
                 config_shorthand: name,
                 ..
             }
@@ -104,6 +99,17 @@ impl<'a> HeaderType<'a> {
                 //TODO:Eli This can be removed once module params is implemented and app names are no longer strings
                 None
             }
+        }
+    }
+
+    pub fn to_maybe_builtin(self, module_id: ModuleId) -> Self {
+        match self {
+            HeaderType::Module { name, exposes } if module_id.is_builtin() => HeaderType::Builtin {
+                name,
+                exposes,
+                generates_with: &[],
+            },
+            _ => self,
         }
     }
 }
@@ -159,13 +165,25 @@ impl<'a> From<ModuleName<'a>> for &'a str {
     }
 }
 
+impl<'a> From<ModuleName<'a>> for roc_module::ident::ModuleName {
+    fn from(name: ModuleName<'a>) -> Self {
+        name.0.into()
+    }
+}
+
 impl<'a> ModuleName<'a> {
+    const MODULE_SEPARATOR: char = '.';
+
     pub const fn new(name: &'a str) -> Self {
         ModuleName(name)
     }
 
     pub const fn as_str(&'a self) -> &'a str {
         self.0
+    }
+
+    pub fn parts(&'a self) -> impl DoubleEndedIterator<Item = &'a str> {
+        self.0.split(Self::MODULE_SEPARATOR)
     }
 }
 
@@ -207,7 +225,6 @@ macro_rules! keywords {
 
 keywords! {
     ExposesKeyword => "exposes",
-    ImportsKeyword => "imports",
     WithKeyword => "with",
     GeneratesKeyword => "generates",
     PackageKeyword => "package",
@@ -215,22 +232,36 @@ keywords! {
     RequiresKeyword => "requires",
     ProvidesKeyword => "provides",
     ToKeyword => "to",
+    PlatformKeyword => "platform",
+    // Deprecated
+    ImportsKeyword => "imports",
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct KeywordItem<'a, K, V> {
     pub keyword: Spaces<'a, K>,
     pub item: V,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct InterfaceHeader<'a> {
-    pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<ModuleName<'a>>,
+pub struct ModuleHeader<'a> {
+    pub after_keyword: &'a [CommentOrNewline<'a>],
+    pub params: Option<ModuleParams<'a>>,
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
 
-    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    // Keeping this so we can format old interface header into module headers
+    pub interface_imports: Option<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModuleParams<'a> {
+    pub params: Collection<'a, Loc<Pattern<'a>>>,
+    pub before_arrow: &'a [CommentOrNewline<'a>],
+    pub after_arrow: &'a [CommentOrNewline<'a>],
+}
+
+pub type ImportsKeywordItem<'a> = KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>;
+pub type ImportsCollection<'a> = Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostedHeader<'a> {
@@ -253,14 +284,13 @@ pub enum To<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
-    pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<StrLiteral<'a>>,
-
-    pub packages:
-        Option<KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>>,
-    pub imports:
-        Option<KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>>,
-    pub provides: ProvidesTo<'a>,
+    pub before_provides: &'a [CommentOrNewline<'a>],
+    pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub before_packages: &'a [CommentOrNewline<'a>],
+    pub packages: Loc<Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
+    // Old header pieces
+    pub old_imports: Option<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>,
+    pub old_provides_to_new_package: Option<PackageName<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -275,12 +305,10 @@ pub struct ProvidesTo<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageHeader<'a> {
-    pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<PackageName<'a>>,
-
-    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
-    pub packages:
-        KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub exposes: Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>,
+    pub before_packages: &'a [CommentOrNewline<'a>],
+    pub packages: Loc<Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -336,6 +364,7 @@ pub struct TypedIdent<'a> {
 pub struct PackageEntry<'a> {
     pub shorthand: &'a str,
     pub spaces_after_shorthand: &'a [CommentOrNewline<'a>],
+    pub platform_marker: Option<&'a [CommentOrNewline<'a>]>,
     pub package_name: Loc<PackageName<'a>>,
 }
 
@@ -356,9 +385,15 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                 ),
                 space0_e(EPackageEntry::IndentPackage),
             )),
-            loc(specialize_err(EPackageEntry::BadPackage, package_name())),
+            and(
+                optional(skip_first(
+                    crate::parser::keyword(crate::keyword::PLATFORM, EPackageEntry::Platform),
+                    space0_e(EPackageEntry::IndentPackage)
+                )),
+                loc(specialize_err(EPackageEntry::BadPackage, package_name()))
+            )
         ),
-        move |arena, (opt_shorthand, package_or_path)| {
+        move |arena, (opt_shorthand, (platform_marker, package_or_path))| {
             let entry = match opt_shorthand {
                 Some(((shorthand, spaces_before_colon), spaces_after_colon)) => PackageEntry {
                     shorthand,
@@ -367,11 +402,13 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                         spaces_before_colon,
                         spaces_after_colon,
                     ),
+                    platform_marker,
                     package_name: package_or_path,
                 },
                 None => PackageEntry {
                     shorthand: "",
                     spaces_after_shorthand: &[],
+                    platform_marker,
                     package_name: package_or_path,
                 },
             };
@@ -405,7 +442,7 @@ where
     }
 }
 
-impl<'a> Malformed for InterfaceHeader<'a> {
+impl<'a> Malformed for ModuleHeader<'a> {
     fn is_malformed(&self) -> bool {
         false
     }
@@ -419,7 +456,7 @@ impl<'a> Malformed for HostedHeader<'a> {
 
 impl<'a> Malformed for AppHeader<'a> {
     fn is_malformed(&self) -> bool {
-        self.name.is_malformed()
+        false
     }
 }
 

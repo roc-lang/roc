@@ -54,6 +54,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    #[allow(dead_code)]
     const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
@@ -648,6 +649,78 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn test_module_imports_pkg_w_flag() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "Module.roc",
+            &["--main", "tests/module_imports_pkg/app.roc"],
+            indoc!(
+                r#"
+                0 failed and 1 passed in <ignored for test> ms.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn test_module_imports_pkg_no_flag() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "Module.roc",
+            &[],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
+
+                This module is trying to import from `pkg`:
+
+                3│  import pkg.Foo
+                           ^^^^^^^
+
+                A lowercase name indicates a package shorthand, but I don't know which
+                packages are available.
+
+                When checking a module directly, I look for a `main.roc` app or
+                package to resolve shorthands from.
+
+                You can create it, or specify an existing one with the --main flag."#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn test_module_imports_unknown_pkg() {
+        test_roc_expect(
+            "crates/cli/tests/module_imports_pkg",
+            "ImportsUnknownPkg.roc",
+            &["--main", "tests/module_imports_pkg/app.roc"],
+            indoc!(
+                r#"
+                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
+
+                This module is trying to import from `cli`:
+
+                3│  import cli.Foo
+                           ^^^^^^^
+
+                A lowercase name indicates a package shorthand, but I don't recognize
+                this one. Did you mean one of these?
+
+                    pkg
+
+                Note: I'm using the following module to resolve package shorthands:
+
+                    tests/module_imports_pkg/app.roc
+
+                You can specify a different one with the --main flag."#
+            ),
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
@@ -715,29 +788,6 @@ mod cli_run {
         test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
     }
 
-    #[cfg_attr(windows, ignore)] // flaky error; issue #5024
-    #[serial(breakout)]
-    #[test]
-    fn breakout() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "breakoutBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
-    #[test]
-    #[serial(breakout)]
-    fn breakout_hello_gui() {
-        test_roc_app_slim(
-            "examples/gui/breakout",
-            "hello-guiBROKEN.roc",
-            "",
-            UseValgrind::No,
-        )
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
@@ -777,7 +827,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args_check() {
-        let path = file_path_from_root("examples/cli", "argsBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -804,7 +854,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_countdown_check() {
-        let path = file_path_from_root("examples/cli", "countdown.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "countdown.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -813,7 +863,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_echo_check() {
-        let path = file_path_from_root("examples/cli", "echo.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "echo.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -822,7 +872,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_file_check() {
-        let path = file_path_from_root("examples/cli", "fileBROKEN.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -831,7 +881,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_form_check() {
-        let path = file_path_from_root("examples/cli", "form.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -840,7 +890,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
     fn cli_http_get_check() {
-        let path = file_path_from_root("examples/cli", "http-get.roc");
+        let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -897,26 +947,11 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
-    fn static_site_gen() {
-        test_roc_app(
-            "examples/static-site-gen",
-            "static-site.roc",
-            &[],
-            &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
-            &[],
-            "Processed 4 files with 3 successes and 0 errors\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "env.roc",
             &[],
             &[],
@@ -938,28 +973,16 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file.roc",
             &[],
             &[],
             &[],
-            indoc!(
-                r#"
-                This roc file can print its own source code. The source is:
-
-                app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.9.0/oKWkaruh2zXxin_xfsYsCJobH1tO8_JvNkFzDwwzNUQ.tar.br" }
-                    imports [
-                        pf.Stdout,
-                        "ingested-file.roc" as ownCode : Str,
-                    ]
-                    provides [main] to pf
-
-                main =
-                    Stdout.line "\nThis roc file can print its own source code. The source is:\n\n$(ownCode)"
-
-                "#
-            ),
+            format!(
+                "\nThis roc file can print its own source code. The source is:\n\n{}\n",
+                include_str!("cli/ingested-file.roc")
+            )
+            .as_str(),
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -970,12 +993,27 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            "examples/cli",
+            "crates/cli/tests/cli",
             "ingested-file-bytes.roc",
             &[],
             &[],
             &[],
-            "162088\n",
+            "27101\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes_no_ann() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "ingested-file-bytes-no-ann.roc",
+            &[],
+            &[],
+            &[],
+            "27101\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -986,8 +1024,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser",
-            "parse-movies-csv.roc",
+            "crates/cli/tests/cli",
+            "parser-movies-csv.roc",
             "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n",
             UseValgrind::No,
         )
@@ -998,8 +1036,8 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
-            "examples/parser",
-            "letter-counts.roc",
+            "crates/cli/tests/cli",
+            "parser-letter-counts.roc",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
@@ -1025,20 +1063,21 @@ mod cli_run {
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        #[allow(unused_imports)]
         use super::{TestCliCommands, UseValgrind};
         use cli_utils::helpers::cli_testing_dir;
 
+        #[allow(unused_imports)]
         use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
 
+        #[allow(unused_imports)]
         use std::{path::Path, sync::Once};
-
-        static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
         fn test_benchmark(
             roc_filename: &str,
             stdin: &[&str],
             expected_ending: &str,
-            use_valgrind: UseValgrind,
+            _use_valgrind: UseValgrind,
         ) {
             let file_name = cli_testing_dir("benchmarks").join(roc_filename);
 
@@ -1062,14 +1101,17 @@ mod cli_run {
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            check_output_regular(&file_name, stdin, expected_ending, use_valgrind);
+            check_output_regular(&file_name, stdin, expected_ending, _use_valgrind);
 
             #[cfg(feature = "wasm32-cli-run")]
             check_output_wasm(&file_name, stdin, expected_ending);
 
             #[cfg(feature = "i386-cli-run")]
-            check_output_i386(&file_name, stdin, expected_ending, use_valgrind);
+            check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
         }
+
+        #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
+        static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
         #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
         fn check_output_regular(
@@ -1439,7 +1481,7 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^
@@ -1483,7 +1525,7 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
                 3│      imports [Symbol.{ Ident }]
                                  ^^^^^^^^^^^^^^^^

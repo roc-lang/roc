@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 @4-20 Function(
                     [
@@ -56,7 +55,6 @@ Defs(
             AnnotatedBody {
                 ann_pattern: @0-1 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 ann_type: @4-20 Function(
                     [
@@ -93,19 +91,16 @@ Defs(
                 comment: None,
                 body_pattern: @21-22 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 body_expr: @25-32 Closure(
                     [
                         @26-27 Identifier {
                             ident: "x",
-                            suffixed: 0,
                         },
                     ],
                     @31-32 Var {
                         module_name: "",
                         ident: "x",
-                        suffixed: 0,
                     },
                 ),
             },
@@ -116,7 +111,6 @@ Defs(
             @34-35 Var {
                 module_name: "",
                 ident: "f",
-                suffixed: 0,
             },
             [
                 @36-47 Tuple(

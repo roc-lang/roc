@@ -9,7 +9,7 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    is_loc_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
+    is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
     Pattern, RecordBuilderField, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
@@ -38,18 +38,19 @@ impl<'a> Formattable for Expr<'a> {
             | Num(..)
             | NonBase10Int { .. }
             | SingleQuote(_)
-            | RecordAccess(_, _)
             | AccessorFunction(_)
-            | TupleAccess(_, _)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | IngestedFile(_, _)
             | EmptyDefsFinal
             | Crash => false,
+
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+                inner.is_multiline()
+            }
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -170,11 +171,7 @@ impl<'a> Formattable for Expr<'a> {
             Str(literal) => {
                 fmt_str_literal(buf, *literal, indent);
             }
-            Var {
-                module_name,
-                ident,
-                suffixed,
-            } => {
+            Var { module_name, ident } => {
                 buf.indent(indent);
                 if !module_name.is_empty() {
                     buf.push_str(module_name);
@@ -182,11 +179,6 @@ impl<'a> Formattable for Expr<'a> {
                 }
 
                 buf.push_str(ident);
-
-                let count: u8 = *suffixed;
-                for _ in 0..count {
-                    buf.push('!');
-                }
             }
             Underscore(name) => {
                 buf.indent(indent);
@@ -512,60 +504,18 @@ impl<'a> Formattable for Expr<'a> {
                 }
             }
             RecordAccess(expr, key) => {
-                // Check for any `!` suffixes and format these at the end of expression
-                let (expr_to_format, suffix_count) = if let Var {
-                    module_name,
-                    ident,
-                    suffixed,
-                } = expr
-                {
-                    (
-                        Var {
-                            module_name,
-                            ident,
-                            suffixed: 0,
-                        },
-                        suffixed,
-                    )
-                } else {
-                    (**expr, &0u8)
-                };
-
-                expr_to_format.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
                 buf.push_str(key);
-
-                for _ in 0..*suffix_count {
-                    buf.push('!');
-                }
             }
             TupleAccess(expr, key) => {
-                // Check for any `!` suffixes and format these at the end of expression
-                let (expr_to_format, suffix_count) = if let Var {
-                    module_name,
-                    ident,
-                    suffixed,
-                } = expr
-                {
-                    (
-                        Var {
-                            module_name,
-                            ident,
-                            suffixed: 0,
-                        },
-                        suffixed,
-                    )
-                } else {
-                    (**expr, &0u8)
-                };
-
-                expr_to_format.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
                 buf.push_str(key);
-
-                for _ in 0..*suffix_count {
-                    buf.push('!');
-                }
+            }
+            TaskAwaitBang(expr) => {
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                buf.push('!');
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
@@ -579,7 +529,6 @@ impl<'a> Formattable for Expr<'a> {
             PrecedenceConflict { .. } => {}
             MultipleRecordBuilders { .. } => {}
             UnappliedRecordBuilder { .. } => {}
-            IngestedFile(_, _) => {}
         }
     }
 }
@@ -789,8 +738,8 @@ fn fmt_binops<'a>(
         || loc_right_side.value.is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
-    let is_any_lefts_suffixed = lefts.iter().any(|(left, _)| is_loc_expr_suffixed(left));
-    let is_right_suffixed = is_loc_expr_suffixed(loc_right_side);
+    let is_any_lefts_suffixed = lefts.iter().any(|(left, _)| is_expr_suffixed(&left.value));
+    let is_right_suffixed = is_expr_suffixed(&loc_right_side.value);
     let is_any_suffixed = is_any_lefts_suffixed || is_right_suffixed;
 
     let mut is_first = false;

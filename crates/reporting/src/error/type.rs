@@ -85,7 +85,7 @@ pub fn type_problem<'b>(
         UnfulfilledAbility(incomplete) => {
             let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
 
-            let doc = report_unfulfilled_ability(alloc, lines, incomplete);
+            let doc = report_unfulfilled_ability(alloc, lines, incomplete, severity);
 
             report(title, doc, filename)
         }
@@ -96,9 +96,9 @@ pub fn type_problem<'b>(
 
             let incomplete = incomplete
                 .into_iter()
-                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled, severity));
             let note = alloc.stack(incomplete);
-            let snippet = alloc.region(lines.convert_region(region));
+            let snippet = alloc.region(lines.convert_region(region), severity);
             let stack = [
                 alloc.text(
                     "This expression has a type that does not implement the abilities it's expected to:",
@@ -118,9 +118,9 @@ pub fn type_problem<'b>(
         BadPatternMissingAbility(region, _category, _found, incomplete) => {
             let incomplete = incomplete
                 .into_iter()
-                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled, severity));
             let note = alloc.stack(incomplete);
-            let snippet = alloc.region(lines.convert_region(region));
+            let snippet = alloc.region(lines.convert_region(region), severity);
             let stack = [
                 alloc.text(
                     "This expression has a type does not implement the abilities it's expected to:",
@@ -139,7 +139,7 @@ pub fn type_problem<'b>(
         }
         Exhaustive(problem) => Some(exhaustive_problem(alloc, lines, filename, problem)),
         CircularDef(entries) => {
-            let doc = to_circular_def_doc(alloc, lines, &entries);
+            let doc = to_circular_def_doc(alloc, lines, &entries, severity);
             let title = CIRCULAR_DEF.to_string();
 
             Some(Report {
@@ -161,7 +161,7 @@ pub fn type_problem<'b>(
                     alloc.symbol_unqualified(member),
                     alloc.reflow(" is for a non-opaque type:"),
                 ]),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("It is specialized for"),
                 alloc.type_block(error_type_to_doc(alloc, typ)),
                 alloc.reflow("but structural types can never specialize abilities!"),
@@ -191,7 +191,7 @@ pub fn type_problem<'b>(
                     alloc.symbol_unqualified(ability_member),
                     alloc.reflow(" is not for the expected type:"),
                 ]),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.concat([
                     alloc.reflow("It was previously claimed to be a specialization for "),
                     alloc.symbol_unqualified(expected_opaque),
@@ -254,6 +254,7 @@ fn report_unfulfilled_ability<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     unfulfilled: Unfulfilled,
+    severity: Severity,
 ) -> RocDocBuilder<'a> {
     match unfulfilled {
         Unfulfilled::OpaqueDoesNotImplement { typ, ability } => {
@@ -302,7 +303,7 @@ fn report_unfulfilled_ability<'a>(
                     alloc.symbol_foreign_qualified(opaque),
                     alloc.reflow(":"),
                 ]),
-                alloc.region(lines.convert_region(derive_region)),
+                alloc.region(lines.convert_region(derive_region), severity),
             ]
             .into_iter()
             .chain(reason)
@@ -446,6 +447,7 @@ pub fn cyclic_alias<'b>(
     region: roc_region::all::Region,
     others: Vec<Symbol>,
     alias_kind: AliasKind,
+    severity: Severity,
 ) -> (RocDocBuilder<'b>, String) {
     let when_is_recursion_legal =
         alloc.reflow("Recursion in ")
@@ -460,7 +462,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.reflow(" "))
                 .append(alloc.reflow(alias_kind.as_str()))
                 .append(alloc.reflow(" is self-recursive in an invalid way:")),
-            alloc.region(lines.convert_region(region)),
+            alloc.region(lines.convert_region(region), severity),
             when_is_recursion_legal,
         ])
     } else {
@@ -471,7 +473,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.reflow(" "))
                 .append(alloc.reflow(alias_kind.as_str()))
                 .append(alloc.reflow(" is recursive in an invalid way:")),
-            alloc.region(lines.convert_region(region)),
+            alloc.region(lines.convert_region(region), severity),
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
@@ -515,9 +517,10 @@ fn report_mismatch<'b>(
         alloc.region_with_subregion(
             lines.convert_region(highlight),
             lines.convert_region(region),
+            severity,
         )
     } else {
-        alloc.region(lines.convert_region(region))
+        alloc.region(lines.convert_region(region), severity)
     };
     let lines = vec![
         problem,
@@ -559,9 +562,10 @@ fn report_bad_type<'b>(
         alloc.region_with_subregion(
             lines.convert_region(highlight),
             lines.convert_region(region),
+            severity,
         )
     } else {
-        alloc.region(lines.convert_region(region))
+        alloc.region(lines.convert_region(region), severity)
     };
     let lines = vec![
         problem,
@@ -664,7 +668,7 @@ fn to_expr_report<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 doc: alloc.stack([
                     alloc.text("This expression is used in an unexpected way:"),
-                    alloc.region(lines.convert_region(expr_region)),
+                    alloc.region(lines.convert_region(expr_region), severity),
                     comparison,
                 ]),
                 severity,
@@ -786,6 +790,7 @@ fn to_expr_report<'b>(
                         alloc.region_with_subregion(
                             lines.convert_region(joined),
                             lines.convert_region(expr_region),
+                            severity,
                         )
                     },
                     comparison,
@@ -1138,7 +1143,7 @@ fn to_expr_report<'b>(
                                     " is an opaque type, so it cannot be called with an argument:",
                                 ),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
                                 CalledVia::RecordBuilder => {
                                     alloc.hint("Did you mean to apply it to a function first?")
@@ -1160,7 +1165,7 @@ fn to_expr_report<'b>(
                                     }
                                 )),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
                                 CalledVia::RecordBuilder => {
                                     alloc.concat([
@@ -1208,7 +1213,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                         ];
 
@@ -1232,7 +1237,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             alloc.reflow(
                                 "Roc does not allow functions to be partially applied. \
                                 Use a closure to make partial application explicit.",
@@ -1407,6 +1412,7 @@ fn to_expr_report<'b>(
                 let snippet = alloc.region_with_subregion(
                     lines.convert_region(region),
                     lines.convert_region(expr_region),
+                    severity,
                 );
 
                 let this_is = alloc.concat([
@@ -1460,7 +1466,7 @@ fn to_expr_report<'b>(
                         .append(alloc.text(" argument to "))
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     pattern_type_comparison(
                         alloc,
                         expected_type,
@@ -1501,7 +1507,7 @@ fn to_expr_report<'b>(
                         .reflow("This value passed to ")
                         .append(alloc.keyword("crash"))
                         .append(alloc.reflow(" is not a string:")),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     type_comparison(
                         alloc,
                         found,
@@ -1915,7 +1921,7 @@ fn to_pattern_report<'b>(
         PExpected::NoExpectation(expected_type) => {
             let doc = alloc.stack([
                 alloc.text("This pattern is being used in an unexpected way:"),
-                alloc.region(lines.convert_region(expr_region)),
+                alloc.region(lines.convert_region(expr_region), severity),
                 pattern_type_comparison(
                     alloc,
                     found,
@@ -1948,7 +1954,7 @@ fn to_pattern_report<'b>(
                         .append(alloc.text(" argument to "))
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     pattern_type_comparison(
                         alloc,
                         found,
@@ -1986,6 +1992,7 @@ fn to_pattern_report<'b>(
                         alloc.region_with_subregion(
                             lines.convert_region(region),
                             lines.convert_region(expr_region),
+                            severity,
                         ),
                         pattern_type_comparison(
                             alloc,
@@ -2030,6 +2037,7 @@ fn to_pattern_report<'b>(
                             alloc.region_with_subregion(
                                 lines.convert_region(region),
                                 lines.convert_region(expr_region),
+                                severity,
                             ),
                             pattern_type_comparison(
                                 alloc,
@@ -2059,7 +2067,7 @@ fn to_pattern_report<'b>(
             PReason::ListElem => {
                 let doc = alloc.stack([
                     alloc.concat([alloc.reflow("This list element doesn't match the types of other elements in the pattern:")]),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     pattern_type_comparison(
                         alloc,
                         found,
@@ -2170,7 +2178,7 @@ fn to_circular_report<'b>(
                     .reflow("I'm inferring a weird self-referential type for ")
                     .append(alloc.symbol_unqualified(symbol))
                     .append(alloc.text(":")),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.stack([
                     alloc.reflow(
                         "Here is my best effort at writing down the type. \
@@ -2999,14 +3007,14 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
                 }
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
@@ -3019,7 +3027,7 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -3027,7 +3035,7 @@ fn to_diff<'b>(
 
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -4360,7 +4368,7 @@ fn type_problem_to_pretty<'b>(
         (FieldTypo(typo, possibilities), _) => {
             let suggestions = suggest::sort(typo.as_str(), possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let typo_str = format!("{typo}");
@@ -4412,7 +4420,7 @@ fn type_problem_to_pretty<'b>(
             let typo_str = format!("{}", typo.as_ident_str());
             let suggestions = suggest::sort(&typo_str, possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let nearest_str = format!("{nearest}");
@@ -4810,7 +4818,7 @@ fn report_record_field_typo<'b>(
 
     let doc = alloc.stack([
         header,
-        alloc.region(lines.convert_region(field_region)),
+        alloc.region(lines.convert_region(field_region), severity),
         if suggestions.is_empty() {
             let r_doc = match opt_sym {
                 Some(symbol) => alloc.symbol_unqualified(symbol).append(" is"),
@@ -4875,7 +4883,7 @@ fn exhaustive_problem<'a>(
             BadArg => {
                 let doc = alloc.stack([
                     alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.concat([
@@ -4898,7 +4906,7 @@ fn exhaustive_problem<'a>(
             BadDestruct => {
                 let doc = alloc.stack([
                     alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.concat([
@@ -4926,7 +4934,7 @@ fn exhaustive_problem<'a>(
                         alloc.keyword("when"),
                         alloc.reflow(" does not cover all the possibilities:"),
                     ]),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.reflow(
@@ -4958,6 +4966,7 @@ fn exhaustive_problem<'a>(
                 alloc.region_with_subregion(
                     lines.convert_region(overall_region),
                     lines.convert_region(branch_region),
+                    severity,
                 ),
                 alloc.reflow(
                     "Any value of this shape will be handled by \
@@ -4986,6 +4995,7 @@ fn exhaustive_problem<'a>(
                 alloc.region_with_subregion(
                     lines.convert_region(overall_region),
                     lines.convert_region(branch_region),
+                    severity,
                 ),
                 alloc.reflow(
                     "It's impossible to create a value of this shape, \

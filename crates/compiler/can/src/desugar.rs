@@ -9,7 +9,7 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    wrap_in_task_ok, AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral,
+    AssignedField, Collection, ModuleImportParams, Pattern, RecordBuilderField, StrLiteral,
     StrSegment, ValueDef, WhenBranch,
 };
 use roc_region::all::{LineInfo, Loc, Region};
@@ -57,11 +57,7 @@ fn new_op_call_expr<'a>(
             let args = arena.alloc([left, right]);
 
             let loc_expr = arena.alloc(Loc {
-                value: Expr::Var {
-                    module_name,
-                    ident,
-                    suffixed: 0,
-                },
+                value: Expr::Var { module_name, ident },
                 region: loc_op.region,
             });
 
@@ -134,6 +130,28 @@ fn desugar_value_def<'a>(
                 preceding_comment: *preceding_comment,
             }
         }
+        ModuleImport(roc_parse::ast::ModuleImport {
+            before_name,
+            name,
+            params,
+            alias,
+            exposed,
+        }) => {
+            let desugared_params =
+                params.map(|ModuleImportParams { before, params }| ModuleImportParams {
+                    before,
+                    params: desugar_field_collection(arena, params, src, line_info, module_path),
+                });
+
+            ModuleImport(roc_parse::ast::ModuleImport {
+                before_name,
+                name: *name,
+                params: desugared_params,
+                alias: *alias,
+                exposed: *exposed,
+            })
+        }
+        IngestedFileImport(_) => *def,
 
         Stmt(stmt_expr) => {
             // desugar into a Body({}, stmt_expr)
@@ -161,8 +179,8 @@ pub fn desugar_defs_node_values<'a>(
         *value_def = desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
     }
 
-    // `desugar_defs_node_values` is called recursively in `desugar_expr` and we
-    // only we only want to unwrap suffixed nodes if they are a top level def.
+    // `desugar_defs_node_values` is called recursively in `desugar_expr`
+    // and we only want to unwrap suffixed nodes if they are a top level def.
     //
     // check here first so we only unwrap the expressions once, and after they have
     // been desugared
@@ -176,7 +194,7 @@ pub fn desugar_defs_node_values<'a>(
 /// For each top-level ValueDef in our module, we will unwrap any suffixed
 /// expressions
 ///
-/// e.g. `say! "hi"` desugars to `Task.await (say "hi") -> \{} -> ...`
+/// e.g. `say! "hi"` desugars to `Task.await (say "hi") \{} -> ...`
 pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) -> ValueDef<'a> {
     use ValueDef::*;
 
@@ -193,13 +211,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     arena,
                     Body(
                         loc_pattern,
-                        apply_task_await(
-                            arena,
-                            loc_expr.region,
-                            sub_arg,
-                            sub_pat,
-                            wrap_in_task_ok(arena, sub_new),
-                        ),
+                        apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new),
                     ),
                 ),
                 Err(..) => Body(
@@ -241,7 +253,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                             body_expr.region,
                             sub_arg,
                             sub_pat,
-                            wrap_in_task_ok(arena, sub_new),
+                            sub_new,
                         ),
                     },
                 ),
@@ -257,6 +269,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
 
         // TODO support desugaring of Dbg, Expect, and ExpectFx
         Dbg { .. } | Expect { .. } | ExpectFx { .. } => value_def,
+        ModuleImport { .. } | IngestedFileImport(_) => value_def,
 
         Stmt(..) => {
             internal_error!(
@@ -291,7 +304,6 @@ pub fn desugar_expr<'a>(
         | UnappliedRecordBuilder { .. }
         | Tag(_)
         | OpaqueRef(_)
-        | IngestedFile(_, _)
         | Crash => loc_expr,
 
         Str(str_literal) => match str_literal {
@@ -342,6 +354,15 @@ pub fn desugar_expr<'a>(
 
             arena.alloc(Loc { region, value })
         }
+        // desugar the sub_expression, but leave the TaskAwaitBang as this will
+        // be unwrapped later in desugar_value_def_suffixed
+        TaskAwaitBang(sub_expr) => {
+            let intermediate = arena.alloc(Loc::at(loc_expr.region, **sub_expr));
+            let new_sub_loc_expr = desugar_expr(arena, intermediate, src, line_info, module_path);
+            let new_sub_expr = arena.alloc(new_sub_loc_expr.value);
+
+            arena.alloc(Loc::at(loc_expr.region, TaskAwaitBang(new_sub_expr)))
+        }
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
             let loc_sub_expr = Loc {
@@ -377,15 +398,7 @@ pub fn desugar_expr<'a>(
             })
         }
         Record(fields) => {
-            let mut allocated = Vec::with_capacity_in(fields.len(), arena);
-            for field in fields.iter() {
-                let value = desugar_field(arena, &field.value, src, line_info, module_path);
-                allocated.push(Loc {
-                    value,
-                    region: field.region,
-                });
-            }
-            let fields = fields.replace_items(allocated.into_bump_slice());
+            let fields = desugar_field_collection(arena, *fields, src, line_info, module_path);
             arena.alloc(Loc {
                 region: loc_expr.region,
                 value: Record(fields),
@@ -601,12 +614,10 @@ pub fn desugar_expr<'a>(
                 Negate => Var {
                     module_name: ModuleName::NUM,
                     ident: "neg",
-                    suffixed: 0,
                 },
                 Not => Var {
                     module_name: ModuleName::BOOL,
                     ident: "not",
-                    suffixed: 0,
                 },
             };
             let loc_fn_var = arena.alloc(Loc { region, value });
@@ -704,7 +715,6 @@ pub fn desugar_expr<'a>(
             let inspect_fn = Var {
                 module_name: ModuleName::INSPECT,
                 ident: "toStr",
-                suffixed: 0,
             };
             let loc_inspect_fn_var = arena.alloc(Loc {
                 value: inspect_fn,
@@ -759,7 +769,6 @@ pub fn desugar_expr<'a>(
                         Expr::Var {
                             module_name: ModuleName::TASK,
                             ident: "ok",
-                            suffixed: 0,
                         },
                     )),
                     arena.alloc(apply_args),
@@ -823,6 +832,24 @@ fn desugar_str_segments<'a>(
     .into_bump_slice()
 }
 
+fn desugar_field_collection<'a>(
+    arena: &'a Bump,
+    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> Collection<'a, Loc<AssignedField<'a, Expr<'a>>>> {
+    let mut allocated = Vec::with_capacity_in(fields.len(), arena);
+
+    for field in fields.iter() {
+        let value = desugar_field(arena, &field.value, src, line_info, module_path);
+
+        allocated.push(Loc::at(field.region, value));
+    }
+
+    fields.replace_items(allocated.into_bump_slice())
+}
+
 fn desugar_field<'a>(
     arena: &'a Bump,
     field: &'a AssignedField<'a, Expr<'a>>,
@@ -855,7 +882,6 @@ fn desugar_field<'a>(
                 value: Var {
                     module_name: "",
                     ident: loc_str.value,
-                    suffixed: 0,
                 },
                 region: loc_str.region,
             };
@@ -1036,7 +1062,6 @@ fn record_builder_arg<'a>(
                         value: Expr::Var {
                             module_name: "",
                             ident: arena.alloc("#".to_owned() + label.value),
-                            suffixed: 0,
                         },
                     });
 
@@ -1076,10 +1101,7 @@ fn record_builder_arg<'a>(
 
     for label in apply_field_names.iter().rev() {
         let name = arena.alloc("#".to_owned() + label.value);
-        let ident = roc_parse::ast::Pattern::Identifier {
-            ident: name,
-            suffixed: 0,
-        };
+        let ident = roc_parse::ast::Pattern::Identifier { ident: name };
 
         let arg_pattern = arena.alloc(Loc {
             value: ident,

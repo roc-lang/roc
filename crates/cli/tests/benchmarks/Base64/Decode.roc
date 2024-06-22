@@ -1,4 +1,6 @@
-interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ ByteDecoder, DecodeProblem }]
+interface Base64.Decode exposes [fromBytes] imports []
+
+import Bytes.Decode exposing [ByteDecoder, DecodeProblem]
 
 fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->

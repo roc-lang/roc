@@ -75,19 +75,15 @@ When(
                         [
                             @61-62 Identifier {
                                 ident: "a",
-                                suffixed: 0,
                             },
                             @64-65 Identifier {
                                 ident: "b",
-                                suffixed: 0,
                             },
                             @67-68 Identifier {
                                 ident: "c",
-                                suffixed: 0,
                             },
                             @70-71 Identifier {
                                 ident: "d",
-                                suffixed: 0,
                             },
                         ],
                     ),
@@ -108,11 +104,9 @@ When(
                         [
                             @82-83 Identifier {
                                 ident: "a",
-                                suffixed: 0,
                             },
                             @85-86 Identifier {
                                 ident: "b",
-                                suffixed: 0,
                             },
                             @88-90 ListRest(
                                 None,
@@ -139,11 +133,9 @@ When(
                             ),
                             @105-106 Identifier {
                                 ident: "c",
-                                suffixed: 0,
                             },
                             @108-109 Identifier {
                                 ident: "d",
-                                suffixed: 0,
                             },
                         ],
                     ),
@@ -180,7 +172,6 @@ When(
                                 [
                                     @132-133 Identifier {
                                         ident: "a",
-                                        suffixed: 0,
                                     },
                                 ],
                             ),
@@ -218,7 +209,6 @@ When(
                                     ),
                                     @160-161 Identifier {
                                         ident: "x",
-                                        suffixed: 0,
                                     },
                                 ],
                             ),

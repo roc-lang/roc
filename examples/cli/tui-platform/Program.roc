@@ -1,6 +1,4 @@
-interface Program
-    exposes [Program]
-    imports []
+module [Program]
 
 Program model : {
     init : {} -> model,

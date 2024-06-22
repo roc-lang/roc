@@ -1,7 +1,9 @@
 use std::fmt::Debug;
-use std::path::Path;
 
-use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
+use crate::expr::merge_spaces;
+use crate::header::{
+    self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
+};
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
@@ -9,10 +11,10 @@ use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
-use roc_module::ident::ModuleName;
+use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
@@ -45,6 +47,18 @@ impl<'a, T> Spaced<'a, T> {
         match self {
             Spaced::Item(answer) => answer,
             Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
+        }
+    }
+
+    pub fn map<U, F: Fn(&T) -> U>(&self, arena: &'a Bump, f: F) -> Spaced<'a, U> {
+        match self {
+            Spaced::Item(item) => Spaced::Item(f(item)),
+            Spaced::SpaceBefore(next, spaces) => {
+                Spaced::SpaceBefore(arena.alloc(next.map(arena, f)), spaces)
+            }
+            Spaced::SpaceAfter(next, spaces) => {
+                Spaced::SpaceAfter(arena.alloc(next.map(arena, f)), spaces)
+            }
         }
     }
 }
@@ -97,9 +111,151 @@ pub struct Module<'a> {
     pub header: Header<'a>,
 }
 
+impl<'a> Module<'a> {
+    pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
+        let (header, defs) = match self.header {
+            Header::Module(header) => (
+                Header::Module(ModuleHeader {
+                    interface_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.interface_imports),
+            ),
+            Header::App(header) => (
+                Header::App(AppHeader {
+                    old_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.old_imports),
+            ),
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => {
+                (self.header, Defs::default())
+            }
+        };
+
+        (Module { header, ..self }, defs)
+    }
+
+    pub fn header_imports_to_defs(
+        arena: &'a Bump,
+        imports: Option<
+            header::KeywordItem<'a, header::ImportsKeyword, header::ImportsCollection<'a>>,
+        >,
+    ) -> Defs<'a> {
+        let mut defs = Defs::default();
+
+        if let Some(imports) = imports {
+            let len = imports.item.len();
+
+            for (index, import) in imports.item.iter().enumerate() {
+                let spaced = import.extract_spaces();
+
+                let value_def = match spaced.item {
+                    header::ImportsEntry::Package(pkg_name, name, exposed) => {
+                        Self::header_import_to_value_def(
+                            Some(pkg_name),
+                            name,
+                            exposed,
+                            import.region,
+                        )
+                    }
+                    header::ImportsEntry::Module(name, exposed) => {
+                        Self::header_import_to_value_def(None, name, exposed, import.region)
+                    }
+                    header::ImportsEntry::IngestedFile(path, typed_ident) => {
+                        let typed_ident = typed_ident.extract_spaces();
+
+                        ValueDef::IngestedFileImport(IngestedFileImport {
+                            before_path: &[],
+                            path: Loc {
+                                value: path,
+                                region: import.region,
+                            },
+                            name: header::KeywordItem {
+                                keyword: Spaces {
+                                    before: &[],
+                                    item: ImportAsKeyword,
+                                    after: &[],
+                                },
+                                item: typed_ident.item.ident,
+                            },
+                            annotation: Some(IngestedFileAnnotation {
+                                before_colon: merge_spaces(
+                                    arena,
+                                    typed_ident.before,
+                                    typed_ident.item.spaces_before_colon,
+                                ),
+                                annotation: typed_ident.item.ann,
+                            }),
+                        })
+                    }
+                };
+
+                defs.push_value_def(
+                    value_def,
+                    import.region,
+                    if index == 0 {
+                        let mut before = vec![CommentOrNewline::Newline, CommentOrNewline::Newline];
+                        before.extend(spaced.before);
+                        arena.alloc(before)
+                    } else {
+                        spaced.before
+                    },
+                    if index == len - 1 {
+                        let mut after = spaced.after.to_vec();
+                        after.extend_from_slice(imports.item.final_comments());
+                        after.push(CommentOrNewline::Newline);
+                        after.push(CommentOrNewline::Newline);
+                        arena.alloc(after)
+                    } else {
+                        spaced.after
+                    },
+                );
+            }
+        }
+        defs
+    }
+
+    fn header_import_to_value_def(
+        pkg_name: Option<&'a str>,
+        name: header::ModuleName<'a>,
+        exposed: Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        region: Region,
+    ) -> ValueDef<'a> {
+        use crate::header::KeywordItem;
+
+        let new_exposed = if exposed.is_empty() {
+            None
+        } else {
+            Some(KeywordItem {
+                keyword: Spaces {
+                    before: &[],
+                    item: ImportExposingKeyword,
+                    after: &[],
+                },
+                item: exposed,
+            })
+        };
+
+        ValueDef::ModuleImport(ModuleImport {
+            before_name: &[],
+            name: Loc {
+                region,
+                value: ImportedModuleName {
+                    package: pkg_name,
+                    name,
+                },
+            },
+            params: None,
+            alias: None,
+            exposed: new_exposed,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Header<'a> {
-    Interface(InterfaceHeader<'a>),
+    Module(ModuleHeader<'a>),
     App(AppHeader<'a>),
     Package(PackageHeader<'a>),
     Platform(PlatformHeader<'a>),
@@ -252,7 +408,7 @@ pub enum Expr<'a> {
         is_negative: bool,
     },
 
-    // String Literals
+    /// String Literals
     Str(StrLiteral<'a>), // string without escapes in it
     /// eg 'b'
     SingleQuote(&'a str),
@@ -265,6 +421,9 @@ pub enum Expr<'a> {
 
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
+
+    /// Task await bang - i.e. the ! in `File.readUtf8! path`
+    TaskAwaitBang(&'a Expr<'a>),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -281,14 +440,10 @@ pub enum Expr<'a> {
     // Record Builders
     RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
 
-    // The name of a file to be ingested directly into a variable.
-    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
-
     // Lookups
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
         ident: &'a str,
-        suffixed: u8, // how many `!` suffixes, for example `doTheThing!!` executes a Task that returns a Task
     },
 
     Underscore(&'a str),
@@ -355,17 +510,6 @@ pub enum Expr<'a> {
 }
 
 impl Expr<'_> {
-    pub fn increment_var_suffix(&mut self, count: u8) {
-        match self {
-            Expr::Var { suffixed, .. } => {
-                *suffixed += count;
-            }
-            _ => {
-                internal_error!("increment_var_suffix called on non-Var expression");
-            }
-        }
-    }
-
     pub fn get_region_spanning_binops(&self) -> Region {
         match self {
             Expr::BinOps(firsts, last) => {
@@ -392,45 +536,43 @@ pub fn split_loc_exprs_around<'a>(
     (before, after)
 }
 
-pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
-    match loc_expr.value.extract_spaces().item {
+pub fn is_expr_suffixed(expr: &Expr) -> bool {
+    match expr {
         // expression without arguments, `read!`
-        Expr::Var { suffixed, .. } => suffixed > 0,
+        Expr::Var { .. } => false,
+
+        Expr::TaskAwaitBang(..) => true,
 
         // expression with arguments, `line! "Foo"`
         Expr::Apply(sub_loc_expr, apply_args, _) => {
-            let is_function_suffixed = is_loc_expr_suffixed(sub_loc_expr);
-            let any_args_suffixed = apply_args.iter().any(|arg| is_loc_expr_suffixed(arg));
+            let is_function_suffixed = is_expr_suffixed(&sub_loc_expr.value);
+            let any_args_suffixed = apply_args.iter().any(|arg| is_expr_suffixed(&arg.value));
 
             any_args_suffixed || is_function_suffixed
         }
 
         // expression in a pipeline, `"hi" |> say!`
         Expr::BinOps(firsts, last) => {
-            let is_expr_suffixed = is_loc_expr_suffixed(last);
-            let any_chain_suffixed = firsts
+            firsts
                 .iter()
-                .any(|(chain_loc_expr, _)| is_loc_expr_suffixed(chain_loc_expr));
-
-            is_expr_suffixed || any_chain_suffixed
+                .any(|(chain_loc_expr, _)| is_expr_suffixed(&chain_loc_expr.value))
+                || is_expr_suffixed(&last.value)
         }
 
         // expression in a if-then-else, `if isOk! then "ok" else doSomething!`
         Expr::If(if_thens, final_else) => {
             let any_if_thens_suffixed = if_thens.iter().any(|(if_then, else_expr)| {
-                is_loc_expr_suffixed(if_then) || is_loc_expr_suffixed(else_expr)
+                is_expr_suffixed(&if_then.value) || is_expr_suffixed(&else_expr.value)
             });
 
-            is_loc_expr_suffixed(final_else) || any_if_thens_suffixed
+            is_expr_suffixed(&final_else.value) || any_if_thens_suffixed
         }
 
         // expression in parens `(read!)`
-        Expr::ParensAround(sub_loc_expr) => {
-            is_loc_expr_suffixed(&Loc::at(loc_expr.region, *sub_loc_expr))
-        }
+        Expr::ParensAround(sub_loc_expr) => is_expr_suffixed(sub_loc_expr),
 
         // expression in a closure
-        Expr::Closure(_, sub_loc_expr) => is_loc_expr_suffixed(sub_loc_expr),
+        Expr::Closure(_, sub_loc_expr) => is_expr_suffixed(&sub_loc_expr.value),
 
         // expressions inside a Defs
         // note we ignore the final expression as it should not be suffixed
@@ -438,35 +580,91 @@ pub fn is_loc_expr_suffixed(loc_expr: &Loc<Expr>) -> bool {
             let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
                 Ok(_) => false,
                 Err(value_index) => match defs.value_defs[value_index.index()] {
-                    ValueDef::Body(_, loc_expr) => is_loc_expr_suffixed(loc_expr),
-                    ValueDef::AnnotatedBody { body_expr, .. } => is_loc_expr_suffixed(body_expr),
+                    ValueDef::Body(_, loc_expr) => is_expr_suffixed(&loc_expr.value),
+                    ValueDef::AnnotatedBody { body_expr, .. } => is_expr_suffixed(&body_expr.value),
                     _ => false,
                 },
             });
 
             any_defs_suffixed
         }
-
-        _ => false,
+        Expr::Float(_) => false,
+        Expr::Num(_) => false,
+        Expr::NonBase10Int { .. } => false,
+        Expr::Str(_) => false,
+        Expr::SingleQuote(_) => false,
+        Expr::RecordAccess(a, _) => is_expr_suffixed(a),
+        Expr::AccessorFunction(_) => false,
+        Expr::TupleAccess(a, _) => is_expr_suffixed(a),
+        Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
+        Expr::RecordUpdate { update, fields } => {
+            is_expr_suffixed(&update.value)
+                || fields
+                    .iter()
+                    .any(|field| is_assigned_value_suffixed(&field.value))
+        }
+        Expr::Record(items) => items
+            .iter()
+            .any(|field| is_assigned_value_suffixed(&field.value)),
+        Expr::Tuple(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
+        Expr::RecordBuilder(items) => items
+            .iter()
+            .any(|rbf| is_record_builder_field_suffixed(&rbf.value)),
+        Expr::Underscore(_) => false,
+        Expr::Crash => false,
+        Expr::Tag(_) => false,
+        Expr::OpaqueRef(_) => false,
+        Expr::EmptyDefsFinal => false,
+        Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
+        Expr::Expect(a, b) | Expr::Dbg(a, b) => {
+            is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value)
+        }
+        Expr::LowLevelDbg(_, a, b) => is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value),
+        Expr::UnaryOp(a, _) => is_expr_suffixed(&a.value),
+        Expr::When(cond, branches) => {
+            is_expr_suffixed(&cond.value) || branches.iter().any(|x| is_when_branch_suffixed(x))
+        }
+        Expr::SpaceBefore(a, _) => is_expr_suffixed(a),
+        Expr::SpaceAfter(a, _) => is_expr_suffixed(a),
+        Expr::MalformedIdent(_, _) => false,
+        Expr::MalformedClosure => false,
+        Expr::MalformedSuffixed(_) => false,
+        Expr::PrecedenceConflict(_) => false,
+        Expr::MultipleRecordBuilders(_) => false,
+        Expr::UnappliedRecordBuilder(_) => false,
     }
 }
 
-pub fn wrap_in_task_ok<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
-    arena.alloc(Loc::at(
-        loc_expr.region,
-        Expr::Apply(
-            arena.alloc(Loc::at(
-                loc_expr.region,
-                Expr::Var {
-                    module_name: ModuleName::TASK,
-                    ident: "ok",
-                    suffixed: 0,
-                },
-            )),
-            arena.alloc([loc_expr]),
-            CalledVia::BangSuffix,
-        ),
-    ))
+fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
+    is_expr_suffixed(&branch.value.value)
+        || branch
+            .guard
+            .map(|x| is_expr_suffixed(&x.value))
+            .unwrap_or(false)
+}
+
+fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
+    match value {
+        AssignedField::RequiredValue(_, _, a) | AssignedField::OptionalValue(_, _, a) => {
+            is_expr_suffixed(&a.value)
+        }
+        AssignedField::LabelOnly(_) => false,
+        AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
+            is_assigned_value_suffixed(a)
+        }
+        AssignedField::Malformed(_) => false,
+    }
+}
+
+fn is_record_builder_field_suffixed(field: &RecordBuilderField<'_>) -> bool {
+    match field {
+        RecordBuilderField::Value(_, _, a) => is_expr_suffixed(&a.value),
+        RecordBuilderField::ApplyValue(_, _, _, a) => is_expr_suffixed(&a.value),
+        RecordBuilderField::LabelOnly(_) => false,
+        RecordBuilderField::SpaceBefore(a, _) => is_record_builder_field_suffixed(a),
+        RecordBuilderField::SpaceAfter(a, _) => is_record_builder_field_suffixed(a),
+        RecordBuilderField::Malformed(_) => false,
+    }
 }
 
 pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
@@ -587,6 +785,12 @@ pub enum ValueDef<'a> {
         preceding_comment: Region,
     },
 
+    /// e.g. `import InternalHttp as Http exposing [Req]`.
+    ModuleImport(ModuleImport<'a>),
+
+    /// e.g. `import "path/to/my/file.txt" as myFile : Str`
+    IngestedFileImport(IngestedFileImport<'a>),
+
     Stmt(&'a Loc<Expr<'a>>),
 }
 
@@ -600,8 +804,344 @@ impl<'a> ValueDef<'a> {
     }
 }
 
+pub struct RecursiveValueDefIter<'a, 'b> {
+    current: &'b Defs<'a>,
+    index: usize,
+    pending: std::vec::Vec<&'b Defs<'a>>,
+}
+
+impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
+    pub fn new(defs: &'b Defs<'a>) -> Self {
+        Self {
+            current: defs,
+            index: 0,
+            pending: vec![],
+        }
+    }
+
+    fn push_pending_from_expr(&mut self, expr: &'b Expr<'a>) {
+        let mut expr_stack = vec![expr];
+
+        use Expr::*;
+
+        macro_rules! push_stack_from_record_fields {
+            ($fields:expr) => {
+                for field in $fields.items {
+                    let mut current = field.value;
+
+                    loop {
+                        use AssignedField::*;
+
+                        match current {
+                            RequiredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            OptionalValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            SpaceBefore(next, _) => current = *next,
+                            SpaceAfter(next, _) => current = *next,
+                            LabelOnly(_) | Malformed(_) => break,
+                        }
+                    }
+                }
+            };
+        }
+
+        while let Some(next) = expr_stack.pop() {
+            match next {
+                Defs(defs, cont) => {
+                    self.pending.push(defs);
+                    // We purposefully don't push the exprs inside defs here
+                    // because they will be traversed when the iterator
+                    // gets to their parent def.
+                    expr_stack.push(&cont.value);
+                }
+                List(list) => {
+                    expr_stack.reserve(list.len());
+                    for loc_expr in list.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordUpdate { update, fields } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&update.value);
+                    push_stack_from_record_fields!(fields);
+                }
+                Record(fields) => {
+                    expr_stack.reserve(fields.len());
+                    push_stack_from_record_fields!(fields);
+                }
+                Tuple(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_expr in fields.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordBuilder(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_record_builder_field in fields.items {
+                        let mut current_field = loc_record_builder_field.value;
+
+                        loop {
+                            use RecordBuilderField::*;
+
+                            match current_field {
+                                Value(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                                ApplyValue(_, _, _, loc_val) => {
+                                    break expr_stack.push(&loc_val.value)
+                                }
+                                SpaceBefore(next_field, _) => current_field = *next_field,
+                                SpaceAfter(next_field, _) => current_field = *next_field,
+                                LabelOnly(_) | Malformed(_) => break,
+                            }
+                        }
+                    }
+                }
+                Closure(_, body) => expr_stack.push(&body.value),
+                Backpassing(_, a, b) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&a.value);
+                    expr_stack.push(&b.value);
+                }
+                Expect(condition, cont)
+                | Dbg(condition, cont)
+                | LowLevelDbg(_, condition, cont) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
+                }
+                Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                BinOps(ops, expr) => {
+                    expr_stack.reserve(ops.len() + 1);
+
+                    for (a, _) in ops.iter() {
+                        expr_stack.push(&a.value);
+                    }
+                    expr_stack.push(&expr.value);
+                }
+                UnaryOp(expr, _) => expr_stack.push(&expr.value),
+                If(ifs, alternate) => {
+                    expr_stack.reserve(ifs.len() * 2 + 1);
+
+                    for (condition, consequent) in ifs.iter() {
+                        expr_stack.push(&condition.value);
+                        expr_stack.push(&consequent.value);
+                    }
+                    expr_stack.push(&alternate.value);
+                }
+                When(condition, branches) => {
+                    expr_stack.reserve(branches.len() + 1);
+                    expr_stack.push(&condition.value);
+
+                    for WhenBranch {
+                        patterns: _,
+                        value,
+                        guard,
+                    } in branches.iter()
+                    {
+                        expr_stack.push(&value.value);
+
+                        match guard {
+                            None => {}
+                            Some(guard) => expr_stack.push(&guard.value),
+                        }
+                    }
+                }
+                RecordAccess(expr, _)
+                | TupleAccess(expr, _)
+                | TaskAwaitBang(expr)
+                | SpaceBefore(expr, _)
+                | SpaceAfter(expr, _)
+                | ParensAround(expr) => expr_stack.push(expr),
+
+                MultipleRecordBuilders(loc_expr) | UnappliedRecordBuilder(loc_expr) => {
+                    expr_stack.push(&loc_expr.value)
+                }
+
+                Float(_)
+                | Num(_)
+                | NonBase10Int { .. }
+                | Str(_)
+                | SingleQuote(_)
+                | AccessorFunction(_)
+                | Var { .. }
+                | Underscore(_)
+                | Crash
+                | Tag(_)
+                | OpaqueRef(_)
+                | MalformedIdent(_, _)
+                | MalformedClosure
+                | PrecedenceConflict(_)
+                | MalformedSuffixed(_)
+                | EmptyDefsFinal => { /* terminal */ }
+            }
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
+    type Item = (&'b ValueDef<'a>, &'b Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current.tags.get(self.index) {
+            Some(tag) => {
+                if let Err(def_index) = tag.split() {
+                    let def = &self.current.value_defs[def_index.index()];
+                    let region = &self.current.regions[self.index];
+
+                    match def {
+                        ValueDef::Body(_, body) => self.push_pending_from_expr(&body.value),
+
+                        ValueDef::AnnotatedBody {
+                            ann_pattern: _,
+                            ann_type: _,
+                            comment: _,
+                            body_pattern: _,
+                            body_expr,
+                        } => self.push_pending_from_expr(&body_expr.value),
+
+                        ValueDef::Dbg {
+                            condition,
+                            preceding_comment: _,
+                        }
+                        | ValueDef::Expect {
+                            condition,
+                            preceding_comment: _,
+                        }
+                        | ValueDef::ExpectFx {
+                            condition,
+                            preceding_comment: _,
+                        } => self.push_pending_from_expr(&condition.value),
+
+                        ValueDef::ModuleImport(ModuleImport {
+                            before_name: _,
+                            name: _,
+                            alias: _,
+                            exposed: _,
+                            params,
+                        }) => {
+                            if let Some(ModuleImportParams { before: _, params }) = params {
+                                for loc_assigned_field in params.items {
+                                    if let Some(expr) = loc_assigned_field.value.value() {
+                                        self.push_pending_from_expr(&expr.value);
+                                    }
+                                }
+                            }
+                        }
+                        ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
+                        ValueDef::Annotation(_, _) | ValueDef::IngestedFileImport(_) => {}
+                    }
+
+                    self.index += 1;
+
+                    Some((def, region))
+                } else {
+                    // Not a value def, try next
+                    self.index += 1;
+                    self.next()
+                }
+            }
+
+            None => {
+                self.current = self.pending.pop()?;
+                self.index = 0;
+                self.next()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImport<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
+    pub name: Loc<ImportedModuleName<'a>>,
+    pub params: Option<ModuleImportParams<'a>>,
+    pub alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
+    pub exposed: Option<
+        header::KeywordItem<
+            'a,
+            ImportExposingKeyword,
+            Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        >,
+    >,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImportParams<'a> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub params: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileImport<'a> {
+    pub before_path: &'a [CommentOrNewline<'a>],
+    pub path: Loc<StrLiteral<'a>>,
+    pub name: header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>,
+    pub annotation: Option<IngestedFileAnnotation<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileAnnotation<'a> {
+    pub before_colon: &'a [CommentOrNewline<'a>],
+    pub annotation: Loc<TypeAnnotation<'a>>,
+}
+
+impl<'a> Malformed for IngestedFileAnnotation<'a> {
+    fn is_malformed(&self) -> bool {
+        self.annotation.value.is_malformed()
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportAsKeyword;
+
+impl header::Keyword for ImportAsKeyword {
+    const KEYWORD: &'static str = "as";
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportExposingKeyword;
+
+impl header::Keyword for ImportExposingKeyword {
+    const KEYWORD: &'static str = "exposing";
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportedModuleName<'a> {
+    pub package: Option<&'a str>,
+    pub name: ModuleName<'a>,
+}
+
+impl<'a> From<ImportedModuleName<'a>> for QualifiedModuleName<'a> {
+    fn from(imported: ImportedModuleName<'a>) -> Self {
+        Self {
+            opt_package: imported.package,
+            module: imported.name.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportAlias<'a>(&'a str);
+
+impl<'a> ImportAlias<'a> {
+    pub const fn new(name: &'a str) -> Self {
+        ImportAlias(name)
+    }
+
+    pub const fn as_str(&'a self) -> &'a str {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
+    /// A collection of references by index to either `type_defs` or `value_defs`
+    /// It's an entry point for actual definitions, while `type_defs` and `value_defs` are append-only collections
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
     pub regions: std::vec::Vec<Region>,
     pub space_before: std::vec::Vec<Slice<CommentOrNewline<'a>>>,
@@ -666,13 +1206,13 @@ impl<'a> Defs<'a> {
                         ..
                     },
                     loc_expr,
-                ) if collection.is_empty() && is_loc_expr_suffixed(loc_expr) => {
+                ) if collection.is_empty() && is_expr_suffixed(&loc_expr.value) => {
                     let mut new_defs = self.clone();
                     new_defs.remove_value_def(tag_index);
 
                     return Some((new_defs, loc_expr));
                 }
-                ValueDef::Stmt(loc_expr) if is_loc_expr_suffixed(loc_expr) => {
+                ValueDef::Stmt(loc_expr) if is_expr_suffixed(&loc_expr.value) => {
                     let mut new_defs = self.clone();
                     new_defs.remove_value_def(tag_index);
 
@@ -1019,6 +1559,20 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
+impl<'a, Val> AssignedField<'a, Val> {
+    pub fn value(&self) -> Option<&Loc<Val>> {
+        let mut current = self;
+
+        loop {
+            match current {
+                Self::RequiredValue(_, _, val) | Self::OptionalValue(_, _, val) => break Some(val),
+                Self::LabelOnly(_) | Self::Malformed(_) => break None,
+                Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RecordBuilderField<'a> {
     // A field with a value, e.g. `{ name: "blah" }`
@@ -1095,12 +1649,10 @@ pub enum Pattern<'a> {
     // Identifier
     Identifier {
         ident: &'a str,
-        suffixed: u8,
     },
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,
-        suffixed: u8,
     },
 
     Tag(&'a str),
@@ -1218,21 +1770,11 @@ impl<'a> Pattern<'a> {
             //      { x, y } : { x : Int, y ? Bool }
             //      { x, y ? False } = rec
             OptionalField(x, _) => match other {
-                Identifier {
-                    ident: y,
-                    suffixed: 0,
-                }
-                | OptionalField(y, _) => x == y,
+                Identifier { ident: y } | OptionalField(y, _) => x == y,
                 _ => false,
             },
-            Identifier {
-                ident: x,
-                suffixed: a,
-            } => match other {
-                Identifier {
-                    ident: y,
-                    suffixed: b,
-                } => x == y && a == b,
+            Identifier { ident: x } => match other {
+                Identifier { ident: y } => x == y,
                 OptionalField(y, _) => x == y,
                 _ => false,
             },
@@ -1294,15 +1836,13 @@ impl<'a> Pattern<'a> {
             QualifiedIdentifier {
                 module_name: a,
                 ident: x,
-                suffixed: i,
             } => {
                 if let QualifiedIdentifier {
                     module_name: b,
                     ident: y,
-                    suffixed: j,
                 } = other
                 {
-                    a == b && x == y && i == j
+                    a == b && x == y
                 } else {
                     false
                 }
@@ -1365,15 +1905,6 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-        }
-    }
-
-    // used to check if a pattern is suffixed to report as an error
-    pub fn is_suffixed(&self) -> bool {
-        match self {
-            Pattern::Identifier { suffixed, .. } => *suffixed > 0,
-            Pattern::QualifiedIdentifier { suffixed, .. } => *suffixed > 0,
-            _ => false,
         }
     }
 }
@@ -1632,13 +2163,11 @@ impl<'a> Expr<'a> {
     pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
         module_name: "",
         ident: "<function>",
-        suffixed: 0,
     };
 
     pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
         module_name: "",
         ident: "*",
-        suffixed: 0,
     };
 
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
@@ -1837,7 +2366,7 @@ impl<'a> Malformed for Module<'a> {
 impl<'a> Malformed for Header<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            Header::Interface(header) => header.is_malformed(),
+            Header::Module(header) => header.is_malformed(),
             Header::App(header) => header.is_malformed(),
             Header::Package(header) => header.is_malformed(),
             Header::Platform(header) => header.is_malformed(),
@@ -1866,14 +2395,14 @@ impl<'a> Malformed for Expr<'a> {
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
-            IngestedFile(_, _) |
             EmptyDefsFinal |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
 
             RecordAccess(inner, _) |
-            TupleAccess(inner, _) => inner.is_malformed(),
+            TupleAccess(inner, _) |
+            TaskAwaitBang(inner) => inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 
@@ -2139,8 +2668,29 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
+            ValueDef::ModuleImport(ModuleImport {
+                before_name: _,
+                name: _,
+                params,
+                alias: _,
+                exposed: _,
+            }) => params.is_malformed(),
+            ValueDef::IngestedFileImport(IngestedFileImport {
+                before_path: _,
+                path,
+                name: _,
+                annotation,
+            }) => path.is_malformed() || annotation.is_malformed(),
             ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
         }
+    }
+}
+
+impl<'a> Malformed for ModuleImportParams<'a> {
+    fn is_malformed(&self) -> bool {
+        let Self { before: _, params } = self;
+
+        params.is_malformed()
     }
 }
 

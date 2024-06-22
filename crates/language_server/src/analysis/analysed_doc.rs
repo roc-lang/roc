@@ -255,7 +255,7 @@ impl AnalyzedDocument {
             let is_module_completion = symbol_prefix
                 .split('.')
                 .nth_back(1) // second to last
-                .and_then(|str| str.chars().nth(0).map(|c| c.is_uppercase()))
+                .map(|str| str.starts_with(|c: char| c.is_uppercase()))
                 .unwrap_or(false);
 
             if is_module_completion {
@@ -279,10 +279,8 @@ impl AnalyzedDocument {
                 )
             }
         } else {
-            let is_module_or_type_completion = symbol_prefix
-                .chars()
-                .nth(0)
-                .map_or(false, |c| c.is_uppercase());
+            let is_module_or_type_completion =
+                symbol_prefix.starts_with(|c: char| c.is_uppercase());
 
             if is_module_or_type_completion {
                 info!("Getting module completion...");

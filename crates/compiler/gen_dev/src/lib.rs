@@ -1704,6 +1704,13 @@ trait Backend<'a> {
 
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
+            LowLevel::ListConcatUtf8 => self.build_fn_call(
+                sym,
+                bitcode::LIST_CONCAT_UTF8.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,

@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use roc_fmt::Buf;
 use roc_parse::{
     ast::{Defs, Module},
+    module::parse_module_defs,
     parser::SyntaxError,
 };
 use roc_region::all::Loc;
@@ -20,16 +21,14 @@ pub struct Ast<'a> {
 
 impl<'a> Ast<'a> {
     pub fn parse(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-        use roc_parse::{
-            module::{module_defs, parse_header},
-            parser::Parser,
-            state::State,
-        };
+        use roc_parse::{module::parse_header, state::State};
 
         let (module, state) = parse_header(arena, State::new(src.as_bytes()))
             .map_err(|e| SyntaxError::Header(e.problem))?;
 
-        let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
+        let (module, defs) = module.upgrade_header_imports(arena);
+
+        let defs = parse_module_defs(arena, state, defs)?;
 
         Ok(Ast {
             module,

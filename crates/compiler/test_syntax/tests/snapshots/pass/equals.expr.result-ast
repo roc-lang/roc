@@ -4,7 +4,6 @@ BinOps(
             @0-1 Var {
                 module_name: "",
                 ident: "x",
-                suffixed: 0,
             },
             @1-3 Equals,
         ),
@@ -12,6 +11,5 @@ BinOps(
     @3-4 Var {
         module_name: "",
         ident: "y",
-        suffixed: 0,
     },
 )

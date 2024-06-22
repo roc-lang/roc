@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 @8-10 SpaceBefore(
                     Record {

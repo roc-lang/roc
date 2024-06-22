@@ -481,6 +481,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT);
             }
+            ListConcatUtf8 => self.load_args_and_call_zig(backend, bitcode::LIST_CONCAT_UTF8),
 
             ListReserve => {
                 // List.reserve : List elem, U64 -> List elem
@@ -2161,13 +2162,13 @@ impl<'a> LowLevelCall<'a> {
 
             // Empty record is always equal to empty record.
             // There are no runtime arguments to check, so just emit true or false.
-            LayoutRepr::Struct(field_layouts) if field_layouts.is_empty() => {
+            LayoutRepr::Struct([]) => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
             // Void is always equal to void. This is the type for the contents of the empty list in `[] == []`
             // This instruction will never execute, but we need an i32 for module validation
-            LayoutRepr::Union(UnionLayout::NonRecursive(tags)) if tags.is_empty() => {
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 

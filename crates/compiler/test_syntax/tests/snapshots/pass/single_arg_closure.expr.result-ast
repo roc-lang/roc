@@ -2,7 +2,6 @@ Closure(
     [
         @1-2 Identifier {
             ident: "a",
-            suffixed: 0,
         },
     ],
     @6-8 Num(

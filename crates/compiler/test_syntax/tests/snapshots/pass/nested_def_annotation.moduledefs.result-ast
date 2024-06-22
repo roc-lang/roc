@@ -17,7 +17,6 @@ Defs {
         Body(
             @0-4 Identifier {
                 ident: "main",
-                suffixed: 0,
             },
             @11-115 SpaceBefore(
                 Defs(
@@ -40,7 +39,6 @@ Defs {
                             Annotation(
                                 @11-23 Identifier {
                                     ident: "wrappedNotEq",
-                                    suffixed: 0,
                                 },
                                 @26-38 Function(
                                     [
@@ -61,7 +59,6 @@ Defs {
                             AnnotatedBody {
                                 ann_pattern: @11-23 Identifier {
                                     ident: "wrappedNotEq",
-                                    suffixed: 0,
                                 },
                                 ann_type: @26-38 Function(
                                     [
@@ -81,17 +78,14 @@ Defs {
                                 comment: None,
                                 body_pattern: @43-55 Identifier {
                                     ident: "wrappedNotEq",
-                                    suffixed: 0,
                                 },
                                 body_expr: @58-93 Closure(
                                     [
                                         @59-63 Identifier {
                                             ident: "num1",
-                                            suffixed: 0,
                                         },
                                         @65-69 Identifier {
                                             ident: "num2",
-                                            suffixed: 0,
                                         },
                                     ],
                                     @81-93 SpaceBefore(
@@ -101,7 +95,6 @@ Defs {
                                                     @81-85 Var {
                                                         module_name: "",
                                                         ident: "num1",
-                                                        suffixed: 0,
                                                     },
                                                     @86-88 NotEquals,
                                                 ),
@@ -109,7 +102,6 @@ Defs {
                                             @89-93 Var {
                                                 module_name: "",
                                                 ident: "num2",
-                                                suffixed: 0,
                                             },
                                         ),
                                         [
@@ -125,7 +117,6 @@ Defs {
                             @99-111 Var {
                                 module_name: "",
                                 ident: "wrappedNotEq",
-                                suffixed: 0,
                             },
                             [
                                 @112-113 Num(

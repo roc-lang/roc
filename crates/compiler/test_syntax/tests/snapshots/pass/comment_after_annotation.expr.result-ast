@@ -30,7 +30,6 @@ Defs(
         Var {
             module_name: "",
             ident: "q",
-            suffixed: 0,
         },
         [
             LineComment(

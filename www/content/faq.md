@@ -425,6 +425,45 @@ Dependent types are too risky of a bet for Roc to take. They have been implement
 
 Perhaps more success stories will emerge over time, but in the meantime it remains an open question whether dependent types are net beneficial in practice to application development. Further experimentation would be required to answer this question, and Roc is not the right language to do those experiments.
 
+## [Can one application have multiple platforms? Can platforms compose?](#multiple-platforms)
+
+The short answer to each of these questions is "No." To understand why, it's helpful to look at this from the platform author's perspective.
+
+Building a Roc platform means implementing two things:
+
+1. The public-facing Roc API. This is the part the application author sees.
+2. The "host," which provides the lower-level implementation behind that API. The host isn't written in Roc, and isn't visible to the application author.
+
+Let's say I'm writing a platform and I decide to implement the host in C.
+
+My C code will compile to an executable which does something like this:
+
+1. Start running the program
+2. At some point, call a function named something like "roc_app_main"
+3. That roc_app_main function will result in the actual Roc application code running.
+
+An important characteristic of this design is that the platform is in complete control of when all the Roc code runs. If the host is written in C, that C code will specify the `main()` function that runs when the compiled binary runs. (The Roc application might also have something named `main`, but that just compiles down to a pure function the C host can choose to call—or not—whenever it pleases.)
+
+One of the main goals of this design is to give platform authors the ability to make a coherent experience for a specific domain. The public API can omit operations that aren't implementable in a particular host, or which wouldn't make sense in the target domain. The Task data structure provides enough information for the host to use any kind of asynchronous I/O system they like, or synchronous blocking I/O if that makes more sense.
+
+The single-platform design is based around the idea of giving a platform author exclusive control over which primitives are available and how they're implemented at a low level. Exclusivity is the point! It's not really clear how "multiple platforms" or "composed platforms" would work, but certainly it would require sacrificing the current benefit of one platform being able to provide a cohesive experience for its domain.
+
+With all that in mind, it's possible to write Roc code that can be used across multiple platforms. Applications can use platform-agnostic packages, as well as packages involving I/O, as long as their platform supports the I/O operations in question.
+
+Similarly, platforms can share code for common Roc logic using normal Roc packages. Code can also be shared between hosts using whatever normal code sharing mechanisms their chosen host languages support.
+
+Putting all this together, applications have exactly one platform, which enables platform authors to create a cohesive experience optimized for a particular domain, and both application authors and platform authors can share code as much as they like.
+
+## [Will Roc ever compile to JavaScript, JVM/CLR/BEAM bytecode, or other higher-level targets?](#other-compilation-targets)
+
+The plan is for Roc to compile only to very low-level targets like machine code and WebAssembly.
+
+This is partly in order to keep the scope of the project smaller, but also because supporting higher-level targets could make it significantly more difficult to create an ecosystem of high-performance Roc packages. Techniques which are performance optimizations on low-level targets like machine code or WebAssembly might actually impede performance on higher-level targets, and vice versa.
+
+Additionally, some of these higher-level targets may not be able to represent Roc's full range of numbers efficiently (e.g. Roc's very common [`U64`](https://www.roc-lang.org/builtins/Num#U64) would be represented in JavaScript as [a heap-allocated `BigInt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt), which would be massively slower), and their string representations may not work well with Roc's builtins (e.g. Roc's [`Str`](https://www.roc-lang.org/builtins/Str) uses UTF-8 and has operations which let you traverse those bytes directly, although the JVM, CLR, and JavaScript all use UTF-16).
+
+Fortunately, since these higher-level targets tend to support some combination of C FFI, WebAssembly calls, or both, there's already a path to use Roc code in those environments even if Roc doesn't directly compile to their higher-level bytecode.
+
 ## [Will Roc's compiler ever be self-hosted? (That is, will it ever be written in Roc?)](#self-hosted-compiler) {#self-hosted-compiler}
 
 The plan is to never implement Roc's compiler in Roc.

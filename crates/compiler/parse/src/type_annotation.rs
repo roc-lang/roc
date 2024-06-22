@@ -11,7 +11,7 @@ use crate::keyword;
 use crate::parser::{
     absolute_column_min_indent, and, collection_trailing_sep_e, either, increment_min_indent, loc,
     map, map_with_arena, skip_first, skip_second, succeed, then, zero_or_more, ERecord,
-    ETypeAbilityImpl,
+    ETypeAbilityImpl, indented_seq
 };
 use crate::parser::{
     allocated, backtrackable, byte, fail, optional, specialize_err, specialize_err_ref, two_bytes,
@@ -72,13 +72,7 @@ fn check_type_alias<'a>(
             var_names.reserve(vars.len());
             for var in vars {
                 if let TypeAnnotation::BoundVariable(v) = var.value {
-                    var_names.push(Loc::at(
-                        var.region,
-                        Pattern::Identifier {
-                            ident: v,
-                            suffixed: 0,
-                        },
-                    ));
+                    var_names.push(Loc::at(var.region, Pattern::Identifier { ident: v }));
                 } else {
                     return Err(ETypeInlineAlias::ArgumentNotLowercase(var.region.start()));
                 }
@@ -400,7 +394,7 @@ fn record_type<'a>(
 
 fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map(
-        and(
+indented_seq(
             specialize_err(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`

@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 @4-92 Where(
                     @4-16 SpaceAfter(
@@ -93,7 +92,6 @@ Defs(
         Var {
             module_name: "",
             ident: "f",
-            suffixed: 0,
         },
         [
             Newline,

@@ -1,7 +1,4 @@
-app "rocdemo"
-    packages { pf: "platform.roc" }
-    imports []
-    provides [program] to pf
+app [program] { pf: platform "platform.roc" }
 
 interpolateString : Str -> Str
 interpolateString = \name ->

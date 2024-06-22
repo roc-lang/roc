@@ -87,7 +87,10 @@ impl_space_problem! {
     EGeneratesWith,
     EHeader<'a>,
     EIf<'a>,
+    EImport<'a>,
+    EParams<'a>,
     EImports,
+    EImportParams<'a>,
     EInParens<'a>,
     EClosure<'a>,
     EList<'a>,
@@ -114,6 +117,7 @@ impl_space_problem! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EHeader<'a> {
     Provides(EProvides<'a>, Position),
+    Params(EParams<'a>, Position),
     Exposes(EExposes, Position),
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
@@ -145,6 +149,15 @@ pub enum EProvides<'a> {
     ListEnd(Position),
     Identifier(Position),
     Package(EPackageName<'a>, Position),
+    Space(BadInputError, Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EParams<'a> {
+    Pattern(PRecord<'a>, Position),
+    BeforeArrow(Position),
+    Arrow(Position),
+    AfterArrow(Position),
     Space(BadInputError, Position),
 }
 
@@ -210,6 +223,8 @@ pub enum EPackageEntry<'a> {
     Shorthand(Position),
     Colon(Position),
     IndentPackage(Position),
+    IndentPlatform(Position),
+    Platform(Position),
     Space(BadInputError, Position),
 }
 
@@ -346,6 +361,7 @@ pub enum EExpr<'a> {
 
     Expect(EExpect<'a>, Position),
     Dbg(EExpect<'a>, Position),
+    Import(EImport<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
@@ -517,6 +533,45 @@ pub enum EExpect<'a> {
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
     IndentCondition(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EImport<'a> {
+    Import(Position),
+    IndentStart(Position),
+    PackageShorthand(Position),
+    PackageShorthandDot(Position),
+    ModuleName(Position),
+    Params(EImportParams<'a>, Position),
+    IndentAs(Position),
+    As(Position),
+    IndentAlias(Position),
+    Alias(Position),
+    LowercaseAlias(Region),
+    IndentExposing(Position),
+    Exposing(Position),
+    ExposingListStart(Position),
+    ExposedName(Position),
+    ExposingListEnd(Position),
+    IndentIngestedPath(Position),
+    IngestedPath(Position),
+    IndentIngestedName(Position),
+    IngestedName(Position),
+    IndentColon(Position),
+    Colon(Position),
+    IndentAnnotation(Position),
+    Annotation(EType<'a>, Position),
+    Space(BadInputError, Position),
+    EndNewline(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EImportParams<'a> {
+    Indent(Position),
+    Record(ERecord<'a>, Position),
+    RecordUpdateFound(Region),
+    RecordApplyFound(Region),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1684,7 +1739,7 @@ macro_rules! record {
 /// Similar to [`skip_first`], but we modify the `min_indent` of the second
 /// parser (`parser`) to be 1 greater than the `line_indent()` at the start of
 /// the first parser (`before`).
-pub fn indented_seq<'a, O, E: 'a>(
+pub fn indented_seq_skip_first<'a, O, E: 'a>(
     before: impl Parser<'a, (), E>,
     parser: impl Parser<'a, O, E>,
 ) -> impl Parser<'a, O, E> {
@@ -1709,6 +1764,35 @@ pub fn indented_seq<'a, O, E: 'a>(
         }
     }
 }
+
+/// Similar to `and`, but we modify the min_indent of the second parser to be
+/// 1 greater than the line_indent() at the start of the first parser.
+pub fn indented_seq<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.line_indent();
+
+        // TODO: we should account for min_indent here, but this doesn't currently work
+        // because min_indent is sometimes larger than it really should be, which is in turn
+        // due to uses of `increment_indent`.
+        //
+        // let p1_indent = std::cmp::max(start_indent, min_indent);
+
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
+
+        match p1.parse(arena, state, p1_indent) {
+            Ok((p1, out1, state)) => match p2.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
+        }
+    }
+}
+
 
 /// Similar to [`and`], but we modify the `min_indent` of the second parser to be
 /// 1 greater than the `column()` at the start of the first parser.

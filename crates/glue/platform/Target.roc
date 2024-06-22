@@ -1,6 +1,4 @@
-interface Target
-    exposes [Target, Architecture, OperatingSystem]
-    imports []
+module [Target, Architecture, OperatingSystem]
 
 Target : {
     architecture : Architecture,

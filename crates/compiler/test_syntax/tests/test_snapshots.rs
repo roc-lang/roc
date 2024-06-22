@@ -200,6 +200,7 @@ mod test_snapshots {
         fail/if_guard_without_condition.expr,
         fail/if_missing_else.expr,
         fail/if_outdented_then.expr,
+        fail/import_with_lowercase_alias.moduledefs,
         fail/imports_missing_comma.header,
         fail/inline_hastype.expr,
         fail/invalid_operator.expr,
@@ -211,6 +212,8 @@ mod test_snapshots {
         fail/list_pattern_not_terminated.expr,
         fail/list_pattern_weird_rest_pattern.expr,
         fail/list_without_end.expr,
+        fail/module_params_with_missing_arrow.header,
+        fail/module_with_unfinished_params.header,
         fail/multi_no_end.expr,
         fail/pattern_binds_keyword.expr,
         fail/pattern_in_parens_end.expr,
@@ -299,10 +302,11 @@ mod test_snapshots {
         pass/dbg_multiline.expr,
         pass/def_without_newline.expr,
         pass/destructure_tag_assignment.expr,
+        pass/docs.expr,
         pass/empty_app_header.header,
         pass/empty_hosted_header.header,
-        pass/empty_interface_header.header,
         pass/empty_list.expr,
+        pass/empty_module_header.header,
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
@@ -323,8 +327,17 @@ mod test_snapshots {
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/if_def.expr,
+        pass/import.moduledefs,
+        pass/import_from_package.moduledefs,
+        pass/import_with_alias.moduledefs,
+        pass/import_with_comments.moduledefs,
+        pass/import_with_exposed.moduledefs,
+        pass/import_with_params.moduledefs,
+        pass/ingested_file.moduledefs,
+        pass/inline_import.expr,
+        pass/inline_ingested_file.expr,
+        pass/inline_ingested_file_no_ann.expr,
         pass/int_with_underscore.expr,
-        pass/interface_with_newline.header,
         pass/lambda_in_chain.expr,
         pass/lambda_indent.expr,
         pass/list_closing_indent_not_enough.expr,
@@ -339,6 +352,12 @@ mod test_snapshots {
         pass/minus_twelve_minus_five.expr,
         pass/mixed_docs.expr,
         pass/module_def_newline.moduledefs,
+        pass/module_multiline_exposes.header,
+        pass/module_with_multiline_params_and_exposes.header,
+        pass/module_with_newline.header,
+        pass/module_with_optional_param.header,
+        pass/module_with_params.header,
+        pass/module_with_params_and_multiline_exposes.header,
         pass/multi_backpassing.expr,
         pass/multi_backpassing_in_def.moduledefs,
         pass/multi_backpassing_with_apply.expr,
@@ -360,7 +379,6 @@ mod test_snapshots {
         pass/nested_def_annotation.moduledefs,
         pass/nested_def_without_newline.expr,
         pass/nested_if.expr,
-        pass/nested_module.header,
         pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_mul.expr,
         pass/newline_after_paren.expr,
@@ -377,9 +395,10 @@ mod test_snapshots {
         pass/nonempty_hosted_header.header,
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
-        pass/docs.expr,
         pass/not_multiline_string.expr,
         pass/number_literal_suffixes.expr,
+        pass/old_app_header.full,
+        pass/old_interface_header.header,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
@@ -574,6 +593,8 @@ mod test_snapshots {
             Err(err) => Err(format!("{err:?}")),
         };
 
+        println!("{:?}", result);
+
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);
             for token in tokens {
@@ -741,7 +762,6 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -758,7 +778,6 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -774,7 +793,6 @@ mod test_snapshots {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;
@@ -790,13 +808,11 @@ mod test_snapshots {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
-                suffixed: 0,
             });
 
             let expr2 = arena.alloc(Var {
                 module_name: "",
                 ident: "project",
-                suffixed: 0,
             });
 
             bumpalo::vec![in arena;

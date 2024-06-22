@@ -1,27 +1,25 @@
-interface Html.Event
-    exposes [
-        Handler,
-        CyclicStructureAccessor,
-        on,
-        custom,
-        onClick,
-        onDoubleClick,
-        onMouseDown,
-        onMouseUp,
-        onMouseEnter,
-        onMouseLeave,
-        onMouseOver,
-        onMouseOut,
-        onCheck,
-        onBlur,
-        onFocus,
-        onInput,
-        onSubmit,
-    ]
-    imports [
-        Action.{ Action },
-        Html.Internal.Shared.{ Attribute },
-    ]
+module [
+    Handler,
+    CyclicStructureAccessor,
+    on,
+    custom,
+    onClick,
+    onDoubleClick,
+    onMouseDown,
+    onMouseUp,
+    onMouseEnter,
+    onMouseLeave,
+    onMouseOver,
+    onMouseOut,
+    onCheck,
+    onBlur,
+    onFocus,
+    onInput,
+    onSubmit,
+]
+
+import Action exposing [Action]
+import Html.Internal.Shared exposing [Attribute]
 
 Handler state : Html.Internal.Shared.Handler state
 CyclicStructureAccessor : Html.Internal.Shared.CyclicStructureAccessor

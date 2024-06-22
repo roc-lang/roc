@@ -79,6 +79,7 @@ pub fn generate_stub_lib(
     let loaded = roc_load::load_and_monomorphize(
         arena,
         input_path.to_path_buf(),
+        None,
         roc_cache_dir,
         LoadConfig {
             target,

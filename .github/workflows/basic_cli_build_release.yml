@@ -11,7 +11,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.9.0
+  RELEASE_TAG: 0.9.1
 
 jobs:
   prepare:
@@ -97,7 +97,7 @@ jobs:
             basic-cli/platform/linux-arm64.o
 
   build-macos-x86_64-files:
-    runs-on: [macos-11] # I expect the generated files to work on macOS 12 and up
+    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
     needs: [prepare]
     steps:
       - uses: actions/checkout@v4
@@ -158,7 +158,11 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - run: git clone https://github.com/roc-lang/basic-cli.git
+      - run: |
+          git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
+          git checkout $RELEASE_TAG
+          cd ..
 
       - run: cp macos-apple-silicon-files/* ./basic-cli/platform
 

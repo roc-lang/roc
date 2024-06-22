@@ -25,7 +25,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 @4-73 Where(
                     @4-10 Function(
@@ -80,7 +79,6 @@ Defs(
             Annotation(
                 @75-76 Identifier {
                     ident: "f",
-                    suffixed: 0,
                 },
                 @79-154 Where(
                     @79-85 SpaceAfter(
@@ -148,7 +146,6 @@ Defs(
         Var {
             module_name: "",
             ident: "f",
-            suffixed: 0,
         },
         [
             Newline,

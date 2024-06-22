@@ -203,6 +203,9 @@ pub async fn entrypoint_from_js(src: String) -> String {
         ReplAction::Exit => {
             "To exit the web version of the REPL, just close the browser tab!".to_string()
         }
+        ReplAction::FileProblem { .. } => {
+            "The web version of the REPL cannot import files... for now!".to_string()
+        }
         ReplAction::Nothing => String::new(),
         ReplAction::Eval { opt_mono, problems } => {
             let opt_output = match opt_mono {

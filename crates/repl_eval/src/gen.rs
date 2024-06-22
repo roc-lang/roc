@@ -53,13 +53,14 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     palette: Palette,
 ) -> (Option<MonomorphizedModule<'a>>, Problems) {
     let filename = PathBuf::from("replfile.roc");
-    let src_dir = PathBuf::from("fake/test/path");
+    let src_dir = PathBuf::from(".");
     let (bytes_before_expr, module_src) = promote_expr_to_module(arena, defs, expr);
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target,

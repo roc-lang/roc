@@ -1,6 +1,3 @@
-app "example"
-    packages { pf: "path" }
-    imports [pf.Stdout]
-    provides [main] to pf
+app [main] { pf: platform "path" }
 
 main = Stdout.line "Hello"

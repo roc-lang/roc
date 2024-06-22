@@ -1,28 +1,28 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.573 : U8 = GetTagId #Attr.3;
-    joinpoint List.574 List.572:
-        ret List.572;
+    let List.575 : U8 = GetTagId #Attr.3;
+    joinpoint List.576 List.574:
+        ret List.574;
     in
-    switch List.573:
+    switch List.575:
         case 0:
-            let List.575 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
+            let List.577 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
             decref #Attr.2;
-            jump List.574 List.575;
+            jump List.576 List.577;
     
         case 1:
-            let List.576 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
+            let List.578 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
             decref #Attr.2;
-            jump List.574 List.576;
+            jump List.576 List.578;
     
         default:
-            let List.577 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
+            let List.579 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
             decref #Attr.2;
-            jump List.574 List.577;
+            jump List.576 List.579;
     
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.277 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.277;
+    let Num.281 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.281;
 
 procedure Test.4 (Test.5, #Attr.12):
     let Test.16 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;

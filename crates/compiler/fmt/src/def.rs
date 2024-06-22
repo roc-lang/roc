@@ -1,11 +1,15 @@
-use crate::annotation::{Formattable, Newlines, Parens};
+use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
+use crate::collection::{fmt_collection, Braces};
+use crate::expr::fmt_str_literal;
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_default_newline, fmt_spaces, INDENT};
+use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef,
-    TypeHeader, ValueDef,
+    AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
+use roc_parse::header::Keyword;
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -183,6 +187,226 @@ impl<'a> Formattable for TypeHeader<'a> {
     }
 }
 
+impl<'a> Formattable for ModuleImport<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_name,
+            name,
+            params,
+            alias,
+            exposed,
+        } = self;
+
+        !before_name.is_empty()
+            || name.is_multiline()
+            || params.is_multiline()
+            || alias.is_multiline()
+            || match exposed {
+                Some(a) => a.keyword.is_multiline() || is_collection_multiline(&a.item),
+                None => false,
+            }
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_name,
+            name,
+            params,
+            alias,
+            exposed,
+        } = self;
+
+        buf.indent(indent);
+        buf.push_str("import");
+
+        let indent = if !before_name.is_empty()
+            || (params.is_multiline() && exposed.is_some())
+            || alias.is_multiline()
+            || exposed.map_or(false, |e| e.keyword.is_multiline())
+        {
+            indent + INDENT
+        } else {
+            indent
+        };
+
+        fmt_default_spaces(buf, before_name, indent);
+
+        name.format(buf, indent);
+        params.format(buf, indent);
+        alias.format(buf, indent);
+
+        if let Some(exposed) = exposed {
+            exposed.keyword.format(buf, indent);
+            fmt_collection(buf, indent, Braces::Square, exposed.item, Newlines::No);
+        }
+    }
+}
+
+impl<'a> Formattable for ModuleImportParams<'a> {
+    fn is_multiline(&self) -> bool {
+        let ModuleImportParams { before, params } = self;
+
+        !before.is_empty() || is_collection_multiline(params)
+    }
+
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
+        let ModuleImportParams { before, params } = self;
+
+        fmt_default_spaces(buf, before, indent);
+        fmt_collection(buf, indent, Braces::Curly, *params, newlines);
+    }
+}
+
+impl<'a> Formattable for IngestedFileImport<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_path,
+            path: _,
+            name,
+            annotation,
+        } = self;
+        !before_path.is_empty() || name.keyword.is_multiline() || annotation.is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_path,
+            path,
+            name,
+            annotation,
+        } = self;
+
+        buf.indent(indent);
+        buf.push_str("import");
+
+        let indent = indent + INDENT;
+
+        fmt_default_spaces(buf, before_path, indent);
+        fmt_str_literal(buf, path.value, indent);
+
+        name.keyword.format(buf, indent);
+        buf.push_str(name.item.value);
+
+        annotation.format(buf, indent);
+    }
+}
+
+impl<'a> Formattable for ImportedModuleName<'a> {
+    fn is_multiline(&self) -> bool {
+        // No newlines in module name itself.
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+
+        if let Some(package_shorthand) = self.package {
+            buf.push_str(package_shorthand);
+            buf.push_str(".");
+        }
+
+        self.name.format(buf, indent);
+    }
+}
+
+impl<'a> Formattable for ImportAlias<'a> {
+    fn is_multiline(&self) -> bool {
+        // No newlines in alias itself.
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(self.as_str());
+    }
+}
+
+impl Formattable for ImportAsKeyword {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf<'_>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(ImportAsKeyword::KEYWORD);
+    }
+}
+
+impl Formattable for ImportExposingKeyword {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf<'_>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(ImportExposingKeyword::KEYWORD);
+    }
+}
+
+impl<'a> Formattable for IngestedFileAnnotation<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_colon,
+            annotation,
+        } = self;
+        !before_colon.is_empty() || annotation.is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_colon,
+            annotation,
+        } = self;
+
+        fmt_default_spaces(buf, before_colon, indent);
+        buf.push_str(":");
+        buf.spaces(1);
+        annotation.format(buf, indent);
+    }
+}
+
 impl<'a> Formattable for ValueDef<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::ValueDef::*;
@@ -196,6 +420,8 @@ impl<'a> Formattable for ValueDef<'a> {
             Expect { condition, .. } => condition.is_multiline(),
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
+            ModuleImport(module_import) => module_import.is_multiline(),
+            IngestedFileImport(ingested_file_import) => ingested_file_import.is_multiline(),
             Stmt(loc_expr) => loc_expr.is_multiline(),
         }
     }
@@ -239,6 +465,8 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
+            ModuleImport(module_import) => module_import.format(buf, indent),
+            IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
             Stmt(loc_expr) => loc_expr.format_with_options(buf, parens, newlines, indent),
         }
     }

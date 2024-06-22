@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-1 Identifier {
                     ident: "a",
-                    suffixed: 0,
                 },
                 @2-3 BoundVariable(
                     "b",
@@ -29,6 +28,5 @@ Defs(
     @4-5 Var {
         module_name: "",
         ident: "i",
-        suffixed: 0,
     },
 )

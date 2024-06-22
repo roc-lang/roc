@@ -18,7 +18,6 @@ Defs(
             Annotation(
                 @0-3 Identifier {
                     ident: "foo",
-                    suffixed: 0,
                 },
                 @6-33 As(
                     @6-21 Apply(
@@ -39,11 +38,9 @@ Defs(
                         vars: [
                             @30-31 Identifier {
                                 ident: "a",
-                                suffixed: 0,
                             },
                             @32-33 Identifier {
                                 ident: "b",
-                                suffixed: 0,
                             },
                         ],
                     },

@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{is_loc_expr_suffixed, wrap_in_task_ok, Pattern, ValueDef, WhenBranch};
+use roc_parse::ast::{is_expr_suffixed, Pattern, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 use std::cell::Cell;
 
@@ -31,11 +31,9 @@ fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
             Expr::Var {
                 module_name: "",
                 ident: answer_ident,
-                suffixed: 0,
             },
             Pattern::Identifier {
                 ident: answer_ident.as_str(),
-                suffixed: 0,
             },
         )
     })
@@ -95,63 +93,10 @@ pub fn unwrap_suffixed_expression<'a>(
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     let unwrapped_expression = {
         match loc_expr.value {
-            Expr::Var {
-                module_name,
-                ident,
-                suffixed,
-            } => {
-                match suffixed {
-                    0 => Ok(loc_expr),
-                    1 => {
-                        let unwrapped_var = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            Expr::Var {
-                                module_name,
-                                ident,
-                                suffixed: suffixed.saturating_sub(1),
-                            },
-                        ));
+            Expr::TaskAwaitBang(sub_expr) => {
+                let unwrapped_sub_expr = arena.alloc(Loc::at(loc_expr.region, *sub_expr));
 
-                        init_unwrapped_err(arena, unwrapped_var, maybe_def_pat)
-                    }
-                    _ => {
-                        let unwrapped_var = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            Expr::Var {
-                                module_name,
-                                ident,
-                                suffixed: 0,
-                            },
-                        ));
-
-                        // we generate an intermediate pattern `#!a0` etc
-                        // so we dont unwrap the definition pattern
-                        let (mut answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
-
-                        // we transfer the suffix from the Var to the intermediate answer Var
-                        // as that will need to be unwrapped in a future call
-                        if let Expr::Var {
-                            module_name: "",
-                            ident: answer_ident,
-                            suffixed: 0,
-                        } = answer_var
-                        {
-                            answer_var = Expr::Var {
-                                module_name: "",
-                                ident: answer_ident,
-                                suffixed: suffixed.saturating_sub(1),
-                            }
-                        } else {
-                            internal_error!("expected a suffixed Var to be generated");
-                        }
-
-                        Err(EUnwrapped::UnwrappedSubExpr {
-                            sub_arg: unwrapped_var,
-                            sub_pat: arena.alloc(Loc::at(unwrapped_var.region, answer_pat)),
-                            sub_new: arena.alloc(Loc::at(unwrapped_var.region, answer_var)),
-                        })
-                    }
-                }
+                init_unwrapped_err(arena, unwrapped_sub_expr, maybe_def_pat)
             }
 
             Expr::Defs(..) => unwrap_suffixed_expression_defs_help(arena, loc_expr, maybe_def_pat),
@@ -177,11 +122,87 @@ pub fn unwrap_suffixed_expression<'a>(
             Expr::SpaceBefore(..) | Expr::SpaceAfter(..) => {
                 internal_error!(
                     "SpaceBefore and SpaceAfter should have been removed in desugar_expr"
-                )
+                );
             }
 
             Expr::BinOps(..) => {
-                internal_error!("BinOps should have been desugared in desugar_expr")
+                internal_error!("BinOps should have been desugared in desugar_expr");
+            }
+
+            Expr::LowLevelDbg(dbg_src, arg, rest) => {
+                if is_expr_suffixed(&arg.value) {
+                    // we cannot unwrap a suffixed expression within dbg
+                    // e.g. dbg (foo! "bar")
+                    return Err(EUnwrapped::Malformed);
+                }
+
+                match unwrap_suffixed_expression(arena, rest, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                        ));
+                        return Ok(new_dbg);
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                        ));
+                        Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: unwrapped_expr,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                        ));
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg: new_dbg,
+                            sub_pat,
+                            sub_new,
+                        })
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                }
+            }
+
+            Expr::Expect(condition, continuation) => {
+                if is_expr_suffixed(&condition.value) {
+                    // we cannot unwrap a suffixed expression within expect
+                    // e.g. expect (foo! "bar")
+                    return Err(EUnwrapped::Malformed);
+                }
+
+                match unwrap_suffixed_expression(arena, continuation, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        return Ok(new_expect);
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        Err(EUnwrapped::UnwrappedDefExpr(new_expect))
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: unwrapped_expr,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_expect = arena
+                            .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
+                        Err(EUnwrapped::UnwrappedSubExpr {
+                            sub_arg: new_expect,
+                            sub_pat,
+                            sub_new,
+                        })
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                }
             }
 
             // we only need to unwrap some expressions, leave the rest as is
@@ -192,8 +213,8 @@ pub fn unwrap_suffixed_expression<'a>(
     // KEEP THIS HERE FOR DEBUGGING
     // USEFUL TO SEE THE UNWRAPPING
     // OF AST NODES AS THEY DESCEND
-    // if is_loc_expr_suffixed(loc_expr) {
-    //     dbg!(&loc_expr, &unwrapped_expression);
+    // if is_expr_suffixed(&loc_expr.value) {
+    //     dbg!(&maybe_def_pat, &loc_expr, &unwrapped_expression);
     // }
 
     unwrapped_expression
@@ -248,19 +269,7 @@ pub fn unwrap_suffixed_expression_closure_help<'a>(
 ) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
     match loc_expr.value {
         Expr::Closure(closure_args, closure_loc_ret) => {
-
-            // Check to make sure that arguments are not suffixed
-            let suffixed_arg_count = closure_args
-                .iter()
-                .filter(|loc_pat| loc_pat.value.is_suffixed())
-                .count();
-
-            if suffixed_arg_count > 0 {
-                debug_assert!(false,"closure arguments should not be suffixed");
-                return Err(EUnwrapped::Malformed);
-            }
-
-            // note we use `None` here as we don't want to pass a DefExpr up and 
+            // note we use `None` here as we don't want to pass a DefExpr up and
             // unwrap the definition pattern for the closure
             match unwrap_suffixed_expression(arena, closure_loc_ret, None) {
                 Ok(unwrapped_expr) => {
@@ -292,17 +301,14 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
 
             // Any suffixed arguments will be innermost, therefore we unwrap those first
             let local_args = arena.alloc_slice_copy(apply_args);
-            for (_, arg) in local_args.iter_mut().enumerate() {
-                match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
+            for arg in local_args.iter_mut() {
+                // Args are always expressions, don't pass `maybe_def_pat`
+                match unwrap_suffixed_expression(arena, arg, None) {
                     Ok(new_arg) => {
                         *arg = new_arg;
                     }
-                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_arg)) => {
-                        *arg = unwrapped_arg;
-
-                        let new_apply = arena.alloc(Loc::at(loc_expr.region, Apply(function, local_args, called_via)));
-
-                        return Err(EUnwrapped::UnwrappedDefExpr(new_apply));
+                    Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                        internal_error!("unreachable, unwrapped arg cannot be def expression as `None` was passed as pattern");
                     }
                     Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new: new_arg }) => {
 
@@ -316,21 +322,15 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
             }
 
             // special case for when our Apply function is a suffixed Var (but not multiple suffixed)
-            if let Expr::Var { module_name, ident, suffixed } = function.value {
-                if suffixed == 1 {
-                    let unwrapped_function = arena.alloc(Loc::at(
-                        loc_expr.region,
-                        Expr::Var {
-                            module_name,
-                            ident,
-                            suffixed: suffixed - 1,
-                        },
-                    ));
+            if let Expr::TaskAwaitBang(sub_expr) = function.value {
+                let unwrapped_function = arena.alloc(Loc::at(
+                    loc_expr.region,
+                    *sub_expr,
+                ));
 
-                    let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
+                let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(unwrapped_function, local_args, called_via)));
 
-                    return init_unwrapped_err(arena, new_apply, maybe_def_pat);
-                }
+                return init_unwrapped_err(arena, new_apply, maybe_def_pat);
             }
 
             // function is another expression
@@ -368,7 +368,7 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 let (current_if_then_statement, current_if_then_expression) = if_then;
 
                 // unwrap suffixed (innermost) expressions e.g. `if true then doThing! then ...`
-                if is_loc_expr_suffixed(current_if_then_expression) {
+                if is_expr_suffixed(&current_if_then_expression.value) {
                     // split if_thens around the current index
                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
@@ -398,13 +398,8 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                             sub_pat,
                             sub_new,
                         }) => {
-                            let unwrapped_expression = apply_task_await(
-                                arena,
-                                sub_arg.region,
-                                sub_arg,
-                                sub_pat,
-                                wrap_in_task_ok(arena, sub_new),
-                            );
+                            let unwrapped_expression =
+                                apply_task_await(arena, sub_arg.region, sub_arg, sub_pat, sub_new);
 
                             let mut new_if_thens = Vec::new_in(arena);
 
@@ -429,7 +424,7 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                 // unwrap suffixed statements e.g. `if isThing! then ...`
                 // note we want to split and nest if-then's so we only run Task's
                 // that are required
-                if is_loc_expr_suffixed(current_if_then_statement) {
+                if is_expr_suffixed(&current_if_then_statement.value) {
                     // split if_thens around the current index
                     let (before, after) = roc_parse::ast::split_around(if_thens, index);
 
@@ -541,13 +536,8 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                     sub_pat,
                     sub_new,
                 }) => {
-                    let unwrapped_final_else = apply_task_await(
-                        arena,
-                        sub_arg.region,
-                        sub_arg,
-                        sub_pat,
-                        wrap_in_task_ok(arena, sub_new),
-                    );
+                    let unwrapped_final_else =
+                        apply_task_await(arena, sub_arg.region, sub_arg, sub_pat, sub_new);
 
                     let new_if = arena.alloc(Loc::at(
                         loc_expr.region,
@@ -572,19 +562,21 @@ pub fn unwrap_suffixed_expression_when_help<'a>(
         Expr::When(condition, branches) => {
 
             // first unwrap any when branches values
-            // e.g. 
-            // when foo is 
+            // e.g.
+            // when foo is
             //     [] -> line! "bar"
             //      _ -> line! "baz"
             for (branch_index, WhenBranch{value: branch_loc_expr,patterns, guard}) in branches.iter().enumerate() {
 
                 // if the branch isn't suffixed we can leave it alone
-                if is_loc_expr_suffixed(branch_loc_expr) {
+                if is_expr_suffixed(&branch_loc_expr.value) {
                     let unwrapped_branch_value = match unwrap_suffixed_expression(arena, branch_loc_expr, None) {
                         Ok(unwrapped_branch_value) => unwrapped_branch_value,
                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => apply_task_await(arena, branch_loc_expr.region, sub_arg, sub_pat, sub_new),
                         Err(..) => return Err(EUnwrapped::Malformed),
                     };
+
+                    // TODO: unwrap guard
 
                     let new_branch = WhenBranch{value: *unwrapped_branch_value, patterns, guard: *guard};
                     let mut new_branches = Vec::new_in(arena);
@@ -645,7 +637,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                 };
 
                 let maybe_suffixed_value_def = match current_value_def {
-                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) => None,
+                    Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
                     AnnotatedBody { body_pattern, body_expr, .. } => Some((body_pattern, body_expr)),
                     Body (def_pattern, def_expr, .. ) => Some((def_pattern, def_expr)),
                 };
@@ -670,7 +662,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                         Ok(next_expr) => next_expr,
                                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
                                             // We need to apply Task.ok here as the defs final expression was unwrapped
-                                            apply_task_await(arena,def_expr.region,sub_arg,sub_pat,wrap_in_task_ok(arena, sub_new))
+                                            apply_task_await(arena,def_expr.region,sub_arg,sub_pat,sub_new)
                                         }
                                         Err(EUnwrapped::UnwrappedDefExpr(..)) | Err(EUnwrapped::Malformed) => {
                                             // TODO handle case when we have maybe_def_pat so can return an unwrapped up
@@ -816,7 +808,6 @@ pub fn apply_task_await<'a>(
                 value: Var {
                     module_name: ModuleName::TASK,
                     ident: "await",
-                    suffixed: 0,
                 },
             }),
             arena.alloc(task_await_apply_args),
@@ -857,15 +848,21 @@ fn is_matching_empty_record<'a>(
     is_empty_record && is_pattern_empty_record
 }
 
-fn is_matching_intermediate_answer<'a>(
+pub fn is_matching_intermediate_answer<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
-    loc_expr: &'a Loc<Expr<'a>>,
+    loc_new: &'a Loc<Expr<'a>>,
 ) -> bool {
     let pat_ident = match loc_pat.value {
         Pattern::Identifier { ident, .. } => Some(ident),
         _ => None,
     };
-    let exp_ident = match extract_wrapped_task_ok_value(loc_expr) {
+    let exp_ident = match loc_new.value {
+        Expr::Var {
+            module_name, ident, ..
+        } if module_name.is_empty() && ident.starts_with('#') => Some(ident),
+        _ => None,
+    };
+    let exp_ident_in_task = match extract_wrapped_task_ok_value(loc_new) {
         Some(task_expr) => match task_expr.value {
             Expr::Var {
                 module_name, ident, ..
@@ -874,8 +871,9 @@ fn is_matching_intermediate_answer<'a>(
         },
         None => None,
     };
-    match (pat_ident, exp_ident) {
-        (Some(a), Some(b)) => a == b,
+    match (pat_ident, exp_ident, exp_ident_in_task) {
+        (Some(a), Some(b), None) => a == b,
+        (Some(a), None, Some(b)) => a == b,
         _ => false,
     }
 }

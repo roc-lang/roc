@@ -32,7 +32,6 @@ When(
                                         ),
                                         @33-34 Identifier {
                                             ident: "x",
-                                            suffixed: 0,
                                         },
                                     ],
                                 ),
@@ -47,7 +46,6 @@ When(
             value: @40-41 Var {
                 module_name: "",
                 ident: "x",
-                suffixed: 0,
             },
             guard: None,
         },
@@ -65,7 +63,6 @@ When(
                                         ),
                                         @53-54 Identifier {
                                             ident: "b",
-                                            suffixed: 0,
                                         },
                                     ],
                                 ),
@@ -89,7 +86,6 @@ When(
                 @64-65 Var {
                     module_name: "",
                     ident: "b",
-                    suffixed: 0,
                 },
             ),
             guard: None,
