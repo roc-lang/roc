@@ -119,10 +119,17 @@ fn find_zig_glue_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
+    // This path is available when built and run from source
     // Environment variable defined in wasi-libc-sys/build.rs
-    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
-    if std::path::Path::exists(&wasi_libc_pathbuf) {
-        return wasi_libc_pathbuf;
+    let build_path = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&build_path) {
+        return build_path;
+    }
+
+    // This path is available in the release tarball
+    match get_relative_path(Path::new("wasi-libc.a")) {
+        Some(path) if path.exists() => return path,
+        _ => (),
     }
 
     internal_error!("cannot find `wasi-libc.a`")
