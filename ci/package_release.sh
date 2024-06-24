@@ -18,6 +18,3 @@ mv crates/roc_std $1/crates
 mv crates/compiler/builtins/bitcode/src $1/crates/compiler/builtins/bitcode
  
 tar -czvf "$1.tar.gz" $1
-
-# delete unnecessary files and folders
-git clean -fdx --exclude $1.tar.gz
