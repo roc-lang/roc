@@ -119,10 +119,17 @@ fn find_zig_glue_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
+    // This path is available when built and run from source
     // Environment variable defined in wasi-libc-sys/build.rs
-    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
-    if std::path::Path::exists(&wasi_libc_pathbuf) {
-        return wasi_libc_pathbuf;
+    let build_path = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&build_path) {
+        return build_path;
+    }
+
+    // This path is available in the release tarball
+    match get_relative_path(Path::new("lib/wasi-libc.a")) {
+        Some(path) if path.exists() => return path,
+        _ => (),
     }
 
     internal_error!("cannot find `wasi-libc.a`")
@@ -1345,12 +1352,14 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
         .expect("failed to write host builtins object to tempfile");
 
+    let wasi_libc_path = find_wasi_libc_path();
+
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
         builtins_host_tempfile.path().to_str().unwrap(),
         host_input,
-        WASI_LIBC_PATH,
+        wasi_libc_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti
         "-o",
         output_file,
