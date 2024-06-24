@@ -1019,7 +1019,7 @@ fn link_linux(
             &crti_path_str,
             &crtn_path_str,
         ])
-        .args(&base_args)
+        .args(base_args)
         .args(["-dynamic-linker", ld_linux_path_str])
         .args(input_paths)
         .args(extra_link_flags())
