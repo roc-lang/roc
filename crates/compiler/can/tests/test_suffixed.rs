@@ -610,7 +610,7 @@ mod suffixed_tests {
                 else
                     line "fail"
             "#,
-            r##"Defs { tags: [Index(2147483648)], regions: [@0-286], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @23-286 Defs(Defs { tags: [Index(2147483650), Index(2147483651)], regions: [@32-49, @76-94], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 1)], space_after: [Slice(start = 0, length = 0), Slice(start = 1, length = 0)], spaces: [Newline], type_defs: [], value_defs: [Body(@23-29 Identifier { ident: "isTrue" }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok" }, [@40-49 Var { module_name: "Bool", ident: "true" }], Space)), Body(@66-73 Identifier { ident: "isFalse" }, @76-94 Apply(@76-83 Var { module_name: "Task", ident: "ok" }, [@84-94 Var { module_name: "Bool", ident: "false" }], Space)), Body(@23-29 Identifier { ident: "isTrue" }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok" }, [@40-49 Var { module_name: "Bool", ident: "true" }], Space)), Body(@66-73 Identifier { ident: "isFalse" }, @76-94 Apply(@76-83 Var { module_name: "Task", ident: "ok" }, [@84-94 Var { module_name: "Bool", ident: "false" }], Space))] }, @115-123 Apply(@115-123 Var { module_name: "Task", ident: "await" }, [@115-123 Var { module_name: "", ident: "isFalse" }, @115-123 Closure([@115-123 Identifier { ident: "#!a0" }], @112-286 If([(@115-123 Var { module_name: "", ident: "#!a0" }, @149-160 Apply(@149-153 Var { module_name: "", ident: "line" }, [@154-160 Str(PlainLine("fail"))], Space))], @185-192 Apply(@185-192 Var { module_name: "Task", ident: "await" }, [@185-192 Var { module_name: "", ident: "isTrue" }, @185-192 Closure([@185-192 Identifier { ident: "#!a1" }], @112-286 If([(@185-192 Var { module_name: "", ident: "#!a1" }, @219-233 Apply(@219-223 Var { module_name: "", ident: "line" }, [@224-233 Str(PlainLine("success"))], Space))], @275-286 Apply(@275-279 Var { module_name: "", ident: "line" }, [@280-286 Str(PlainLine("fail"))], Space)))], BangSuffix)))], BangSuffix)))] }"##,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-286], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-286 Defs(Defs { tags: [Index(2147483650), Index(2147483651)], regions: [@32-49, @76-94], space_before: [Slice(start = 0, length = 0), Slice(start = 0, length = 1)], space_after: [Slice(start = 0, length = 0), Slice(start = 1, length = 0)], spaces: [Newline], type_defs: [], value_defs: [Body(@23-29 Identifier { ident: "isTrue" }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok" }, [@40-49 Var { module_name: "Bool", ident: "true" }], Space)), Body(@66-73 Identifier { ident: "isFalse" }, @76-94 Apply(@76-83 Var { module_name: "Task", ident: "ok" }, [@84-94 Var { module_name: "Bool", ident: "false" }], Space)), Body(@23-29 Identifier { ident: "isTrue" }, @32-49 Apply(@32-39 Var { module_name: "Task", ident: "ok" }, [@40-49 Var { module_name: "Bool", ident: "true" }], Space)), Body(@66-73 Identifier { ident: "isFalse" }, @76-94 Apply(@76-83 Var { module_name: "Task", ident: "ok" }, [@84-94 Var { module_name: "Bool", ident: "false" }], Space))] }, @115-123 Apply(@115-123 Var { module_name: "Task", ident: "await" }, [@115-123 Var { module_name: "", ident: "isFalse" }, @115-123 Closure([@115-123 Identifier { ident: "#!a0" }], @112-286 If([(@115-123 Var { module_name: "", ident: "#!a0" }, @149-160 Apply(@149-153 Var { module_name: "", ident: "line" }, [@154-160 Str(PlainLine("fail"))], Space))], @185-192 Apply(@185-192 Var { module_name: "Task", ident: "await" }, [@185-192 Var { module_name: "", ident: "isTrue" }, @185-192 Closure([@185-192 Identifier { ident: "#!a1" }], @112-286 If([(@185-192 Var { module_name: "", ident: "#!a1" }, @219-233 Apply(@219-223 Var { module_name: "", ident: "line" }, [@224-233 Str(PlainLine("success"))], Space))], @275-286 Apply(@275-279 Var { module_name: "", ident: "line" }, [@280-286 Str(PlainLine("fail"))], Space)))], BangSuffix)))], BangSuffix)))] }"##,
         );
     }
 
@@ -681,7 +681,7 @@ mod suffixed_tests {
                 CMD.new "cp"
                 |> mapErr! ERR
             "#,
-            r#"Defs { tags: [Index(2147483648)], regions: [@0-103], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "copy" }, @7-103 Closure([@8-9 Identifier { ident: "a" }, @10-11 Identifier { ident: "b" }], @36-42 Apply(@36-42 Var { module_name: "Task", ident: "await" }, [@36-42 Apply(@36-42 Var { module_name: "", ident: "line" }, [@37-42 Str(PlainLine("FOO"))], Space), @36-42 Closure([@36-42 RecordDestructure([])], @60-103 Apply(@60-103 Var { module_name: "", ident: "mapErr" }, [@60-72 Apply(@60-67 Var { module_name: "CMD", ident: "new" }, [@68-72 Str(PlainLine("cp"))], Space), @100-103 Tag("ERR")], BinOp(Pizza)))], BangSuffix)))] }"#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-103], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "copy" }, @0-103 Closure([@8-9 Identifier { ident: "a" }, @10-11 Identifier { ident: "b" }], @36-42 Apply(@36-42 Var { module_name: "Task", ident: "await" }, [@36-42 Apply(@36-42 Var { module_name: "", ident: "line" }, [@37-42 Str(PlainLine("FOO"))], Space), @36-42 Closure([@36-42 RecordDestructure([])], @60-103 Apply(@60-103 Var { module_name: "", ident: "mapErr" }, [@60-72 Apply(@60-67 Var { module_name: "CMD", ident: "new" }, [@68-72 Str(PlainLine("cp"))], Space), @100-103 Tag("ERR")], BinOp(Pizza)))], BangSuffix)))] }"#,
         );
     }
 
@@ -878,6 +878,26 @@ mod suffixed_tests {
                                 c!
             "#,
             r#"Defs { tags: [Index(2147483648)], regions: [@0-159], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-159 When(@28-29 Var { module_name: "", ident: "a" }, [WhenBranch { patterns: [@53-54 NumLiteral("0")], value: @82-159 When(@87-88 Var { module_name: "", ident: "b" }, [WhenBranch { patterns: [@120-121 NumLiteral("1")], value: @157-159 Var { module_name: "", ident: "c" }, guard: None }]), guard: None }]))] }"#,
+        );
+    }
+
+    #[test]
+    fn deps_final_expr() {
+        run_test(
+            r#"
+            main =
+                when x is
+                    A ->
+                        y = 42
+
+                        if a then
+                            b!
+                        else
+                            c!
+                    B ->
+                        d!
+            "#,
+            r#"Defs { tags: [Index(2147483648)], regions: [@0-266], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-266 When(@28-29 Var { module_name: "", ident: "x" }, [WhenBranch { patterns: [@53-54 Tag("A")], value: @82-214 Defs(Defs { tags: [Index(2147483649)], regions: [@86-88], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@82-83 Identifier { ident: "y" }, @86-88 Num("42")), Body(@82-83 Identifier { ident: "y" }, @86-88 Num("42"))] }, @114-214 If([(@117-118 Var { module_name: "", ident: "a" }, @152-154 Var { module_name: "", ident: "b" })], @212-214 Var { module_name: "", ident: "c" })), guard: None }, WhenBranch { patterns: [@235-236 Tag("B")], value: @264-266 Var { module_name: "", ident: "d" }, guard: None }]))] }"#,
         );
     }
 }
