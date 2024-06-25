@@ -575,8 +575,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Closure(_, sub_loc_expr) => is_expr_suffixed(&sub_loc_expr.value),
 
         // expressions inside a Defs
-        // note we ignore the final expression as it should not be suffixed
-        Expr::Defs(defs, _) => {
+        Expr::Defs(defs, expr) => {
             let any_defs_suffixed = defs.tags.iter().any(|tag| match tag.split() {
                 Ok(_) => false,
                 Err(value_index) => match defs.value_defs[value_index.index()] {
@@ -586,7 +585,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
                 },
             });
 
-            any_defs_suffixed
+            any_defs_suffixed || is_expr_suffixed(&expr.value)
         }
         Expr::Float(_) => false,
         Expr::Num(_) => false,
