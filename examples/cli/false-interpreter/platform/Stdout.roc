@@ -1,10 +1,9 @@
 module [line, raw]
 
-import pf.Effect
-import Task exposing [Task]
+import pf.PlatformTask
 
 line : Str -> Task {} *
-line = \str -> Effect.map (Effect.putLine str) (\_ -> Ok {})
+line = PlatformTask.putLine
 
 raw : Str -> Task {} *
-raw = \str -> Effect.map (Effect.putRaw str) (\_ -> Ok {})
+raw = PlatformTask.putRaw

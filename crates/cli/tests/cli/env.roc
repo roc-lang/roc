@@ -3,7 +3,6 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 import pf.Stdout
 import pf.Stderr
 import pf.Env
-import pf.Task exposing [Task]
 
 main =
     task =

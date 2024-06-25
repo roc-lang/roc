@@ -1458,7 +1458,7 @@ mod cli_run {
 
                 But the type annotation on main says it should be:
 
-                    Effect.Effect (Result {} [])
+                    Task {} []
 
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque
@@ -1535,30 +1535,6 @@ mod cli_run {
                 ────────────────────────────────────────────────────────────────────────────────
 
                 0 errors and 1 warning found in <ignored for test> ms."#
-            ),
-        );
-    }
-
-    #[test]
-    fn unknown_generates_with() {
-        check_compile_error(
-            &known_bad_file("UnknownGeneratesWith.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
-
-                I don't know how to generate the foobar function.
-
-                4│      generates Effect with [after, map, always, foobar]
-                                                                   ^^^^^^
-
-                Only specific functions like `after` and `map` can be generated.Learn
-                more about hosted modules at TODO.
-
-                ────────────────────────────────────────────────────────────────────────────────
-
-                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

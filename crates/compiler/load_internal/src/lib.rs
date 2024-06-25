@@ -26,4 +26,5 @@ pub const BUILTIN_MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::HASH, "Hash"),
     (ModuleId::INSPECT, "Inspect"),
     (ModuleId::JSON, "TotallyNotJson"),
+    (ModuleId::TASK, "Task"),
 ];

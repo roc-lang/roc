@@ -2,7 +2,6 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 
 import pf.Stdin
 import pf.Stdout
-import pf.Task exposing [Task]
 
 main =
     _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")

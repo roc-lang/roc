@@ -328,8 +328,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 name: header.name.remove_spaces(arena),
                 exposes: header.exposes.remove_spaces(arena),
                 imports: header.imports.remove_spaces(arena),
-                generates: header.generates.remove_spaces(arena),
-                generates_with: header.generates_with.remove_spaces(arena),
             }),
         };
         Module {

@@ -1,28 +1,28 @@
-module [line, Handle, withOpen, chunk]
+module [line, withOpen, chunk, Handle]
 
-import pf.Effect
-import Task exposing [Task]
+import pf.PlatformTask
 
 Handle := U64
 
-line : Handle -> Task.Task Str *
-line = \@Handle handle -> Effect.after (Effect.getFileLine handle) Task.succeed
+line : Handle -> Task Str *
+line = \@Handle handle -> PlatformTask.getFileLine handle
 
-chunk : Handle -> Task.Task (List U8) *
-chunk = \@Handle handle -> Effect.after (Effect.getFileBytes handle) Task.succeed
+chunk : Handle -> Task (List U8) *
+chunk = \@Handle handle -> PlatformTask.getFileBytes handle
 
-open : Str -> Task.Task Handle *
+open : Str -> Task Handle *
 open = \path ->
-    Effect.openFile path
-    |> Effect.map (\id -> @Handle id)
-    |> Effect.after Task.succeed
+    PlatformTask.openFile path
+    |> Task.map @Handle
 
 close : Handle -> Task.Task {} *
-close = \@Handle handle -> Effect.after (Effect.closeFile handle) Task.succeed
+close = \@Handle handle -> PlatformTask.closeFile handle
 
 withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->
-    handle <- Task.await (open path)
-    result <- Task.attempt (callback handle)
-    {} <- Task.await (close handle)
-    Task.fromResult result
+    handle = open! path
+
+    callback handle
+    |> Task.attempt \result ->
+        close! handle
+        Task.fromResult result

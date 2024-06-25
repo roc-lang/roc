@@ -17,6 +17,7 @@ pub fn module_source(module_id: ModuleId) -> &'static str {
         ModuleId::HASH => HASH,
         ModuleId::INSPECT => INSPECT,
         ModuleId::JSON => JSON,
+        ModuleId::TASK => TASK,
         _ => internal_error!(
             "ModuleId {:?} is not part of the standard library",
             module_id
@@ -37,3 +38,4 @@ const DECODE: &str = include_str!("../roc/Decode.roc");
 const HASH: &str = include_str!("../roc/Hash.roc");
 const INSPECT: &str = include_str!("../roc/Inspect.roc");
 const JSON: &str = include_str!("../roc/TotallyNotJson.roc");
+const TASK: &str = include_str!("../roc/Task.roc");

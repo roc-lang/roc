@@ -5,7 +5,6 @@ app [main] {
 
 import pf.Stdout
 import pf.Stderr
-import pf.Task exposing [Task]
 import parser.Core exposing [Parser, map, keep]
 import parser.String exposing [strFromUtf8]
 import parser.CSV exposing [CSV]

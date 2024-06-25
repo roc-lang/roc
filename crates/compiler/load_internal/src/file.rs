@@ -2333,6 +2333,7 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::DECODE);
                 extend_module_with_builtin_import(parsed, ModuleId::HASH);
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
+                extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
 
             state
@@ -3520,7 +3521,6 @@ fn load_builtin_module_help<'a>(
                 header_type: HeaderType::Builtin {
                     name: header::ModuleName::new(name_stem),
                     exposes: unspace(arena, header.exposes.items),
-                    generates_with: &[],
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3603,6 +3603,7 @@ fn load_module<'a>(
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
         "TotallyNotJson", ModuleId::JSON
+        "Task", ModuleId::TASK
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -3835,8 +3836,6 @@ fn parse_header<'a>(
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
-                    generates: header.generates.item,
-                    generates_with: unspace(arena, header.generates_with.item.items),
                 },
                 module_comments: comments,
                 header_imports: Some(header.imports),
@@ -5063,6 +5062,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::SET
                         | ModuleId::HASH
                         | ModuleId::INSPECT
+                        | ModuleId::TASK
                 );
 
                 if !name.is_builtin() || should_include_builtin {

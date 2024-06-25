@@ -2,7 +2,6 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 
 import pf.Stdout
 import pf.Arg
-import pf.Task exposing [Task]
 
 main =
     args = Arg.list!

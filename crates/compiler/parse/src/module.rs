@@ -2,18 +2,18 @@ use crate::ast::{Collection, CommentOrNewline, Defs, Header, Module, Spaced, Spa
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::expr::merge_spaces;
 use crate::header::{
-    package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
-    HostedHeader, ImportsCollection, ImportsEntry, ImportsKeyword, ImportsKeywordItem, Keyword,
-    KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry, PackageHeader,
-    PackagesKeyword, PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo,
-    RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, HostedHeader,
+    ImportsCollection, ImportsEntry, ImportsKeyword, ImportsKeywordItem, Keyword, KeywordItem,
+    ModuleHeader, ModuleName, ModuleParams, PackageEntry, PackageHeader, PackagesKeyword,
+    PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword,
+    TypedIdent,
 };
-use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
+use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
     backtrackable, byte, increment_min_indent, optional, reset_min_indent, specialize_err,
-    two_bytes, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EParams,
-    EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
+    two_bytes, EExposes, EHeader, EImports, EPackages, EParams, EProvides, ERequires, ETypedIdent,
+    Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::pattern::record_pattern_fields;
 use crate::state::State;
@@ -186,8 +186,6 @@ fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
         name: loc!(module_name_help(EHeader::ModuleName)),
         exposes: specialize_err(EHeader::Exposes, exposes_values_kw()),
         imports: specialize_err(EHeader::Imports, imports()),
-        generates: specialize_err(EHeader::Generates, generates()),
-        generates_with: specialize_err(EHeader::GeneratesWith, generates_with()),
     })
     .trace("hosted_header")
 }
@@ -759,43 +757,6 @@ fn packages_collection<'a>(
 }
 
 #[inline(always)]
-fn generates<'a>(
-) -> impl Parser<'a, KeywordItem<'a, GeneratesKeyword, UppercaseIdent<'a>>, EGenerates> {
-    record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            GeneratesKeyword,
-            EGenerates::Generates,
-            EGenerates::IndentGenerates,
-            EGenerates::IndentTypeStart
-        ),
-        item: specialize_err(|(), pos| EGenerates::Identifier(pos), uppercase())
-    })
-}
-
-#[inline(always)]
-fn generates_with<'a>() -> impl Parser<
-    'a,
-    KeywordItem<'a, WithKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    EGeneratesWith,
-> {
-    record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            WithKeyword,
-            EGeneratesWith::With,
-            EGeneratesWith::IndentWith,
-            EGeneratesWith::IndentListStart
-        ),
-        item: collection_trailing_sep_e!(
-            byte(b'[', EGeneratesWith::ListStart),
-            exposes_entry(EGeneratesWith::Identifier),
-            byte(b',', EGeneratesWith::ListEnd),
-            byte(b']', EGeneratesWith::ListEnd),
-            Spaced::SpaceBefore
-        )
-    })
-}
-
-#[inline(always)]
 fn imports<'a>() -> impl Parser<
     'a,
     KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
@@ -823,7 +784,7 @@ fn imports<'a>() -> impl Parser<
 pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
     // e.g.
     //
-    // printLine : Str -> Effect {}
+    // printLine : Str -> Task {} *
     map!(
         and!(
             and!(
