@@ -1390,8 +1390,7 @@ where
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
-/// # use roc_parse::loc;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
 /// # use roc_region::all::{Loc, Position};
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
@@ -1400,7 +1399,7 @@ where
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = loc!(word("hello", Problem::NotFound));
+/// let parser = loc(word("hello", Problem::NotFound));
 ///
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
@@ -1409,25 +1408,22 @@ where
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! loc {
-    ($parser:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| {
-            use roc_region::all::{Loc, Region};
+pub fn loc<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+) -> impl Parser<'a, Loc<Output>, E> {
+    move |arena, state: crate::state::State<'a>, min_indent: u32| {
+        let start = state.pos();
 
-            let start = state.pos();
+        match parser.parse(arena, state, min_indent) {
+            Ok((progress, value, state)) => {
+                let end = state.pos();
+                let region = Region::new(start, end);
 
-            match $parser.parse(arena, state, min_indent) {
-                Ok((progress, value, state)) => {
-                    let end = state.pos();
-                    let region = Region::new(start, end);
-
-                    Ok((progress, Loc { region, value }, state))
-                }
-                Err(err) => Err(err),
+                Ok((progress, Loc { region, value }, state))
             }
+            Err(err) => Err(err),
         }
-    };
+    }
 }
 
 /// If the first one parses, ignore its output and move on to parse with the second one.
@@ -1436,13 +1432,12 @@ macro_rules! loc {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_first};
 /// # use roc_parse::ident::lowercase_ident;
-/// # use roc_parse::skip_first;
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = skip_first!(
+/// let parser = skip_first(
 ///    word("hello, ", |_| ()),
 ///    lowercase_ident()
 /// );
@@ -1454,19 +1449,21 @@ macro_rules! loc {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! skip_first {
-    ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, _, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+pub fn skip_first<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, Second, E>
+where
+    P1: Parser<'a, First, E>,
+    P2: Parser<'a, Second, E>,
+    E: 'a,
+{
+    move |arena, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, _, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
 /// If the first one parses, parse the second one; if it also parses, use the
@@ -1476,13 +1473,12 @@ macro_rules! skip_first {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_second};
 /// # use roc_parse::ident::lowercase_ident;
-/// # use roc_parse::skip_second;
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = skip_second!(
+/// let parser = skip_second(
 ///    lowercase_ident(),
 ///    word(", world", |_| ())
 /// );
@@ -1494,75 +1490,84 @@ macro_rules! skip_first {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! skip_second {
-    ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+pub fn skip_second<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, First, E>
+where
+    E: 'a,
+    P1: Parser<'a, First, E>,
+    P2: Parser<'a, Second, E>,
+{
+    move |arena, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
-#[macro_export]
-macro_rules! collection_inner {
-    ($elem:expr, $delimiter:expr, $space_before:expr) => {
-        map_with_arena!(
-            and!(
-                and!(
-                    $crate::blankspace::spaces(),
-                    $crate::parser::trailing_sep_by0(
-                        $delimiter,
-                        $crate::blankspace::spaces_before_optional_after($elem,)
-                    )
+pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a + SpaceProblem>(
+    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    delimiter: impl Parser<'a, (), E>,
+    space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
+) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
+    map_with_arena(
+        and(
+            and(
+                crate::blankspace::spaces(),
+                trailing_sep_by0(
+                    delimiter,
+                    crate::blankspace::spaces_before_optional_after(elem),
                 ),
-                $crate::blankspace::spaces()
             ),
-            |arena: &'a bumpalo::Bump,
-             ((spaces, mut parsed_elems), mut final_comments): (
-                (
-                    &'a [$crate::ast::CommentOrNewline<'a>],
-                    bumpalo::collections::vec::Vec<'a, Loc<_>>
-                ),
-                &'a [$crate::ast::CommentOrNewline<'a>]
-            )| {
-                if !spaces.is_empty() {
-                    if let Some(first) = parsed_elems.first_mut() {
-                        first.value = $space_before(arena.alloc(first.value), spaces)
-                    } else {
-                        debug_assert!(final_comments.is_empty());
-                        final_comments = spaces;
-                    }
-                }
+            crate::blankspace::spaces(),
+        ),
+        #[allow(clippy::type_complexity)]
+        move |arena: &'a bumpalo::Bump,
+              out: (
+            (
+                &'a [crate::ast::CommentOrNewline<'a>],
+                bumpalo::collections::Vec<'a, Loc<Elem>>,
+            ),
+            &'a [crate::ast::CommentOrNewline<'a>],
+        )| {
+            let ((spaces, mut parsed_elems), mut final_comments) = out;
 
-                $crate::ast::Collection::with_items_and_comments(
-                    arena,
-                    parsed_elems.into_bump_slice(),
-                    final_comments,
-                )
+            if !spaces.is_empty() {
+                if let Some(first) = parsed_elems.first_mut() {
+                    first.value = space_before(arena.alloc(first.value.clone()), spaces);
+                } else {
+                    debug_assert!(final_comments.is_empty());
+                    final_comments = spaces;
+                }
             }
-        )
-    };
+
+            crate::ast::Collection::with_items_and_comments(
+                arena,
+                parsed_elems.into_bump_slice(),
+                final_comments,
+            )
+        },
+    )
 }
 
-#[macro_export]
-macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
-        between!(
-            $opening_brace,
-            $crate::parser::reset_min_indent($crate::collection_inner!(
-                $elem,
-                $delimiter,
-                $space_before
-            )),
-            $closing_brace
-        )
-    };
+pub fn collection_trailing_sep_e<
+    'a,
+    Elem: 'a + crate::ast::Spaceable<'a> + Clone,
+    E: 'a + SpaceProblem,
+>(
+    opening_brace: impl Parser<'a, (), E>,
+    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    delimiter: impl Parser<'a, (), E>,
+    closing_brace: impl Parser<'a, (), E>,
+    space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
+) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
+    between(
+        opening_brace,
+        reset_min_indent(collection_inner(elem, delimiter, space_before)),
+        closing_brace,
+    )
 }
 
 /// Creates a parser that always succeeds with the given argument as output.
@@ -1571,12 +1576,11 @@ macro_rules! collection_trailing_sep_e {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::NoProgress};
-/// # use roc_parse::succeed;
+/// # use crate::roc_parse::parser::{Parser, Progress, succeed};
 /// # use bumpalo::Bump;
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = succeed!("different");
+/// let parser = succeed("different");
 ///
 /// let (progress, output, state) = Parser::<&'a str,()>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::NoProgress);
@@ -1585,13 +1589,10 @@ macro_rules! collection_trailing_sep_e {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! succeed {
-    ($value:expr) => {
-        move |_arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            Ok((NoProgress, $value, state))
-        }
-    };
+pub fn succeed<'a, T: Clone, E: 'a>(value: T) -> impl Parser<'a, T, E> {
+    move |_arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        Ok((NoProgress, value.clone(), state))
+    }
 }
 
 /// Creates a parser that always fails.
@@ -1673,49 +1674,47 @@ where
 /// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
 /// Both parsers must have the same error type.
 ///
-/// # Examples
+/// # Example
+///
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
 /// # use roc_region::all::Position;
-/// # use roc_parse::and;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
 /// # }
 /// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = and!(
-///     word("hello", Problem::NotFound),
-///     byte(b',', Problem::NotFound)
-/// );
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser2 = word(", ", Problem::NotFound);
+/// let parser = and(parser1, parser2);
 ///
+/// // Success case
 /// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
 /// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ((), ()));
-/// assert_eq!(state.pos().offset, 6);
+/// assert_eq!(output, ((),()));
+/// assert_eq!(state.pos(), Position::new(7));
 ///
-/// let (progress, err) = parser.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap_err();
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::MadeProgress);
 /// assert_eq!(err, Problem::NotFound(Position::new(5)));
-/// # }
-/// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! and {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+pub fn and<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
 /// Take as input something that looks like a struct literal where values are parsers
@@ -1737,81 +1736,83 @@ macro_rules! record {
     };
 }
 
-/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
-/// 1 greater than the `line_indent()` at the start of the first parser.
-#[macro_export]
-macro_rules! indented_seq_skip_first {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            let start_indent = state.line_indent();
+/// Similar to [`skip_first`], but we modify the `min_indent` of the second
+/// parser (`parser`) to be 1 greater than the `line_indent()` at the start of
+/// the first parser (`before`).
+pub fn indented_seq_skip_first<'a, O, E: 'a>(
+    before: impl Parser<'a, (), E>,
+    parser: impl Parser<'a, O, E>,
+) -> impl Parser<'a, O, E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.line_indent();
 
-            // TODO: we should account for min_indent here, but this doesn't currently work
-            // because min_indent is sometimes larger than it really should be, which is in turn
-            // due to uses of `increment_indent`.
-            //
-            // let p1_indent = std::cmp::max(start_indent, min_indent);
+        // TODO: we should account for min_indent here, but this doesn't currently work
+        // because min_indent is sometimes larger than it really should be, which is in turn
+        // due to uses of `increment_indent`.
+        //
+        // let p1_indent = std::cmp::max(start_indent, min_indent);
 
-            let p1_indent = start_indent;
-            let p2_indent = p1_indent + 1;
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
 
-            match $p1.parse(arena, state, p1_indent) {
-                Ok((p1, (), state)) => match $p2.parse(arena, state, p2_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                    Err((p2, fail)) => Err((p1.or(p2), fail)),
-                },
-                Err((progress, fail)) => Err((progress, fail)),
-            }
+        match before.parse(arena, state, p1_indent) {
+            Ok((p1, (), state)) => match parser.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
-    };
+    }
 }
 
-/// Similar to [`and!`], but we modify the min_indent of the second parser to be
+/// Similar to `and`, but we modify the min_indent of the second parser to be
 /// 1 greater than the line_indent() at the start of the first parser.
-#[macro_export]
-macro_rules! indented_seq {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            let start_indent = state.line_indent();
+pub fn indented_seq<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.line_indent();
 
-            // TODO: we should account for min_indent here, but this doesn't currently work
-            // because min_indent is sometimes larger than it really should be, which is in turn
-            // due to uses of `increment_indent`.
-            //
-            // let p1_indent = std::cmp::max(start_indent, min_indent);
+        // TODO: we should account for min_indent here, but this doesn't currently work
+        // because min_indent is sometimes larger than it really should be, which is in turn
+        // due to uses of `increment_indent`.
+        //
+        // let p1_indent = std::cmp::max(start_indent, min_indent);
 
-            let p1_indent = start_indent;
-            let p2_indent = p1_indent + 1;
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
 
-            match $p1.parse(arena, state, p1_indent) {
-                Ok((p1, out1, state)) => match $p2.parse(arena, state, p2_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                    Err((p2, fail)) => Err((p1.or(p2), fail)),
-                },
-                Err((progress, fail)) => Err((progress, fail)),
-            }
+        match p1.parse(arena, state, p1_indent) {
+            Ok((p1, out1, state)) => match p2.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
-    };
+    }
 }
 
-/// Similar to [`and!`], but we modify the `min_indent` of the second parser to be
+/// Similar to [`and`], but we modify the `min_indent` of the second parser to be
 /// 1 greater than the `column()` at the start of the first parser.
-macro_rules! absolute_indented_seq {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            let start_indent = state.column();
+pub fn absolute_indented_seq<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.column();
 
-            let p1_indent = start_indent;
-            let p2_indent = p1_indent + 1;
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
 
-            match $p1.parse(arena, state, p1_indent) {
-                Ok((p1, out1, state)) => match $p2.parse(arena, state, p2_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                    Err((p2, fail)) => Err((p1.or(p2), fail)),
-                },
-                Err((progress, fail)) => Err((progress, fail)),
-            }
+        match p1.parse(arena, state, p1_indent) {
+            Ok((p1, out1, state)) => match p2.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
-    };
+    }
 }
 
 /// Returns the result of the first parser that makes progress, even if it failed.
@@ -2250,9 +2251,9 @@ where
 #[macro_export]
 macro_rules! byte_check_indent {
     ($byte_to_match:expr, $problem:expr, $min_indent:expr, $indent_problem:expr) => {
-        and!(
+        $crate::parser::and(
             byte($byte_to_match, $problem),
-            $crate::parser::check_indent($min_indent, $indent_problem)
+            $crate::parser::check_indent($min_indent, $indent_problem),
         )
     };
 }
@@ -2264,16 +2265,15 @@ macro_rules! byte_check_indent {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map};
 /// # use roc_region::all::Position;
-/// # use roc_parse::map;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
 /// #     NotFound(Position),
 /// # }
 /// # let arena = Bump::new();
-/// let parser = map!(
+/// let parser = map(
 ///     word("hello", Problem::NotFound),
 ///     |_output| "new output!"
 /// );
@@ -2289,124 +2289,76 @@ macro_rules! byte_check_indent {
 /// assert_eq!(progress, Progress::NoProgress);
 /// assert_eq!(err, Problem::NotFound(Position::zero()));
 /// ```
-#[macro_export]
-macro_rules! map {
-    ($parser:expr, $transform:expr) => {
-        move |arena, state, min_indent| {
-            #[allow(clippy::redundant_closure_call)]
-            $parser
-                .parse(arena, state, min_indent)
-                .map(|(progress, output, next_state)| (progress, $transform(output), next_state))
-        }
-    };
-}
-
-/// Maps/transforms the `Ok` result of parsing using the given function.
-/// Similar to [`map!`], but the transform function also takes a bump allocator.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word};
-/// # use roc_region::all::Position;
-/// # use roc_parse::map_with_arena;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = map_with_arena!(
-///     word("hello", Problem::NotFound),
-///     |_arena, _output| "new output!"
-/// );
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, "new output!");
-/// assert_eq!(state.pos(), Position::new(5));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(err, Problem::NotFound(Position::zero()));
-/// ```
-#[macro_export]
-macro_rules! map_with_arena {
-    ($parser:expr, $transform:expr) => {
-        move |arena, state, min_indent| {
-            #[allow(clippy::redundant_closure_call)]
-            $parser
-                .parse(arena, state, min_indent)
-                .map(|(progress, output, next_state)| {
-                    (progress, $transform(arena, output), next_state)
-                })
-        }
-    };
+pub fn map<'a, Output, MappedOutput, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+    transform: impl Fn(Output) -> MappedOutput,
+) -> impl Parser<'a, MappedOutput, E> {
+    move |arena, state, min_indent| {
+        parser
+            .parse(arena, state, min_indent)
+            .map(|(progress, output, next_state)| (progress, transform(output), next_state))
+    }
 }
 
 /// Applies the parser as many times as possible.
 /// This parser will only fail if the given parser makes partial progress.
-#[macro_export]
-macro_rules! zero_or_more {
-    ($parser:expr) => {
-        move |arena, state: State<'a>, min_indent: u32| {
-            use bumpalo::collections::Vec;
+pub fn zero_or_more<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
+    move |arena, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
 
-            let original_state = state.clone();
+        let start_bytes_len = state.bytes().len();
 
-            let start_bytes_len = state.bytes().len();
+        match parser.parse(arena, state, min_indent) {
+            Ok((_, first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
 
-            match $parser.parse(arena, state, min_indent) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
+                buf.push(first_output);
 
-                    buf.push(first_output);
-
-                    loop {
-                        let old_state = state.clone();
-                        match $parser.parse(arena, state, min_indent) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((fail_progress, fail)) => {
-                                match fail_progress {
-                                    MadeProgress => {
-                                        // made progress on an element and then failed; that's an error
-                                        return Err((MadeProgress, fail));
-                                    }
-                                    NoProgress => {
-                                        // the next element failed with no progress
-                                        // report whether we made progress before
-                                        let progress = Progress::from_lengths(start_bytes_len, old_state.bytes().len());
-                                        return Ok((progress, buf, old_state));
-                                    }
+                loop {
+                    let old_state = state.clone();
+                    match parser.parse(arena, state, min_indent) {
+                        Ok((_, next_output, next_state)) => {
+                            state = next_state;
+                            buf.push(next_output);
+                        }
+                        Err((fail_progress, fail)) => {
+                            match fail_progress {
+                                MadeProgress => {
+                                    // made progress on an element and then failed; that's an error
+                                    return Err((MadeProgress, fail));
+                                }
+                                NoProgress => {
+                                    // the next element failed with no progress
+                                    // report whether we made progress before
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes().len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
                                 }
                             }
                         }
                     }
                 }
-                Err((fail_progress, fail)) => {
-                    match fail_progress {
-                        MadeProgress => {
-                            // made progress on an element and then failed; that's an error
-                            Err((MadeProgress, fail))
-                        }
-                        NoProgress => {
-                            // the first element failed (with no progress), but that's OK
-                            // because we only need to parse 0 elements
-                            Ok((NoProgress, Vec::new_in(arena), original_state))
-                        }
+            }
+            Err((fail_progress, fail)) => {
+                match fail_progress {
+                    MadeProgress => {
+                        // made progress on an element and then failed; that's an error
+                        Err((MadeProgress, fail))
+                    }
+                    NoProgress => {
+                        // the first element failed (with no progress), but that's OK
+                        // because we only need to parse 0 elements
+                        Ok((NoProgress, Vec::new_in(arena), original_state))
                     }
                 }
             }
         }
-    };
+    }
 }
 
 /// Creates a parser that matches one or more times.
@@ -2417,9 +2369,8 @@ macro_rules! zero_or_more {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, one_or_more};
 /// # use roc_region::all::Position;
-/// # use roc_parse::one_or_more;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2427,7 +2378,7 @@ macro_rules! zero_or_more {
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = one_or_more!(
+/// let parser = one_or_more(
 ///     word("hello, ", Problem::NotFound),
 ///     Problem::NotFound
 /// );
@@ -2445,39 +2396,39 @@ macro_rules! zero_or_more {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! one_or_more {
-    ($parser:expr, $to_error:expr) => {
-        move |arena, state: State<'a>, min_indent: u32| {
-            use bumpalo::collections::Vec;
+pub fn one_or_more<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+    to_error: impl Fn(Position) -> E,
+) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
+    move |arena, state: State<'a>, min_indent: u32| match parser.parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
+        Ok((_, first_output, next_state)) => {
+            let mut state = next_state;
+            let mut buf = Vec::with_capacity_in(1, arena);
 
-            match $parser.parse(arena, state.clone(), min_indent) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
+            buf.push(first_output);
 
-                    buf.push(first_output);
-
-                    loop {
-                        let old_state = state.clone();
-                        match $parser.parse(arena, state, min_indent) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((NoProgress, _)) => {
-                                return Ok((MadeProgress, buf, old_state));
-                            }
-                            Err((MadeProgress, fail)) => {
-                                return Err((MadeProgress, fail));
-                            }
-                        }
+            loop {
+                let old_state = state.clone();
+                match parser.parse(arena, state, min_indent) {
+                    Ok((_, next_output, next_state)) => {
+                        state = next_state;
+                        buf.push(next_output);
+                    }
+                    Err((NoProgress, _)) => {
+                        return Ok((MadeProgress, buf, old_state));
+                    }
+                    Err((MadeProgress, fail)) => {
+                        return Err((MadeProgress, fail));
                     }
                 }
-                Err((progress, _)) => Err((progress, $to_error(state.pos()))),
             }
         }
-    };
+        Err((progress, _)) => Err((progress, to_error(state.pos()))),
+    }
 }
 
 /// Creates a parser that debug prints the result of parsing.
@@ -2527,9 +2478,8 @@ macro_rules! debug {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, Progress::{MadeProgress, NoProgress}, word, Either};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, either, Either};
 /// # use roc_region::all::Position;
-/// # use roc_parse::either;
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2537,7 +2487,7 @@ macro_rules! debug {
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = either!(
+/// let parser = either(
 ///     word("hello", Problem::NotFound),
 ///     word("bye", Problem::NotFound)
 /// );
@@ -2560,27 +2510,25 @@ macro_rules! debug {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! either {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-            match $p1.parse(arena, state, min_indent) {
-                Ok((progress, output, state)) => {
-                    Ok((progress, $crate::parser::Either::First(output), state))
-                }
-                Err((NoProgress, _)) => {
-                    match $p2.parse(arena, original_state.clone(), min_indent) {
-                        Ok((progress, output, state)) => {
-                            Ok((progress, $crate::parser::Either::Second(output), state))
-                        }
-                        Err((progress, fail)) => Err((progress, fail)),
-                    }
-                }
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+pub fn either<'a, OutputLeft, OutputRight, E: 'a>(
+    p1: impl Parser<'a, OutputLeft, E>,
+    p2: impl Parser<'a, OutputRight, E>,
+) -> impl Parser<'a, Either<OutputLeft, OutputRight>, E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| {
+        let original_state = state.clone();
+        match p1.parse(arena, state, min_indent) {
+            Ok((progress, output, state)) => {
+                Ok((progress, crate::parser::Either::First(output), state))
             }
+            Err((NoProgress, _)) => match p2.parse(arena, original_state.clone(), min_indent) {
+                Ok((progress, output, state)) => {
+                    Ok((progress, crate::parser::Either::Second(output), state))
+                }
+                Err((progress, fail)) => Err((progress, fail)),
+            },
+            Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
         }
-    };
+    }
 }
 
 /// Given three parsers, parse them all but ignore the output of the first and last one.
@@ -2592,9 +2540,8 @@ macro_rules! either {
 /// ```
 /// # #![forbid(unused_imports)]
 /// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte, between};
 /// # use roc_region::all::Position;
-/// # use roc_parse::{between, skip_first, skip_second};
 /// # use bumpalo::Bump;
 /// # #[derive(Debug, PartialEq)]
 /// # enum Problem {
@@ -2602,7 +2549,7 @@ macro_rules! either {
 /// # }
 /// # let arena = Bump::new();
 /// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = between!(
+/// let parser = between(
 ///     byte(b'(', Problem::NotFound),
 ///     word("hello", Problem::NotFound),
 ///     byte(b')', Problem::NotFound)
@@ -2614,104 +2561,16 @@ macro_rules! either {
 /// # }
 /// # foo(&arena);
 /// ```
-#[macro_export]
-macro_rules! between {
-    ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
-        skip_first!($opening_brace, skip_second!($parser, $closing_brace))
-    };
-}
-
-/// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
-/// Both parsers must have the same error type.
-///
-/// This is a function version of the [`and!`] macro.
-/// For some reason, some usages won't compile unless they use this instead of the macro version.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser1 = word("hello", Problem::NotFound);
-/// let parser2 = word(", ", Problem::NotFound);
-/// let parser = and(parser1, parser2);
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ((),()));
-/// assert_eq!(state.pos(), Position::new(7));
-///
-/// // Error case
-/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(err, Problem::NotFound(Position::new(5)));
-/// ```
-#[inline(always)]
-pub fn and<'a, P1, P2, A, B, E>(p1: P1, p2: P2) -> impl Parser<'a, (A, B), E>
-where
-    P1: Parser<'a, A, E>,
-    P2: Parser<'a, B, E>,
-    P1: 'a,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-    E: 'a,
-{
-    and!(p1, p2)
-}
-
-/// Adds location info. This is a function version the [`loc!`] macro.
-///
-/// For some reason, some usages won't compile unless they use this instead of the macro version.
-/// This is likely because the lifetime `'a` is not defined at the call site.
-///
-/// # Examples
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
-/// # use roc_region::all::{Loc, Position};
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// # }
-/// # let arena = Bump::new();
-/// # fn foo<'a>(arena: &'a Bump) {
-/// let parser = loc(word("hello", Problem::NotFound));
-///
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, Loc::new(0, 5, ()));
-/// assert_eq!(state.pos().offset, 5);
-/// # }
-/// # foo(&arena);
-/// ```
-#[inline(always)]
-pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
-where
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    loc!(parser)
+pub fn between<'a, Before, Inner, After, Err: 'a>(
+    opening_brace: impl Parser<'a, Before, Err>,
+    inner: impl Parser<'a, Inner, Err>,
+    closing_brace: impl Parser<'a, After, Err>,
+) -> impl Parser<'a, Inner, Err> {
+    skip_first(opening_brace, skip_second(inner, closing_brace))
 }
 
 /// Maps/transforms the `Ok` result of parsing using the given function.
-/// Similar to [`map!`], but the transform function also takes a bump allocator.
-///
-/// Function version of the [`map_with_arena!`] macro.
-///
-/// For some reason, some usages won't compile unless they use this instead of the macro version.
-/// This is likely because the lifetime `'a` is not defined at the call site.
+/// Similar to [`map`], but the transform function also takes a bump allocator.
 ///
 /// # Example
 ///
@@ -2749,14 +2608,14 @@ pub fn map_with_arena<'a, P, F, Before, After, E>(
 ) -> impl Parser<'a, After, E>
 where
     P: Parser<'a, Before, E>,
-    P: 'a,
     F: Fn(&'a Bump, Before) -> After,
-    F: 'a,
-    Before: 'a,
-    After: 'a,
     E: 'a,
 {
-    map_with_arena!(parser, transform)
+    move |arena, state, min_indent| {
+        parser
+            .parse(arena, state, min_indent)
+            .map(|(progress, output, next_state)| (progress, transform(arena, output), next_state))
+    }
 }
 
 /// Creates a new parser that does not progress but still forwards the output of
