@@ -1099,28 +1099,26 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
 
-    unsafe {
-        let executable = roc_run_executable_file_path(binary_bytes)?;
-        let (argv_cstrings, envp_cstrings) = make_argv_envp(arena, &executable, args);
+    let executable = roc_run_executable_file_path(binary_bytes)?;
+    let (argv_cstrings, envp_cstrings) = make_argv_envp(arena, &executable, args);
 
-        let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
-            .iter()
-            .map(|s| s.as_ptr())
-            .chain([std::ptr::null()])
-            .collect_in(arena);
+    let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
+        .iter()
+        .map(|s| s.as_ptr())
+        .chain([std::ptr::null()])
+        .collect_in(arena);
 
-        let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
-            .iter()
-            .map(|s| s.as_ptr())
-            .chain([std::ptr::null()])
-            .collect_in(arena);
+    let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
+        .iter()
+        .map(|s| s.as_ptr())
+        .chain([std::ptr::null()])
+        .collect_in(arena);
 
-        match opt_level {
-            OptLevel::Development => roc_dev_native(arena, executable, argv, envp, expect_metadata),
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-                roc_run_native_fast(executable, &argv, &envp);
-            }
-        }
+    match opt_level {
+        OptLevel::Development => roc_dev_native(arena, executable, argv, envp, expect_metadata),
+        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => unsafe {
+            roc_run_native_fast(executable, &argv, &envp);
+        },
     }
 
     Ok(1)
