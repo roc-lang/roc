@@ -158,15 +158,13 @@ pub fn build_host_exposed_def(
         region: Region::zero(),
     };
 
-    let def = Def {
+    Def {
         loc_pattern: Loc::at_zero(pattern),
         loc_expr: Loc::at_zero(def_body),
         expr_var,
         pattern_vars,
         annotation: Some(def_annotation),
-    };
-
-    def
+    }
 }
 
 fn build_fresh_opaque_variables(
