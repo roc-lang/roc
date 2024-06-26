@@ -1244,7 +1244,13 @@ fn roc_dev_native(
                         let options = 0;
                         unsafe { libc::waitpid(pid, &mut status, options) };
 
-                        break status;
+                        // if `WIFEXITED` returns false, `WEXITSTATUS` will just return junk
+                        break if libc::WIFEXITED(status) {
+                            libc::WEXITSTATUS(status)
+                        } else {
+                            // we don't have an exit code, so we probably shouldn't make one up
+                            0
+                        };
                     }
                     ChildProcessMsg::Expect => {
                         roc_repl_expect::run::render_expects_in_memory(
