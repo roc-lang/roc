@@ -5,7 +5,12 @@ import pf.PlatformTask
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 main : Task {} []
 main =
-    inputResult <- Task.attempt PlatformTask.getInt
+    { value, isError } = PlatformTask.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->

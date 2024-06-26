@@ -7,15 +7,6 @@ main : Task {} []
 main =
     PlatformTask.putLine! (showBool test1)
 
-    n = PlatformTask.getInt!
-    when n is
-        1 ->
-            PlatformTask.putLine (showBool test1)
-
-        _ ->
-            ns = Num.toStr n
-            PlatformTask.putLine "No test $(ns)"
-
 showBool : Bool -> Str
 showBool = \b ->
     if

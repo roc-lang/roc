@@ -745,11 +745,11 @@ mod cli_run {
                 r#"
                 Compiled in <ignored for test> ms.
 
-                Direct.roc:
-                    0 failed and 2 passed in <ignored for test> ms.
-
                 Transitive.roc:
                     0 failed and 1 passed in <ignored for test> ms.
+
+                Direct.roc:
+                    0 failed and 2 passed in <ignored for test> ms.
                 "#
             ),
         );

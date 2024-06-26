@@ -10,8 +10,8 @@ main =
     when Base64.fromBytes (Str.toUtf8 "Hello World") is
         Err _ -> PlatformTask.putLine "sadness"
         Ok encoded ->
-            Task.putLine! (Str.concat "encoded: " encoded)
+            PlatformTask.putLine! (Str.concat "encoded: " encoded)
 
             when Base64.toStr encoded is
-                Ok decoded -> Task.putLine (Str.concat "decoded: " decoded)
-                Err _ -> Task.putLine "sadness"
+                Ok decoded -> PlatformTask.putLine (Str.concat "decoded: " decoded)
+                Err _ -> PlatformTask.putLine "sadness"

@@ -1,4 +1,4 @@
-hosted
+hosted PlatformTask
     exposes [putLine, putInt, getInt]
     imports []
 

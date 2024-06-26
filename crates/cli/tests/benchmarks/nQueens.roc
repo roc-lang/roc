@@ -4,7 +4,12 @@ import pf.PlatformTask
 
 main : Task {} []
 main =
-    inputResult = Task.getInt!
+    { value, isError } = PlatformTask.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->
