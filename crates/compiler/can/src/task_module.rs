@@ -15,10 +15,6 @@ pub fn build_host_exposed_def(
     var_store: &mut VarStore,
     annotation: crate::annotation::Annotation,
 ) -> Def {
-    if symbol.contains("PlatformTask") {
-        dbg!(symbol, ident, &annotation);
-    }
-
     let expr_var = var_store.fresh();
     let pattern = Pattern::Identifier(symbol);
     let mut pattern_vars = SendMap::default();
@@ -170,10 +166,6 @@ pub fn build_host_exposed_def(
         annotation: Some(def_annotation),
     };
 
-    if symbol.contains("PlatformTask") {
-        dbg!(&def);
-    }
-
     def
 }
 
@@ -185,16 +177,26 @@ fn build_fresh_opaque_variables(
     // NB: if there are bugs, check whether not introducing variables is a problem!
     // introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
-    let a_var = var_store.fresh();
+    let ok_var = var_store.fresh();
+    let err_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
     let actual = Type::Function(
         vec![Type::EmptyRec],
         Box::new(Type::Variable(closure_var)),
-        Box::new(Type::Variable(a_var)),
+        Box::new(Type::Variable(result_var)),
     );
-    let type_arguments = vec![OptAbleVar {
-        var: a_var,
-        opt_abilities: None,
-    }];
+
+    let type_arguments = vec![
+        OptAbleVar {
+            var: ok_var,
+            opt_abilities: None,
+        },
+        OptAbleVar {
+            var: err_var,
+            opt_abilities: None,
+        },
+    ];
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 
     (Box::new(actual), type_arguments, lambda_set_variables)
