@@ -3434,6 +3434,11 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
+                    let mut parent_dir = filename.to_path_buf();
+                    parent_dir.pop();
+
+                    let packages = unspace(arena, header.packages.item.items);
+
                     let exposes_ids = get_exposes_ids(
                         header.exposes.item.items,
                         arena,
@@ -3442,21 +3447,37 @@ fn load_package_from_disk<'a>(
                     );
 
                     // make a `platform` module that ultimately exposes `main` to the host
-                    let (_, _, platform_module_msg) = build_platform_header(
+                    let (_, _, header) = build_platform_header(
                         arena,
                         Some(shorthand),
                         false, // cannot be the root if loaded as a package
                         app_module_id,
                         filename.to_path_buf(),
                         parser_state,
-                        module_ids,
+                        module_ids.clone(),
                         exposes_ids.into_bump_slice(),
                         &header,
                         comments,
                         pkg_module_timing,
                     )?;
 
-                    Ok(Msg::Header(platform_module_msg))
+                    let filename = header.module_path.clone();
+                    let mut messages = Vec::with_capacity(packages.len() + 1);
+                    messages.push(Msg::Header(header));
+
+                    load_packages(
+                        packages,
+                        &mut messages,
+                        roc_cache_dir,
+                        parent_dir,
+                        arena,
+                        None,
+                        module_ids,
+                        ident_ids_by_module,
+                        filename,
+                    );
+
+                    Ok(Msg::Many(messages))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
