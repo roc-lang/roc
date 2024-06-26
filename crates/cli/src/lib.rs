@@ -1205,13 +1205,10 @@ fn roc_dev_native(
         layout_interner,
     } = expect_metadata;
 
-    // let shm_name =
     let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
     let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
 
     let layout_interner = layout_interner.into_global();
-
-    let mut writer = std::io::stdout();
 
     match unsafe { libc::fork() } {
         0 => unsafe {
@@ -1253,6 +1250,7 @@ fn roc_dev_native(
                         };
                     }
                     ChildProcessMsg::Expect => {
+                        let mut writer = std::io::stdout();
                         roc_repl_expect::run::render_expects_in_memory(
                             &mut writer,
                             arena,
