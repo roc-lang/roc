@@ -1,0 +1,6 @@
+/.vscode
+*.gch
+*.o
+*.dSYM
+a.out
+/run-tests
