@@ -1564,6 +1564,37 @@ fn cannot_use_original_name_if_imported_with_alias() {
 }
 
 #[test]
+fn import_module_params_no_warn() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: "abcdef" }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_typecheck", modules);
+    assert!(result.is_ok());
+}
+
+#[test]
 fn issue_2863_module_type_does_not_exist() {
     let modules = vec![
         (

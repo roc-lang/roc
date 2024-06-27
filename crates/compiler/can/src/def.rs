@@ -19,6 +19,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
+use crate::procedure::QualifiedReference;
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::{PendingAbilitiesInScope, Scope};
@@ -168,6 +169,7 @@ enum PendingValueDef<'a> {
     ),
     /// Module params from an import
     ImportParams {
+        symbol: Symbol,
         loc_pattern: Loc<Pattern>,
         module_id: ModuleId,
         params: ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>,
@@ -188,6 +190,7 @@ impl PendingValueDef<'_> {
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
             PendingValueDef::ImportParams {
                 loc_pattern,
+                symbol: _,
                 module_id: _,
                 params: _,
             } => loc_pattern,
@@ -1148,8 +1151,9 @@ fn canonicalize_value_defs<'a>(
                     exposed_symbols,
                 });
 
-                if let Some((loc_pattern, params)) = params {
+                if let Some((symbol, loc_pattern, params)) = params {
                     pending_value_defs.push(PendingValueDef::ImportParams {
+                        symbol,
                         loc_pattern,
                         module_id,
                         params,
@@ -1602,7 +1606,7 @@ impl DefOrdering {
     fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences) {
         match def_references {
             DefReferences::Value(references) => {
-                let it = references.value_lookups().chain(references.calls());
+                let it = references.value_lookups();
 
                 for referenced in it {
                     if let Some(ref_id) = self.get_id(*referenced) {
@@ -2397,12 +2401,19 @@ fn canonicalize_pending_value_def<'a>(
             )
         }
         ImportParams {
+            symbol,
             loc_pattern,
             module_id,
             params,
         } => {
             let (record, can_output) =
                 canonicalize_record(env, var_store, scope, loc_pattern.region, params);
+
+            // Insert a reference to the record so that we don't report it as unused
+            // If the whole module is unused, we'll report that separately
+            output
+                .references
+                .insert_value_lookup(symbol, QualifiedReference::Unqualified);
 
             let references = DefReferences::Value(can_output.references.clone());
             output.union(can_output);
@@ -2974,6 +2985,7 @@ enum PendingValue<'a> {
         region: Region,
         exposed_symbols: Vec<(Symbol, Region)>,
         params: Option<(
+            Symbol,
             Loc<Pattern>,
             ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>,
         )>,
@@ -3138,25 +3150,30 @@ fn to_pending_value_def<'a>(
                 None => module_name.clone(),
             };
 
-            let params = if let Some(params) = module_import.params  {
+            let mut params_sym = None;
+
+            let params = module_import.params.and_then(|params| {
                 let name_str = name_with_alias.as_str();
 
                 // todo(agus): params specific loc
                 match scope.introduce_str(format!("#{name_str}").as_str(), region) {
-                    Ok(sym) => Some((sym, params)),
+                    Ok(sym) => {
+                        params_sym = Some(sym);
+
+                        let loc_pattern = Loc::at(region, Pattern::Identifier(sym));
+                        Some((sym, loc_pattern, params.params))
+                    },
                     Err(_) => {
-                        // Ignore conflict, it will be handled right after
+                        // Ignore conflict, it will be handled as a duplicate import
                         None
                     }
                 }
-            } else {
-                None
-            };
+            });
 
             if let Err(existing_import) =
                 scope
                     .modules
-                    .insert(name_with_alias.clone(), module_id, params.map(|(sym, _)| sym), region)
+                    .insert(name_with_alias.clone(), module_id, params_sym, region)
             {
                 env.problems.push(Problem::ImportNameConflict {
                     name: name_with_alias,
@@ -3219,14 +3236,7 @@ fn to_pending_value_def<'a>(
                         }))
                     }
                 }
-
             }
-
-            let params =
-                params.map(|(sym, params)| {
-                    // todo(agus): params specific loc
-                    (Loc::at(region, Pattern::Identifier(sym)), params.params)
-                });
 
             PendingValue::ModuleImport {
                 module_id,
