@@ -425,7 +425,7 @@ pub enum Expr<'a> {
     /// Task await bang - i.e. the ! in `File.readUtf8! path`
     TaskAwaitBang(&'a Expr<'a>),
 
-    /// Task await bang - i.e. the ! in `File.readUtf8! path`
+    /// Result try question - i.e. the ? in `List.first? list`
     ResultTryQuestion(&'a Expr<'a>),
 
     // Collection Literals
