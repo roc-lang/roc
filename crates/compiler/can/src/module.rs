@@ -1254,7 +1254,7 @@ fn fix_values_captured_in_closure_expr(
             }
         }
 
-        ImportParams(loc_expr, _) => {
+        ImportParams(loc_expr, _, _) => {
             fix_values_captured_in_closure_expr(
                 &mut loc_expr.value,
                 no_capture_symbols,

@@ -602,7 +602,8 @@ impl Constraints {
             | Constraint::Exhaustive { .. }
             | Constraint::Resolve(..)
             | Constraint::IngestedFile(..)
-            | Constraint::CheckCycle(..) => false,
+            | Constraint::CheckCycle(..)
+            | Constraint::ImportParams(..) => false,
         }
     }
 
@@ -684,6 +685,15 @@ impl Constraints {
         bytes: Arc<Vec<u8>>,
     ) -> Constraint {
         Constraint::IngestedFile(type_index, file_path, bytes)
+    }
+
+    pub fn import_params(
+        &mut self,
+        type_index: TypeOrVar,
+        module_id: ModuleId,
+        region: Region,
+    ) -> Constraint {
+        Constraint::ImportParams(type_index, module_id, region)
     }
 }
 
@@ -787,6 +797,7 @@ pub enum Constraint {
     CheckCycle(Index<Cycle>, IllegalCycleMark),
 
     IngestedFile(TypeOrVar, Box<PathBuf>, Arc<Vec<u8>>),
+    ImportParams(TypeOrVar, ModuleId, Region),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -864,6 +875,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::IngestedFile(arg0, arg1, arg2) => {
                 write!(f, "IngestedFile({arg0:?}, {arg1:?}, {arg2:?})")
+            }
+            Self::ImportParams(arg0, arg1, arg2) => {
+                write!(f, "ImportParams({arg0:?}, {arg1:?}, {arg2:?})")
             }
         }
     }

@@ -1557,6 +1557,7 @@ fn to_expr_report<'b>(
             Reason::RecordDefaultField(_) => {
                 unimplemented!("record default field is not implemented yet")
             }
+            Reason::ImportParams(_) => todo!("agus: report bad params"),
         },
     }
 }

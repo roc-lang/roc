@@ -2422,7 +2422,7 @@ fn canonicalize_pending_value_def<'a>(
 
             let loc_expr = Loc::at(
                 loc_pattern.region,
-                Expr::ImportParams(Box::new(loc_record), module_id),
+                Expr::ImportParams(Box::new(loc_record), var_store.fresh(), module_id),
             );
 
             let def = single_can_def(

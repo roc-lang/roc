@@ -1564,7 +1564,7 @@ fn cannot_use_original_name_if_imported_with_alias() {
 }
 
 #[test]
-fn import_module_params_no_warn() {
+fn module_params_checks() {
     let modules = vec![
         (
             "Api.roc",
@@ -1590,8 +1590,71 @@ fn import_module_params_no_warn() {
         ),
     ];
 
-    let result = multiple_modules("module_params_typecheck", modules);
+    let result = multiple_modules("module_params_checks", modules);
     assert!(result.is_ok());
+}
+
+#[test]
+fn module_params_optional() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key, exp ? "default" } -> [url]
+
+            url = "example.com/$(key)?exp=$(exp)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: "abcdef" }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_optional", modules);
+    assert!(result.is_ok())
+}
+
+#[test]
+#[should_panic]
+fn module_params_typecheck_fail() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: 123 }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    multiple_modules("module_params_typecheck", modules).unwrap_err();
+    // todo(agus): test reporting
 }
 
 #[test]

@@ -340,6 +340,21 @@ fn start_phase<'a>(
                     None
                 };
 
+                let mut module_params_vars = Vec::with_capacity(available_modules.len());
+
+                for (module_id, _) in available_modules.iter() {
+                    if let Some((_, _, pat)) = state.module_cache.param_patterns.get(module_id) {
+                        match pat.value {
+                            roc_can::pattern::Pattern::RecordDestructure { whole_var, .. } => {
+                                module_params_vars.push((*module_id, whole_var));
+                            }
+                            _ => {
+                                internal_error!("Module params can only be records");
+                            }
+                        }
+                    }
+                }
+
                 BuildTask::solve_module(
                     module,
                     ident_ids,
@@ -351,6 +366,7 @@ fn start_phase<'a>(
                     pending_derives,
                     var_store,
                     available_modules,
+                    module_params_vars,
                     &state.exposed_types,
                     dep_idents,
                     declarations,
@@ -905,6 +921,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        module_params_vars: Vec<(ModuleId, Variable)>,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -4301,6 +4318,7 @@ impl<'a> BuildTask<'a> {
         pending_derives: PendingDerives,
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
+        module_params_vars: Vec<(ModuleId, Variable)>,
         exposed_types: &ExposedByModule,
         dep_idents: IdentIdsByModule,
         declarations: Declarations,
@@ -4329,6 +4347,7 @@ impl<'a> BuildTask<'a> {
             module_timing,
             cached_subs,
             derived_module,
+            module_params_vars,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -4597,6 +4616,7 @@ struct SolveResult {
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
+    original_param_vars: Vec<(ModuleId, Variable)>,
     mut types: Types,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
@@ -4623,7 +4643,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    let (import_variables, abilities_store) = add_imports(
+    let (mut import_variables, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
         &mut subs,
@@ -4633,6 +4653,31 @@ fn run_solve_solve(
         &mut imported_rigid_vars,
         &mut imported_flex_vars,
     );
+
+    let mut imported_param_vars = HashMap::with_capacity(original_param_vars.len());
+
+    for (module_id, params_var) in original_param_vars.iter() {
+        let ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            resolved_implementations: _,
+        } = exposed_for_module
+            .exposed_by_module
+            .get(&module_id)
+            .unwrap();
+
+        let copied_import = exposed_types
+            .storage_subs
+            .export_variable_to(&mut subs, *params_var);
+
+        let copied_import_var = extend_imports_data_with_copied_import(
+            copied_import,
+            &mut import_variables,
+            &mut imported_rigid_vars,
+            &mut imported_flex_vars,
+        );
+
+        imported_param_vars.insert(*module_id, copied_import_var);
+    }
 
     let actual_constraint = constraints.let_import_constraint(
         imported_rigid_vars,
@@ -4662,6 +4707,7 @@ fn run_solve_solve(
             #[cfg(debug_assertions)]
             checkmate,
             params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
+            module_params_vars: imported_param_vars,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4726,6 +4772,7 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     exposed_for_module: ExposedForModule,
+    module_params_vars: Vec<(ModuleId, Variable)>,
     types: Types,
     constraints: Constraints,
     constraint: ConstraintSoa,
@@ -4746,6 +4793,11 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
+    let opt_params_var = match module.params_pattern {
+        Some((params_var, _, _)) => Some(params_var),
+        None => None,
+    };
+
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
     let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
@@ -4756,6 +4808,7 @@ fn run_solve<'a>(
             match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
                     exposed_for_module,
+                    module_params_vars,
                     types,
                     constraints,
                     constraint,
@@ -4787,6 +4840,7 @@ fn run_solve<'a>(
         } else {
             run_solve_solve(
                 exposed_for_module,
+                module_params_vars,
                 types,
                 constraints,
                 constraint,
@@ -4817,6 +4871,7 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
+        opt_params_var,
         &solved_implementations,
         &abilities_store,
     );
@@ -6202,6 +6257,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            module_params_vars,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -6210,6 +6266,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             exposed_for_module,
+            module_params_vars,
             types,
             constraints,
             constraint,

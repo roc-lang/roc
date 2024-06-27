@@ -580,9 +580,24 @@ pub fn constrain_expr(
 
             constraints.and_constraint([store_expected, lookup_constr])
         }
-        ImportParams(params, module_id) => {
-            // todo(agus): constrain
-            Constraint::True
+        ImportParams(params, var, module_id) => {
+            let index = constraints.push_variable(*var);
+            let expected_params = constraints.push_expected_type(Expected::ForReason(
+                Reason::ImportParams(*module_id),
+                index,
+                params.region,
+            ));
+            let expr_con = constrain_expr(
+                types,
+                constraints,
+                env,
+                params.region,
+                &params.value,
+                expected_params,
+            );
+            let params_con = constraints.import_params(index, *module_id, params.region);
+            let expr_and_params = constraints.and_constraint([expr_con, params_con]);
+            constraints.exists([*var], expr_and_params)
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
@@ -4098,7 +4113,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 return true;
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
-            ImportParams(loc_expr, _) => expr = &loc_expr.value,
+            ImportParams(loc_expr, _, _) => expr = &loc_expr.value,
             Str(_)
             | IngestedFile(..)
             | List { .. }

@@ -4425,7 +4425,7 @@ pub fn with_hole<'a>(
         ParamsVar { .. } => {
             todo!("agus: handle params var")
         }
-        ImportParams(loc_expr, _) => with_hole(
+        ImportParams(loc_expr, _, _) => with_hole(
             env,
             loc_expr.value,
             variable,

@@ -75,14 +75,16 @@ fn constrain_params(
 
     let pattern_constraints = constraints.and_constraint(state.constraints);
 
-    constraints.let_constraint(
+    let cons = constraints.let_constraint(
         [],
         state.vars,
         state.headers,
         pattern_constraints,
         constraint,
         Generalizable(true),
-    )
+    );
+
+    constraints.exists([*pattern_var], cons)
 }
 
 fn constrain_symbols_from_requires(

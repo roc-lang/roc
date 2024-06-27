@@ -209,7 +209,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         Var(sym, _) | ParamsVar { symbol: sym, .. } | AbilityMember(sym, _, _) => {
             pp_sym(c, f, *sym)
         }
-        ImportParams(loc_expr, _) => expr(c, p, f, &loc_expr.value),
+        ImportParams(loc_expr, _, _) => expr(c, p, f, &loc_expr.value),
         When {
             loc_cond, branches, ..
         } => maybe_paren!(

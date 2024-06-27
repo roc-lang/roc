@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::solve::RunSolveOutput;
 use crate::FunctionKind;
 use crate::{aliases::Aliases, solve};
@@ -81,8 +83,9 @@ pub struct SolveConfig<'a> {
     /// The checkmate collector for this module.
     pub checkmate: Option<roc_checkmate::Collector>,
 
-    /// Module params pattern
+    /// Module params
     pub params_pattern: Option<roc_can::pattern::Pattern>,
+    pub module_params_vars: HashMap<ModuleId, Variable>,
 }
 
 pub struct SolveOutput {
@@ -147,6 +150,7 @@ pub fn exposed_types_storage_subs(
     home: ModuleId,
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
+    params_var: Option<Variable>,
     solved_implementations: &ResolvedImplementations,
     abilities_store: &AbilitiesStore,
 ) -> ExposedTypesStorageSubs {
@@ -157,6 +161,10 @@ pub fn exposed_types_storage_subs(
     for (symbol, var) in exposed_vars_by_symbol.iter() {
         let new_var = storage_subs.import_variable_from(subs, *var).variable;
         stored_vars_by_symbol.insert(*symbol, new_var);
+    }
+
+    if let Some(params_var) = params_var {
+        storage_subs.import_variable_from(subs, params_var);
     }
 
     let mut stored_specialization_lambda_set_vars =

@@ -184,7 +184,7 @@ pub enum Expr {
     },
 
     /// Module params expression in import
-    ImportParams(Box<Loc<Expr>>, ModuleId),
+    ImportParams(Box<Loc<Expr>>, Variable, ModuleId),
 
     /// The "crash" keyword
     Crash {
@@ -338,7 +338,7 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
-            Self::ImportParams(loc_expr, _) => loc_expr.value.category(),
+            Self::ImportParams(loc_expr, _, _) => loc_expr.value.category(),
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -2225,9 +2225,9 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
-        ImportParams(loc_expr, module_id) => {
+        ImportParams(loc_expr, var, module_id) => {
             let loc_expr = Loc::at(loc_expr.region, inline_calls(var_store, loc_expr.value));
-            ImportParams(Box::new(loc_expr), module_id)
+            ImportParams(Box::new(loc_expr), var, module_id)
         }
 
         RecordAccess {
@@ -3242,7 +3242,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
-            Expr::ImportParams(loc_expr, _) => {
+            Expr::ImportParams(loc_expr, _, _) => {
                 stack.push(&loc_expr.value);
             }
             Expr::Expect {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
@@ -20,7 +22,7 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
@@ -130,6 +132,7 @@ fn run_help(
         derived_module,
         function_kind,
         params_pattern,
+        module_params_vars,
         ..
     } = config;
 
@@ -183,6 +186,7 @@ fn run_help(
         &mut obligation_cache,
         &mut awaiting_specializations,
         params_pattern,
+        module_params_vars,
     );
 
     RunSolveOutput {
@@ -241,6 +245,7 @@ fn solve(
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
     params_pattern: Option<roc_can::pattern::Pattern>,
+    module_params_vars: HashMap<ModuleId, Variable>,
 ) -> State {
     let scope = Scope::new(params_pattern);
 
@@ -1393,6 +1398,48 @@ fn solve(
                             problems.push(problem);
                             state
                         }
+                    }
+                }
+            }
+            ImportParams(type_index, module_id, _region) => {
+                let actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                let expected = module_params_vars
+                    .get(module_id)
+                    // todo(agus): Module has no params? handle
+                    .unwrap();
+
+                match unify(
+                    &mut env.uenv(),
+                    actual,
+                    *expected,
+                    UnificationMode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    Success {
+                        vars,
+                        must_implement_ability: _,
+                        lambda_sets_to_specialize: _,
+                        extra_metadata: _,
+                    } => {
+                        env.introduce(rank, &vars);
+
+                        state
+                    }
+
+                    Failure(vars, _actual_type, _expected_type, _) => {
+                        env.introduce(rank, &vars);
+
+                        todo!("agus: reporting")
                     }
                 }
             }
