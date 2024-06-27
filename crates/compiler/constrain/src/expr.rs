@@ -566,23 +566,15 @@ pub fn constrain_expr(
 
             constraints.exists([*ret_var], and)
         }
-        Var(symbol, variable) => {
-            // Save the expectation in the variable, then lookup the symbol's type in the environment
-            let expected_type = *constraints[expected].get_type_ref();
-            let store_expected = constraints.store(expected_type, *variable, file!(), line!());
-
-            let lookup_constr = constraints.lookup(*symbol, expected, region);
-
-            constraints.and_constraint([store_expected, lookup_constr])
-        }
-        ParamsVar {
+        Var(symbol, variable)
+        | ParamsVar {
             symbol,
             params: _,
-            var,
+            var: variable,
         } => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
             let expected_type = *constraints[expected].get_type_ref();
-            let store_expected = constraints.store(expected_type, *var, file!(), line!());
+            let store_expected = constraints.store(expected_type, *variable, file!(), line!());
 
             let lookup_constr = constraints.lookup(*symbol, expected, region);
 
