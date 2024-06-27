@@ -378,6 +378,7 @@ impl<'a> Accessor<'a> {
 pub enum Suffix<'a> {
     Accessor(Accessor<'a>),
     TaskAwaitBang,
+    ResultTryQuestion,
 }
 
 /// a `.foo` or `.1` accessor function
