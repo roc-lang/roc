@@ -6,7 +6,7 @@ use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{
-    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
+    AnnotatedMark, ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
 use crate::pattern::{
     canonicalize_record_destructure, BindingsFromPattern, Pattern, PermitShadows,
@@ -138,6 +138,7 @@ pub struct Module {
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
     pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
 
 #[derive(Debug, Default)]
@@ -151,7 +152,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
-    pub params_pattern: Option<Pattern>,
+    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
@@ -395,7 +396,7 @@ pub fn canonicalize_module_defs<'a>(
              before_arrow: _,
              after_arrow: _,
          }| {
-            canonicalize_record_destructure(
+            let can_pattern = canonicalize_record_destructure(
                 &mut env,
                 var_store,
                 &mut scope,
@@ -405,6 +406,14 @@ pub fn canonicalize_module_defs<'a>(
                 &pattern.value,
                 pattern.region,
                 PermitShadows(false),
+            );
+
+            let loc_pattern = Loc::at(pattern.region, can_pattern);
+
+            (
+                var_store.fresh(),
+                AnnotatedMark::new(var_store),
+                loc_pattern,
             )
         },
     );

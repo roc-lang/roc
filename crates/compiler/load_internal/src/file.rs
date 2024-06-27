@@ -2395,6 +2395,13 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
+            if let Some(params_pattern) = constrained_module.module.params_pattern.clone() {
+                state
+                    .module_cache
+                    .param_patterns
+                    .insert(module_id, params_pattern);
+            }
+
             state
                 .module_cache
                 .constrained
@@ -5112,6 +5119,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
+        params_pattern: module_output.params_pattern,
     };
 
     let constrained_module = ConstrainedModule {
@@ -5455,6 +5463,7 @@ fn make_specializations<'a>(
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
+
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,

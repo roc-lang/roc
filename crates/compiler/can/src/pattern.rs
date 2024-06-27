@@ -778,6 +778,7 @@ pub fn canonicalize_pattern<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_record_destructure<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
