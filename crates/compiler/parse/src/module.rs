@@ -123,7 +123,7 @@ fn module_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
 
 fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
     record!(ModuleParams {
-        params: specialize_err(EParams::Pattern, record_pattern_fields()),
+        pattern: specialize_err(EParams::Pattern, loc(record_pattern_fields())),
         before_arrow: skip_second(
             space0_e(EParams::BeforeArrow),
             loc(two_bytes(b'-', b'>', EParams::Arrow))

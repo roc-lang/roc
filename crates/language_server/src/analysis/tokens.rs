@@ -243,12 +243,12 @@ where
 impl IterTokens for ModuleParams<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            params,
+            pattern,
             before_arrow: _,
             after_arrow: _,
         } = self;
 
-        params.iter_tokens(arena)
+        pattern.value.iter_tokens(arena)
     }
 }
 

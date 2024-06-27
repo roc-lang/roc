@@ -182,11 +182,17 @@ pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
     let mut indent = fmt_spaces_with_outdent(buf, header.after_keyword, 0);
 
     if let Some(params) = &header.params {
-        if is_collection_multiline(&params.params) {
+        if is_collection_multiline(&params.pattern.value) {
             indent = INDENT;
         }
 
-        fmt_collection(buf, indent, Braces::Curly, params.params, Newlines::Yes);
+        fmt_collection(
+            buf,
+            indent,
+            Braces::Curly,
+            params.pattern.value,
+            Newlines::Yes,
+        );
 
         indent = fmt_spaces_with_outdent(buf, params.before_arrow, indent);
         buf.push_str("->");

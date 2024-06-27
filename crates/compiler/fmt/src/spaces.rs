@@ -342,7 +342,7 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
 impl<'a> RemoveSpaces<'a> for ModuleParams<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         ModuleParams {
-            params: self.params.remove_spaces(arena),
+            pattern: self.pattern.remove_spaces(arena),
             before_arrow: &[],
             after_arrow: &[],
         }

@@ -389,10 +389,10 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut param_patterns = Vec::new();
 
-    if let Some(ModuleParams { params, .. }) = header_type.get_params() {
-        param_patterns.reserve_exact(params.len());
+    if let Some(ModuleParams { pattern, .. }) = header_type.get_params() {
+        param_patterns.reserve_exact(pattern.value.len());
 
-        for param in params.iter() {
+        for param in pattern.value.iter() {
             let pattern = canonicalize_pattern(
                 &mut env,
                 var_store,
