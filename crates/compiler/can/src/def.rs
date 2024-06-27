@@ -2404,6 +2404,7 @@ fn canonicalize_pending_value_def<'a>(
             let (record, can_output) =
                 canonicalize_record(env, var_store, scope, loc_pattern.region, params);
 
+            let references = DefReferences::Value(can_output.references.clone());
             output.union(can_output);
 
             let loc_record = Loc::at(loc_pattern.region, record);
@@ -2423,7 +2424,7 @@ fn canonicalize_pending_value_def<'a>(
 
             DefOutput {
                 output,
-                references: DefReferences::Value(References::new()),
+                references,
                 def,
             }
         }
