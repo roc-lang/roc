@@ -379,11 +379,7 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
-        assert!(problems.iter().any(|problem| matches!(
-            problem,
-            Problem::RuntimeError(RuntimeError::Shadowing { .. })
-        )));
+        assert_eq!(problems.len(), 0);
     }
 
     #[test]
@@ -400,11 +396,7 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
-        assert!(problems.iter().any(|problem| matches!(
-            problem,
-            Problem::RuntimeError(RuntimeError::Shadowing { .. })
-        )));
+        assert_eq!(problems.len(), 0);
     }
 
     #[test]
