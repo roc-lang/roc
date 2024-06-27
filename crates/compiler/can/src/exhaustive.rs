@@ -479,6 +479,7 @@ pub fn sketch_when_branches(region: Region, patterns: &[expr::WhenBranch]) -> Sk
         guard,
         value: _,
         redundant,
+        refinements: _,
     } in patterns
     {
         let guard = if guard.is_some() {

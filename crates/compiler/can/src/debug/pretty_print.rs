@@ -462,6 +462,7 @@ fn branch<'a>(c: &Ctx, f: &'a Arena<'a>, b: &'a WhenBranch) -> DocBuilder<'a, Ar
         value,
         guard,
         redundant: _,
+        refinements: _,
     } = b;
 
     f.intersperse(

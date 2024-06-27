@@ -1,0 +1,9 @@
+app "test" provides [expandError] to "./platform"
+
+expandError : [Io [Wrapper Str]] -> [Io [Wrapper Str], Net Str]
+expandError = \e ->
+#^^^^^^^^^^^{-1} [Io [Wrapper Str]a] -[[expandError(0)]]-> [Io [Wrapper Str]a, Net Str]*
+    when e is
+    #    ^ [Io [Wrapper Str]*]
+        error -> error
+    #            ^^^^^ [Io [Wrapper Str]*, Net Str]*

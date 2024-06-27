@@ -3,15 +3,17 @@
 use crate::ir::erased::{build_erased_function, ResolvedErasedLambda};
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
-    self, Builtin, ClosureCallOptions, ClosureDataKind, ClosureRepresentation, EnumDispatch,
-    InLayout, LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem,
-    LayoutRepr, Niche, RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout,
-    WrappedVariant,
+    self, ext_var_is_empty_tag_union, Builtin, ClosureCallOptions, ClosureDataKind,
+    ClosureRepresentation, EnumDispatch, InLayout, LambdaName, LambdaSet, Layout, LayoutCache,
+    LayoutInterner, LayoutProblem, LayoutRepr, Niche, RawFunctionLayout, TLLayoutInterner,
+    TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
+use roc_can::expr::{
+    AnnotatedMark, ClosureData, ExpectLookup, Refinements, WhenBranch, WhenBranchPattern,
+};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -1376,6 +1378,12 @@ impl<'a, 'i> Env<'a, 'i> {
         Symbol::new(self.home, ident_id)
     }
 
+    pub fn duplicate_symbol(&mut self, symbol: Symbol) -> Symbol {
+        let ident_id = self.ident_ids.duplicate_ident(symbol.ident_id());
+
+        Symbol::new(symbol.module_id(), ident_id)
+    }
+
     pub fn next_update_mode_id(&mut self) -> UpdateModeId {
         self.update_mode_ids.next_id()
     }
@@ -2736,11 +2744,16 @@ fn from_can_let<'a>(
     }
 
     // this may be a destructure pattern
-    let (mono_pattern, assignments) =
-        match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
-            Ok(v) => v,
-            Err(_) => todo!(),
-        };
+    let (mono_pattern, assignments) = match from_can_pattern(
+        env,
+        procs,
+        layout_cache,
+        &def.loc_pattern.value,
+        &VecMap::default(),
+    ) {
+        Ok(v) => v,
+        Err(_) => todo!(),
+    };
 
     // convert the continuation
     let mut stmt = lower_rest!(variable, cont.value);
@@ -2849,7 +2862,6 @@ fn pattern_to_when(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
@@ -2909,6 +2921,9 @@ fn pattern_to_when(
                     guard: None,
                     // If this type-checked, it's non-redundant
                     redundant: RedundantMark::known_non_redundant(),
+                    // This branch isn't allowed to be refined because it
+                    // wasn't originally from a `when` expression
+                    refinements: Refinements::default(),
                 }],
                 branches_cond_var: pattern_var,
                 // If this type-checked, it's exhaustive
@@ -6906,6 +6921,140 @@ fn register_capturing_closure<'a>(
     }
 }
 
+fn get_sorted_tags<'a>(
+    subs: &'a Subs,
+    var: Variable,
+) -> Option<(
+    (impl Iterator<Item = (TagName, &'a [Variable])> + 'a),
+    roc_types::subs::TagExt,
+)> {
+    let content = subs.get_content_without_compacting(var);
+    match content {
+        Content::Structure(FlatType::TagUnion(tags, ext)) => {
+            let (tags, ext) = tags.sorted_iterator_and_ext(&subs, *ext);
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext));
+            Some((tags.map(|(tag_name, variables)| (tag_name, variables)), ext))
+        }
+        Content::Structure(FlatType::RecursiveTagUnion(_var, _tags, _ext)) => {
+            todo!("refine_tag_union: recursive tag union")
+        }
+        _ => None,
+    }
+}
+
+/// In refine_tag_union, we use this instead of Env::unique_symbol to avoid
+/// mutably borrowing the entire env, since we're already borrowing a part of it.
+fn unique_symbol(ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
+    let ident_id = ident_ids.gen_unique();
+
+    Symbol::new(home, ident_id)
+}
+
+fn can_refine_tag_union(env: &mut Env, from_var: Variable, to_var: Variable) -> bool {
+    if env.subs.equivalent(from_var, to_var) {
+        return false;
+    }
+
+    matches!(
+        env.subs.get_content_without_compacting(from_var),
+        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..))
+    ) && matches!(
+        env.subs.get_content_without_compacting(to_var),
+        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..))
+    )
+}
+
+fn refine_tag_union(
+    env: &mut Env,
+    from_var: Variable,
+    to_var: Variable,
+) -> Option<std::vec::Vec<WhenBranch>> {
+    use roc_can::expr::Expr::*;
+
+    if env.subs.equivalent(from_var, to_var) {
+        return None;
+    }
+
+    let (from_tags, from_ext) = get_sorted_tags(&env.subs, from_var)?;
+    let (mut to_tags, to_ext) = get_sorted_tags(&env.subs, to_var)?;
+
+    let ret: std::vec::Vec<WhenBranch> = from_tags
+        .map(|(from_tag, from_args)| {
+            let arg_symbols: std::vec::Vec<Symbol> = (0..from_args.len())
+                .map(|_| unique_symbol(&mut env.ident_ids, env.home))
+                .collect();
+            let arguments: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)> = from_args
+                .iter()
+                .zip(arg_symbols.iter())
+                .map(|(&var, &sym)| {
+                    (
+                        var,
+                        Loc::at_zero(roc_can::pattern::Pattern::Identifier(sym)),
+                    )
+                })
+                .collect();
+            while let Some((to_tag, to_args)) = to_tags.next() {
+                if to_tag > from_tag {
+                    // Since from_tags and to_tags are both sorted,
+                    // if we get to a tag greater than from_tag, then from_tag is not in to_tags.
+                    break;
+                } else if to_tag == from_tag {
+                    // this tag is in both tag unions
+                    debug_assert!(from_args.len() == to_args.len());
+                    let patterns = vec![WhenBranchPattern {
+                        pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                            whole_var: from_var,
+                            ext_var: from_ext.var(),
+                            tag_name: from_tag,
+                            arguments,
+                        }),
+                        degenerate: false,
+                    }];
+                    return WhenBranch {
+                        patterns,
+                        value: Loc::at_zero(Tag {
+                            tag_union_var: to_var,
+                            ext_var: to_ext.var(),
+                            name: to_tag,
+                            arguments: to_args
+                                .iter()
+                                .zip(arg_symbols.iter())
+                                .map(|(&var, &sym)| (var, Loc::at_zero(Var(sym, var))))
+                                .collect(),
+                        }),
+                        guard: None,
+                        redundant: RedundantMark::known_non_redundant(),
+                        // We've already done the refinements!
+                        refinements: Refinements::default(),
+                    };
+                }
+            }
+            // this tag is only in from_tags, not from_tags
+            let patterns = vec![WhenBranchPattern {
+                pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                    whole_var: from_var,
+                    ext_var: from_ext.var(),
+                    tag_name: from_tag,
+                    arguments,
+                }),
+                degenerate: false,
+            }];
+            WhenBranch {
+                patterns,
+                value: Loc::at_zero(Crash {
+                    msg: Box::new(Loc::at_zero(Str("TODO".into()))),
+                    ret_var: to_var,
+                }),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
+            }
+        })
+        .collect();
+
+    Some(ret)
+}
+
 pub fn from_can<'a>(
     env: &mut Env<'a, '_>,
     variable: Variable,
@@ -7232,7 +7381,26 @@ fn to_opt_branches<'a>(
         }
 
         for loc_pattern in when_branch.patterns {
-            match from_can_pattern(env, procs, layout_cache, &loc_pattern.pattern.value) {
+            let symbol_refinement_map: VecMap<Symbol, Symbol> = when_branch
+                .refinements
+                .iter()
+                .filter_map(|(&symbol, &unrefined_var, &refined_var)| {
+                    if can_refine_tag_union(env, unrefined_var, refined_var) {
+                        Some((symbol, env.duplicate_symbol(symbol)))
+                    } else {
+                        None
+                    }
+                })
+                // .map(|(&symbol, _, _)| ((symbol, env.duplicate_symbol(symbol))))
+                .collect();
+
+            match from_can_pattern(
+                env,
+                procs,
+                layout_cache,
+                &loc_pattern.pattern.value,
+                &symbol_refinement_map,
+            ) {
                 Ok((mono_pattern, assignments)) => {
                     let loc_expr = if !loc_pattern.degenerate {
                         let mut loc_expr = when_branch.value.clone();
@@ -7252,6 +7420,46 @@ fn to_opt_branches<'a>(
                             let new_expr =
                                 roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
                             loc_expr = Loc::at(region, new_expr);
+                        }
+
+                        for (&refined_symbol, &unrefined_var, &refined_var) in
+                            when_branch.refinements.iter()
+                        {
+                            if let Some(refinement_branches) =
+                                refine_tag_union(env, unrefined_var, refined_var)
+                            {
+                                let unrefined_symbol = *symbol_refinement_map
+                                    .get(&refined_symbol)
+                                    .unwrap_or(&refined_symbol);
+                                let when = roc_can::expr::Expr::When {
+                                    loc_cond: Box::new(Loc::at(
+                                        region,
+                                        roc_can::expr::Expr::Var(unrefined_symbol, unrefined_var),
+                                    )),
+                                    cond_var: unrefined_var,
+                                    expr_var: refined_var,
+                                    region,
+                                    branches: refinement_branches,
+                                    branches_cond_var: unrefined_var,
+                                    exhaustive: ExhaustiveMark::known_exhaustive(),
+                                };
+                                let def = roc_can::def::Def {
+                                    annotation: None,
+                                    expr_var: refined_var,
+                                    loc_expr: Loc::at(region, when),
+                                    loc_pattern: Loc::at(
+                                        region,
+                                        roc_can::pattern::Pattern::Identifier(refined_symbol),
+                                    ),
+                                    pattern_vars: std::iter::once((refined_symbol, refined_var))
+                                        .collect(),
+                                };
+                                let new_expr = roc_can::expr::Expr::LetNonRec(
+                                    Box::new(def),
+                                    Box::new(loc_expr),
+                                );
+                                loc_expr = Loc::at(region, new_expr);
+                            }
                         }
 
                         loc_expr

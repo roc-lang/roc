@@ -16,6 +16,7 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::Refinements;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -34,6 +35,7 @@ use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Obligated, SpecializationLsetCollector,
     Unified::*,
 };
+use roc_unify::Env as UEnv;
 
 mod scope;
 pub use scope::Scope;
@@ -215,6 +217,7 @@ enum Work<'a> {
         /// mimic `type_to_var`, we must add these variables to `Pools`
         /// at the correct rank
         pool_variables: &'a [Variable],
+        refinements: &'a Option<Box<Refinements>>,
     },
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
     ///
@@ -230,6 +233,7 @@ enum Work<'a> {
         /// mimic `type_to_var`, we must add these variables to `Pools`
         /// at the correct rank
         pool_variables: &'a [Variable],
+        refinements: &'a Option<Box<Refinements>>,
     },
 }
 
@@ -277,6 +281,7 @@ fn solve(
                 rank,
                 let_con,
                 pool_variables,
+                refinements,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -309,7 +314,34 @@ fn solve(
                         *loc_var,
                     );
 
-                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                    let unexpanded_var = loc_var.value;
+                    let unexpanded_descriptor = env.subs.get(unexpanded_var);
+                    let expanded_var = if let Some(refinements2) = &refinements {
+                        if let Some(&(unrefined_var, refined_var)) = refinements2.get(*symbol) {
+                            if matches!(unexpanded_descriptor.content, Content::Structure(..)) {
+                                unify(
+                                    &mut UEnv::new(env.subs, None),
+                                    unexpanded_var,
+                                    unrefined_var,
+                                    UnificationMode::EQ,
+                                    Polarity::Neg, // TODO: polarity
+                                );
+                                debug_assert!(env
+                                    .subs
+                                    .equivalent_without_compacting(unexpanded_var, unrefined_var));
+                                env.subs.set(refined_var, unexpanded_descriptor.clone());
+                                open_tag_union(env, refined_var);
+                                refined_var
+                            } else {
+                                unexpanded_var
+                            }
+                        } else {
+                            unexpanded_var
+                        }
+                    } else {
+                        unexpanded_var
+                    };
+                    new_scope.insert_symbol_var_if_vacant(*symbol, expanded_var);
                 }
 
                 stack.push(Work::Constraint {
@@ -327,6 +359,7 @@ fn solve(
                 rank,
                 let_con,
                 pool_variables,
+                refinements,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -438,7 +471,34 @@ fn solve(
                         *loc_var,
                     );
 
-                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                    let unexpanded_var = loc_var.value;
+                    let unexpanded_descriptor = env.subs.get(unexpanded_var);
+                    let expanded_var = if let Some(refinements2) = &refinements {
+                        if let Some(&(unrefined_var, refined_var)) = refinements2.get(*symbol) {
+                            if matches!(unexpanded_descriptor.content, Content::Structure(..)) {
+                                unify(
+                                    &mut UEnv::new(env.subs, None),
+                                    unexpanded_var,
+                                    unrefined_var,
+                                    UnificationMode::EQ,
+                                    Polarity::Neg, // TODO: polarity
+                                );
+                                debug_assert!(env
+                                    .subs
+                                    .equivalent_without_compacting(unexpanded_var, unrefined_var));
+                                env.subs.set(refined_var, unexpanded_descriptor.clone());
+                                open_tag_union(env, refined_var);
+                                refined_var
+                            } else {
+                                unexpanded_var
+                            }
+                        } else {
+                            unexpanded_var
+                        }
+                    } else {
+                        unexpanded_var
+                    };
+                    new_scope.insert_symbol_var_if_vacant(*symbol, expanded_var);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -768,12 +828,17 @@ fn solve(
                     }
                 }
             }
-            Let(index, pool_slice) => {
+            Let(index, pool_slice, refinements)
+            | LetAndExpandType(index, pool_slice, refinements) => {
+                // dbg!(constraint);
                 let let_con = &env.constraints.let_constraints[index.index()];
+                // dbg!(let_con);
 
                 let offset = let_con.defs_and_ret_constraint.index();
                 let defs_constraint = &env.constraints.constraints[offset];
                 let ret_constraint = &env.constraints.constraints[offset + 1];
+                // dbg!(defs_constraint);
+                // dbg!(ret_constraint);
 
                 let flex_vars = &env.constraints.variables[let_con.flex_vars.indices()];
                 let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
@@ -781,6 +846,7 @@ fn solve(
                 let pool_variables = &env.constraints.variables[pool_slice.indices()];
 
                 if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
+                    // dbg!("branch 1");
                     debug_assert!(pool_variables.is_empty());
 
                     env.introduce(rank, flex_vars);
@@ -795,16 +861,20 @@ fn solve(
 
                     state
                 } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
+                    // dbg!("branch 2");
                     // items are popped from the stack in reverse order. That means that we'll
                     // first solve then defs_constraint, and then (eventually) the ret_constraint.
                     //
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
+                    // dbg!("pushing");
                     stack.push(Work::LetConNoVariables {
                         scope,
                         rank,
                         let_con,
                         pool_variables,
+                        // expand: matches!(constraint, LetAndExpandType(..)),
+                        refinements,
                     });
                     stack.push(Work::Constraint {
                         scope,
@@ -814,6 +884,7 @@ fn solve(
 
                     state
                 } else {
+                    // dbg!("branch 3");
                     // If the let-binding is generalizable, work at the next rank (which will be
                     // the rank at which introduced variables will become generalized, if they end up
                     // staying there); otherwise, stay at the current level.
@@ -853,11 +924,14 @@ fn solve(
                     // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
                     // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
                     // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
+                    // dbg!("pushing");
                     stack.push(Work::LetConIntroducesVariables {
                         scope,
                         rank,
                         let_con,
                         pool_variables,
+                        // expand: matches!(constraint, LetAndExpandType(..)),
+                        refinements,
                     });
                     stack.push(Work::Constraint {
                         scope,
@@ -868,6 +942,20 @@ fn solve(
                     state
                 }
             }
+            // ExpandTypeUnions(refinements) => {
+            //     let refinements = &**refinements;
+            //     let mut new_env = env.clone();
+            //     for (&symbol, &unrefined_var, &refined_var) in refinements.iter() {
+            //         let unexpanded_var = new_env.get_var_by_symbol(&symbol).unwrap();
+            //         let unexpanded_desc = subs.get(unexpanded_var);
+            //         subs.set(unrefined_var, unexpanded_desc);
+            //         subs.set(refined_var, unexpanded_desc.clone());
+            //         open_tag_union(subs, pools, refined_var);
+            //         new_env.insert_symbol_var_if_vacant(symbol, var)
+            //     }
+
+            //     state
+            // }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
                     env,
@@ -1441,6 +1529,7 @@ fn open_tag_union(env: &mut InferenceEnv, var: Variable) {
 
         let desc = env.subs.get(var);
         match desc.content {
+            // TODO: handle FunctionOrTagUnion, EmptyTagUnion, RecursiveTagUnion
             Structure(TagUnion(tags, ext)) => {
                 if let Structure(EmptyTagUnion) = env.subs.get_content_without_compacting(ext.var())
                 {

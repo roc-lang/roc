@@ -17,7 +17,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
     AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, ExpectLookup, Field,
-    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, WhenBranch,
+    FunctionDef, OpaqueWrapFunctionData, Refinements, StructAccessorData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -1004,6 +1004,7 @@ pub fn constrain_expr(
             let mut pattern_cons = Vec::with_capacity(branches.len() + 2);
             let mut delayed_is_open_constraints = Vec::with_capacity(2);
             let mut body_cons = Vec::with_capacity(branches.len());
+            let mut refinements = Refinements::default();
 
             for (index, when_branch) in branches.iter().enumerate() {
                 let expected_pattern = |sub_pattern, sub_region| {
@@ -1016,6 +1017,8 @@ pub fn constrain_expr(
                         sub_region,
                     )
                 };
+
+                refinements.merge(&when_branch.refinements);
 
                 let ConstrainedBranch {
                     vars: new_pattern_vars,
@@ -1111,7 +1114,8 @@ pub fn constrain_expr(
             // need be before solving the bodies.
             let pattern_constraints = constraints.and_constraint(pattern_cons);
             let body_constraints = constraints.and_constraint(body_cons);
-            let when_body_con = constraints.let_constraint(
+            // let body_constraints = constraints.and_constraint([expansion_constraints, body_constraints]);
+            let when_body_con = constraints.let_and_expand_type_constraint(
                 [],
                 pattern_vars,
                 pattern_headers,
@@ -1119,6 +1123,7 @@ pub fn constrain_expr(
                 body_constraints,
                 // Never generalize identifiers introduced in branch-patterns
                 Generalizable(false),
+                refinements,
             );
 
             let result_con =
