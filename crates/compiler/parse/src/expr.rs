@@ -166,6 +166,7 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
             )
         ),
         map(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
+        map(byte(b'?', EExpr::Access), |_| Suffix::ResultTryQuestion),
     ))
 }
 
@@ -2467,6 +2468,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
         | Expr::TaskAwaitBang(..)
+        | Expr::ResultTryQuestion(..)
         | Expr::Crash => return Err(()),
 
         Expr::Str(string) => Pattern::StrLiteral(string),
@@ -3403,6 +3405,7 @@ fn apply_expr_access_chain<'a>(
                 Expr::TupleAccess(arena.alloc(value), field)
             }
             Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
+            Suffix::ResultTryQuestion => Expr::ResultTryQuestion(arena.alloc(value)),
         })
 }
 

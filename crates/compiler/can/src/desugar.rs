@@ -363,6 +363,7 @@ pub fn desugar_expr<'a>(
 
             arena.alloc(Loc::at(loc_expr.region, TaskAwaitBang(new_sub_expr)))
         }
+        ResultTryQuestion(_) => todo!("desugar ResultTryQuestion"),
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
             let loc_sub_expr = Loc {

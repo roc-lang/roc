@@ -48,9 +48,10 @@ impl<'a> Formattable for Expr<'a> {
             | EmptyDefsFinal
             | Crash => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
-                inner.is_multiline()
-            }
+            RecordAccess(inner, _)
+            | TupleAccess(inner, _)
+            | TaskAwaitBang(inner)
+            | ResultTryQuestion(inner) => inner.is_multiline(),
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -516,6 +517,10 @@ impl<'a> Formattable for Expr<'a> {
             TaskAwaitBang(expr) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('!');
+            }
+            ResultTryQuestion(expr) => {
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                buf.push('?');
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
