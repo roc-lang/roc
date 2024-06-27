@@ -1366,9 +1366,9 @@ fn parse_defs_end<'a>(
                         );
                     }
                     Either::Second(value_def) => {
+                        // If we got a ValueDef::Body, check if a type annotation preceded it.
+                        // If so, we may need to combine them into an AnnotatedBody.
                         let joined_def = match value_def {
-                            // If we got a ValueDef::Body, check if a type annotation preceded it.
-                            // If so, we may need to combine them into an AnnotatedBody.
                             ValueDef::Body(loc_pattern, loc_def_expr) => {
                                 let region =
                                     Region::span_across(&loc_pattern.region, &loc_def_expr.region);
