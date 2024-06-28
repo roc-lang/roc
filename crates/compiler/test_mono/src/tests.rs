@@ -5,15 +5,13 @@
 // we actually want to compare against the literal float bits
 #![allow(clippy::float_cmp)]
 
-#[macro_use]
-extern crate indoc;
-
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
 /// run out of stack space in debug builds (but don't in --release builds)
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 use bumpalo::Bump;
+use indoc::{formatdoc, indoc};
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::FunctionKind;
@@ -25,9 +23,58 @@ use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::STLayoutInterner;
+use roc_test_utils::TAG_LEN_ENCODER_FMT;
 use test_mono_macros::*;
 
 const TARGET: roc_target::Target = roc_target::Target::LinuxX64;
+
+/// err decoder is a trivial implementation of a decoder which only returns an error
+/// useful when you need a decoder implementation, but want minimal code generation
+pub const ERR_DECODER_FMT: &str = r#"
+ErrDecoder := {} implements [
+        DecoderFormatting {
+            u8: decodeU8,
+            u16: decodeU16,
+            u32: decodeU32,
+            u64: decodeU64,
+            u128: decodeU128,
+            i8: decodeI8,
+            i16: decodeI16,
+            i32: decodeI32,
+            i64: decodeI64,
+            i128: decodeI128,
+            f32: decodeF32,
+            f64: decodeF64,
+            dec: decodeDec,
+            bool: decodeBool,
+            string: decodeString,
+            list: decodeList,
+            record: decodeRecord,
+            tuple: decodeTuple,
+        },
+    ]
+decodeU8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeU16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeU32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeU64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeU128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeI8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeI16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeI32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeI64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeI128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeF32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeF64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeDec = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeBool = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeString = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeList : Decoder elem ErrDecoder -> Decoder (List elem) ErrDecoder
+decodeList = \_ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeRecord : state, (state, Str -> [Keep (Decoder state ErrDecoder), Skip]), (state, ErrDecoder -> Result val DecodeError) -> Decoder val ErrDecoder
+decodeRecord = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decodeTuple : state, (state, U64 -> [Next (Decoder state ErrDecoder), TooLong]), (state -> Result val DecodeError) -> Decoder val ErrDecoder
+decodeTuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+"#;
 
 /// Without this, some tests pass in `cargo test --release` but fail without
 /// the --release flag because they run out of stack space. This increases
@@ -1522,20 +1569,22 @@ fn list_sort_asc() {
 #[mono_test]
 #[ignore]
 fn encode_custom_type() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
 
-        HelloWorld := {}
-        toEncoder = \@HelloWorld {} ->
+        {TAG_LEN_ENCODER_FMT}
+
+        HelloWorld := {{}}
+        toEncoder = \@HelloWorld {{}} ->
             Encode.custom \bytes, fmt ->
                 bytes
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{}}) tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1545,14 +1594,16 @@ fn encode_custom_type() {
 
 #[mono_test]
 fn encode_derived_string() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
 
+        {TAG_LEN_ENCODER_FMT}
+
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes "abc" tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1563,14 +1614,16 @@ fn encode_derived_string() {
 #[mono_test]
 #[ignore = "TODO"]
 fn encode_derived_record() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
 
+        {TAG_LEN_ENCODER_FMT}
+
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "a"} TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes {{a: "a"}} tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1905,14 +1958,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 
 #[mono_test(large_stack = "true")]
 fn encode_derived_record_one_field_string() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
 
+        {TAG_LEN_ENCODER_FMT}
+
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes {{a: "foo"}} tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1922,14 +1977,16 @@ fn encode_derived_record_one_field_string() {
 
 #[mono_test(large_stack = "true")]
 fn encode_derived_record_two_field_strings() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
 
+        {TAG_LEN_ENCODER_FMT}
+
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes {{a: "foo", b: "bar"}} tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1939,14 +1996,16 @@ fn encode_derived_record_two_field_strings() {
 
 #[mono_test(large_stack = "true")]
 fn encode_derived_nested_record_string() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
 
+        {TAG_LEN_ENCODER_FMT}
+
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes {{a: {{b: "bar"}}}} tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1956,16 +2015,18 @@ fn encode_derived_nested_record_string() {
 
 #[mono_test]
 fn encode_derived_tag_one_field_string() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
+
+        {TAG_LEN_ENCODER_FMT}
 
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1997,16 +2058,18 @@ fn polymorphic_expression_unification() {
 
 #[mono_test]
 fn encode_derived_tag_two_payloads_string() {
-    indoc!(
+    &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, TotallyNotJson]
+            imports [Encode.{{ toEncoder }}]
             provides [main] to "./platform"
+
+        {TAG_LEN_ENCODER_FMT}
 
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
+            result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2271,14 +2334,18 @@ fn issue_4705() {
 
 #[mono_test(mode = "test", large_stack = "true")]
 fn issue_4749() {
-    indoc!(
+    &formatdoc!(
         r#"
-        interface Test exposes [] imports [TotallyNotJson]
+        interface Test exposes [] imports []
 
         expect
-            input = [82, 111, 99]
-            got = Decode.fromBytes input TotallyNotJson.json
-            got == Ok "Roc"
+            got : [Y [Y1, Y2], Z [Z1, Z2]]_
+            got = Z Z1
+
+            t : [A [A1, A2]]_
+            t = A A1
+
+            got != t
         "#
     )
 }
@@ -2485,18 +2552,20 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
 
 #[mono_test(mode = "test", large_stack = "true")]
 fn issue_4772_weakened_monomorphic_destructure() {
-    indoc!(
+    &formatdoc!(
         r#"
-        interface Test exposes [] imports [TotallyNotJson]
+        interface Test exposes [] imports []
+
+        {ERR_DECODER_FMT}
 
         getNumber =
-            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") TotallyNotJson.json
+            {{ result, rest }} = Decode.fromBytesPartial (Str.toUtf8 "-1234") (@ErrDecoder {{}})
 
             when result is
                 Ok val ->
                     when Str.toI64 val is
                         Ok number ->
-                            Ok {val : number, input : rest}
+                            Ok {{val : number, input : rest}}
                         Err InvalidNumStr ->
                             Err (ParsingFailure "not a number")
 
@@ -2505,7 +2574,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
         expect
             result = getNumber
-            result == Ok {val : -1234i64, input : []}
+            result == Ok {{val : -1234i64, input : []}}
         "#
     )
 }
@@ -2682,11 +2751,13 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // be, because they in fact represent to different specializations of needed encoders. In
     // particular, the lambda set `[[] + [A]:toEncoder:1 + [B]:toEncoder:1]` must be preserved,
     // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
-    indoc!(
+    &formatdoc!(
         r#"
-        app "test" imports [TotallyNotJson] provides [main] to "./platform"
+        app "test" imports [] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
+        {TAG_LEN_ENCODER_FMT}
+
+        Q a b := {{ a: a, b: b }} implements [Encoding {{toEncoder: toEncoderQ}}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -2696,10 +2767,10 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
 
                 Encode.appendWith bytes f fmt
 
-        accessor = @Q {a : A, b: B}
+        accessor = @Q {{a : A, b: B}}
 
         main =
-            Encode.toBytes accessor TotallyNotJson.json
+            Encode.toBytes accessor tagLenFmt
         "#
     )
 }
@@ -2720,11 +2791,13 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
     // such, the lambda set `[[] + Str:toEncoder:1]` should be produced during compaction, rather
     // than staying as the expanded `[[] + Str:toEncoder:1 + Str:toEncoder:1]` after the types of
     // `t.a` and `t.b` are filled in.
-    indoc!(
+    &formatdoc!(
         r#"
-        app "test" imports [TotallyNotJson] provides [main] to "./platform"
+        app "test" imports [] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
+        {TAG_LEN_ENCODER_FMT}
+
+        Q a b := {{ a: a, b: b }} implements [Encoding {{toEncoder: toEncoderQ}}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -2736,10 +2809,10 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
 
         accessor =
             x = ""
-            @Q {a : x, b: x}
+            @Q {{a : x, b: x}}
 
         main =
-            Encode.toBytes accessor TotallyNotJson.json
+            Encode.toBytes accessor tagLenFmt
         "#
     )
 }
