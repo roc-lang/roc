@@ -476,7 +476,7 @@ decodeF32 = Decode.custom \bytes, @Json {} ->
 
 # Test decode of F32
 expect
-    actual : DecodeResult F32 [TooShort]
+    actual : DecodeResult (List U8) F32 [TooShort]
     actual = Str.toUtf8 "12.34e-5" |> Decode.fromBytesPartial json
     numStr = actual.result |> Result.map Num.toStr
 
@@ -495,7 +495,7 @@ decodeF64 = Decode.custom \bytes, @Json {} ->
 
 # Test decode of F64
 expect
-    actual : DecodeResult F64 [TooShort]
+    actual : DecodeResult (List U8) F64 [TooShort]
     actual = Str.toUtf8 "12.34e-5" |> Decode.fromBytesPartial json
     numStr = actual.result |> Result.map Num.toStr
 
@@ -514,7 +514,7 @@ decodeDec = Decode.custom \bytes, @Json {} ->
 
 # Test decode of Dec
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = Str.toUtf8 "12.0034" |> Decode.fromBytesPartial json
 
     actual.result == Ok 12.0034dec
@@ -574,7 +574,7 @@ expect
 
     actual.result == Ok ("The Answer is", 42)
 
-parseExactChar : List U8, U8 -> DecodeResult {} [TooShort]
+parseExactChar : List U8, U8 -> DecodeResult (List U8) {} [TooShort]
 parseExactChar = \bytes, char ->
     when List.get bytes 0 is
         Ok c ->
@@ -587,19 +587,19 @@ parseExactChar = \bytes, char ->
 
         Err _ -> { result: Err TooShort, rest: bytes }
 
-openBracket : List U8 -> DecodeResult {} [TooShort]
+openBracket : List U8 -> DecodeResult (List U8) {} [TooShort]
 openBracket = \bytes -> parseExactChar bytes '['
 
-closingBracket : List U8 -> DecodeResult {} [TooShort]
+closingBracket : List U8 -> DecodeResult (List U8) {} [TooShort]
 closingBracket = \bytes -> parseExactChar bytes ']'
 
-anything : List U8 -> DecodeResult {} [TooShort]
+anything : List U8 -> DecodeResult (List U8) {} [TooShort]
 anything = \bytes -> { result: Err TooShort, rest: bytes }
 
-comma : List U8 -> DecodeResult {} [TooShort]
+comma : List U8 -> DecodeResult (List U8) {} [TooShort]
 comma = \bytes -> parseExactChar bytes ','
 
-tryDecode : DecodeResult a [TooShort], ({ val : a, rest : List U8 } -> DecodeResult b [TooShort]) -> DecodeResult b [TooShort]
+tryDecode : DecodeResult (List U8) a [TooShort], ({ val : a, rest : List U8 } -> DecodeResult (List U8) b [TooShort]) -> DecodeResult (List U8) b [TooShort]
 tryDecode = \{ result, rest }, mapper ->
     when result is
         Ok val -> mapper { val, rest }
@@ -715,96 +715,96 @@ expect
     actual == expected
 
 expect
-    actual : DecodeResult U16 [TooShort]
+    actual : DecodeResult (List U8) U16 [TooShort]
     actual = "+1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Err TooShort, rest: ['+', '1'] }
     actual == expected
 
 expect
-    actual : DecodeResult U16 [TooShort]
+    actual : DecodeResult (List U8) U16 [TooShort]
     actual = ".0" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Err TooShort, rest: ['.', '0'] }
     actual == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "-.1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     actual.result == Err TooShort
 
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = "72" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok 72dec
     actual.result == expected
 
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = "-0" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok 0dec
     actual.result == expected
 
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = "-7" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok -7dec
     actual.result == expected
 
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = "-0\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 0dec, rest: ['\n'] }
     actual == expected
 
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = "123456789000 \n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 123456789000dec, rest: [' ', '\n'] }
     actual == expected
 
 expect
-    actual : DecodeResult Dec [TooShort]
+    actual : DecodeResult (List U8) Dec [TooShort]
     actual = "-12.03" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok -12.03
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "-12." |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "01.1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = ".0" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "1.e1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "-1.2E" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "0.1e+" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
-    actual : DecodeResult U64 [TooShort]
+    actual : DecodeResult (List U8) U64 [TooShort]
     actual = "-03" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
@@ -1172,7 +1172,7 @@ ArrayClosingState : [
 expect
     input = Str.toUtf8 "[ ]"
 
-    actual : DecodeResult (List U8) [TooShort]
+    actual : DecodeResult (List U8) (List U8) [TooShort]
     actual = Decode.fromBytesPartial input json
 
     actual.result == Ok []
@@ -1181,7 +1181,7 @@ expect
 expect
     input = Str.toUtf8 "\n[\t 1 , 2  , 3]"
 
-    actual : DecodeResult (List U64) [TooShort]
+    actual : DecodeResult (List U8) (List U64) [TooShort]
     actual = Decode.fromBytesPartial input json
 
     expected = Ok [1, 2, 3]
@@ -1192,7 +1192,7 @@ expect
 expect
     input = Str.toUtf8 "\n\t [\n \"one\"\r , \"two\" , \n\"3\"\t]"
 
-    actual : DecodeResult (List Str) [TooShort]
+    actual : DecodeResult (List U8) (List Str) [TooShort]
     actual = Decode.fromBytesPartial input json
     expected = Ok ["one", "two", "3"]
 
