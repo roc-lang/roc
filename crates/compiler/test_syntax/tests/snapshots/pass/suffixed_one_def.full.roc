@@ -14,3 +14,11 @@ main =
 
     C.z "Bar"
 
+    # is this a valid statement?
+    "Foo" |> D.x?
+
+    # what about this?
+    "Bar" |> E.y? 
+        { config: "config" }
+
+    F.z "Bar"

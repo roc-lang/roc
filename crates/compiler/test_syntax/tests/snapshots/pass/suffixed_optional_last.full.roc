@@ -2,7 +2,7 @@ app ""
     packages {
         cli: "",
     }
-    imports []
+    imports [cli.Stdout, cli.Task]
     provides [main] to cli
 
 main = 
@@ -10,3 +10,9 @@ main =
         |> Cmd.new
         |> Cmd.status
         |> Task.mapErr! UnableToCheckJQVersion
+
+
+    "jq --version"
+        |> Cmd.new
+        |> Cmd.status?
+        |> Stdout.line
