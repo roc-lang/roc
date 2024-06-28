@@ -1,11 +1,13 @@
-use bumpalo::{collections::Vec, Bump};
+use bumpalo::{
+    collections::{CollectIn, Vec},
+    Bump,
+};
 use roc_collections::{MutMap, ReferenceMatrix};
-use roc_error_macros::todo_lambda_erasure;
 use roc_module::symbol::Symbol;
 
 use crate::{
     inc_dec::Ownership,
-    ir::{Call, CallType, Expr, Proc, ProcLayout, Stmt},
+    ir::{Call, CallType, Expr, JoinPointId, Param, Proc, ProcLayout, Stmt},
     layout::{Builtin, InLayout, LayoutInterner, LayoutRepr, Niche},
 };
 
@@ -46,8 +48,10 @@ impl BorrowSignature {
         }
     }
 
-    fn set(&mut self, index: usize, ownership: Ownership) {
+    fn set(&mut self, index: usize, ownership: Ownership) -> bool {
         assert!(index < self.len());
+
+        let modified = self.get(index) != Some(&ownership);
 
         let mask = 1 << (index + 8);
 
@@ -55,6 +59,8 @@ impl BorrowSignature {
             Ownership::Owned => self.0 |= mask,
             Ownership::Borrowed => self.0 &= !mask,
         }
+
+        modified
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Ownership> + '_ {
@@ -76,27 +82,35 @@ impl std::ops::Index<usize> for BorrowSignature {
     }
 }
 
-pub(crate) type BorrowSignatures<'a> = MutMap<(Symbol, ProcLayout<'a>), BorrowSignature>;
+pub(crate) struct BorrowSignatures<'a> {
+    pub(crate) procs: MutMap<(Symbol, ProcLayout<'a>), BorrowSignature>,
+}
 
 pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
     arena: &'a Bump,
     interner: &impl LayoutInterner<'a>,
     procs: &'b MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> BorrowSignatures<'a> {
-    let mut borrow_signatures: BorrowSignatures = procs
-        .iter()
-        .map(|(_key, proc)| {
-            let mut signature = BorrowSignature::new(proc.args.len());
+    let mut borrow_signatures: BorrowSignatures = BorrowSignatures {
+        procs: procs
+            .iter()
+            .map(|(_key, proc)| {
+                let mut signature = BorrowSignature::new(proc.args.len());
 
-            let key = (proc.name.name(), proc.proc_layout(arena));
+                let key = (proc.name.name(), proc.proc_layout(arena));
 
-            for (i, in_layout) in key.1.arguments.iter().enumerate() {
-                signature.set(i, layout_to_ownership(*in_layout, interner));
-            }
+                for (i, in_layout) in key.1.arguments.iter().enumerate() {
+                    signature.set(i, layout_to_ownership(*in_layout, interner));
+                }
 
-            (key, signature)
-        })
-        .collect();
+                (key, signature)
+            })
+            .collect(),
+    };
+
+    let mut join_points: Vec<_> = std::iter::repeat_with(MutMap::default)
+        .take(procs.len())
+        .collect_in(arena);
 
     // next we first partition the functions into strongly connected components, then do a
     // topological sort on these components, finally run the fix-point borrow analysis on each
@@ -104,6 +118,9 @@ pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
 
     let matrix = construct_reference_matrix(arena, procs);
     let sccs = matrix.strongly_connected_components_all();
+
+    let mut join_point_stack = Vec::new_in(arena);
+    let mut proc_join_points = MutMap::default();
 
     for (group, _) in sccs.groups() {
         // This is a fixed-point analysis
@@ -121,22 +138,38 @@ pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
                 let (_, proc) = procs.iter().nth(index).unwrap();
                 let key = (proc.name.name(), proc.proc_layout(arena));
 
+                std::mem::swap(&mut proc_join_points, &mut join_points[index]);
+
                 if proc.args.is_empty() {
                     continue;
                 }
 
                 let mut state = State {
                     args: proc.args,
-                    borrow_signature: *borrow_signatures.get(&key).unwrap(),
+                    borrow_signature: *borrow_signatures.procs.get(&key).unwrap(),
+                    join_point_stack,
+                    join_points: proc_join_points,
+                    modified: false,
                 };
 
-                state.inspect_stmt(&mut borrow_signatures, &proc.body);
+                state.inspect_stmt(interner, &mut borrow_signatures, &proc.body);
 
-                let Some(old) = borrow_signatures.insert(key, state.borrow_signature) else {
+                let Some(old) = borrow_signatures.procs.insert(key, state.borrow_signature) else {
                     unreachable!("key should be present");
                 };
 
-                modified |= old != state.borrow_signature
+                // TODO I think this should use state.modified, but that loops infinitely currently
+                // also maybe a change in join point signature is always immediately reflected in a
+                // change in proc signature, in which case using the join point changes may not
+                // have any effect.
+                modified |= old != state.borrow_signature;
+
+                proc_join_points = state.join_points;
+
+                std::mem::swap(&mut proc_join_points, &mut join_points[index]);
+
+                join_point_stack = state.join_point_stack;
+                join_point_stack.clear();
             }
 
             if !modified {
@@ -156,7 +189,7 @@ fn infer_borrow_signature<'a>(
     proc: &'a Proc<'a>,
 ) -> BorrowSignature {
     let mut state = State::new(arena, interner, borrow_signatures, proc);
-    state.inspect_stmt(borrow_signatures, &proc.body);
+    state.inspect_stmt(interner, borrow_signatures, &proc.body);
     state.borrow_signature
 }
 
@@ -165,6 +198,9 @@ struct State<'a> {
     /// for which borrow inference might decide to pass as borrowed
     args: &'a [(InLayout<'a>, Symbol)],
     borrow_signature: BorrowSignature,
+    join_point_stack: Vec<'a, (JoinPointId, &'a [Param<'a>])>,
+    join_points: MutMap<JoinPointId, BorrowSignature>,
+    modified: bool,
 }
 
 fn layout_to_ownership<'a>(
@@ -172,7 +208,8 @@ fn layout_to_ownership<'a>(
     interner: &impl LayoutInterner<'a>,
 ) -> Ownership {
     match interner.get_repr(in_layout) {
-        LayoutRepr::Builtin(Builtin::Str | Builtin::List(_)) => Ownership::Borrowed,
+        LayoutRepr::Builtin(Builtin::Str) => Ownership::Borrowed,
+        LayoutRepr::Builtin(Builtin::List(_)) => Ownership::Borrowed,
         LayoutRepr::LambdaSet(inner) => {
             layout_to_ownership(inner.runtime_representation(), interner)
         }
@@ -190,7 +227,7 @@ impl<'a> State<'a> {
         let key = (proc.name.name(), proc.proc_layout(arena));
 
         // initialize the borrow signature based on the layout if first time
-        let borrow_signature = borrow_signatures.entry(key).or_insert_with(|| {
+        let borrow_signature = borrow_signatures.procs.entry(key).or_insert_with(|| {
             let mut borrow_signature = BorrowSignature::new(proc.args.len());
 
             for (i, in_layout) in key.1.arguments.iter().enumerate() {
@@ -203,6 +240,9 @@ impl<'a> State<'a> {
         Self {
             args: proc.args,
             borrow_signature: *borrow_signature,
+            join_point_stack: Vec::new_in(arena),
+            join_points: MutMap::default(),
+            modified: false,
         }
     }
 
@@ -211,15 +251,30 @@ impl<'a> State<'a> {
     /// Currently argument symbols participate if `layout_to_ownership` returns `Borrowed` for their layout.
     fn mark_owned(&mut self, symbol: Symbol) {
         if let Some(index) = self.args.iter().position(|(_, s)| *s == symbol) {
-            self.borrow_signature.set(index, Ownership::Owned);
+            self.modified |= self.borrow_signature.set(index, Ownership::Owned);
+        }
+
+        for (id, params) in &self.join_point_stack {
+            if let Some(index) = params.iter().position(|p| p.symbol == symbol) {
+                self.modified |= self
+                    .join_points
+                    .get_mut(id)
+                    .unwrap()
+                    .set(index, Ownership::Owned);
+            }
         }
     }
 
-    fn inspect_stmt(&mut self, borrow_signatures: &mut BorrowSignatures<'a>, stmt: &'a Stmt<'a>) {
+    fn inspect_stmt(
+        &mut self,
+        interner: &impl LayoutInterner<'a>,
+        borrow_signatures: &mut BorrowSignatures<'a>,
+        stmt: &'a Stmt<'a>,
+    ) {
         match stmt {
             Stmt::Let(_, expr, _, stmt) => {
                 self.inspect_expr(borrow_signatures, expr);
-                self.inspect_stmt(borrow_signatures, stmt);
+                self.inspect_stmt(interner, borrow_signatures, stmt);
             }
             Stmt::Switch {
                 branches,
@@ -227,9 +282,9 @@ impl<'a> State<'a> {
                 ..
             } => {
                 for (_, _, stmt) in branches.iter() {
-                    self.inspect_stmt(borrow_signatures, stmt);
+                    self.inspect_stmt(interner, borrow_signatures, stmt);
                 }
-                self.inspect_stmt(borrow_signatures, default_branch.1);
+                self.inspect_stmt(interner, borrow_signatures, default_branch.1);
             }
             Stmt::Ret(s) => {
                 // to return a value we must own it
@@ -239,20 +294,47 @@ impl<'a> State<'a> {
             Stmt::Refcounting(_, _) => unreachable!("not inserted yet"),
             Stmt::Expect { remainder, .. } | Stmt::ExpectFx { remainder, .. } => {
                 // based on my reading of inc_dec.rs, expect borrows the symbols
-                self.inspect_stmt(borrow_signatures, remainder);
+                self.inspect_stmt(interner, borrow_signatures, remainder);
             }
             Stmt::Dbg { remainder, .. } => {
                 // based on my reading of inc_dec.rs, expect borrows the symbol
-                self.inspect_stmt(borrow_signatures, remainder);
+                self.inspect_stmt(interner, borrow_signatures, remainder);
             }
             Stmt::Join {
-                body, remainder, ..
+                id,
+                parameters,
+                body,
+                remainder,
             } => {
-                self.inspect_stmt(borrow_signatures, body);
-                self.inspect_stmt(borrow_signatures, remainder);
+                self.join_points.entry(*id).or_insert_with(|| {
+                    let mut signature = BorrowSignature::new(parameters.len());
+
+                    for (i, param) in parameters.iter().enumerate() {
+                        signature.set(i, layout_to_ownership(param.layout, interner));
+                    }
+
+                    signature
+                });
+                self.join_point_stack.push((*id, parameters));
+                self.inspect_stmt(interner, borrow_signatures, body);
+                self.join_point_stack.pop().unwrap();
+                self.inspect_stmt(interner, borrow_signatures, remainder);
             }
 
-            Stmt::Jump(_, _) | Stmt::Crash(_, _) => { /* not relevant for ownership */ }
+            Stmt::Jump(id, arguments) => {
+                let borrow_signature = match self.join_points.get(id) {
+                    Some(s) => *s,
+                    None => unreachable!("no borrow signature for join point {id:?} layout"),
+                };
+
+                for (argument, ownership) in arguments.iter().zip(borrow_signature.iter()) {
+                    if let Ownership::Owned = ownership {
+                        self.mark_owned(*argument);
+                    }
+                }
+            }
+
+            Stmt::Crash(_, _) => { /* not relevant for ownership */ }
         }
     }
 
@@ -281,10 +363,11 @@ impl<'a> State<'a> {
                     niche: Niche::NONE,
                 };
 
-                let borrow_signature = match borrow_signatures.get(&(name.name(), proc_layout)) {
-                    Some(s) => s,
-                    None => unreachable!("no borrow signature for {name:?} layout"),
-                };
+                let borrow_signature =
+                    match borrow_signatures.procs.get(&(name.name(), proc_layout)) {
+                        Some(s) => s,
+                        None => unreachable!("no borrow signature for {name:?} layout"),
+                    };
 
                 for (argument, ownership) in arguments.iter().zip(borrow_signature.iter()) {
                     if let Ownership::Owned = ownership {

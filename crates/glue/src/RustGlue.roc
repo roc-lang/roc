@@ -1286,6 +1286,7 @@ writeIndents = \buf, indents ->
         |> Str.concat indent
         |> writeIndents (indents - 1)
 
+writeTagImpls : Str, List { name : Str, payload : [Some TypeId, None] }, Str, U64, (Str, [Some TypeId, None] -> Str) -> Str
 writeTagImpls = \buf, tags, discriminantName, indents, f ->
     buf
     |> writeIndents indents

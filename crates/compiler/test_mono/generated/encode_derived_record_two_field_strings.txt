@@ -93,7 +93,6 @@ procedure List.92 (#Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_g
             ret List.164;
     in
     inc #Derived_gen.17;
-    inc #Derived_gen.18;
     jump List.577 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21;
 
 procedure Num.127 (#Attr.2):
@@ -178,7 +177,6 @@ procedure Test.67 (Test.68, Test.262, Test.66):
     let Test.69 : List U8 = CallByName Test.3 Test.68 Test.290 Test.291;
     let Test.265 : {} = Struct {};
     let Test.264 : List U8 = CallByName List.18 Test.66 Test.69 Test.265;
-    dec Test.69;
     ret Test.264;
 
 procedure Test.70 (Test.71, Test.266):

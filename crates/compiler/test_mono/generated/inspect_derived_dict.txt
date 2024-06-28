@@ -141,7 +141,6 @@ procedure Dict.38 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
                 let Dict.766 : U32 = CallByName Num.131 Dict.236;
                 let Dict.752 : {U32, U32} = Struct {Dict.766, Dict.224};
                 let Dict.237 : List {U32, U32} = CallByName Dict.67 Dict.221 Dict.752 Dict.223;
-                dec Dict.221;
                 let Dict.751 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.237, Dict.235, Dict.227, Dict.228, Dict.229};
                 ret Dict.751;
             else
@@ -150,8 +149,6 @@ procedure Dict.38 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
                 let Dict.239 : U32 = CallByName Dict.48 Dict.224;
                 jump Dict.736 Dict.221 Dict.222 Dict.238 Dict.239 Dict.225 Dict.226 Dict.227 Dict.228 Dict.229;
     in
-    inc #Derived_gen.0;
-    inc #Derived_gen.1;
     inc #Derived_gen.4;
     jump Dict.736 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8;
 
@@ -232,7 +229,6 @@ procedure Dict.59 (Dict.719):
         let Dict.381 : List {U32, U32} = StructAtIndex 0 Dict.855;
         let Dict.382 : U64 = StructAtIndex 1 Dict.855;
         let Dict.383 : List {U32, U32} = CallByName Dict.64 Dict.381 Dict.376 Dict.380;
-        dec Dict.381;
         let Dict.837 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.383, Dict.376, Dict.382, Dict.378, Dict.380};
         ret Dict.837;
     else
@@ -324,7 +320,6 @@ procedure Dict.67 (#Derived_gen.28, #Derived_gen.29, #Derived_gen.30):
             let Dict.754 : List {U32, U32} = CallByName List.3 Dict.414 Dict.416 Dict.415;
             ret Dict.754;
     in
-    inc #Derived_gen.28;
     jump Dict.753 #Derived_gen.28 #Derived_gen.29 #Derived_gen.30;
 
 procedure Dict.68 (Dict.419, Dict.420):
@@ -422,8 +417,6 @@ procedure Dict.8 (Dict.210, Dict.211, Dict.212):
         let Dict.219 : U32 = CallByName Dict.70 Dict.218;
         let Dict.220 : U64 = CallByName Dict.71 Dict.218 Dict.217;
         let Dict.735 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.38 Dict.213 Dict.214 Dict.220 Dict.219 Dict.211 Dict.212 Dict.215 Dict.216 Dict.217;
-        dec Dict.214;
-        dec Dict.213;
         dec Dict.211;
         ret Dict.735;
     in
@@ -900,7 +893,6 @@ procedure Inspect.60 (Inspect.298):
 procedure List.11 (List.138, List.139):
     let List.636 : List {U32, U32} = CallByName List.68 List.139;
     let List.635 : List {U32, U32} = CallByName List.90 List.138 List.139 List.636;
-    dec List.636;
     ret List.635;
 
 procedure List.18 (List.160, List.161, List.162):
@@ -1011,7 +1003,6 @@ procedure List.90 (#Derived_gen.33, #Derived_gen.34, #Derived_gen.35):
         else
             ret List.142;
     in
-    inc #Derived_gen.35;
     jump List.625 #Derived_gen.33 #Derived_gen.34 #Derived_gen.35;
 
 procedure List.92 (#Derived_gen.50, #Derived_gen.51, #Derived_gen.52, #Derived_gen.53, #Derived_gen.54):
@@ -1055,7 +1046,6 @@ procedure List.93 (#Derived_gen.23, #Derived_gen.24, #Derived_gen.25, #Derived_g
             let List.622 : {Str, I64} = CallByName List.66 List.172 List.175;
             inc List.622;
             let List.177 : List {U32, U32} = CallByName Dict.398 List.173 List.622 List.175 List.174;
-            dec List.173;
             let List.621 : U64 = 1i64;
             let List.620 : U64 = CallByName Num.51 List.175 List.621;
             jump List.616 List.172 List.177 List.174 List.620 List.176;
@@ -1063,7 +1053,6 @@ procedure List.93 (#Derived_gen.23, #Derived_gen.24, #Derived_gen.25, #Derived_g
             dec List.172;
             ret List.173;
     in
-    inc #Derived_gen.24;
     inc #Derived_gen.23;
     jump List.616 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26 #Derived_gen.27;
 

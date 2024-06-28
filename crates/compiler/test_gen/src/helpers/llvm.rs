@@ -29,7 +29,8 @@ const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 #[allow(dead_code)]
 pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
-    OptLevel::Normal
+    // OptLevel::Normal
+    OptLevel::Optimize
 } else {
     OptLevel::Optimize
 };

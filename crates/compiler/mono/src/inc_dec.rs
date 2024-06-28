@@ -38,7 +38,7 @@ pub fn insert_inc_dec_operations<'a>(
     let borrow_signatures = crate::borrow::infer_borrow_signatures(arena, layout_interner, ps);
     let borrow_signatures = arena.alloc(borrow_signatures);
 
-    //    for ((s, _), sig) in borrow_signatures.iter() {
+    //    for ((s, _), sig) in borrow_signatures.procs.iter() {
     //        dbg!((s, sig));
     //    }
 
@@ -58,10 +58,8 @@ pub fn insert_inc_dec_operations<'a>(
     }
 }
 
-/**
-Enum indicating whether a symbol should be reference counted or not.
-This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
-*/
+/// Enum indicating whether a symbol should be reference counted or not.
+/// This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
 #[derive(Copy, Clone)]
 enum VarRcType {
     ReferenceCounted,
@@ -435,6 +433,7 @@ fn insert_inc_dec_operations_proc<'a>(
 
     // Add all arguments to the environment (if they are reference counted)
     let borrow_signature = borrow_signatures
+        .procs
         .get(&(proc.name.name(), proc.proc_layout(arena)))
         .unwrap();
     for ((_, symbol), ownership) in proc.args.iter().zip(borrow_signature.iter()) {
@@ -1008,10 +1007,6 @@ fn insert_refcount_operations_binding<'a>(
                     ret_layout,
                     ..
                 } => {
-                    //                    let new_let = new_let!(stmt);
-                    //
-                    //                    inc_owned!(arguments.iter().copied(), new_let)
-
                     let proc_layout = ProcLayout {
                         arguments: arg_layouts,
                         result: ret_layout,
@@ -1020,6 +1015,7 @@ fn insert_refcount_operations_binding<'a>(
 
                     let borrow_signature = match environment
                         .borrow_signatures
+                        .procs
                         .get(&(name.name(), proc_layout))
                     {
                         Some(s) => s,

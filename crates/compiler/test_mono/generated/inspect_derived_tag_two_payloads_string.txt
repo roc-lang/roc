@@ -37,7 +37,6 @@ procedure Inspect.202 (Inspect.203, #Attr.12):
     let Inspect.321 : Str = CallByName Inspect.59 Inspect.333 Inspect.335;
     dec Inspect.335;
     let Inspect.317 : Str = CallByName Inspect.204 Inspect.321 Inspect.336;
-    dec Inspect.321;
     dec Inspect.336;
     let Inspect.318 : Str = ")";
     let Inspect.316 : Str = CallByName Inspect.59 Inspect.317 Inspect.318;
@@ -171,7 +170,6 @@ procedure List.92 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_g
             dec List.163;
             ret List.164;
     in
-    inc #Derived_gen.14;
     inc #Derived_gen.13;
     jump List.577 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
 

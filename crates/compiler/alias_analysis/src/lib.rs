@@ -349,8 +349,9 @@ where
     }
 
     match opt_level {
-        OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
+        // OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
+        // OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
+        _ => morphic_lib::solve_trivial(program),
     }
 }
 
