@@ -755,28 +755,6 @@ pub fn desugar_expr<'a>(
             })
         }
 
-        // Replace an empty final def with a `Task.ok {}`
-        EmptyDefsFinal => {
-            let mut apply_args: Vec<&'a Loc<Expr<'a>>> = Vec::new_in(arena);
-            apply_args
-                .push(arena.alloc(Loc::at(loc_expr.region, Expr::Record(Collection::empty()))));
-
-            arena.alloc(Loc::at(
-                loc_expr.region,
-                Expr::Apply(
-                    arena.alloc(Loc::at(
-                        loc_expr.region,
-                        Expr::Var {
-                            module_name: ModuleName::TASK,
-                            ident: "ok",
-                        },
-                    )),
-                    arena.alloc(apply_args),
-                    CalledVia::BangSuffix,
-                ),
-            ))
-        }
-
         // note this only exists after desugaring
         LowLevelDbg(_, _, _) => loc_expr,
     }
