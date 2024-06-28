@@ -6,10 +6,10 @@ procedure List.5 (#Attr.2, #Attr.3):
 procedure Test.2 (Test.5):
     let Test.6 : List [<rnnu>C List *self] = UnionAtIndex (Id 0) (Index 0) Test.5;
     inc Test.6;
-    let #Derived_gen.1 : [<rnnu>C List *self] = Reset { symbol: Test.5, id: UpdateModeId { id: 0 } };
+    let #Derived_gen.2 : [<rnnu>C List *self] = Reset { symbol: Test.5, id: UpdateModeId { id: 1 } };
     let Test.15 : {} = Struct {};
     let Test.7 : List [<rnnu>C List *self] = CallByName List.5 Test.6 Test.15;
-    let Test.14 : [<rnnu>C List *self] = Reuse #Derived_gen.1 UpdateModeId { id: 0 } TagId(0) Test.7;
+    let Test.14 : [<rnnu>C List *self] = Reuse #Derived_gen.2 UpdateModeId { id: 1 } TagId(0) Test.7;
     ret Test.14;
 
 procedure Test.0 ():

@@ -131,7 +131,6 @@ impl ModuleName {
     pub const HASH: &'static str = "Hash";
     pub const INSPECT: &'static str = "Inspect";
     pub const TASK: &'static str = "Task";
-    pub const JSON: &'static str = "TotallyNotJson";
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
