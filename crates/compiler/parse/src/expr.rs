@@ -1368,16 +1368,20 @@ fn parse_defs_end<'a>(
                     Either::Second(value_def) => {
                         // If we got a ValueDef::Body, check if a type annotation preceded it.
                         // If so, we may need to combine them into an AnnotatedBody.
-                        let joined = match value_def {
-                            ValueDef::Body(loc_pattern, loc_def_expr)
-                                if spaces_before_current.len() <= 1 =>
-                            {
+                        let joined_def = match value_def {
+                            ValueDef::Body(loc_pattern, loc_def_expr) => {
                                 let region =
                                     Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
+                                let signature_must_match_value = spaces_before_current.len() <= 1;
+                                let value_name = &loc_pattern.value;
+
                                 match defs.last() {
-                                    Some(Err(ValueDef::Annotation(ann_pattern, ann_type))) => {
-                                        let (value_def, region) = join_ann_to_body!(
+                                    Some(Err(ValueDef::Annotation(ann_pattern, ann_type)))
+                                        if signature_must_match_value
+                                            || ann_pattern.value.equivalent(value_name) =>
+                                    {
+                                        Some(join_ann_to_body!(
                                             arena,
                                             loc_pattern,
                                             loc_def_expr,
@@ -1385,21 +1389,19 @@ fn parse_defs_end<'a>(
                                             ann_type,
                                             spaces_before_current,
                                             region
-                                        );
-
-                                        defs.replace_with_value_def(
-                                            defs.tags.len() - 1,
-                                            value_def,
-                                            region,
-                                        );
-
-                                        true
+                                        ))
                                     }
                                     Some(Ok(TypeDef::Alias {
                                         header,
                                         ann: ann_type,
-                                    })) => {
-                                        let (value_def, region) = join_alias_to_body!(
+                                    })) if signature_must_match_value
+                                        || header
+                                            .vars
+                                            .first()
+                                            .map(|var| var.value.equivalent(value_name))
+                                            .unwrap_or(false) =>
+                                    {
+                                        Some(join_alias_to_body!(
                                             arena,
                                             loc_pattern,
                                             loc_def_expr,
@@ -1407,24 +1409,16 @@ fn parse_defs_end<'a>(
                                             ann_type,
                                             spaces_before_current,
                                             region
-                                        );
-
-                                        defs.replace_with_value_def(
-                                            defs.tags.len() - 1,
-                                            value_def,
-                                            region,
-                                        );
-
-                                        true
+                                        ))
                                     }
-                                    _ => false,
+                                    _ => None,
                                 }
                             }
-                            _ => false,
+                            _ => None,
                         };
-
-                        if !joined {
-                            // the previous and current def can't be joined up
+                        if let Some((joined_def, region)) = joined_def {
+                            defs.replace_with_value_def(defs.tags.len() - 1, joined_def, region);
+                        } else {
                             defs.push_value_def(
                                 value_def,
                                 region,
