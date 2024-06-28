@@ -9,7 +9,9 @@ We are committed to providing a friendly, safe and welcoming environment for all
 All contributions are appreciated! Typo fixes, bug fixes, feature requests,
 bug reports...
 
-For a good place to start, consider reaching out on the `#contributing` channel on [our zulip group chat][roc-zulip].
+For ideas, proposals and feature request, [click here](https://www.roc-lang.org/community#ideas), for all other contributions, read on.
+
+For a good place to start, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) or reach out on the `#contributing` channel on [our zulip group chat][roc-zulip].
 Before making your first pull request, talk to an existing contributor on [zulip][roc-zulip] about what you plan to do! This can avoid duplicated effort or a rejection because the change doesn't fit with the goals of the language.
 
 If you are interested in larger, implementation- or research-heavy projects
