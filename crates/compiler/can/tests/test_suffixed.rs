@@ -900,6 +900,19 @@ mod suffixed_tests {
             r#"Defs { tags: [Index(2147483648)], regions: [@0-266], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-266 When(@28-29 Var { module_name: "", ident: "x" }, [WhenBranch { patterns: [@53-54 Tag("A")], value: @82-214 Defs(Defs { tags: [Index(2147483649)], regions: [@86-88], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@82-83 Identifier { ident: "y" }, @86-88 Num("42")), Body(@82-83 Identifier { ident: "y" }, @86-88 Num("42"))] }, @114-214 If([(@117-118 Var { module_name: "", ident: "a" }, @152-154 Var { module_name: "", ident: "b" })], @212-214 Var { module_name: "", ident: "c" })), guard: None }, WhenBranch { patterns: [@235-236 Tag("B")], value: @264-266 Var { module_name: "", ident: "d" }, guard: None }]))] }"#,
         );
     }
+
+    #[test]
+    fn dbg_stmt_arg() {
+        run_test(
+            r#"
+            main =
+                dbg a!
+
+                b
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-48], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-48 Apply(@0-48 Var { module_name: "Task", ident: "await" }, [@27-29 Var { module_name: "", ident: "a" }, @0-48 Closure([@27-29 Identifier { ident: "#!a0" }], @0-48 LowLevelDbg(("test.roc:3", "  "), @27-29 Apply(@27-29 Var { module_name: "Inspect", ident: "toStr" }, [@27-29 Var { module_name: "", ident: "#!a0" }], Space), @47-48 Var { module_name: "", ident: "b" }))], BangSuffix))] }"##,
+        )
+    }
 }
 
 #[cfg(test)]
