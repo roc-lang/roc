@@ -167,7 +167,7 @@ pub(crate) fn infer_borrow_signatures<'a>(
                 // NOTE: this does not directly include updates to join point signatures. The
                 // assumption is that a relevant change in join point signature is immediately
                 // (i.e. no fixpoint is required) reflected in the proc signature.
-                debug_assert_eq!(
+                assert_eq!(
                     state.modified,
                     borrow_signatures
                         .procs
