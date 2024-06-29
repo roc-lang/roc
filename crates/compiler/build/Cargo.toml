@@ -17,6 +17,7 @@ roc_error_macros = { path = "../../error_macros" }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_gen_llvm = { path = "../gen_llvm" }
 roc_gen_wasm = { path = "../gen_wasm" }
+roc_wasm_module = { path = "../../wasm_module"}
 roc_linker = { path = "../../linker" }
 roc_load = { path = "../load" }
 roc_module = { path = "../module" }
