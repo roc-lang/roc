@@ -2311,7 +2311,6 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "roc_wasm_module",
  "serde_json",
  "target-lexicon",
  "tempfile",
