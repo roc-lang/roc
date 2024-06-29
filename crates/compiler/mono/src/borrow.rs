@@ -162,15 +162,20 @@ pub(crate) fn infer_borrow_signatures<'a>(
 
                 state.inspect_stmt(interner, &mut borrow_signatures, &proc.body);
 
-                let Some(old) = borrow_signatures.procs.insert(key, state.borrow_signature) else {
-                    unreachable!("key should be present");
-                };
-
-                // TODO I think this should use state.modified, but that loops infinitely currently
-                // also maybe a change in join point signature is always immediately reflected in a
-                // change in proc signature, in which case using the join point changes may not
-                // have any effect.
-                modified |= old != state.borrow_signature;
+                // did any proc signature get modified?
+                //
+                // NOTE: this does not directly include updates to join point signatures. The
+                // assumption is that a relevant change in join point signature is immediately
+                // (i.e. no fixpoint is required) reflected in the proc signature.
+                debug_assert_eq!(
+                    state.modified,
+                    borrow_signatures
+                        .procs
+                        .insert(key, state.borrow_signature)
+                        .unwrap()
+                        != state.borrow_signature
+                );
+                modified |= state.modified;
 
                 proc_join_points = state.join_points;
 
@@ -257,10 +262,12 @@ impl<'state, 'a> State<'state, 'a> {
             self.modified |= self.borrow_signature.set(index, Ownership::Owned);
         }
 
+        // theory: relevant modification to a join point borrow signature is always immediately
+        // reflected in the borrow signature of its surrounding function. Therefore we don't need
+        // to include changes to join point signatures in the `modified` flag.
         for (id, params) in &self.join_point_stack {
             if let Some(index) = params.iter().position(|p| p.symbol == symbol) {
-                self.modified |= self
-                    .join_points
+                self.join_points
                     .get_mut(id)
                     .unwrap()
                     .set(index, Ownership::Owned);

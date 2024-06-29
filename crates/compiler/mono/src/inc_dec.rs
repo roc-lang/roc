@@ -734,13 +734,11 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             body,
             remainder,
         } => {
-            // Assuming that the values in the closure of the body of this jointpoint are already bound.
-            // Assuming that all symbols are still owned. (So that we can determine what symbols got consumed in the join point.)
+            // NOTE: Assuming that the values in the closure of the body of this jointpoint are already bound.
 
-            //            debug_assert!(environment
-            //                .symbols_ownership
-            //                .iter()
-            //                .all(|(_, ownership)| ownership.is_owned()));
+            // NOTE: this code previously assumed that all symbols bound by the join point are owned.
+            // With borrow inference, that is no longer true but the analysis here _should_ mirror
+            // borrow inference and yield the same result.
 
             let mut body_env = environment.clone();
 
