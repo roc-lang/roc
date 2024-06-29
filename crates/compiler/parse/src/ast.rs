@@ -634,6 +634,16 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
     }
 }
 
+pub fn is_top_level_expr_suffixed(expr: &Expr) -> bool {
+    match expr {
+        Expr::TaskAwaitBang(..) => true,
+        Expr::ParensAround(sub_loc_expr) => is_top_level_expr_suffixed(sub_loc_expr),
+        Expr::SpaceBefore(a, _) => is_top_level_expr_suffixed(a),
+        Expr::SpaceAfter(a, _) => is_top_level_expr_suffixed(a),
+        _ => false,
+    }
+}
+
 fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
     is_expr_suffixed(&branch.value.value)
         || branch
@@ -1186,45 +1196,32 @@ impl<'a> Defs<'a> {
     // We could have a type annotation as the last tag,
     // this helper ensures we refer to the last value_def
     // and that we remove the correct tag
-    pub fn last_value_suffixed(&self) -> Option<(Self, &'a Loc<Expr<'a>>)> {
-        let value_indexes =
-            self.tags
-                .clone()
-                .into_iter()
-                .enumerate()
-                .filter_map(|(tag_index, tag)| match tag.split() {
-                    Ok(_) => None,
-                    Err(value_index) => Some((tag_index, value_index.index())),
-                });
-
-        if let Some((tag_index, value_index)) = value_indexes.last() {
-            match self.value_defs[value_index] {
-                ValueDef::Body(
-                    Loc {
-                        value: Pattern::RecordDestructure(collection),
-                        ..
-                    },
-                    loc_expr,
-                ) if collection.is_empty() && is_expr_suffixed(&loc_expr.value) => {
-                    let mut new_defs = self.clone();
-                    new_defs.remove_value_def(tag_index);
-
-                    return Some((new_defs, loc_expr));
-                }
-                ValueDef::Stmt(loc_expr) if is_expr_suffixed(&loc_expr.value) => {
-                    let mut new_defs = self.clone();
-                    new_defs.remove_value_def(tag_index);
-
-                    return Some((new_defs, loc_expr));
-                }
-                _ => {}
-            }
-        }
-
-        None
+    pub fn last_value_suffixed(&self) -> Option<(usize, &'a Loc<Expr<'a>>)> {
+        self.tags
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(tag_index, tag)| match tag.split() {
+                Ok(_) => None,
+                Err(value_index) => match self.value_defs[value_index.index()] {
+                    ValueDef::Body(
+                        Loc {
+                            value: Pattern::RecordDestructure(collection),
+                            ..
+                        },
+                        loc_expr,
+                    ) if collection.is_empty() && is_expr_suffixed(&loc_expr.value) => {
+                        Some((tag_index, loc_expr))
+                    }
+                    ValueDef::Stmt(loc_expr) if is_expr_suffixed(&loc_expr.value) => {
+                        Some((tag_index, loc_expr))
+                    }
+                    _ => None,
+                },
+            })
     }
 
-    pub fn remove_value_def(&mut self, index: usize) {
+    pub fn remove_tag(&mut self, index: usize) {
         match self
             .tags
             .get(index)

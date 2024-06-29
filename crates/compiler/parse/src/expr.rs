@@ -1,9 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation,
-    TypeDef, TypeHeader, ValueDef,
+    is_expr_suffixed, is_top_level_expr_suffixed, AssignedField, Collection, CommentOrNewline,
+    Defs, Expr, ExtractSpaces, Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword,
+    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+    ModuleImport, ModuleImportParams, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -1467,35 +1467,34 @@ fn parse_defs_expr<'a>(
                     // If the last def was a suffixed statement, assume this was
                     // intentional by the application author instead of giving
                     // an error.
-                    if let Some((new_defs, loc_ret)) = def_state.last_value_suffixed() {
-                        // note we check the tags here and not value_defs, as there may be redundant defs in Defs
-
-                        let mut local_defs = new_defs.clone();
-
-                        let last_stmt = ValueDef::Stmt(loc_ret);
-                        local_defs.push_value_def(last_stmt, loc_ret.region, &[], &[]);
-
-                        //check the length of the defs we would return, if we only have one
+                    if let Some((tag_index, loc_ret)) = def_state.last_value_suffixed() {
+                        // check the length of the defs we would return, if we only have one
                         // we can just return the expression
                         // note we use tags here, as we may have redundant defs in Defs
-                        if local_defs
-                            .tags
-                            .iter()
-                            .filter(|tag| tag.split().is_err())
-                            .count()
-                            == 1
-                        {
+                        // TODO: should type defs be empty here so we can check only tags.len()?
+                        if def_state.list_value_defs().count() == 1 {
                             return Ok((MadeProgress, loc_ret.value, state));
                         }
 
-                        return Ok((
-                            MadeProgress,
-                            Expr::Defs(
-                                arena.alloc(local_defs),
-                                arena.alloc(Loc::at_zero(Expr::EmptyDefsFinal)),
-                            ),
-                            state,
-                        ));
+                        if is_top_level_expr_suffixed(&loc_ret.value) {
+                            return Ok((
+                                MadeProgress,
+                                Expr::Defs(
+                                    arena.alloc(def_state),
+                                    arena.alloc(Loc::at_zero(Expr::EmptyDefsFinal)),
+                                ),
+                                state,
+                            ));
+                        } else {
+                            let mut def_state = def_state;
+                            def_state.remove_tag(tag_index);
+
+                            return Ok((
+                                MadeProgress,
+                                Expr::Defs(arena.alloc(def_state), arena.alloc(loc_ret)),
+                                state,
+                            ));
+                        }
                     }
 
                     Err((
