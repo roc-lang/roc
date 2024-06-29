@@ -86,10 +86,10 @@ pub(crate) struct BorrowSignatures<'a> {
     pub(crate) procs: MutMap<(Symbol, ProcLayout<'a>), BorrowSignature>,
 }
 
-pub(crate) fn infer_borrow_signatures<'a, 'b: 'a>(
+pub(crate) fn infer_borrow_signatures<'a>(
     arena: &'a Bump,
     interner: &impl LayoutInterner<'a>,
-    procs: &'b MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> BorrowSignatures<'a> {
     let mut borrow_signatures: BorrowSignatures = BorrowSignatures {
         procs: procs
@@ -193,12 +193,12 @@ fn infer_borrow_signature<'a>(
     state.borrow_signature
 }
 
-struct State<'a> {
+struct State<'state, 'arena> {
     /// Argument symbols with a layout of `List *` or `Str`, i.e. the layouts
     /// for which borrow inference might decide to pass as borrowed
-    args: &'a [(InLayout<'a>, Symbol)],
+    args: &'state [(InLayout<'arena>, Symbol)],
     borrow_signature: BorrowSignature,
-    join_point_stack: Vec<'a, (JoinPointId, &'a [Param<'a>])>,
+    join_point_stack: Vec<'arena, (JoinPointId, &'state [Param<'arena>])>,
     join_points: MutMap<JoinPointId, BorrowSignature>,
     modified: bool,
 }
@@ -217,12 +217,12 @@ fn layout_to_ownership<'a>(
     }
 }
 
-impl<'a> State<'a> {
+impl<'state, 'a> State<'state, 'a> {
     fn new(
         arena: &'a Bump,
         interner: &impl LayoutInterner<'a>,
         borrow_signatures: &mut BorrowSignatures<'a>,
-        proc: &'a Proc<'a>,
+        proc: &Proc<'a>,
     ) -> Self {
         let key = (proc.name.name(), proc.proc_layout(arena));
 
@@ -269,7 +269,7 @@ impl<'a> State<'a> {
         &mut self,
         interner: &impl LayoutInterner<'a>,
         borrow_signatures: &mut BorrowSignatures<'a>,
-        stmt: &'a Stmt<'a>,
+        stmt: &Stmt<'a>,
     ) {
         match stmt {
             Stmt::Let(_, expr, _, stmt) => {
@@ -338,13 +338,13 @@ impl<'a> State<'a> {
         }
     }
 
-    fn inspect_expr(&mut self, borrow_signatures: &mut BorrowSignatures<'a>, expr: &'a Expr<'a>) {
+    fn inspect_expr(&mut self, borrow_signatures: &mut BorrowSignatures<'a>, expr: &Expr<'a>) {
         if let Expr::Call(call) = expr {
             self.inspect_call(borrow_signatures, call)
         }
     }
 
-    fn inspect_call(&mut self, borrow_signatures: &mut BorrowSignatures<'a>, call: &'a Call<'a>) {
+    fn inspect_call(&mut self, borrow_signatures: &mut BorrowSignatures<'a>, call: &Call<'a>) {
         let Call {
             call_type,
             arguments,

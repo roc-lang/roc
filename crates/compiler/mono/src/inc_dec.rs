@@ -32,15 +32,9 @@ pub fn insert_inc_dec_operations<'a>(
     layout_interner: &STLayoutInterner<'a>,
     procedures: &mut HashMap<(Symbol, ProcLayout<'a>), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
-    // TODO remove this clone?
-    let ps = arena.alloc(procedures.clone());
-
-    let borrow_signatures = crate::borrow::infer_borrow_signatures(arena, layout_interner, ps);
+    let borrow_signatures =
+        crate::borrow::infer_borrow_signatures(arena, layout_interner, &procedures);
     let borrow_signatures = arena.alloc(borrow_signatures);
-
-    //    for ((s, _), sig) in borrow_signatures.procs.iter() {
-    //        dbg!((s, sig));
-    //    }
 
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
