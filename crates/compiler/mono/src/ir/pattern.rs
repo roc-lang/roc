@@ -1084,7 +1084,9 @@ fn from_can_pattern_help<'a>(
                 list_layout,
                 element_layout,
                 elements: mono_patterns,
-                opt_rest: patterns.opt_rest,
+                opt_rest: patterns
+                    .opt_rest
+                    .map(|(i, name)| (i, name.map(|s| s.value))),
             })
         }
     }
