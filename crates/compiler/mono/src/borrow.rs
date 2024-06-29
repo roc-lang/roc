@@ -33,6 +33,19 @@ impl BorrowSignature {
         Self(len as _)
     }
 
+    fn from_layouts<'a>(
+        interner: &impl LayoutInterner<'a>,
+        layouts: impl ExactSizeIterator<Item = &'a InLayout<'a>>,
+    ) -> Self {
+        let mut signature = BorrowSignature::new(layouts.len());
+
+        for (i, layout) in layouts.enumerate() {
+            signature.set(i, layout_to_ownership(*layout, interner));
+        }
+
+        signature
+    }
+
     fn len(&self) -> usize {
         (self.0 & 0xFF) as usize
     }
@@ -95,19 +108,14 @@ pub(crate) fn infer_borrow_signatures<'a>(
         procs: procs
             .iter()
             .map(|(_key, proc)| {
-                let mut signature = BorrowSignature::new(proc.args.len());
-
                 let key = (proc.name.name(), proc.proc_layout(arena));
-
-                for (i, in_layout) in key.1.arguments.iter().enumerate() {
-                    signature.set(i, layout_to_ownership(*in_layout, interner));
-                }
-
+                let signature = BorrowSignature::from_layouts(interner, key.1.arguments.iter());
                 (key, signature)
             })
             .collect(),
     };
 
+    // for every proc (by index) a collection of its join points
     let mut join_points: Vec<_> = std::iter::repeat_with(MutMap::default)
         .take(procs.len())
         .collect_in(arena);
@@ -138,11 +146,11 @@ pub(crate) fn infer_borrow_signatures<'a>(
                 let (_, proc) = procs.iter().nth(index).unwrap();
                 let key = (proc.name.name(), proc.proc_layout(arena));
 
-                std::mem::swap(&mut proc_join_points, &mut join_points[index]);
-
                 if proc.args.is_empty() {
                     continue;
                 }
+
+                std::mem::swap(&mut proc_join_points, &mut join_points[index]);
 
                 let mut state = State {
                     args: proc.args,
@@ -186,7 +194,7 @@ fn infer_borrow_signature<'a>(
     arena: &'a Bump,
     interner: &impl LayoutInterner<'a>,
     borrow_signatures: &'a mut BorrowSignatures<'a>,
-    proc: &'a Proc<'a>,
+    proc: &Proc<'a>,
 ) -> BorrowSignature {
     let mut state = State::new(arena, interner, borrow_signatures, proc);
     state.inspect_stmt(interner, borrow_signatures, &proc.body);
@@ -227,15 +235,10 @@ impl<'state, 'a> State<'state, 'a> {
         let key = (proc.name.name(), proc.proc_layout(arena));
 
         // initialize the borrow signature based on the layout if first time
-        let borrow_signature = borrow_signatures.procs.entry(key).or_insert_with(|| {
-            let mut borrow_signature = BorrowSignature::new(proc.args.len());
-
-            for (i, in_layout) in key.1.arguments.iter().enumerate() {
-                borrow_signature.set(i, layout_to_ownership(*in_layout, interner));
-            }
-
-            borrow_signature
-        });
+        let borrow_signature = borrow_signatures
+            .procs
+            .entry(key)
+            .or_insert_with(|| BorrowSignature::from_layouts(interner, key.1.arguments.iter()));
 
         Self {
             args: proc.args,
@@ -306,18 +309,31 @@ impl<'state, 'a> State<'state, 'a> {
                 body,
                 remainder,
             } => {
+                // insert the default borrow signature if we're seeing this JP for the first time
                 self.join_points.entry(*id).or_insert_with(|| {
-                    let mut signature = BorrowSignature::new(parameters.len());
-
-                    for (i, param) in parameters.iter().enumerate() {
-                        signature.set(i, layout_to_ownership(param.layout, interner));
-                    }
-
-                    signature
+                    BorrowSignature::from_layouts(interner, parameters.iter().map(|p| &p.layout))
                 });
+
+                // within the body, changes to ownership for symbols introduced by this join point
+                // must be propagated. An example is
+                //
+                // ```roc
+                // writeIndents = \buf, indents ->
+                //     if indents <= 0 then
+                //         buf
+                //     else
+                //         buf
+                //         |> Str.concat "    "
+                //         |> writeIndents (indents - 1)
+                // ```
+                //
+                // where the mono will jump immediately to a (recursive) join point. The fact that
+                // the `buf` value is owned within the join point for efficient concatentation must
+                // be propagated to `writeIndents`' function argument
                 self.join_point_stack.push((*id, parameters));
                 self.inspect_stmt(interner, borrow_signatures, body);
                 self.join_point_stack.pop().unwrap();
+
                 self.inspect_stmt(interner, borrow_signatures, remainder);
             }
 
