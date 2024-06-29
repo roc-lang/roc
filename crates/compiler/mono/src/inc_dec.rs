@@ -33,7 +33,7 @@ pub fn insert_inc_dec_operations<'a>(
     procedures: &mut HashMap<(Symbol, ProcLayout<'a>), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
     let borrow_signatures =
-        crate::borrow::infer_borrow_signatures(arena, layout_interner, &procedures);
+        crate::borrow::infer_borrow_signatures(arena, layout_interner, procedures);
     let borrow_signatures = arena.alloc(borrow_signatures);
 
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
