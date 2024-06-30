@@ -91,7 +91,7 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
     }
 }
 
-pub const INTERNAL_ERROR_MESSAGE: &'static str = concat!(
+pub const INTERNAL_ERROR_MESSAGE: &str = concat!(
     "An internal compiler expectation was broken.\n",
     "This is definitely a compiler bug.\n",
     "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>\n",
@@ -116,7 +116,7 @@ macro_rules! internal_error {
     })
 }
 
-pub const USER_ERROR_MESSAGE: &'static str = concat!(
+pub const USER_ERROR_MESSAGE: &str = concat!(
     "We ran into an issue while compiling your code.\n",
     "Sadly, we don't have a pretty error message for this case yet.\n",
     "If you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n",
