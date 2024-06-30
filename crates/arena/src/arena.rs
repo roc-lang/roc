@@ -38,7 +38,7 @@ pub(crate) struct Header {
 
     /// The original number of bytes we had available.
     /// This is stored as a number rather than a pointer
-    /// so that we can store 0 here when this is a slice.
+    /// so that we can store 0 here when this is a slice into a larger allocation.
     /// That lets Drop know not to try to deallocate it.
     original_capacity: usize,
 
@@ -102,7 +102,7 @@ enum Storage {
 pub struct Arena<'a> {
     storage: Storage,
 
-    /// We are not allowed to store more than this many bytes. If we run out, give an error!
+    /// We are not allowed to store more than this many bytes in our Content. If we run out, give an error!
     max_bytes_stored: usize,
 
     /// This is *not* a reference to a Header, despite what it says! (That's just for alignment.)

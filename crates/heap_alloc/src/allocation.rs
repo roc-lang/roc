@@ -5,21 +5,24 @@
 /// back to the OS when we're done with it.
 ///
 /// Since we should only use these to allocate memory for an entire module at a time, this should
-/// result in at most 1 total syscall per module, which should be fine in terms of performance.
-/// In batch builds, we can do better than 1 syscall per module, by doing a gigantic virtual
-/// allocation and then handing out slices of it to operations (like loading from cache) which
-/// will write to the memory once and then never need to write to a later address inside the allocation.
+/// result in 1 total syscall per module, which should be fine in terms of performance.
 ///
 /// As of this writing, wasm uses the wee_alloc crate to emulate virtual memory by managing a free
 /// list behind the scenes, since wasm only supports growing the heap and that's it. Although
 /// wasm doesn't have a watch mode, it does have long-running processes in the form of the repl
 /// and also potentially in the future a playground.
-use core::{alloc::Layout, fmt, mem::MaybeUninit, ptr::NonNull, slice};
+use core::{
+    alloc::Layout,
+    fmt,
+    mem::{self, MaybeUninit},
+    ptr::NonNull,
+};
 
 #[derive(Debug)]
 pub struct Allocation {
     pages: NonNull<Page>,
     layout: Layout,
+    used: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -172,22 +175,118 @@ impl Allocation {
 
         Ok(Self {
             pages: non_null.cast(),
+            used: 0,
             layout,
         })
     }
 
-    pub fn layout(&self) -> Layout {
-        self.layout
+    /// Reallocate in-place if possible; otherwise, create a new allocation
+    /// and copy over the contents of the old one. If the new size would
+    /// exceed isize::MAX, it instead becomes isize::MAX.
+    pub fn grow(&mut self, additional_bytes_desired: usize) {
+        let layout = self.layout;
+        let new_size = layout.size().saturating_add(additional_bytes_desired);
+        let layout = Layout::from_size_align(new_size, layout.align())
+            // Although the alignment is already valid, this can theoretically fail
+            // in the very specific case where the new size, when rounded to the nearest
+            // multiple of alignment, exceeds isize::MAX. In the extremely unlikely
+            // event where that happens, decline to grow and go back to the old layout.
+            .unwrap_or(layout)
+            .pad_to_align();
+
+        let todo = todo!(); // TODO try to grow the allocation in-place. Replace self's pointer.
     }
 
-    pub fn as_slice(&self) -> &[MaybeUninit<u8>] {
-        // Safety: we know the pointer is non-null, and points to an allocation of that many bytes.
-        unsafe { slice::from_raw_parts(self.pages.as_ptr().cast(), self.layout.size()) }
+    /// Hands out a slice of T elements.
+    pub fn extract_slice<T>(&mut self, elems: usize) -> &mut [MaybeUninit<T>] {
+        // We won't return a slice that's bigger than the number of
+        // allocated bytes we have left!
+        let next_ptr = self.pages.as_ptr().byte_add(elems * msm::size_of::<T>())
+
+        match self.layout.extend(Layout::array::<T>(elems)) {
+            Ok(layout) => {
+                let available_len = self.bytes_remaining();
+                let desired_len = available_len.min(layout.size());
+                let desired_align = self.layout.align().max(layout.align());
+
+                // Figure out how much padding we need to achieve the desired alignment
+                let ptr = self.pages.as_ptr() as *mut u8;
+                let padding_needed = ptr.align_offset(desired_align);
+
+                // Figure out what the actual length of the slice will be,
+                // taking into account necessary padding and how mny bytes are left.
+                let actual_len = desired_len
+                    .saturating_add(padding_needed)
+                    .min(available_len);
+
+                // Advance the pointer past the padding.
+                let ptr = unsafe { ptr.add(padding_needed) };
+
+                // After adding the padding, the pointer should now be aligned correctly!
+                debug_assert_eq!(ptr as usize % desired_align, 0);
+
+                // Record the new length
+                self.len += actual_len;
+
+                unsafe { core::slice::from_raw_parts_mut(ptr, actual_len) }
+            }
+            Err(_) => {
+                // If the requested layout overflowed isize::MAX, return an empty slice.
+                // This should theoretically never happen, given that we already ensured
+                // that it fits in bytes_remaining.
+                &mut []
+            }
+        }
     }
 
-    pub fn as_slice_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        // Safety: we know the pointer is non-null, and points to an allocation of that many bytes.
-        unsafe { slice::from_raw_parts_mut(self.pages.as_ptr().cast(), self.layout.size()) }
+    pub fn bytes_remaining(&self) -> usize {
+        self.layout.size().saturating_sub(self.len)
+    }
+
+    /// Reallocate in-place if possible; otherwise, create a new allocation
+    /// and copy over the contents of the old one. If the new size would
+    /// exceed isize::MAX, it instead becomes isize::MAX.
+    pub fn grow(&mut self, additional_bytes_desired: usize) {
+        let layout = self.layout;
+        let new_size = layout.size().saturating_add(additional_bytes_desired);
+        let layout = Layout::from_size_align(new_size, layout.align())
+            // Although the alignment is already valid, this can theoretically fail
+            // in the very specific case where the new size, when rounded to the nearest
+            // multiple of alignment, exceeds isize::MAX. In the extremely unlikely
+            // event where that happens, decline to grow and go back to the old layout.
+            .unwrap_or(layout)
+            .pad_to_align();
+
+        let todo = todo!(); // TODO try to grow the allocation in-place. Replace self's pointer.
+    }
+
+    pub fn slice_mut(&mut self, layout: Layout) -> &mut [u8] {
+        // We won't return a slice that's bigger than the number of
+        // allocated bytes we have left!
+        let available_len = self.bytes_remaining();
+        let desired_len = available_len.min(layout.size());
+        let desired_align = self.layout.align().max(layout.align());
+
+        // Figure out how much padding we need to achieve the desired alignment
+        let ptr = self.pages.as_ptr() as *mut u8;
+        let padding_needed = ptr.align_offset(desired_align);
+
+        // Figure out what the actual length of the slice will be,
+        // taking into account necessary padding and how mny bytes are left.
+        let actual_len = desired_len
+            .saturating_add(padding_needed)
+            .min(available_len);
+
+        // Advance the pointer past the padding.
+        let ptr = unsafe { ptr.add(padding_needed) };
+
+        // After adding the padding, the pointer should now be aligned correctly!
+        debug_assert_eq!(ptr as usize % desired_align, 0);
+
+        // Record the new length
+        self.len += actual_len;
+
+        unsafe { core::slice::from_raw_parts_mut(ptr, actual_len) }
     }
 }
 
@@ -257,85 +356,32 @@ impl Drop for Allocation {
     }
 }
 
-#[cfg(test)]
-mod alloc_tests {
-    use super::{Allocation, Page, PAGE_SIZE};
-    use core::{
-        alloc::Layout,
-        mem::{self, MaybeUninit},
+#[test]
+fn verify_page_size() {
+    let os_page_size = unsafe {
+        #[cfg(unix)]
+        {
+            extern "C" {
+                fn getpagesize() -> i32;
+            }
+
+            getpagesize() as usize
+        }
+
+        #[cfg(windows)]
+        {
+            // https://devblogs.microsoft.com/oldnewthing/20210510-00/?p=105200
+            // 16KiB should be accepted by all Windows systems
+            16384
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            // In wasm, "each page is sized 64KiB" according to
+            // https://developer.mozilla.org/en-US/docs/webassembly/reference/memory/size
+            65536
+        }
     };
 
-    #[test]
-    fn verify_page_size() {
-        let os_page_size = unsafe {
-            #[cfg(unix)]
-            {
-                extern "C" {
-                    fn getpagesize() -> i32;
-                }
-
-                getpagesize() as usize
-            }
-
-            #[cfg(windows)]
-            {
-                // https://devblogs.microsoft.com/oldnewthing/20210510-00/?p=105200
-                // 16KiB should be accepted by all Windows systems
-                16384
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // In wasm, "each page is sized 64KiB" according to
-                // https://developer.mozilla.org/en-US/docs/webassembly/reference/memory/size
-                65536
-            }
-        };
-
-        assert_eq!(os_page_size, PAGE_SIZE);
-    }
-
-    #[test]
-    fn small_allocation() {
-        let size = 1024;
-        let allocation = Allocation::alloc_virtual(Layout::from_size_align(size, 8).unwrap());
-        assert!(allocation.is_ok());
-
-        let alloc_layout = allocation.unwrap().layout();
-        assert_eq!(alloc_layout.size(), size.max(mem::size_of::<Page>()));
-        assert!(alloc_layout.size() >= mem::size_of::<Page>());
-        assert!(alloc_layout.align() >= mem::align_of::<Page>());
-    }
-
-    #[test]
-    fn large_allocation() {
-        let size = 1024 * 1024 * 100;
-        let allocation = Allocation::alloc_virtual(Layout::from_size_align(size, 8).unwrap());
-        assert!(allocation.is_ok());
-
-        let alloc_layout = allocation.unwrap().layout();
-        assert_eq!(alloc_layout.size(), size.max(mem::size_of::<Page>()));
-        assert!(alloc_layout.size() >= mem::size_of::<Page>());
-        assert!(alloc_layout.align() >= mem::align_of::<Page>());
-    }
-
-    #[test]
-    fn test_allocation_slice_access() {
-        let layout = Layout::from_size_align(1024, 8).unwrap();
-        let mut allocation = Allocation::alloc_virtual(layout).unwrap();
-
-        let slice = allocation.as_slice_mut();
-        assert_eq!(slice.len(), PAGE_SIZE);
-
-        // Write to the slice
-        for (i, byte) in slice.iter_mut().enumerate() {
-            *byte = MaybeUninit::new(i as u8);
-        }
-
-        // Read from the slice
-        let slice = allocation.as_slice();
-        for (i, byte) in slice.iter().enumerate() {
-            assert_eq!(unsafe { byte.assume_init() }, (i % 256) as u8);
-        }
-    }
+    assert_eq!(os_page_size, PAGE_SIZE);
 }
