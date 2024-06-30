@@ -101,7 +101,8 @@ pub const INTERNAL_ERROR_MESSAGE: &str = concat!(
 );
 
 /// `internal_error!` should be used whenever a compiler invariant is broken.
-/// It is a wrapper around panic that tells the user to file a bug.
+/// It tells the user to file a bug and then exits the program with a nonzero exit code.
+/// (On wasm it doesn't tell the user anything, since we don't necessarily have a way to print.)
 /// This should only be used in cases where there would be a compiler bug and the user can't fix it.
 /// If there is simply an unimplemented feature, please use `unimplemented!`
 /// If there is a user error, please use roc_reporting to print a nice error message.
