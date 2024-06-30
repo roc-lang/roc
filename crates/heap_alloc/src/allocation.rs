@@ -43,12 +43,12 @@ const PAGE_SIZE: usize = 16384;
 //
 // In wasm, "each page is sized 64KiB" according to
 // https://developer.mozilla.org/en-US/docs/webassembly/reference/memory/size
-#[cfg(wasm32)]
+#[cfg(target_arch = "wasm32")]
 const PAGE_SIZE: usize = 65536;
 
 /// We use wee_alloc for allocations on wasm because wasm natively supports only growing the heap,
 /// not releasing anything. Releasing has to be built in userspace, which wee_alloc provides.
-#[cfg(wasm32)]
+#[cfg(target_arch = "wasm32")]
 static WEE_ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -152,7 +152,7 @@ impl Allocation {
                 }
             }
 
-            #[cfg(wasm32)]
+            #[cfg(target_arch = "wasm32")]
             {
                 let ptr = unsafe { WEE_ALLOC.alloc(layout) };
 
@@ -275,7 +275,7 @@ impl Drop for Allocation {
             }
         }
 
-        #[cfg(wasm32)]
+        #[cfg(target_arch = "wasm32")]
         {
             let _ptr = unsafe { WEE_ALLOC.dealloc(layout) };
 
@@ -311,7 +311,7 @@ fn verify_page_size() {
             16384
         }
 
-        #[cfg(wasm)]
+        #[cfg(target_arch = "wasm32")]
         {
             // In wasm, "each page is sized 64KiB" according to
             // https://developer.mozilla.org/en-US/docs/webassembly/reference/memory/size

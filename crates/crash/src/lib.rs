@@ -108,7 +108,7 @@ pub fn crash(exit_code: i32, message: &str) -> ! {
         }
     }
 
-    #[cfg(wasm32)]
+    #[cfg(target_arch = "wasm32")]
     {
         extern "C" {
             // Assume we've defined this primitive function, which is up to the wasm wrapper to interpret.

@@ -62,7 +62,7 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
             Ok(())
         }
 
-        #[cfg(wasm32)]
+        #[cfg(target_arch = "wasm32")]
         fn write_str(&mut self, _s: &str) -> fmt::Result {
             Ok(())
         }
@@ -83,7 +83,7 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
         ExitProcess(1)
     }
 
-    #[cfg(wasm32)]
+    #[cfg(target_arch = "wasm32")]
     {
         // We have no way to write to any stderr equivalent in wasm,
         // so just trap to end the program immediately.
