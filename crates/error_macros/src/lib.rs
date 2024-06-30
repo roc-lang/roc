@@ -204,13 +204,13 @@ macro_rules! assert_copyable {
 #[macro_export]
 macro_rules! _incomplete_project {
     ($project_name:literal, $tracking_issue_no:literal) => {
-        panic!(
+        $crate::internal_error!(
             "[{}] not yet implemented. Tracking issue: https://github.com/roc-lang/roc/issues/{}",
             $project_name, $tracking_issue_no,
         )
     };
     ($project_name:literal, $tracking_issue_no:literal, $($arg:tt)+) => {
-        panic!(
+        $crate::internal_error!(
             "[{}] not yet implemented. Tracking issue: https://github.com/roc-lang/roc/issues/{}.\nAdditional information: {}",
             $project_name, $tracking_issue_no,
             format_args!($($arg)+),
