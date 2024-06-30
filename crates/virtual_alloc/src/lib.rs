@@ -2,14 +2,6 @@
 // Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
-mod arena;
-mod arena_ref;
-mod soa;
-mod string;
-mod vec;
+mod allocation;
 
-pub use crate::arena::*;
-pub use crate::arena_ref::*;
-pub use crate::soa::*;
-pub use crate::string::*;
-pub use crate::vec::*;
+pub use allocation::*;

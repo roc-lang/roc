@@ -57,7 +57,7 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
         self.len == Default::default()
     }
 
-    pub fn get(&self, arena: &'a Arena<'a>, index: Len) -> Option<&'a T> {
+    pub fn get(&self, arena: &'a Arena, index: Len) -> Option<&'a T> {
         if index < self.len {
             Some(unsafe { self.get_unchecked(arena, index) })
         } else {
@@ -65,7 +65,7 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
         }
     }
 
-    pub unsafe fn get_unchecked(&self, arena: &'a Arena<'a>, index: Len) -> &'a T {
+    pub unsafe fn get_unchecked(&self, arena: &'a Arena, index: Len) -> &'a T {
         #[cfg(debug_assertions)]
         {
             self.start.debug_verify_arena(arena, "Vec::get");
@@ -79,9 +79,9 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
 
     pub fn write<'b>(
         &self,
-        self_arena: &Arena<'a>,
+        self_arena: &Arena,
         dest: &mut Vec<'b, T, impl AsU32>,
-        dest_arena: &mut Arena<'b>,
+        dest_arena: &mut Arena,
     ) {
         // This will fail if dest.len + self.len overflows, so we no longer need to worry about that.
         dest.reserve(self.len);

@@ -2,6 +2,9 @@
 members = [
   "crates/compiler/*",
   "crates/vendor/*",
+  "crates/new_frontend/*",
+  "crates/virtual_alloc",
+  "crates/crash",
   "crates/fs",
   "crates/arena",
   "crates/glue",

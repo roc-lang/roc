@@ -28,7 +28,7 @@ impl<'a, Len: AsU32> String<'a, Len> {
         self.vec.is_empty()
     }
 
-    pub fn get_utf8_byte(&self, arena: &'a Arena<'a>, index: Len) -> Option<&'a u8> {
+    pub fn get_utf8_byte(&self, arena: &'a Arena, index: Len) -> Option<&'a u8> {
         self.vec.get(arena, index)
     }
 
@@ -42,9 +42,9 @@ impl<'a, Len: AsU32> String<'a, Len> {
 
     pub fn write<'b>(
         &self,
-        self_arena: &Arena<'a>,
+        self_arena: &Arena,
         buf: &mut String<'b, impl AsU32>,
-        buf_arena: &mut Arena<'b>,
+        buf_arena: &mut Arena,
     ) {
         self.vec.write(self_arena, buf.as_bytes_mut(), buf_arena)
     }

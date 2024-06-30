@@ -1,0 +1,11 @@
+[package]
+name = "src64"
+description = "64-byte aligned source files"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+arena = { path = "../../arena" }

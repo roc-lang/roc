@@ -1,0 +1,10 @@
+[package]
+name = "crash"
+description = "When the compiler encounters an unrecoverable error and needs to exit immediately."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]

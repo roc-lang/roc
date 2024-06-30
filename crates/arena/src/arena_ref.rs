@@ -17,7 +17,7 @@ pub struct ArenaRefMut<'a, T> {
     _marker: PhantomData<&'a T>,
 
     #[cfg(debug_assertions)]
-    pub(crate) arena: &'a Arena<'a>,
+    pub(crate) arena: Arena<'a>,
 }
 
 impl<'a, T: fmt::Debug> fmt::Debug for ArenaRefMut<'a, T> {

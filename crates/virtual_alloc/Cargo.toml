@@ -1,0 +1,17 @@
+[package]
+name = "virtual_alloc"
+description = "Allocating and deallocating virtual memory directly from the OS"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# We use wee_alloc for wasm "virtual" allocations, since wasm doesn't have
+# a built-in mmap or VirtualAlloc equivalent. This adds about 800 bytes to the binary.
+# We could alternatively just always grow the heap and leak.
+[target.'cfg(wasm32)'.dependencies.wee_alloc]
+version = "0.4.5"
+default-features = false
+
+[dependencies]

@@ -19,10 +19,19 @@ use fs::{FileMetadata, IoError, ReadFile, WriteFile};
 use core::{
     alloc::Layout,
     cell::Cell,
-    mem::{align_of, size_of, MaybeUninit},
+    mem::{self, align_of, size_of, MaybeUninit},
     ptr::NonNull,
     slice,
 };
+
+/// We'll exit after printing this message to stderr if allocation fails
+#[cfg(not(debug_assertions))]
+const ALLOC_FAILED_MESSAGE: &str =
+    "The Roc compiler had to exit unexpectedly because a virtual memory allocation operation failed.\n\nThis normally should never happen, but one way it could happen is if the compiler is running in an unusually memory-constrained environment, such as a virtualized operating system.\n\nIf you are seeing this message repeatedly, you might want to try contacting other Roc community members via <https://roc-lang.org/community> to see if they can help.";
+
+#[cfg(not(debug_assertions))]
+/// We'll exit with this code if allocation fails
+const ALLOC_FAILED_EXIT_CODE: i32 = 90;
 
 #[cfg(debug_assertions)]
 static NEXT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
@@ -78,52 +87,51 @@ impl Drop for Header {
     }
 }
 
+#[cfg(debug_assertions)]
+static ARENA_IDS: () = (); // TODO make this use std, Mutex, etc.
+
 #[derive(Debug)]
 #[cfg_attr(not(debug_assertions), repr(transparent))]
 pub struct Arena {
-    /// Pointer to the first byte of our content, *not* to the actual header (as the type suggests).
-    ///
-    /// We do it this way so that:
-    /// - Header's Drop impl will get run when this is dropped.
-    /// - The pointer itself is to the content in order to make bump operations more efficeint.
-    pub(crate) content: Cell<Header>,
-
-    #[cfg(debug_assertions)]
-    id: u64,
+    pub(crate) content: [Header],
 }
 
 impl Arena {
-    /// Create a new arena using some of this arena's memory, if possible.
-    /// If there isn't enough memory, returns a new arena with its own allocation
-    /// and doesn't use any of this arena's memory.
+    /// Create a new arena using the given slice of memory, if possible.
+    /// If there isn't enough memory in the slice, returns a new arena with its own allocation
+    /// and doesn't use any of the given memory.
     ///
     /// # Safety
     /// The given pointer must point to at least `capacity` bytes, and `capacity` must
     /// be greater than size_of::<Header>().
-    pub unsafe fn from_existing_allocation(mut ptr: NonNull<usize>, capacity_bytes: u32) -> Self {
+    pub unsafe fn from_mut_slice(slice: &mut [usize]) -> &mut Self {
         // We don't want to expose Header outside this module, but it's very important that
-        // `ptr` points to something with the
-        debug_assert_eq!(core::mem::align_of_val(ptr.as_mut()), align_of::<Header>());
-        debug_assert!(capacity_bytes as usize > size_of::<Header>());
+        // the slice points to something with the correct alignment!
+        debug_assert_eq!(
+            core::mem::align_of_val(slice.as_ptr().as_mut()),
+            align_of::<Header>()
+        );
+        debug_assert!(slice.len().saturating_mul(size_of::<usize>()) > size_of::<Header>());
 
         let header_ptr: *mut Header = ptr.as_ptr().cast();
         let content_ptr = header_ptr.add(1);
         let next: usize;
         let capacity: usize;
 
-        // On 64-bit targets, (content_ptr + capacity) can never overflow, so we can
-        // do a normal wrapping addition.
         #[cfg(target_pointer_width = "64")]
         {
-            capacity = capacity_bytes as usize;
+            capacity = slice.len();
+
+            // On 64-bit targets, (content_ptr + capacity) can never overflow, so we can
+            // do a normal wrapping addition.
             next = (content_ptr as usize) + capacity;
         }
 
-        // On targets smaller than 64-bit, it's possible for (ptr + capacity) to overflow,
-        // so we do saturating arithmetic to shrink the available capacity if that happens.
         #[cfg(not(target_pointer_width = "64"))]
         {
-            next = (content_ptr as usize).saturating_add(capacity_bytes as usize);
+            // On targets smaller than 64-bit, it's possible for (ptr + capacity) to overflow,
+            // so we do saturating arithmetic to shrink the available capacity if that happens.
+            next = (content_ptr as usize).saturating_add(slice.len());
             capacity = (next - (content_ptr as usize));
         }
 
@@ -136,7 +144,7 @@ impl Arena {
             original_header_ptr: header_ptr,
         };
 
-        Self::from_content_ptr(content_ptr)
+        Self::from_ptr_to_content(content_ptr)
     }
 
     /// Returns the amount of bytes used in the given buffer. Note that this might be zero
@@ -199,7 +207,7 @@ impl Arena {
         }
 
         Ok((
-            unsafe { Self::from_existing_allocation(ptr.cast(), alloc_size as u32) },
+            unsafe { Self::from_mut_slice(ptr.cast(), alloc_size as u32) },
             bytes_read,
         ))
     }
@@ -241,7 +249,7 @@ impl Arena {
                 original_header_ptr: header_ptr,
             };
 
-            Self::from_content_ptr(content_ptr)
+            Self::from_ptr_to_content(content_ptr)
         }
     }
 
@@ -249,12 +257,20 @@ impl Arena {
         let todo = todo!();
     }
 
-    unsafe fn from_content_ptr(content_ptr: *mut Header) -> Self {
-        Self {
-            content: Cell::from(*content_ptr),
-            #[cfg(debug_assertions)]
-            id: NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
-        }
+    unsafe fn from_ptr_to_content(content_ptr: *mut Header) -> Self {
+        let todo = (); // TODO ok get rid of all of this, make it so you can't actually have an Arena.
+                       // Rather, you can store an Allocation as owned and then have an Arena be a slice into that!
+        debug_assert_eq!(mem::align_of::<Header>(), mem::align_of::<Self>());
+
+        // The arena itself should be a pointer to its content, such that
+        // the header is
+        let self_ptr = content_ptr as *mut Self;
+
+        // TODO restore this using the static thing, store it by ptr
+        // #[cfg(debug_assertions)]
+        // id: NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+
+        self_ptr.read() // TODO does this work?
     }
 
     /// If there is not enough space in the current allocation, goes back to the OS to do a virtual
@@ -270,7 +286,7 @@ impl Arena {
     }
 
     fn header(&self) -> &Header {
-        // The header is stored right before the content
+        // The header is stored right before the pointer to the arena itself.
         unsafe { &*(self.content as *const Header).sub(1) }
     }
 

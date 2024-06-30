@@ -1,3 +1,7 @@
+// This should be no_std, but we want to be able to use dbg! in development and std conveniences in testing
+// Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
+#![cfg_attr(not(any(debug_assertions, test)), no_std)]
+
 // Loads Roc source files (from strings or from files) into a structure which is
 // guaranteed to have the following properties, all of which the SIMD parser requires:
 // - 16B alignment
@@ -51,7 +55,7 @@ impl<'a> Src64<'a> {
     /// chunks of 64B. (If extra bytes are needed to make it a multiple of 64B, we add trailing newlines
     /// because the parser ignores those.)
     pub fn bytes(&self) -> &[u8] {
-        self.bytes
+        &self.bytes
     }
 
     pub fn len(&self) -> usize {
