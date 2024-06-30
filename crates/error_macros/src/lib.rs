@@ -91,6 +91,12 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
     }
 }
 
+pub const INTERNAL_ERROR_MESSAGE: &'static str = concat!(
+    "An internal compiler expectation was broken.\n",
+    "This is definitely a compiler bug.\n",
+    "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>\n",
+);
+
 /// `internal_error!` should be used whenever a compiler invariant is broken.
 /// It is a wrapper around panic that tells the user to file a bug.
 /// This should only be used in cases where there would be a compiler bug and the user can't fix it.
@@ -99,26 +105,22 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
 #[macro_export]
 macro_rules! internal_error {
     () => ({
-        $crate::error_and_exit(format_args!(
-            concat!(
-                "An internal compiler expectation was broken.\n",
-                "This is definitely a compiler bug.\n",
-                "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>"
-            )
-        ))
+        $crate::error_and_exit(format_args!("{}", $crate::INTERNAL_ERROR_MESSAGE))
     });
     ($($arg:tt)*) => ({
         $crate::error_and_exit(format_args!(
-            concat!(
-                "An internal compiler expectation was broken.\n",
-                "This is definitely a compiler bug.\n",
-                "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>\n",
-                "{}"
-            ),
+            "{}{}",
+            $crate::INTERNAL_ERROR_MESSAGE,
             format_args!($($arg)*)
         ))
     })
 }
+
+pub const USER_ERROR_MESSAGE: &'static str = concat!(
+    "We ran into an issue while compiling your code.\n",
+    "Sadly, we don't have a pretty error message for this case yet.\n",
+    "If you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n",
+);
 
 /// `user_error!` should only ever be used temporarily.
 /// It is a way to document locations where we do not yet have nice error reporting.
@@ -126,22 +128,12 @@ macro_rules! internal_error {
 #[macro_export]
 macro_rules! user_error {
     () => ({
-        $crate::error_and_exit(format_args!(
-            concat!(
-                "We ran into an issue while compiling your code.\n",
-                "Sadly, we don't have a pretty error message for this case yet.\n",
-                "If you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n",
-            )
-        ))
+        $crate::error_and_exit(format_args!("{}", $crate::USER_ERROR_MESSAGE))
     });
     ($($arg:tt)*) => ({
         $crate::error_and_exit(format_args!(
-            concat!(
-                "We ran into an issue while compiling your code.\n",
-                "Sadly, we don't have a pretty error message for this case yet.\n",
-                "If you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n",
-                "{}"
-            ),
+            "{}{}",
+            $crate::USER_ERROR_MESSAGE,
             format_args!($($arg)*)
         ))
     })
