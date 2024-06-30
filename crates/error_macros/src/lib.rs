@@ -1,4 +1,96 @@
 //! Provides macros for consistent reporting of errors in Roc's rust code.
+#![no_std]
+
+#[cfg(unix)]
+extern "C" {
+    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+    fn exit(status: i32) -> !;
+}
+
+#[cfg(unix)]
+const STDERR_FD: i32 = 2;
+
+#[cfg(windows)]
+extern "C" {
+    pub fn GetStdHandle(nStdHandle: i32) -> *mut core::ffi::c_void;
+    pub fn WriteFile(
+        hFile: *mut core::ffi::c_void,
+        lpBuffer: *const u8,
+        nNumberOfBytesToWrite: u32,
+        lpNumberOfBytesWritten: *mut u32,
+        lpOverlapped: *mut core::ffi::c_void,
+    ) -> i32;
+    pub fn ExitProcess(exit_code: u32) -> !;
+}
+
+#[cfg(windows)]
+const STD_ERROR_HANDLE: i32 = -12;
+
+/// Print each of the given strings to stderr (if it's available; on wasm, nothing will
+/// be printed) and then immediately exit the program with an error.
+/// On wasm, this will trap, and on UNIX or Windows it will exit with a code of 1.
+#[cfg(any(unix, windows, wasm32))]
+pub fn error_and_exit<'a>(strings: impl IntoIterator<Item = impl Into<&'a str>>) -> ! {
+    #[cfg(unix)]
+    unsafe {
+        // Write each of the arguments to stderr
+        for string in strings {
+            let string = string.into();
+
+            if !string.is_empty() {
+                let _ = write(STDERR_FD, string.as_ptr(), string.len());
+            }
+        }
+
+        // Write a newline at the end to make sure stderr gets flushed.
+        const NEWLINE: &'static str = "\n";
+
+        let _ = write(STDERR_FD, NEWLINE.as_ptr(), NEWLINE.len());
+
+        exit(1)
+    }
+
+    #[cfg(windows)]
+    unsafe {
+        let handle = GetStdHandle(STD_ERROR_HANDLE);
+        let mut written = 0;
+
+        for string in strings {
+            let string = string.into();
+
+            if !string.is_empty() {
+                let _ = WriteFile(
+                    handle,
+                    string.as_ptr(),
+                    string.len() as u32,
+                    &mut written,
+                    core::ptr::null_mut(),
+                );
+            }
+        }
+
+        // Write a newline at the end to make sure stderr gets flushed.
+        const NEWLINE: &'static str = "\n";
+
+        let _ = WriteFile(
+            handle,
+            NEWLINE.as_ptr(),
+            NEWLINE.len() as u32,
+            &mut written,
+            core::ptr::null_mut(),
+        );
+
+        ExitProcess(1)
+    }
+
+    #[cfg(wasm32)]
+    {
+        // We have no way to write to any stderr equivalent in wasm,
+        // so just trap to end the program immediately.
+        core::arch::wasm32::unreachable()
+    }
+}
+
 /// `internal_error!` should be used whenever a compiler invariant is broken.
 /// It is a wrapper around panic that tells the user to file a bug.
 /// This should only be used in cases where there would be a compiler bug and the user can't fix it.
@@ -7,13 +99,11 @@
 #[macro_export]
 macro_rules! internal_error {
     ($($arg:tt)*) => ({
-        eprintln!("An internal compiler expectation was broken.");
-        eprintln!("This is definitely a compiler bug.");
-        // TODO: update this to the new bug template.
-        eprintln!("Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose");
-        #[allow(clippy::panic)] {
-            panic!($($arg)*);
-        }
+        $crate::error_and_exit([
+            // TODO: update this to the new bug template.
+            "An internal compiler expectation was broken.\nThis is definitely a compiler bug.\nPlease file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>"
+            $(,$arg)*
+        ])
     })
 }
 
@@ -23,11 +113,10 @@ macro_rules! internal_error {
 #[macro_export]
 macro_rules! user_error {
     ($($arg:tt)*) => ({
-        eprintln!("We ran into an issue while compiling your code.");
-        eprintln!("Sadly, we don't have a pretty error message for this case yet.");
-        eprintln!("If you can't figure out the problem from the context below, please reach out at: https://roc.zulipchat.com/");
-        eprintln!($($arg)*);
-        std::process::exit(1);
+        $crate::error_and_exit([
+            "We ran into an issue while compiling your code.\nSadly, we don't have a pretty error message for this case yet.\nIf you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n"
+            $(,$arg)*
+        ])
     })
 }
 
