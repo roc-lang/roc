@@ -16,11 +16,11 @@ use fs::{FileMetadata, IoError, ReadFile, WriteFile};
 
 use core::{
     alloc::Layout,
+    ffi::c_void,
     mem::{self, align_of, size_of, MaybeUninit},
     ptr::NonNull,
     slice,
 };
-use std::os::raw::c_void;
 
 #[cfg(debug_assertions)]
 static NEXT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
@@ -136,7 +136,7 @@ impl<'a> Arena<'a> {
         // We don't want to expose Header outside this module, but it's very important that
         // the slice points to something with the correct alignment!
         debug_assert_eq!(
-            core::mem::align_of_val(slice.as_ptr().as_mut()),
+            mem::align_of_val(slice.as_ptr().as_mut()),
             align_of::<Header>()
         );
         debug_assert!(slice.len().saturating_mul(size_of::<usize>()) > size_of::<Header>());
