@@ -9,3 +9,4 @@ version.workspace = true
 
 [dependencies]
 heap_alloc = { path = "../heap_alloc" }
+roc_error_macros = { path = "../error_macros" }

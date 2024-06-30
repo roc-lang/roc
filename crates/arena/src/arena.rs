@@ -9,6 +9,7 @@
 /// we're done with it (e.g. a module gets unloaded).
 use crate::{arena_ref::ArenaRef, ArenaRefMut};
 use heap_alloc::Allocation;
+use roc_error_macros::{internal_error, oom};
 
 #[cfg(not(wasm32))]
 use fs::{FileMetadata, IoError, ReadFile, WriteFile};
@@ -19,11 +20,10 @@ use core::{
     ptr::NonNull,
     slice,
 };
+use std::os::raw::c_void;
 
 #[cfg(debug_assertions)]
 static NEXT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
-
-pub type Result<T> = core::result::Result<T, AllocFailed>;
 
 #[derive(Debug, PartialEq)]
 pub enum AllocFailed {
@@ -211,7 +211,8 @@ impl<'a> Arena<'a> {
 
                 let (buf, capacity_bytes) = Allocation::alloc_virtual(unsafe {
                     Layout::from_size_align_unchecked(alloc_size, align_of::<Header>())
-                });
+                })
+                .unwrap_or_else(|_| oom!());
 
                 let bytes_read = file.read_into(unsafe {
                     slice::from_raw_parts_mut(buf.as_ptr(), capacity_bytes)
@@ -260,7 +261,8 @@ impl<'a> Arena<'a> {
 
         // Get the actual capacity back (alloc may have given us more than we asked for,
         // after rounding up for page alignment etc.)
-        let (non_null, allocated_bytes) = Allocation::alloc_virtual(layout);
+        let (non_null, allocated_bytes) =
+            Allocation::alloc_virtual(layout).unwrap_or_else(|_| oom!());
 
         // The allocated bytes include the header, so subtract that back out.
         // In the extremely unlikely event that we end up with zero somehow,
@@ -307,11 +309,12 @@ impl<'a> Arena<'a> {
     /// new location (unlike, say, a Vec would when it resizes); instead, it will create new OS
     /// allocations as needed. When the arena gets dropped, all of those allocations will be
     /// returned to the OS (or marked as free in the wasm allocator).
-    ///
-    /// This is based on bumpalo's `alloc_with` - see bumpalo's docs on why the Fn can improve perf:
-    /// https://docs.rs/bumpalo/latest/bumpalo/struct.Bump.html#method.alloc_with
-    pub fn alloc<T>(&mut self) -> Result<ArenaRefMut<MaybeUninit<T>>> {
-        unsafe { self.alloc_layout(Layout::new::<T>()).cast() }
+    pub fn try_alloc<T>(&mut self) -> Result<ArenaRefMut<MaybeUninit<T>>, AllocFailed> {
+        unsafe { self.try_alloc_layout(Layout::new::<T>()) }
+    }
+
+    pub fn alloc<T>(&mut self) -> ArenaRefMut<MaybeUninit<T>> {
+        unsafe { self.alloc_layout(Layout::new::<T>()) }
     }
 
     fn header(&self) -> &Header {
@@ -337,7 +340,7 @@ impl<'a> Arena<'a> {
     /// new location (unlike, say, a Vec would when it resizes); instead, it will create new OS
     /// allocations as needed. When the arena gets dropped, all of those allocations will be
     /// returned to the OS (or marked as free in the wasm allocator).
-    pub fn alloc_layout(&mut self, layout: Layout) -> Result<ArenaRefMut<u8>> {
+    pub fn try_alloc_layout(&mut self, layout: Layout) -> Result<ArenaRefMut<u8>, AllocFailed> {
         let size = layout.size();
         let align = layout.align();
         let mut content_ptr = self.content as *const Header as *const u8 as usize;
@@ -384,6 +387,31 @@ impl<'a> Arena<'a> {
         Ok(ArenaRefMut::new_in((new_ptr - content_ptr) as u32, self))
     }
 
+    pub fn alloc_layout(&mut self, layout: Layout) -> ArenaRefMut<u8> {
+        self.try_alloc_layout(layout).unwrap_or_else(|err| {
+            match err {
+                AllocFailed::MaxCapacityExceeded => {
+                    internal_error!("A borrowed arena allocation needed to reallocate. This means not enough was virtually allocated in the first place, and a higher number should have been chosen in the compiler.")
+                }
+                AllocFailed::OsAllocFailed => {
+                    oom!()
+                }
+            }
+        })
+    }
+
+    pub(crate) unsafe fn at_byte_offset_mut(&'a mut self, byte_offset: usize) -> *mut c_void {
+        (self.content as *mut Header as *mut u8)
+            .add(byte_offset)
+            .cast()
+    }
+
+    pub(crate) unsafe fn at_byte_offset(&'a self, byte_offset: usize) -> *const c_void {
+        (self.content as *const Header as *const u8)
+            .add(byte_offset)
+            .cast()
+    }
+
     pub unsafe fn get_unchecked<T>(&'a self, arena_ref: impl Into<ArenaRef<'a, T>>) -> &'a T {
         let arena_ref = arena_ref.into();
 
@@ -395,9 +423,7 @@ impl<'a> Arena<'a> {
             assert_eq!(self.id, arena_ref.arena.id);
         }
 
-        &*(self.content as *const Header as *const u8)
-            .add(arena_ref.byte_offset())
-            .cast()
+        &*self.at_byte_offset(arena_ref.byte_offset()).cast()
     }
 
     fn content(&self) -> &[u8] {

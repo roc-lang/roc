@@ -136,6 +136,7 @@ name = "arena"
 version = "0.0.1"
 dependencies = [
  "heap_alloc",
+ "roc_error_macros",
 ]
 
 [[package]]

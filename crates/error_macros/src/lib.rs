@@ -98,7 +98,7 @@ pub const INTERNAL_ERROR_MESSAGE: &str = concat!(
 );
 
 /// `internal_error!` should be used whenever a compiler invariant is broken.
-/// It is a wrapper around panic that tells the user to file a bug.
+/// It is tells the user to file a bug and then exits the program with a nonzero exit code.
 /// This should only be used in cases where there would be a compiler bug and the user can't fix it.
 /// If there is simply an unimplemented feature, please use `unimplemented!`
 /// If there is a user error, please use roc_reporting to print a nice error message.
@@ -111,6 +111,40 @@ macro_rules! internal_error {
         $crate::error_and_exit(format_args!(
             "{}{}",
             $crate::INTERNAL_ERROR_MESSAGE,
+            format_args!($($arg)*)
+        ))
+    })
+}
+
+pub const OOM_MESSAGE: &str =
+    concat!("Roc's compiler ran out of available system memory and was unable to continue.\n",);
+
+#[macro_export]
+macro_rules! oom {
+    () => ({
+        $crate::error_and_exit(format_args!("{}", $crate::OOM_MESSAGE))
+    });
+    ($($arg:tt)*) => ({
+        $crate::error_and_exit(format_args!(
+            "{}{}",
+            $crate::OOM_MESSAGE,
+            format_args!($($arg)*)
+        ))
+    })
+}
+
+pub const UNRECOVERABLE_MESSAGE: &str =
+    concat!("Roc's compiler encountered an unrecoverable error and was unable to continue.\n",);
+
+#[macro_export]
+macro_rules! unrecoverable {
+    () => ({
+        $crate::error_and_exit(format_args!("{}", $crate::UNRECOVERABLE_MESSAGE))
+    });
+    ($($arg:tt)*) => ({
+        $crate::error_and_exit(format_args!(
+            "{}{}",
+            $crate::UNRECOVERABLE_MESSAGE,
             format_args!($($arg)*)
         ))
     })
