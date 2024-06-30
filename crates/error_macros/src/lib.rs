@@ -1,6 +1,7 @@
 //! Provides macros for consistent reporting of errors in Roc's rust code.
 #![no_std]
 
+#[cfg(any(unix, windows, target_arch = "wasm32"))]
 use core::fmt;
 
 #[cfg(unix)]
@@ -31,7 +32,7 @@ const STD_ERROR_HANDLE: i32 = -12;
 /// Print each of the given strings to stderr (if it's available; on wasm, nothing will
 /// be printed) and then immediately exit the program with an error.
 /// On wasm, this will trap, and on UNIX or Windows it will exit with a code of 1.
-#[cfg(any(unix, windows, wasm32))]
+#[cfg(any(unix, windows, target_arch = "wasm32"))]
 pub fn error_and_exit(args: fmt::Arguments) -> ! {
     use fmt::Write;
 
@@ -62,7 +63,7 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
             Ok(())
         }
 
-        #[cfg(wasm32)]
+        #[cfg(target_arch = "wasm32")]
         fn write_str(&mut self, _s: &str) -> fmt::Result {
             Ok(())
         }
@@ -83,7 +84,7 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
         ExitProcess(1)
     }
 
-    #[cfg(wasm32)]
+    #[cfg(target_arch = "wasm32")]
     {
         // We have no way to write to any stderr equivalent in wasm,
         // so just trap to end the program immediately.
