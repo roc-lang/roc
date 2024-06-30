@@ -205,7 +205,7 @@ impl Allocation {
 
         // Figure out how much padding we need to achieve the desired alignment
         let ptr = self.pages.as_ptr() as *mut u8;
-        let padding_needed = round_up_to(ptr as usize, desired_align).saturating_sub(ptr as usize);
+        let padding_needed = ptr.align_offset(desired_align);
 
         // Figure out what the actual length of the slice will be,
         // taking into account necessary padding and how mny bytes are left.
