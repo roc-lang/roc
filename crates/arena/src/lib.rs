@@ -4,10 +4,12 @@
 
 mod arena;
 mod arena_ref;
+mod id_map;
 mod string;
 mod vec;
 
 pub use crate::arena::*;
 pub use crate::arena_ref::*;
+pub use crate::id_map::*;
 pub use crate::string::*;
 pub use crate::vec::*;

@@ -76,7 +76,7 @@ impl Drop for Header {
                     align_of::<Header>(),
                 );
 
-                dealloc_virtual(header_ptr.cast(), layout);
+                Allocation::dealloc_virtual(header_ptr.cast(), layout);
             }
         }
     }
@@ -111,8 +111,8 @@ pub struct Arena<'a> {
     pub(crate) content: &'a mut Header,
 }
 
-impl Arena<'a> {
-    pub fn from_owned(allocation: Allocation, max_bytes_stored: usize) -> &mut Self {
+impl<'a> Arena<'a> {
+    pub fn from_owned(allocation: Allocation, max_bytes_stored: usize) -> &'a mut Self {
         let storage = Storage::Owned(allocation);
 
         let todo = todo!(); // TODO get content from pointer etc.
@@ -129,7 +129,7 @@ impl Arena<'a> {
         allocation: &'a mut Allocation,
         layout: Layout,
         max_bytes_stored: usize,
-    ) -> &mut Self {
+    ) -> &'a mut Self {
         let storage = Storage::Borrowed;
         let todo = (); // TODO go ask the allocation to give me a number of its bytes.
 
@@ -209,7 +209,7 @@ impl Arena<'a> {
                 // they should never have report having more than u32::MAX bytes anyway.
                 alloc_size = (bytes_needed as usize).saturating_add(size_of::<Header>());
 
-                let (buf, capacity_bytes) = alloc_virtual(unsafe {
+                let (buf, capacity_bytes) = Allocation::alloc_virtual(unsafe {
                     Layout::from_size_align_unchecked(alloc_size, align_of::<Header>())
                 });
 
@@ -260,7 +260,7 @@ impl Arena<'a> {
 
         // Get the actual capacity back (alloc may have given us more than we asked for,
         // after rounding up for page alignment etc.)
-        let (non_null, allocated_bytes) = alloc_virtual(layout);
+        let (non_null, allocated_bytes) = Allocation::alloc_virtual(layout);
 
         // The allocated bytes include the header, so subtract that back out.
         // In the extremely unlikely event that we end up with zero somehow,
@@ -384,7 +384,7 @@ impl Arena<'a> {
         Ok(ArenaRefMut::new_in((new_ptr - content_ptr) as u32, self))
     }
 
-    pub unsafe fn get_unchecked<'a, T>(&'a self, arena_ref: impl Into<ArenaRef<'a, T>>) -> &'a T {
+    pub unsafe fn get_unchecked<T>(&'a self, arena_ref: impl Into<ArenaRef<'a, T>>) -> &'a T {
         let arena_ref = arena_ref.into();
 
         #[cfg(debug_assertions)]
