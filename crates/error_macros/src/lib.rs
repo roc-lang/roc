@@ -1,6 +1,8 @@
 //! Provides macros for consistent reporting of errors in Roc's rust code.
 #![no_std]
 
+use core::fmt;
+
 #[cfg(unix)]
 extern "C" {
     fn write(fd: i32, buf: *const u8, count: usize) -> isize;
@@ -30,56 +32,54 @@ const STD_ERROR_HANDLE: i32 = -12;
 /// be printed) and then immediately exit the program with an error.
 /// On wasm, this will trap, and on UNIX or Windows it will exit with a code of 1.
 #[cfg(any(unix, windows, wasm32))]
-pub fn error_and_exit<'a>(strings: impl IntoIterator<Item = impl Into<&'a str>>) -> ! {
-    #[cfg(unix)]
-    unsafe {
-        // Write each of the arguments to stderr
-        for string in strings {
-            let string = string.into();
+pub fn error_and_exit(args: fmt::Arguments) -> ! {
+    use fmt::Write;
 
-            if !string.is_empty() {
-                let _ = write(STDERR_FD, string.as_ptr(), string.len());
+    struct StderrWriter;
+
+    impl Write for StderrWriter {
+        #[cfg(unix)]
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            unsafe {
+                let _ = write(STDERR_FD, s.as_ptr(), s.len());
             }
+            Ok(())
         }
 
-        // Write a newline at the end to make sure stderr gets flushed.
-        const NEWLINE: &'static str = "\n";
+        #[cfg(windows)]
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            unsafe {
+                let handle = GetStdHandle(STD_ERROR_HANDLE);
+                let mut written = 0;
+                let _ = WriteFile(
+                    handle,
+                    s.as_ptr(),
+                    s.len() as u32,
+                    &mut written,
+                    core::ptr::null_mut(),
+                );
+            }
+            Ok(())
+        }
 
-        let _ = write(STDERR_FD, NEWLINE.as_ptr(), NEWLINE.len());
+        #[cfg(wasm32)]
+        fn write_str(&mut self, _s: &str) -> fmt::Result {
+            Ok(())
+        }
+    }
 
+    let _ = fmt::write(&mut StderrWriter, args);
+
+    // Write a newline at the end to make sure stderr gets flushed.
+    let _ = StderrWriter.write_str("\n");
+
+    #[cfg(unix)]
+    unsafe {
         exit(1)
     }
 
     #[cfg(windows)]
     unsafe {
-        let handle = GetStdHandle(STD_ERROR_HANDLE);
-        let mut written = 0;
-
-        for string in strings {
-            let string = string.into();
-
-            if !string.is_empty() {
-                let _ = WriteFile(
-                    handle,
-                    string.as_ptr(),
-                    string.len() as u32,
-                    &mut written,
-                    core::ptr::null_mut(),
-                );
-            }
-        }
-
-        // Write a newline at the end to make sure stderr gets flushed.
-        const NEWLINE: &'static str = "\n";
-
-        let _ = WriteFile(
-            handle,
-            NEWLINE.as_ptr(),
-            NEWLINE.len() as u32,
-            &mut written,
-            core::ptr::null_mut(),
-        );
-
         ExitProcess(1)
     }
 
@@ -98,12 +98,25 @@ pub fn error_and_exit<'a>(strings: impl IntoIterator<Item = impl Into<&'a str>>)
 /// If there is a user error, please use roc_reporting to print a nice error message.
 #[macro_export]
 macro_rules! internal_error {
+    () => ({
+        $crate::error_and_exit(format_args!(
+            concat!(
+                "An internal compiler expectation was broken.\n",
+                "This is definitely a compiler bug.\n",
+                "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>"
+            )
+        ))
+    });
     ($($arg:tt)*) => ({
-        $crate::error_and_exit([
-            // TODO: update this to the new bug template.
-            "An internal compiler expectation was broken.\nThis is definitely a compiler bug.\nPlease file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>"
-            $(,$arg)*
-        ])
+        $crate::error_and_exit(format_args!(
+            concat!(
+                "An internal compiler expectation was broken.\n",
+                "This is definitely a compiler bug.\n",
+                "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>\n",
+                "{}"
+            ),
+            format_args!($($arg)*)
+        ))
     })
 }
 
@@ -112,11 +125,25 @@ macro_rules! internal_error {
 /// All cases of `user_error!` should eventually be replaced with pretty error printing using roc_reporting.
 #[macro_export]
 macro_rules! user_error {
+    () => ({
+        $crate::error_and_exit(format_args!(
+            concat!(
+                "We ran into an issue while compiling your code.\n",
+                "Sadly, we don't have a pretty error message for this case yet.\n",
+                "If you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n",
+            )
+        ))
+    });
     ($($arg:tt)*) => ({
-        $crate::error_and_exit([
-            "We ran into an issue while compiling your code.\nSadly, we don't have a pretty error message for this case yet.\nIf you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n"
-            $(,$arg)*
-        ])
+        $crate::error_and_exit(format_args!(
+            concat!(
+                "We ran into an issue while compiling your code.\n",
+                "Sadly, we don't have a pretty error message for this case yet.\n",
+                "If you can't figure out the problem from the context below, please reach out at <https://roc.zulipchat.com>\n",
+                "{}"
+            ),
+            format_args!($($arg)*)
+        ))
     })
 }
 
