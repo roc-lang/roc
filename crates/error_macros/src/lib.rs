@@ -32,6 +32,8 @@ const STD_ERROR_HANDLE: i32 = -12;
 /// Print each of the given strings to stderr (if it's available; on wasm, nothing will
 /// be printed) and then immediately exit the program with an error.
 /// On wasm, this will trap, and on UNIX or Windows it will exit with a code of 1.
+#[inline(never)]
+#[cold]
 #[cfg(any(unix, windows, target_arch = "wasm32"))]
 pub fn error_and_exit(args: fmt::Arguments) -> ! {
     use fmt::Write;
