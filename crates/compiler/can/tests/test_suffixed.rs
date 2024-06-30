@@ -754,7 +754,7 @@ mod suffixed_tests {
                     _ -> 
                         ok {}
             "#,
-            r##"Defs { tags: [Index(2147483648)], regions: [@0-195], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list" }, @0-195 Apply(@0-195 Var { module_name: "Task", ident: "await" }, [@29-37 Var { module_name: "", ident: "getList" }, @0-195 Closure([@29-37 Identifier { ident: "#!a0" }], @0-195 When(@29-37 Var { module_name: "", ident: "#!a0" }, [WhenBranch { patterns: [@61-63 List([])], value: @97-103 Apply(@97-103 Var { module_name: "Task", ident: "await" }, [@97-103 Apply(@97-103 Var { module_name: "", ident: "line" }, [@98-103 Str(PlainLine("foo"))], Space), @97-103 Closure([@97-103 RecordDestructure([])], @128-139 Apply(@128-139 Var { module_name: "", ident: "line" }, [@134-139 Str(PlainLine("bar"))], Space))], BangSuffix), guard: None }, WhenBranch { patterns: [@160-161 Underscore("")], value: @190-195 Apply(@190-192 Var { module_name: "", ident: "ok" }, [@193-195 Record([])], Space), guard: None }]))], BangSuffix))] }"##,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-195], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "list" }, @0-195 Apply(@0-195 Var { module_name: "Task", ident: "await" }, [@29-37 Var { module_name: "", ident: "getList" }, @0-195 Closure([@29-37 Identifier { ident: "#!a1" }], @0-195 When(@29-37 Var { module_name: "", ident: "#!a1" }, [WhenBranch { patterns: [@61-63 List([])], value: @97-103 Apply(@97-103 Var { module_name: "Task", ident: "await" }, [@97-103 Apply(@97-103 Var { module_name: "", ident: "line" }, [@98-103 Str(PlainLine("foo"))], Space), @97-103 Closure([@97-103 RecordDestructure([])], @128-139 Apply(@128-139 Var { module_name: "", ident: "line" }, [@134-139 Str(PlainLine("bar"))], Space))], BangSuffix), guard: None }, WhenBranch { patterns: [@160-161 Underscore("")], value: @190-195 Apply(@190-192 Var { module_name: "", ident: "ok" }, [@193-195 Record([])], Space), guard: None }]))], BangSuffix))] }"##,
         );
     }
 
@@ -912,6 +912,18 @@ mod suffixed_tests {
             "#,
             r##"Defs { tags: [Index(2147483648)], regions: [@0-48], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-48 Apply(@0-48 Var { module_name: "Task", ident: "await" }, [@27-29 Var { module_name: "", ident: "a" }, @0-48 Closure([@27-29 Identifier { ident: "#!a0" }], @0-48 LowLevelDbg(("test.roc:3", "  "), @27-29 Apply(@27-29 Var { module_name: "Inspect", ident: "toStr" }, [@27-29 Var { module_name: "", ident: "#!a0" }], Space), @47-48 Var { module_name: "", ident: "b" }))], BangSuffix))] }"##,
         )
+    }
+
+    #[test]
+    fn last_stmt_not_top_level_suffixed() {
+        run_test(
+            r#"
+            main =
+                x = 42
+                a b!
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-50], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-50 Defs(Defs { tags: [Index(2147483650)], regions: [@27-29], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "x" }, @27-29 Num("42")), Body(@23-24 Identifier { ident: "x" }, @27-29 Num("42")), Body(@23-24 Identifier { ident: "x" }, @27-29 Num("42"))] }, @0-50 Apply(@0-50 Var { module_name: "Task", ident: "await" }, [@48-49 Var { module_name: "", ident: "b" }, @0-50 Closure([@48-49 Identifier { ident: "#!a0" }], @46-50 Apply(@46-47 Var { module_name: "", ident: "a" }, [@48-49 Var { module_name: "", ident: "#!a0" }], Space))], BangSuffix)))] }"##,
+        );
     }
 }
 
