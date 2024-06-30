@@ -14,15 +14,15 @@ const STDERR_FD: i32 = 2;
 
 #[cfg(windows)]
 extern "C" {
-    pub fn GetStdHandle(nStdHandle: i32) -> *mut core::ffi::c_void;
-    pub fn WriteFile(
+    fn GetStdHandle(nStdHandle: i32) -> *mut core::ffi::c_void;
+    fn WriteFile(
         hFile: *mut core::ffi::c_void,
         lpBuffer: *const u8,
         nNumberOfBytesToWrite: u32,
         lpNumberOfBytesWritten: *mut u32,
         lpOverlapped: *mut core::ffi::c_void,
     ) -> i32;
-    pub fn ExitProcess(exit_code: u32) -> !;
+    fn ExitProcess(exit_code: u32) -> !;
 }
 
 #[cfg(windows)]
