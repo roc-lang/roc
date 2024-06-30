@@ -1,6 +1,7 @@
 //! Provides macros for consistent reporting of errors in Roc's rust code.
 #![no_std]
 
+#[cfg(any(unix, windows, target_arch = "wasm32"))]
 use core::fmt;
 
 #[cfg(unix)]
@@ -31,7 +32,9 @@ const STD_ERROR_HANDLE: i32 = -12;
 /// Print each of the given strings to stderr (if it's available; on wasm, nothing will
 /// be printed) and then immediately exit the program with an error.
 /// On wasm, this will trap, and on UNIX or Windows it will exit with a code of 1.
-#[cfg(any(unix, windows, wasm32))]
+#[inline(never)]
+#[cold]
+#[cfg(any(unix, windows, target_arch = "wasm32"))]
 pub fn error_and_exit(args: fmt::Arguments) -> ! {
     use fmt::Write;
 
@@ -98,7 +101,8 @@ pub const INTERNAL_ERROR_MESSAGE: &str = concat!(
 );
 
 /// `internal_error!` should be used whenever a compiler invariant is broken.
-/// It is tells the user to file a bug and then exits the program with a nonzero exit code.
+/// It tells the user to file a bug and then exits the program with a nonzero exit code.
+/// (On wasm it doesn't tell the user anything, since we don't necessarily have a way to print.)
 /// This should only be used in cases where there would be a compiler bug and the user can't fix it.
 /// If there is simply an unimplemented feature, please use `unimplemented!`
 /// If there is a user error, please use roc_reporting to print a nice error message.
@@ -234,13 +238,13 @@ macro_rules! assert_copyable {
 #[macro_export]
 macro_rules! _incomplete_project {
     ($project_name:literal, $tracking_issue_no:literal) => {
-        panic!(
+        $crate::internal_error!(
             "[{}] not yet implemented. Tracking issue: https://github.com/roc-lang/roc/issues/{}",
             $project_name, $tracking_issue_no,
         )
     };
     ($project_name:literal, $tracking_issue_no:literal, $($arg:tt)+) => {
-        panic!(
+        $crate::internal_error!(
             "[{}] not yet implemented. Tracking issue: https://github.com/roc-lang/roc/issues/{}.\nAdditional information: {}",
             $project_name, $tracking_issue_no,
             format_args!($($arg)+),
