@@ -119,10 +119,17 @@ fn find_zig_glue_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
+    // This path is available when built and run from source
     // Environment variable defined in wasi-libc-sys/build.rs
-    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
-    if std::path::Path::exists(&wasi_libc_pathbuf) {
-        return wasi_libc_pathbuf;
+    let build_path = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&build_path) {
+        return build_path;
+    }
+
+    // This path is available in the release tarball
+    match get_relative_path(Path::new("lib/wasi-libc.a")) {
+        Some(path) if path.exists() => return path,
+        _ => (),
     }
 
     internal_error!("cannot find `wasi-libc.a`")
@@ -981,20 +988,14 @@ fn link_linux(
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path_str.to_string()],
+            [scrt1_path_str.as_ref()],
             output_path,
         ),
         LinkType::Dylib => {
             let mut output_path = output_path;
             output_path.set_extension("so");
 
-            (
-                // TODO: find a way to avoid using a vec! here - should theoretically be
-                // able to do this somehow using &[] but the borrow checker isn't having it.
-                // Also find a way to have these be string slices instead of Strings.
-                vec!["-shared".to_string()],
-                output_path,
-            )
+            (["-shared"], output_path)
         }
         LinkType::None => internal_error!("link_linux should not be called with link type of none"),
     };
@@ -1025,7 +1026,7 @@ fn link_linux(
             &crti_path_str,
             &crtn_path_str,
         ])
-        .args(&base_args)
+        .args(base_args)
         .args(["-dynamic-linker", ld_linux_path_str])
         .args(input_paths)
         .args(extra_link_flags())
@@ -1345,12 +1346,14 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
         .expect("failed to write host builtins object to tempfile");
 
+    let wasi_libc_path = find_wasi_libc_path();
+
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
         builtins_host_tempfile.path().to_str().unwrap(),
         host_input,
-        WASI_LIBC_PATH,
+        wasi_libc_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti
         "-o",
         output_file,

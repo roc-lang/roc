@@ -1437,6 +1437,54 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_transitive_deps_app() {
+        check_output_with_stdin(
+            &fixture_file("transitive-deps", "direct-one.roc"),
+            &[],
+            &[],
+            &[],
+            &[],
+            "[One imports Two: From two]\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_transitive_and_direct_dep_app() {
+        check_output_with_stdin(
+            &fixture_file("transitive-deps", "direct-one-and-two.roc"),
+            &[],
+            &[],
+            &[],
+            &[],
+            "[One imports Two: From two] | From two\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_double_transitive_dep_app() {
+        check_output_with_stdin(
+            &fixture_file("transitive-deps", "direct-zero.roc"),
+            &[],
+            &[],
+            &[],
+            &[],
+            "[Zero imports One: [One imports Two: From two]]\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
     fn known_type_error() {
         check_compile_error(
             &known_bad_file("TypeError.roc"),

@@ -9,7 +9,7 @@ use crate::module::{
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
 use crossbeam::channel::{bounded, Sender};
-use crossbeam::deque::{Injector, Stealer, Worker};
+use crossbeam::deque::{Injector, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
@@ -66,10 +66,10 @@ use roc_solve_problem::TypeError;
 use roc_target::Target;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
+use roc_worker::{ChannelProblem, WorkerMsg};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
-use std::iter;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
@@ -81,8 +81,8 @@ use {
     roc_packaging::https::{PackageMetadata, Problem},
 };
 
-pub use crate::work::Phase;
-use crate::work::{DepCycle, Dependencies};
+pub use roc_work::Phase;
+use roc_work::{DepCycle, Dependencies};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_instant::{Duration, Instant};
@@ -150,7 +150,8 @@ fn start_phase<'a>(
 ) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
-    use crate::work::PrepareStartPhase::*;
+    use roc_work::PrepareStartPhase::*;
+
     match state.dependencies.prepare_start_phase(module_id, phase) {
         Continue => {
             // fall through
@@ -939,12 +940,6 @@ enum BuildTask<'a> {
 }
 
 #[derive(Debug)]
-enum WorkerMsg {
-    Shutdown,
-    TaskAdded,
-}
-
-#[derive(Debug)]
 pub struct IncorrectModuleName<'a> {
     pub module_id: ModuleId,
     pub found: Loc<PQModuleName<'a>>,
@@ -1011,26 +1006,6 @@ impl<'a> AvailableShorthands<'a> {
     }
 }
 
-#[derive(Debug)]
-pub enum ChannelProblem {
-    FailedToEnqueueTask(Box<PanicReportInfo>),
-    FailedToSendRootMsg,
-    FailedToSendWorkerShutdownMsg,
-    ChannelDisconnected,
-    FailedToSendManyMsg,
-    FailedToSendFinishedSpecializationsMsg,
-    FailedToSendTaskMsg,
-    FailedToSendFinishedTypeCheckingMsg,
-}
-
-#[derive(Debug)]
-pub struct PanicReportInfo {
-    can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: MutMap<ModuleId, Vec<TypeError>>,
-    sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
-    interns: Interns,
-}
-
 pub enum Phases {
     /// Parse, canonicalize, check types
     TypeCheck,
@@ -1045,35 +1020,13 @@ fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
     task: BuildTask<'a>,
-    state: &State<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
-        listener.send(WorkerMsg::TaskAdded).map_err(|_| {
-            let module_ids = { (*state.arc_modules).lock().clone() }.into_module_ids();
-
-            let interns = Interns {
-                module_ids,
-                all_ident_ids: state.constrained_ident_ids.clone(),
-            };
-
-            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(Box::new(
-                PanicReportInfo {
-                    can_problems: state.module_cache.can_problems.clone(),
-                    type_problems: state.module_cache.type_problems.clone(),
-                    interns,
-                    sources: state
-                        .module_cache
-                        .sources
-                        .iter()
-                        .map(|(key, (path, str_ref))| {
-                            (*key, (path.clone(), str_ref.to_string().into_boxed_str()))
-                        })
-                        .collect(),
-                },
-            )))
-        })?;
+        listener
+            .send(WorkerMsg::TaskAdded)
+            .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask))?;
     }
 
     Ok(())
@@ -1607,15 +1560,7 @@ pub fn load_single_threaded<'a>(
 
     // now we just manually interleave stepping the state "thread" and the worker "thread"
     loop {
-        match state_thread_step(
-            arena,
-            state,
-            &src_dir,
-            worker_listeners,
-            &injector,
-            &msg_tx,
-            &msg_rx,
-        ) {
+        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
                 state = new_state;
@@ -1624,24 +1569,17 @@ pub fn load_single_threaded<'a>(
         }
 
         // then check if the worker can step
-        let control_flow = worker_task_step(
-            arena,
-            &worker,
-            &injector,
-            stealers,
-            &worker_msg_rx,
-            &msg_tx,
-            &src_dir,
-            roc_cache_dir,
-            target,
-        );
+        let control_flow =
+            roc_worker::worker_task_step(&worker, &injector, stealers, &worker_msg_rx, |task| {
+                run_task(task, arena, &src_dir, msg_tx.clone(), roc_cache_dir, target)
+            });
 
         match control_flow {
             Ok(ControlFlow::Break(())) => panic!("the worker should not break!"),
             Ok(ControlFlow::Continue(())) => {
                 // progress was made
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(LoadingProblem::ChannelProblem(e)),
         }
     }
 }
@@ -1649,7 +1587,6 @@ pub fn load_single_threaded<'a>(
 fn state_thread_step<'a>(
     arena: &'a Bump,
     state: State<'a>,
-    src_dir: &Path,
     worker_listeners: &'a [Sender<WorkerMsg>],
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
@@ -1758,7 +1695,6 @@ fn state_thread_step<'a>(
 
                     let res_state = update(
                         state,
-                        src_dir,
                         msg,
                         msg_tx.clone(),
                         injector,
@@ -2036,11 +1972,6 @@ fn load_multi_threaded<'a>(
     let stealers = stealers.into_bump_slice();
     let it = worker_arenas.iter_mut();
 
-    let mut can_problems_recorded = MutMap::default();
-    let mut type_problems_recorded = MutMap::default();
-    let mut sources_recorded = MutMap::default();
-    let mut interns_recorded = Interns::default();
-
     {
         let thread_result = thread::scope(|thread_scope| {
             let mut worker_listeners =
@@ -2065,17 +1996,16 @@ fn load_multi_threaded<'a>(
                     .stack_size(EXPANDED_STACK_SIZE)
                     .spawn(move |_| {
                         // will process messages until we run out
-                        worker_task(
-                            worker_arena,
-                            worker,
-                            injector,
-                            stealers,
-                            worker_msg_rx,
-                            msg_tx,
-                            src_dir,
-                            roc_cache_dir,
-                            target,
-                        )
+                        roc_worker::worker_task(worker, injector, stealers, worker_msg_rx, |task| {
+                            run_task(
+                                task,
+                                worker_arena,
+                                src_dir,
+                                msg_tx.clone(),
+                                roc_cache_dir,
+                                target,
+                            )
+                        })
                     });
 
                 res_join_handle.unwrap_or_else(|_| {
@@ -2110,15 +2040,8 @@ fn load_multi_threaded<'a>(
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             loop {
-                match state_thread_step(
-                    arena,
-                    state,
-                    &src_dir,
-                    worker_listeners,
-                    &injector,
-                    &msg_tx,
-                    &msg_rx,
-                ) {
+                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
+                {
                     Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads!();
 
@@ -2127,36 +2050,6 @@ fn load_multi_threaded<'a>(
                     Ok(ControlFlow::Continue(new_state)) => {
                         state = new_state;
                         continue;
-                    }
-                    Err(LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(
-                        info,
-                    ))) => {
-                        let PanicReportInfo {
-                            can_problems,
-                            type_problems,
-                            sources,
-                            interns,
-                        } = *info;
-
-                        // Record these for later.
-                        can_problems_recorded = can_problems;
-                        type_problems_recorded = type_problems;
-                        sources_recorded = sources;
-                        interns_recorded = interns;
-
-                        shut_down_worker_threads!();
-
-                        return Err(LoadingProblem::ChannelProblem(
-                            ChannelProblem::FailedToEnqueueTask(Box::new(PanicReportInfo {
-                                // This return value never gets used, so don't bother
-                                // cloning these in order to be able to return them.
-                                // Really, anything could go here.
-                                can_problems: Default::default(),
-                                type_problems: Default::default(),
-                                sources: Default::default(),
-                                interns: Default::default(),
-                            })),
-                        ));
                     }
                     Err(e) => {
                         shut_down_worker_threads!();
@@ -2194,180 +2087,6 @@ fn load_multi_threaded<'a>(
     }
 }
 
-fn worker_task_step<'a>(
-    worker_arena: &'a Bump,
-    worker: &Worker<BuildTask<'a>>,
-    injector: &Injector<BuildTask<'a>>,
-    stealers: &[Stealer<BuildTask<'a>>],
-    worker_msg_rx: &crossbeam::channel::Receiver<WorkerMsg>,
-    msg_tx: &MsgSender<'a>,
-    src_dir: &Path,
-    roc_cache_dir: RocCacheDir<'_>,
-    target: Target,
-) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
-    match worker_msg_rx.try_recv() {
-        Ok(msg) => {
-            match msg {
-                WorkerMsg::Shutdown => {
-                    // We've finished all our work. It's time to
-                    // shut down the thread, so when the main thread
-                    // blocks on joining with all the worker threads,
-                    // it can finally exit too!
-                    Ok(ControlFlow::Break(()))
-                }
-                WorkerMsg::TaskAdded => {
-                    // Find a task - either from this thread's queue,
-                    // or from the main queue, or from another worker's
-                    // queue - and run it.
-                    //
-                    // There might be no tasks to work on! That could
-                    // happen if another thread is working on a task
-                    // which will later result in more tasks being
-                    // added. In that case, do nothing, and keep waiting
-                    // until we receive a Shutdown message.
-                    if let Some(task) = find_task(worker, injector, stealers) {
-                        let result = run_task(
-                            task,
-                            worker_arena,
-                            src_dir,
-                            msg_tx.clone(),
-                            roc_cache_dir,
-                            target,
-                        );
-
-                        match result {
-                            Ok(()) => {}
-                            Err(LoadingProblem::ChannelProblem(problem)) => {
-                                panic!("Channel problem: {problem:?}");
-                            }
-                            Err(LoadingProblem::ParsingFailed(problem)) => {
-                                msg_tx.send(Msg::FailedToParse(problem)).unwrap();
-                            }
-                            Err(LoadingProblem::FileProblem { filename, error }) => {
-                                msg_tx
-                                    .send(Msg::FailedToReadFile { filename, error })
-                                    .unwrap();
-                            }
-                            Err(LoadingProblem::IncorrectModuleName(err)) => {
-                                msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
-                            }
-                            Err(err @ LoadingProblem::UnrecognizedPackageShorthand { .. }) => {
-                                msg_tx.send(Msg::FailedToLoad(err)).unwrap();
-                            }
-                            Err(other) => {
-                                return Err(other);
-                            }
-                        }
-                    }
-
-                    Ok(ControlFlow::Continue(()))
-                }
-            }
-        }
-        Err(err) => match err {
-            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(())),
-            crossbeam::channel::TryRecvError::Disconnected => Ok(ControlFlow::Break(())),
-        },
-    }
-}
-
-fn worker_task<'a>(
-    worker_arena: &'a Bump,
-    worker: Worker<BuildTask<'a>>,
-    injector: &Injector<BuildTask<'a>>,
-    stealers: &[Stealer<BuildTask<'a>>],
-    worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
-    msg_tx: MsgSender<'a>,
-    src_dir: &Path,
-    roc_cache_dir: RocCacheDir<'_>,
-    target: Target,
-) -> Result<(), LoadingProblem<'a>> {
-    // Keep listening until we receive a Shutdown msg
-    for msg in worker_msg_rx.iter() {
-        match msg {
-            WorkerMsg::Shutdown => {
-                // We've finished all our work. It's time to
-                // shut down the thread, so when the main thread
-                // blocks on joining with all the worker threads,
-                // it can finally exit too!
-                return Ok(());
-            }
-            WorkerMsg::TaskAdded => {
-                // Find a task - either from this thread's queue,
-                // or from the main queue, or from another worker's
-                // queue - and run it.
-                //
-                // There might be no tasks to work on! That could
-                // happen if another thread is working on a task
-                // which will later result in more tasks being
-                // added. In that case, do nothing, and keep waiting
-                // until we receive a Shutdown message.
-                if let Some(task) = find_task(&worker, injector, stealers) {
-                    log!(
-                        ">>> {}",
-                        match &task {
-                            BuildTask::LoadModule { module_name, .. } => {
-                                format!("BuildTask::LoadModule({module_name:?})")
-                            }
-                            BuildTask::Parse { header, .. } => {
-                                format!("BuildTask::Parse({})", header.module_path.display())
-                            }
-                            BuildTask::CanonicalizeAndConstrain { parsed, .. } => format!(
-                                "BuildTask::CanonicalizeAndConstrain({})",
-                                parsed.module_path.display()
-                            ),
-                            BuildTask::Solve { module, .. } => {
-                                format!("BuildTask::Solve({:?})", module.module_id)
-                            }
-                            BuildTask::BuildPendingSpecializations { module_id, .. } => {
-                                format!("BuildTask::BuildPendingSpecializations({module_id:?})")
-                            }
-                            BuildTask::MakeSpecializations { module_id, .. } => {
-                                format!("BuildTask::MakeSpecializations({module_id:?})")
-                            }
-                        }
-                    );
-
-                    let result = run_task(
-                        task,
-                        worker_arena,
-                        src_dir,
-                        msg_tx.clone(),
-                        roc_cache_dir,
-                        target,
-                    );
-
-                    match result {
-                        Ok(()) => {}
-                        Err(LoadingProblem::ChannelProblem(problem)) => {
-                            panic!("Channel problem: {problem:?}");
-                        }
-                        Err(LoadingProblem::ParsingFailed(problem)) => {
-                            msg_tx.send(Msg::FailedToParse(problem)).unwrap();
-                        }
-                        Err(LoadingProblem::FileProblem { filename, error }) => {
-                            msg_tx
-                                .send(Msg::FailedToReadFile { filename, error })
-                                .unwrap();
-                        }
-                        Err(LoadingProblem::IncorrectModuleName(err)) => {
-                            msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
-                        }
-                        Err(err @ LoadingProblem::UnrecognizedPackageShorthand { .. }) => {
-                            msg_tx.send(Msg::FailedToLoad(err)).unwrap();
-                        }
-                        Err(other) => {
-                            return Err(other);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn start_tasks<'a>(
     arena: &'a Bump,
     state: &mut State<'a>,
@@ -2379,7 +2098,7 @@ fn start_tasks<'a>(
         let tasks = start_phase(module_id, phase, arena, state);
 
         for task in tasks {
-            enqueue_task(injector, worker_listeners, task, state)?
+            enqueue_task(injector, worker_listeners, task)?
         }
     }
 
@@ -2438,7 +2157,6 @@ fn extend_module_with_builtin_import(module: &mut ParsedModule, module_id: Modul
 
 fn update<'a>(
     mut state: State<'a>,
-    src_dir: &Path,
     msg: Msg<'a>,
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
@@ -2467,11 +2185,14 @@ fn update<'a>(
             if !header.packages.is_empty() {
                 let mut shorthands = state.arc_shorthands.lock();
 
+                let mut parent_dir = header.module_path.clone();
+                parent_dir.pop();
+
                 register_package_shorthands(
                     &mut shorthands,
                     &header.packages,
                     &header.module_path,
-                    src_dir,
+                    &parent_dir,
                     &state.cache_dir,
                 )?;
             }
@@ -3611,6 +3332,7 @@ fn load_package_from_disk<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
+    roc_cache_dir: RocCacheDir,
     app_module_id: Option<ModuleId>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
@@ -3669,20 +3391,41 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
-                    let (_, _, package_module_msg) = build_package_header(
+                    let mut parent_dir = filename.to_path_buf();
+                    parent_dir.pop();
+
+                    let packages = unspace(arena, header.packages.value.items);
+
+                    let (_, _, header) = build_package_header(
                         arena,
                         Some(shorthand),
                         false, // cannot be the root if loaded as a package
                         filename.to_path_buf(),
                         parser_state,
-                        module_ids,
-                        ident_ids_by_module,
+                        module_ids.clone(),
+                        ident_ids_by_module.clone(),
                         &header,
                         comments,
                         pkg_module_timing,
                     )?;
 
-                    Ok(Msg::Header(package_module_msg))
+                    let filename = header.module_path.clone();
+                    let mut messages = Vec::with_capacity(packages.len() + 1);
+                    messages.push(Msg::Header(header));
+
+                    load_packages(
+                        packages,
+                        &mut messages,
+                        roc_cache_dir,
+                        parent_dir,
+                        arena,
+                        None,
+                        module_ids,
+                        ident_ids_by_module,
+                        filename,
+                    );
+
+                    Ok(Msg::Many(messages))
                 }
                 Ok((
                     ast::Module {
@@ -3691,6 +3434,11 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
+                    let mut parent_dir = filename.to_path_buf();
+                    parent_dir.pop();
+
+                    let packages = unspace(arena, header.packages.item.items);
+
                     let exposes_ids = get_exposes_ids(
                         header.exposes.item.items,
                         arena,
@@ -3699,21 +3447,37 @@ fn load_package_from_disk<'a>(
                     );
 
                     // make a `platform` module that ultimately exposes `main` to the host
-                    let (_, _, platform_module_msg) = build_platform_header(
+                    let (_, _, header) = build_platform_header(
                         arena,
                         Some(shorthand),
                         false, // cannot be the root if loaded as a package
                         app_module_id,
                         filename.to_path_buf(),
                         parser_state,
-                        module_ids,
+                        module_ids.clone(),
                         exposes_ids.into_bump_slice(),
                         &header,
                         comments,
                         pkg_module_timing,
                     )?;
 
-                    Ok(Msg::Header(platform_module_msg))
+                    let filename = header.module_path.clone();
+                    let mut messages = Vec::with_capacity(packages.len() + 1);
+                    messages.push(Msg::Header(header));
+
+                    load_packages(
+                        packages,
+                        &mut messages,
+                        roc_cache_dir,
+                        parent_dir,
+                        arena,
+                        None,
+                        module_ids,
+                        ident_ids_by_module,
+                        filename,
+                    );
+
+                    Ok(Msg::Many(messages))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
@@ -3961,32 +3725,6 @@ fn module_name_to_path<'a>(
     (filename, opt_shorthand)
 }
 
-/// Find a task according to the following algorithm:
-///
-/// 1. Look in a local Worker queue. If it has a task, pop it off the queue and return it.
-/// 2. If that queue was empty, ask the global queue for a task.
-/// 3. If the global queue is also empty, iterate through each Stealer (each Worker queue has a
-///    corresponding Stealer, which can steal from it. Stealers can be shared across threads.)
-///
-/// Based on https://docs.rs/crossbeam/0.7.3/crossbeam/deque/index.html#examples
-fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]) -> Option<T> {
-    // Pop a task from the local queue, if not empty.
-    local.pop().or_else(|| {
-        // Otherwise, we need to look for a task elsewhere.
-        iter::repeat_with(|| {
-            // Try stealing a task from the global queue.
-            global
-                .steal()
-                // Or try stealing a task from one of the other threads.
-                .or_else(|| stealers.iter().map(|s| s.steal()).collect())
-        })
-        // Loop while no task was stolen and any steal operation needs to be retried.
-        .find(|s| !s.is_retry())
-        // Extract the stolen task, if there is one.
-        .and_then(|s| s.success())
-    })
-}
-
 #[derive(Debug)]
 struct HeaderOutput<'a> {
     module_id: ModuleId,
@@ -3995,14 +3733,19 @@ struct HeaderOutput<'a> {
     opt_platform_shorthand: Option<&'a str>,
 }
 
-fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
+pub enum RocFileErr {
+    InvalidExtension,
+    NotDotRocAndNoHashbangOnFirstLine,
+    InvalidUtf8,
+}
+
+fn ensure_roc_file(filename: &Path, src_bytes: &[u8]) -> Result<(), RocFileErr> {
     match filename.extension() {
         Some(ext) => {
-            if ext != ROC_FILE_EXTENSION {
-                return Err(LoadingProblem::FileProblem {
-                    filename: filename.to_path_buf(),
-                    error: io::ErrorKind::Unsupported,
-                });
+            if ext == ROC_FILE_EXTENSION {
+                Ok(())
+            } else {
+                Err(RocFileErr::InvalidExtension)
             }
         }
         None => {
@@ -4010,18 +3753,19 @@ fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingP
                 .iter()
                 .position(|a| *a == b'\n')
                 .unwrap_or(src_bytes.len());
-            let frist_line_bytes = src_bytes[0..index].to_vec();
-            if let Ok(first_line) = String::from_utf8(frist_line_bytes) {
+            let first_line_bytes = &src_bytes[0..index];
+
+            if let Ok(first_line) = core::str::from_utf8(first_line_bytes) {
                 if !(first_line.starts_with("#!") && first_line.contains("roc")) {
-                    return Err(LoadingProblem::FileProblem {
-                        filename: filename.to_path_buf(),
-                        error: std::io::ErrorKind::Unsupported,
-                    });
+                    Err(RocFileErr::NotDotRocAndNoHashbangOnFirstLine)
+                } else {
+                    Ok(())
                 }
+            } else {
+                Err(RocFileErr::InvalidUtf8)
             }
         }
     }
-    Ok(())
 }
 
 fn parse_header<'a>(
@@ -4042,7 +3786,23 @@ fn parse_header<'a>(
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
 
-    ensure_roc_file(&filename, src_bytes)?;
+    if let Err(problem) = ensure_roc_file(&filename, src_bytes) {
+        let problem = match problem {
+            // TODO we should print separate error messages for these
+            RocFileErr::InvalidExtension | RocFileErr::NotDotRocAndNoHashbangOnFirstLine => {
+                LoadingProblem::FileProblem {
+                    filename,
+                    error: io::ErrorKind::Unsupported,
+                }
+            }
+            RocFileErr::InvalidUtf8 => LoadingProblem::FileProblem {
+                filename,
+                error: io::ErrorKind::InvalidData,
+            },
+        };
+
+        return Err(problem);
+    };
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
@@ -4359,6 +4119,7 @@ fn load_packages<'a>(
             arena,
             &root_module_path,
             shorthand,
+            roc_cache_dir,
             app_module_id,
             module_ids.clone(),
             ident_ids_by_module.clone(),
@@ -6356,10 +6117,10 @@ fn run_task<'a>(
     msg_tx: MsgSender<'a>,
     roc_cache_dir: RocCacheDir<'_>,
     target: Target,
-) -> Result<(), LoadingProblem<'a>> {
+) -> Result<(), ChannelProblem> {
     use BuildTask::*;
 
-    let msg = match task {
+    let msg_result = match task {
         LoadModule {
             module_name,
             module_ids,
@@ -6508,13 +6269,37 @@ fn run_task<'a>(
             derived_module,
             expectations,
         )),
-    }?;
+    };
 
-    msg_tx
-        .send(msg)
-        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendTaskMsg))?;
+    match msg_result {
+        Ok(msg) => {
+            msg_tx
+                .send(msg)
+                .map_err(|_| ChannelProblem::FailedToSendTaskMsg)?;
 
-    Ok(())
+            Ok(())
+        }
+        Err(loading_problem) => {
+            let result = match loading_problem {
+                LoadingProblem::ChannelProblem(problem) => {
+                    return Err(problem);
+                }
+                LoadingProblem::ParsingFailed(problem) => msg_tx.send(Msg::FailedToParse(problem)),
+                LoadingProblem::FileProblem { filename, error } => {
+                    msg_tx.send(Msg::FailedToReadFile { filename, error })
+                }
+                LoadingProblem::IncorrectModuleName(err) => {
+                    msg_tx.send(Msg::IncorrectModuleName(err))
+                }
+                err => msg_tx.send(Msg::FailedToLoad(err)),
+            };
+
+            match result {
+                Ok(()) => Ok(()),
+                Err(_) => Err(ChannelProblem::FailedToSendTaskMsg),
+            }
+        }
+    }
 }
 
 fn to_import_cycle_report(

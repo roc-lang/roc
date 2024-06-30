@@ -141,7 +141,7 @@ fn headers_from_annotation_help(
                     constraints.push_type(types, typ)
                 };
                 let typ = Loc::at(annotation.region, annotation_index);
-                headers.insert(rest, typ);
+                headers.insert(rest.value, typ);
 
                 false
             } else {
@@ -735,7 +735,7 @@ pub fn constrain_pattern(
 
             if let Some((_, Some(rest))) = opt_rest {
                 state.headers.insert(
-                    *rest,
+                    rest.value,
                     Loc {
                         region,
                         value: *constraints[expected].get_type_ref(),

@@ -2446,7 +2446,7 @@ fn pattern_as_of_symbol() {
 #[mono_test]
 fn function_specialization_information_in_lambda_set_thunk() {
     // https://github.com/roc-lang/roc/issues/4734
-    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    // https://github.com/roc-lang/rfcs/blob/main/0010-let-generalization-lets-not.md
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
@@ -2465,7 +2465,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
 #[mono_test]
 fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     // https://github.com/roc-lang/roc/issues/4734
-    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    // https://github.com/roc-lang/rfcs/blob/main/0010-let-generalization-lets-not.md
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
