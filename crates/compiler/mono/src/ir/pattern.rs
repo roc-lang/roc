@@ -131,6 +131,8 @@ enum PatternBindingIter<'r, 'a> {
 
 enum PatternBindingWork<'r, 'a> {
     Pat(&'r Pattern<'a>),
+    #[allow(dead_code)]
+    // Field will be used once todo is immplemented in next in impl<'r, 'a> Iterator for PatternBindingIter
     RecordDestruct(&'r DestructType<'a>),
 }
 

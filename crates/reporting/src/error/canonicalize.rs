@@ -1698,7 +1698,11 @@ fn to_bad_ident_pattern_report<'b>(
 enum BadIdentNext<'a> {
     LowercaseAccess(u32),
     UppercaseAccess(u32),
+    #[allow(dead_code)]
+    // The field u32 will be used once todo is implemented in to_bad_ident_expr_report
     NumberAccess(u32),
+    #[allow(dead_code)]
+    // The field str will be used once todo is implemented in to_bad_ident_expr_report
     Keyword(&'a str),
     DanglingDot,
     Other(Option<char>),
