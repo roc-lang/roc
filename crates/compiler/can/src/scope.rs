@@ -33,7 +33,6 @@ pub struct Scope {
     pub modules: ScopeModules,
 
     /// Identifiers that are imported
-    // todo(agus): move to ScopeModules?
     imported_symbols: Vec<(Ident, Symbol, Region)>,
 
     /// Shadows of an ability member, for example a local specialization of `eq` for the ability

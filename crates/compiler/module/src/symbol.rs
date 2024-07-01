@@ -641,7 +641,7 @@ impl LookedupSymbol {
 #[derive(Debug, Clone)]
 pub struct ScopeModules {
     modules: VecMap<ModuleName, ModuleId>,
-    sources: VecMap<ModuleId, ScopeModuleSource>, // todo(agus): why not Vec?
+    sources: Vec<ScopeModuleSource>,
     params: Vec<Option<Symbol>>,
 }
 
@@ -698,17 +698,16 @@ impl ScopeModules {
         params_symbol: Option<Symbol>,
         region: Region,
     ) -> Result<(), ScopeModuleSource> {
-        if let Some(existing_module_id) = self.modules.get(&module_name) {
+        if let Some((index, existing_module_id)) = self.modules.get_with_index(&module_name) {
             if *existing_module_id == module_id {
                 return Ok(());
             }
 
-            return Err(*self.sources.get(existing_module_id).unwrap());
+            return Err(*self.sources.get(index).unwrap());
         }
 
         self.modules.insert(module_name, module_id);
-        self.sources
-            .insert(module_id, ScopeModuleSource::Import(region));
+        self.sources.push(ScopeModuleSource::Import(region));
         self.params.push(params_symbol);
         Ok(())
     }
@@ -1078,14 +1077,12 @@ macro_rules! define_builtins {
                 let capacity = $total + 1;
 
                 let mut modules = VecMap::with_capacity(capacity);
-                let mut sources = VecMap::with_capacity(capacity);
+                let mut sources = Vec::with_capacity(capacity);
                 let mut params = Vec::with_capacity(capacity);
-
-                // todo(agus): Use insert
 
                 if !home_id.is_builtin() {
                     modules.insert(home_name, home_id);
-                    sources.insert(home_id, ScopeModuleSource::Current);
+                    sources.push(ScopeModuleSource::Current);
                     params.push(None);
                 }
 
@@ -1093,7 +1090,7 @@ macro_rules! define_builtins {
                     let name: ModuleName = name_str.into();
 
                     modules.insert(name, id);
-                    sources.insert(id, ScopeModuleSource::Builtin);
+                    sources.push(ScopeModuleSource::Builtin);
                     params.push(None);
                 };
 
