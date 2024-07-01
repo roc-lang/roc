@@ -194,7 +194,7 @@ pub(crate) fn preprocess_windows(
         Err(e) => internal_error!("Failed to parse shared library file: {e}"),
     };
     let dummy_dll_symbols = shared_lib_obj
-        .dynamic_symbols()
+        .symbols()
         .filter(is_roc_definition)
         .count();
 
