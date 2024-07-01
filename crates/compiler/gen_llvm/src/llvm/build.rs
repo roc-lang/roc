@@ -2964,136 +2964,61 @@ fn list_literal<'a, 'ctx>(
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
-    // TODO re-enable, currently causes morphic segfaults because it tries to update
-    // constants in-place...
-    // if element_type.is_int_type() {
-    if false {
+    let is_all_constant = elems.iter().all(|e| e.is_literal());
+
+    if is_all_constant {
         let element_type = element_type.into_int_type();
+
         let element_width = layout_interner.stack_size(element_layout);
-        let size = list_length * element_width as usize;
-        let alignment = layout_interner
+
+        let refcount_slot_bytes = layout_interner
             .alignment_bytes(element_layout)
-            .max(env.target.ptr_width() as u32);
+            .max(env.target.ptr_width() as u32) as usize;
 
-        let mut is_all_constant = true;
-        let zero_elements =
-            (env.target.ptr_width() as u8 as f64 / element_width as f64).ceil() as usize;
+        let refcount_slot_elements =
+            (refcount_slot_bytes as f64 / element_width as f64).ceil() as usize;
 
-        // runtime-evaluated elements
-        let mut runtime_evaluated_elements = Vec::with_capacity_in(list_length, env.arena);
+        let data_bytes = list_length * element_width as usize;
 
-        // set up a global that contains all the literal elements of the array
-        // any variables or expressions are represented as `undef`
-        let global = {
-            let mut global_elements = Vec::with_capacity_in(list_length, env.arena);
+        assert!(refcount_slot_elements > 0);
 
-            // Add zero bytes that represent the refcount
-            //
-            // - if all elements are const, then we store the whole list as a constant.
-            //      It then needs a refcount before the first element.
-            // - but if the list is not all constants, then we will just copy the constant values,
-            //      and we do not need that refcount at the start
-            //
-            // In the latter case, we won't store the zeros in the globals
-            // (we slice them off again below)
-            for _ in 0..zero_elements {
-                global_elements.push(element_type.const_zero());
-            }
+        let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
 
-            // Copy the elements from the list literal into the array
-            for (index, element) in elems.iter().enumerate() {
-                match element {
-                    ListLiteralElement::Literal(literal) => {
-                        let val = build_exp_literal(
-                            env,
-                            layout_interner,
-                            parent,
-                            element_layout,
-                            literal,
-                        );
-                        global_elements.push(val.into_int_value());
-                    }
-                    ListLiteralElement::Symbol(symbol) => {
-                        let val = scope.load_symbol(symbol);
+        // Fill the refcount slot with nulls
+        for _ in 0..(refcount_slot_elements) {
+            bytes.push(element_type.const_zero());
+        }
 
-                        // here we'd like to furthermore check for intval.is_const().
-                        // if all elements are const for LLVM, we could make the array a constant.
-                        // BUT morphic does not know about this, and could allow us to modify that
-                        // array in-place. That would cause a segfault. So, we'll have to find
-                        // constants ourselves and cannot lean on LLVM here.
+        // Copy the elements from the list literal into the array
+        for element in elems.iter() {
+            let literal = element.get_literal().expect("is_all_constant is true");
+            let val = build_exp_literal(env, layout_interner, parent, element_layout, &literal);
+            bytes.push(val.into_int_value());
+        }
 
-                        is_all_constant = false;
+        let typ = element_type.array_type(bytes.len() as u32);
+        let global = env.module.add_global(typ, None, "roc__list_literal");
 
-                        runtime_evaluated_elements.push((index, val));
+        global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+        global.set_constant(true);
+        global.set_alignment(layout_interner.alignment_bytes(element_layout));
+        global.set_unnamed_addr(true);
+        global.set_linkage(inkwell::module::Linkage::Private);
 
-                        global_elements.push(element_type.get_undef());
-                    }
-                };
-            }
+        let with_rc_ptr = global.as_pointer_value();
 
-            let const_elements = if is_all_constant {
-                global_elements.into_bump_slice()
-            } else {
-                &global_elements[zero_elements..]
-            };
-
-            // use None for the address space (e.g. Const does not work)
-            let typ = element_type.array_type(const_elements.len() as u32);
-            let global = env.module.add_global(typ, None, "roc__list_literal");
-
-            global.set_constant(true);
-            global.set_alignment(alignment);
-            global.set_unnamed_addr(true);
-            global.set_linkage(inkwell::module::Linkage::Private);
-
-            global.set_initializer(&element_type.const_array(const_elements));
-            global.as_pointer_value()
+        let data_ptr = unsafe {
+            env.builder.new_build_in_bounds_gep(
+                element_type,
+                with_rc_ptr,
+                &[env
+                    .ptr_int()
+                    .const_int(refcount_slot_elements as u64, false)],
+                "get_data_ptr",
+            )
         };
 
-        if is_all_constant {
-            // all elements are constants, so we can use the memory in the constants section directly
-            // here we make a pointer to the first actual element (skipping the 0 bytes that
-            // represent the refcount)
-            let zero = env.ptr_int().const_zero();
-            let offset = env.ptr_int().const_int(zero_elements as _, false);
-
-            let ptr = unsafe {
-                env.builder.new_build_in_bounds_gep(
-                    element_type,
-                    global,
-                    &[zero, offset],
-                    "first_element_pointer",
-                )
-            };
-
-            super::build_list::store_list(env, ptr, list_length_intval).into()
-        } else {
-            // some of our elements are non-constant, so we must allocate space on the heap
-            let ptr = allocate_list(env, layout_interner, element_layout, list_length_intval);
-
-            // then, copy the relevant segment from the constant section into the heap
-            env.builder
-                .build_memcpy(
-                    ptr,
-                    alignment,
-                    global,
-                    alignment,
-                    env.ptr_int().const_int(size as _, false),
-                )
-                .unwrap();
-
-            // then replace the `undef`s with the values that we evaluate at runtime
-            for (index, val) in runtime_evaluated_elements {
-                let index_val = ctx.i64_type().const_int(index as u64, false);
-                let elem_ptr = unsafe {
-                    builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
-                };
-
-                builder.new_build_store(elem_ptr, val);
-            }
-
-            super::build_list::store_list(env, ptr, list_length_intval).into()
-        }
+        super::build_list::store_list(env, data_ptr, list_length_intval).into()
     } else {
         let ptr = allocate_list(env, layout_interner, element_layout, list_length_intval);
 
