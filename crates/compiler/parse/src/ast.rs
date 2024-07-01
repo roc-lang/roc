@@ -1031,7 +1031,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             params,
                         }) => {
                             if let Some(ModuleImportParams { before: _, params }) = params {
-                                for loc_assigned_field in params.items {
+                                for loc_assigned_field in params.value.items {
                                     if let Some(expr) = loc_assigned_field.value.value() {
                                         self.push_pending_from_expr(&expr.value);
                                     }
@@ -1079,7 +1079,7 @@ pub struct ModuleImport<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModuleImportParams<'a> {
     pub before: &'a [CommentOrNewline<'a>],
-    pub params: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    pub params: Loc<Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

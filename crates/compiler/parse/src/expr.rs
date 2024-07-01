@@ -993,9 +993,11 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
     then(
         and(
             backtrackable(space0_e(EImportParams::Indent)),
-            specialize_err(EImportParams::Record, record_help()),
+            specialize_err(EImportParams::Record, loc(record_help())),
         ),
-        |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
+        |arena, state, _, (before, loc_record): (_, Loc<RecordHelp<'a>>)| {
+            let record = loc_record.value;
+
             if let Some(update) = record.update {
                 return Err((
                     MadeProgress,
@@ -1013,7 +1015,10 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
                 }
             })?;
 
-            let import_params = ModuleImportParams { before, params };
+            let import_params = ModuleImportParams {
+                before,
+                params: Loc::at(loc_record.region, params),
+            };
 
             Ok((MadeProgress, import_params, state))
         },

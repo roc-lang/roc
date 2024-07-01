@@ -3155,13 +3155,14 @@ fn to_pending_value_def<'a>(
             let params = module_import.params.and_then(|params| {
                 let name_str = name_with_alias.as_str();
 
-                // todo(agus): params specific loc
-                match scope.introduce_str(format!("#{name_str}").as_str(), region) {
+                let params_region = params.params.region;
+
+                match scope.introduce_str(format!("#{name_str}").as_str(), params_region) {
                     Ok(sym) => {
                         params_sym = Some(sym);
 
-                        let loc_pattern = Loc::at(region, Pattern::Identifier(sym));
-                        Some((sym, loc_pattern, params.params))
+                        let loc_pattern = Loc::at(params_region, Pattern::Identifier(sym));
+                        Some((sym, loc_pattern, params.params.value))
                     },
                     Err(_) => {
                         // Ignore conflict, it will be handled as a duplicate import
