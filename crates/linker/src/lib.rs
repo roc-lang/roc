@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 mod elf;
 mod macho;
 mod pe;
+mod util;
 
 mod generate_dylib;
 
@@ -380,7 +381,6 @@ pub fn preprocess_host(
         &metadata_path,
         preprocessed_path.as_path(),
         dylib_path,
-        &[],
         verbose,
         time,
     )
@@ -394,7 +394,6 @@ fn preprocess(
     metadata_path: &Path,
     preprocessed_path: &Path,
     shared_lib: &Path,
-    stub_dll_symbols: &[String],
     verbose: bool,
     time: bool,
 ) {
@@ -430,7 +429,7 @@ fn preprocess(
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,
-                stub_dll_symbols,
+                shared_lib,
                 verbose,
                 time,
             )
