@@ -6,6 +6,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::{AnnotatedMark, Declarations};
 use roc_can::pattern::Pattern;
 use roc_collections::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -62,6 +63,21 @@ fn constrain_params(
     let expected_params = constraints.push_pat_expected_type(PExpected::NoExpectation(index));
 
     let mut state = PatternState::default();
+
+    let closed_con = match loc_pattern.value {
+        Pattern::RecordDestructure {
+            whole_var: _,
+            ext_var,
+            destructs: _,
+        } => {
+            // Disallow record extension for module params
+            let empty_rec = constraints.push_type(types, Types::EMPTY_RECORD);
+            constraints.store(empty_rec, ext_var, file!(), line!())
+        }
+        _ => internal_error!("Only record destructures are allowed in module params. This should've been caught earlier."),
+    };
+
+    state.constraints.push(closed_con);
 
     constrain_pattern(
         types,

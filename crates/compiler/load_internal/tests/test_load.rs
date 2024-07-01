@@ -1626,7 +1626,7 @@ fn module_params_optional() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "report import params mismatch")]
 fn module_params_typecheck_fail() {
     let modules = vec![
         (
@@ -1653,7 +1653,39 @@ fn module_params_typecheck_fail() {
         ),
     ];
 
-    multiple_modules("module_params_typecheck", modules).unwrap_err();
+    let _ = multiple_modules("module_params_typecheck_fail", modules);
+    // todo(agus): test reporting
+}
+
+#[test]
+#[should_panic(expected = "report import params mismatch")]
+fn module_params_typecheck_extra_fields() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: "123", doesNotExist: Bool.true }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let _ = multiple_modules("module_params_typecheck_extra_fields", modules);
     // todo(agus): test reporting
 }
 
