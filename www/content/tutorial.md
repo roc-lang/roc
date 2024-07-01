@@ -1431,13 +1431,19 @@ Each `.roc` file is a separate module and contains Roc code for different purpos
 
 There are several modules that are built into the Roc compiler, which are imported automatically into every Roc module. They are:
 
-1.  `Bool`
-2.  `Str`
-3.  `Num`
-4.  `List`
-5.  `Result`
-6.  `Dict`
-7.  `Set`
+1.  [Str](https://www.roc-lang.org/builtins/Str)
+2.  [Num](https://www.roc-lang.org/builtins/Num)
+3.  [Bool](https://www.roc-lang.org/builtins/Bool)
+4.  [Result](https://www.roc-lang.org/builtins/Result)
+5.  [List](https://www.roc-lang.org/builtins/List)
+6.  [Dict](https://www.roc-lang.org/builtins/Dict)
+7.  [Set](https://www.roc-lang.org/builtins/Set)
+8.  [Decode](https://www.roc-lang.org/builtins/Decode)
+9.  [Encode](https://www.roc-lang.org/builtins/Encode)
+10. [Hash](https://www.roc-lang.org/builtins/Hash)
+11. [Box](https://www.roc-lang.org/builtins/Box)
+12. [Inspect](https://www.roc-lang.org/builtins/Inspect)
+13. [Task](https://www.roc-lang.org/builtins/Task)
 
 You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.isEven`, we were referencing functions stored in the `Str` and `Num` modules.
 
