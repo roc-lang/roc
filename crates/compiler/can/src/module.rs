@@ -401,8 +401,7 @@ pub fn canonicalize_module_defs<'a>(
                 var_store,
                 &mut scope,
                 &mut output,
-                // todo(agus): custom type for param
-                PatternType::FunctionArg,
+                PatternType::ModuleParams,
                 &pattern.value,
                 pattern.region,
                 PermitShadows(false),

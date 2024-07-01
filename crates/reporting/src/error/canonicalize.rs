@@ -390,6 +390,7 @@ pub fn can_problem<'b>(
                 TopLevelDef => "a top-level definition:",
                 DefExpr => "a value definition:",
                 FunctionArg => "function arguments:",
+                ModuleParams => "module params:",
                 WhenBranch => unreachable!("all patterns are allowed in a When"),
             };
 
