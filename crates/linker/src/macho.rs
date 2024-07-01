@@ -15,7 +15,7 @@ use std::{
     io::{BufReader, BufWriter},
     mem,
     path::Path,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use crate::{
@@ -23,6 +23,7 @@ use crate::{
     load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
     open_mmap_mut,
 };
+use crate::util::{report_timing, is_roc_undefined, is_roc_definition};
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
 
@@ -102,26 +103,6 @@ impl Metadata {
             }
         }
     }
-}
-
-fn report_timing(label: &str, duration: Duration) {
-    println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
-}
-
-fn is_roc_symbol(sym: &object::Symbol) -> bool {
-    if let Ok(name) = sym.name() {
-        name.trim_start_matches('_').starts_with("roc_")
-    } else {
-        false
-    }
-}
-
-fn is_roc_definition(sym: &object::Symbol) -> bool {
-    sym.is_definition() && is_roc_symbol(sym)
-}
-
-fn is_roc_undefined(sym: &object::Symbol) -> bool {
-    sym.is_undefined() && is_roc_symbol(sym)
 }
 
 fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
