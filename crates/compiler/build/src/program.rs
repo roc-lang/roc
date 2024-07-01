@@ -386,7 +386,10 @@ fn gen_from_mono_module_llvm<'a>(
 
         // Emit the .o file
         match target.architecture() {
-            Architecture::X86_64 | Architecture::X86_32 | Architecture::Aarch64 => {
+            Architecture::X86_64
+            | Architecture::X86_32
+            | Architecture::Aarch64
+            | Architecture::Wasm32 => {
                 let reloc = RelocMode::PIC;
                 let target_machine =
                     target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
@@ -394,11 +397,6 @@ fn gen_from_mono_module_llvm<'a>(
                 target_machine
                     .write_to_memory_buffer(env.module, FileType::Object)
                     .expect("Writing .o file failed")
-            }
-            Architecture::Wasm32 => {
-                // Useful for debugging
-                // module.print_to_file(app_ll_file);
-                module.write_bitcode_to_memory()
             }
             _ => internal_error!(
                 "TODO gracefully handle unsupported architecture: {:?}",
