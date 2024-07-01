@@ -33,27 +33,128 @@ pub enum AllocFailed {
 
 #[derive(Debug)]
 pub(crate) struct Header {
-    /// The next address we want to allocate into.
-    next: *mut u8,
+    /// The total number of content bytes we have available to allocate into.
+    /// This is u64 rather than usize so we can serialize and deserialize
+    /// cached versions of it across 32-bit and 64-bit systems.
+    capacity: u64,
 
-    /// The original number of bytes we had available.
-    /// This is stored as a number rather than a pointer
-    /// so that we can store 0 here when this is a slice into a larger allocation.
-    /// That lets Drop know not to try to deallocate it.
-    original_capacity: usize,
-
-    /// When deallocating, this verifies (in debug builds only) that
-    /// we're deallocating the correct pointer. This should be inferrable
-    /// from the pointer being deallocated, but that relies on the assumption
-    /// that Header will only ever be used in one place, and in one way: to
-    /// point to the beginning of Content in an Arena.
-    #[cfg(debug_assertions)]
-    original_header_ptr: *mut Self,
+    /// The total number of content bytes we've used so far.
+    len: u64,
 }
 
+pub(crate) struct Content {
+    header: Header,
+    bytes: [u8],
+}
+
+#[derive(Debug)]
+union Storage {
+    /// We own our own Allocation. When the arena gets dropped, this will also get dropped
+    /// (and the memory will be freed). This means if we need more memory, we can make a new
+    /// allocation, copy the bytes from the old one over, and drop the old one.
+    owned: Allocation,
+
+    /// We do not own our own Allocation; rather, we have a slice into an allocation that
+    /// someone else owns (e.g. there was one big virtual memory allocation at the beginning
+    /// of the CLI run, and each module's arena gets a fixed-size chunk of that virtual memory.)
+    /// If we need more memory, we will create a new Allocation, switch to Owned, and copy
+    /// our borrowed contents into the new Allocation.
+    uninitialized: Header,
+
+    borrowed: (),
+}
+
+pub struct Arena {
+    owns_allocation: bool,
+    storage: Storage,
+    content: NonNull<Content>,
+}
+
+impl Arena {
+    pub fn new() -> Self {
+        unsafe {
+            let mut answer = Self {
+                owns_allocation: false,
+                storage: Storage {
+                    uninitialized: Header {
+                        capacity: 0,
+                        len: 0,
+                    },
+                },
+                content: NonNull::new_unchecked(ptr::null() as *mut Content),
+            };
+
+            // Our content points to our own `storage` field, so we don't need a heap allocation.
+            answer.content = unsafe { NonNull::new_unchecked(&mut answer.storage as *mut Content) };
+
+            answer
+        }
+    }
+
+    /// How to use this: first, create an empty Arena with Arena::new().
+    /// Then, create a reference from an Allocation with the same lifetime as that Arena
+    /// (e.g. by reading into the Allocation from a file) and pass both in here.
+    /// Now the arena will live as long as the thing it's borrowing from.
+    pub fn fill_borrowed<'a>(&'a mut self, content: &'a mut Content) {
+        // If we have an owned allocation already (for some reason), drop it!
+        if self.owns_allocation {
+            let allocation = unsafe { self.storage.owned };
+
+            self.storage = Storage { borrowed: () };
+
+            drop(allocation);
+        }
+
+        self.owns_allocation = false;
+        self.content = NonNull::from(content);
+    }
+
+    pub fn with_capacity(capacity: u64) -> Self {
+        let allocation = {
+            let capacity_usize = capacity.try_into::<usize>().unwrap_or_else(|| oom!());
+            let content_layout = Layout::array::<u8>(capacity_usize)
+                .and_then(|bytes_layout| Layout::new::<Header>().extend(bytes_layout))
+                .unwrap_or_else(|_| internal_error!());
+
+            Allocation::alloc_virtual(content_layout).unwrap_or_else(|_| oom!())
+        };
+        let content_ptr = allocation.as_ptr() as *mut Content;
+        let content;
+
+        unsafe {
+            (*content_ptr).capacity = allocation.bytes_remaining();
+            (*content_ptr).len = 0;
+            content = { NonNull::new_unchecked(content_ptr) };
+        }
+
+        Self {
+            storage: Storage::Owned(allocation),
+            content,
+        }
+    }
+
+    pub fn alloc<T>(&mut self) -> ArenaRefMut<MaybeUninit<T>> {
+        unsafe { self.alloc_layout(Layout::new::<T>()) }
+    }
+
+    pub fn alloc_layout(&mut self, layout: Layout) -> ArenaRefMut<u8> {
+        self.try_alloc_layout(layout).unwrap_or_else(|err| {
+            match err {
+                AllocFailed::MaxCapacityExceeded => {
+                    internal_error!("A borrowed arena allocation needed to reallocate. This means not enough was virtually allocated in the first place, and a higher number should have been chosen in the compiler.")
+                }
+                AllocFailed::OsAllocFailed => {
+                    oom!()
+                }
+            }
+        })
+    }
+}
+
+/*
 impl Header {
-    fn len(&self) -> usize {
-        self.next as usize - self as *const Header as usize + self.original_capacity
+    fn len(&self) -> u64 {
+        self.len
     }
 }
 
@@ -85,33 +186,21 @@ impl Drop for Header {
 #[cfg(debug_assertions)]
 static ARENA_IDS: () = (); // TODO make this use std, Mutex, etc.
 
-#[derive(Debug)]
-enum Storage {
-    /// We own our own Allocation. When the arena gets dropped, this will also get dropped
-    /// (and the memory will be freed). This means if we need more memory, we can make a new
-    /// allocation, copy the bytes from the old one over, and drop the old one.
-    Owned(Allocation),
-
-    /// We do not own our own Allocation; rather, we have a slice into an allocation that
-    /// someone else owns (e.g. there was one big virtual memory allocation at the beginning
-    /// of the CLI run, and each module's arena gets a fixed-size chunk of that virtual memory.)
-    Borrowed,
-}
 
 #[derive(Debug)]
-pub struct Arena<'a> {
+pub struct Arena {
     storage: Storage,
 
     /// We are not allowed to store more than this many bytes in our Content. If we run out, give an error!
     max_bytes_stored: usize,
 
-    /// This is *not* a reference to a Header, despite what it says! (That's just for alignment.)
+    /// This is *not* a pointer to a Header, despite what it says! (That's just for alignment.)
     /// It actually points to the first byte of content immediately *after* the Header. If you want
     /// the address of the header, you have to subtract size_of::<Header>() bytes from this pointer.
-    pub(crate) content: &'a mut Header,
+    pub(crate) content: *mut Header,
 }
 
-impl<'a> Arena<'a> {
+impl Arena {
     pub fn from_owned(allocation: Allocation, max_bytes_stored: usize) -> &'a mut Self {
         let storage = Storage::Owned(allocation);
 
@@ -175,14 +264,29 @@ impl<'a> Arena<'a> {
         Self::from_ptr_to_content(content_ptr)
     }
 
+    /// Return a read-only arena which uses the given slice as its backing memory.
+    ///
+    /// This is designed to be given a slice returned by Allocation::read_file_into(),
+    /// which allows for doing one massive virtual allocation up front, and then reading
+    /// many cached files into that one allocation.
+    ///
+    /// Since they are cached files, they will not be modified further.
+    pub unsafe fn from_slice(header_ptr: NonNull<MaybeUninit<Header>>) -> Self {
+        let mut header = unsafe { (*header_ptr).assume_init() };
+
+        header.next = (header_ptr.as_ptr() as *mut u8).byte_add(header.original_capacity);
+
+        // TODO
+    }
+
     /// Returns the amount of bytes used in the given buffer. Note that this might be zero
     /// if there wasn't enough room to read the entire file in! (In that case, we would
     /// have made our own allocation and not used the given buffer.)
     #[cfg(not(wasm32))]
     pub fn from_file(
         file: &mut (impl ReadFile + FileMetadata),
-        buf: &mut [u8],
-    ) -> Result<(Self, usize), IoError> {
+        allocation: &mut Allocation,
+    ) -> Result<(&'a Self, usize), IoError> {
         let todo = (); // TODO just move this into fs, no need to get arena involved here! Also, this is broken: we take &mut and then return owned from those bytes!
         let bytes_read = file.read_into(buf)?;
         let mut ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
@@ -313,10 +417,6 @@ impl<'a> Arena<'a> {
         unsafe { self.try_alloc_layout(Layout::new::<T>()) }
     }
 
-    pub fn alloc<T>(&mut self) -> ArenaRefMut<MaybeUninit<T>> {
-        unsafe { self.alloc_layout(Layout::new::<T>()) }
-    }
-
     fn header(&self) -> &Header {
         // The header is stored right before the pointer to the arena itself.
         unsafe { &*(self.content as *const Header).sub(1) }
@@ -387,18 +487,6 @@ impl<'a> Arena<'a> {
         Ok(ArenaRefMut::new_in((new_ptr - content_ptr) as u32, self))
     }
 
-    pub fn alloc_layout(&mut self, layout: Layout) -> ArenaRefMut<u8> {
-        self.try_alloc_layout(layout).unwrap_or_else(|err| {
-            match err {
-                AllocFailed::MaxCapacityExceeded => {
-                    internal_error!("A borrowed arena allocation needed to reallocate. This means not enough was virtually allocated in the first place, and a higher number should have been chosen in the compiler.")
-                }
-                AllocFailed::OsAllocFailed => {
-                    oom!()
-                }
-            }
-        })
-    }
 
     pub(crate) unsafe fn at_byte_offset_mut(&'a mut self, byte_offset: usize) -> *mut c_void {
         (self.content as *mut Header as *mut u8)
@@ -435,3 +523,5 @@ impl<'a> Arena<'a> {
         }
     }
 }
+
+*/

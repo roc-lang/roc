@@ -1,0 +1,11 @@
+[package]
+name = "fs"
+description = "Filesystem access"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+widestring = { version = "1.1.0", default-features = false }

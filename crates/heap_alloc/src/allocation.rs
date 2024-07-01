@@ -22,7 +22,7 @@ use core::{
 pub struct Allocation {
     pages: NonNull<Page>,
     layout: Layout,
-    used: usize,
+    bytes_used: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -175,89 +175,124 @@ impl Allocation {
 
         Ok(Self {
             pages: non_null.cast(),
-            used: 0,
+            bytes_used: 0,
             layout,
         })
     }
 
     /// Reallocate in-place if possible; otherwise, create a new allocation
     /// and copy over the contents of the old one. If the new size would
-    /// exceed isize::MAX, it instead becomes isize::MAX.
-    pub fn grow(&mut self, additional_bytes_desired: usize) {
+    /// exceed isize::MAX, it instead becomes isize::MAX. No matter what,
+    /// the new allocation will be
+    pub fn grow(&mut self, additional_bytes_desired: usize) -> Result<(), AllocFailed> {
         let layout = self.layout;
         let new_size = layout.size().saturating_add(additional_bytes_desired);
-        let layout = Layout::from_size_align(new_size, layout.align())
-            // Although the alignment is already valid, this can theoretically fail
-            // in the very specific case where the new size, when rounded to the nearest
-            // multiple of alignment, exceeds isize::MAX. In the extremely unlikely
-            // event where that happens, decline to grow and go back to the old layout.
-            .unwrap_or(layout)
-            .pad_to_align();
 
-        let todo = todo!(); // TODO try to grow the allocation in-place. Replace self's pointer.
-    }
-
-    /// Hands out a slice of T elements.
-    pub fn extract_slice<T>(&mut self, elems: usize) -> &mut [MaybeUninit<T>] {
-        // We won't return a slice that's bigger than the number of
-        // allocated bytes we have left!
-        let next_ptr = self.pages.as_ptr().byte_add(elems * msm::size_of::<T>())
-
-        match self.layout.extend(Layout::array::<T>(elems)) {
+        match Layout::from_size_align(new_size, layout.align()) {
             Ok(layout) => {
-                let available_len = self.bytes_remaining();
-                let desired_len = available_len.min(layout.size());
-                let desired_align = self.layout.align().max(layout.align());
-
-                // Figure out how much padding we need to achieve the desired alignment
-                let ptr = self.pages.as_ptr() as *mut u8;
-                let padding_needed = ptr.align_offset(desired_align);
-
-                // Figure out what the actual length of the slice will be,
-                // taking into account necessary padding and how mny bytes are left.
-                let actual_len = desired_len
-                    .saturating_add(padding_needed)
-                    .min(available_len);
-
-                // Advance the pointer past the padding.
-                let ptr = unsafe { ptr.add(padding_needed) };
-
-                // After adding the padding, the pointer should now be aligned correctly!
-                debug_assert_eq!(ptr as usize % desired_align, 0);
-
-                // Record the new length
-                self.len += actual_len;
-
-                unsafe { core::slice::from_raw_parts_mut(ptr, actual_len) }
+                let todo = todo!(); // TODO try to grow the allocation in-place. Replace self's pointer.
             }
-            Err(_) => {
-                // If the requested layout overflowed isize::MAX, return an empty slice.
-                // This should theoretically never happen, given that we already ensured
-                // that it fits in bytes_remaining.
-                &mut []
-            }
+            Err(_) => Err(AllocFailed::InvalidLayout),
         }
     }
 
-    pub fn bytes_remaining(&self) -> usize {
-        self.layout.size().saturating_sub(self.len)
+    #[cfg(any(unix, windows))]
+    pub fn read_file_into<'a, T>(
+        &'a mut self,
+        file: &mut impl ReadFile,
+    ) -> Result<&'a mut [T], FromFileErr> {
+        // Calculate how many of our bytes will have been used after aligning our allocation
+        // as needed to have a slice of these elems.
+        let align_offset = self.pages.as_ptr().align_offset(mem::align_of::<T>());
+        let aligned_used = self.bytes_used.saturating_add(align_offset);
+
+        // Make sure we actually have space left after aligning
+        if self.layout.size() < aligned_used {
+            return Err(FromFileErr::NotEnoughSpace);
+        }
+
+        // The slice should begin `aligned_used` bytes after our pointer,
+        // to ensure that its elements are properly aligned.
+        let ptr = (self.pages.as_ptr() as *mut u8).byte_add(aligned_used);
+
+        // The pointer should be correctly aligned for the slice.
+        debug_assert_eq!(ptr.align_offset(mem::align_of::<T>()), 0);
+
+        let max_len = self.layout.size().saturating_sub(aligned_used);
+        let mut buf = unsafe { core::slice::from_raw_parts_mut(ptr, max_len) };
+
+        match file.read_into(&mut buf) {
+            Ok(bytes_read) => {
+                if bytes_read < max_len {
+                    // Update how many bytes in this allocation are used based on how many we *actually* read.
+                    self.bytes_used = aligned_used + bytes_read;
+
+                    Ok(unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()) })
+                } else {
+                    Err(FromFileErr::NotEnoughSpace)
+                }
+            }
+            Err(io_err) => FromFileErr::IoErr(io_err),
+        }
     }
 
-    /// Reallocate in-place if possible; otherwise, create a new allocation
-    /// and copy over the contents of the old one. If the new size would
-    /// exceed isize::MAX, it instead becomes isize::MAX.
-    pub fn grow(&mut self, additional_bytes_desired: usize) {
-        let layout = self.layout;
-        let new_size = layout.size().saturating_add(additional_bytes_desired);
-        let layout = Layout::from_size_align(new_size, layout.align())
-            // Although the alignment is already valid, this can theoretically fail
-            // in the very specific case where the new size, when rounded to the nearest
-            // multiple of alignment, exceeds isize::MAX. In the extremely unlikely
-            // event where that happens, decline to grow and go back to the old layout.
-            .unwrap_or(layout)
-            .pad_to_align();
+    /// This does *not* update bytes_used
+    unsafe fn mut_slice<T>(&mut self) -> &mut [MaybeUninit<T>] {
+        // Calculate how many of our bytes will have been used after aligning our allocation
+        // as needed to have a slice of these elems.
+        let align_offset = self.pages.as_ptr().align_offset(mem::align_of::<T>());
+        let aligned_used = self.bytes_used.saturating_add(align_offset);
 
-        let todo = todo!(); // TODO try to grow the allocation in-place. Replace self's pointer.
+        // Make sure we actually have space left after aligning
+        if self.layout.size() < aligned_used {
+            return None;
+        }
+
+        // The slice should begin `aligned_used` bytes after our pointer,
+        // to ensure that its elements are properly aligned.
+        let ptr = (self.pages.as_ptr() as *mut u8).byte_add(aligned_used);
+
+        // The pointer should be correctly aligned for the slice.
+        debug_assert_eq!(ptr.align_offset(mem::align_of::<T>()), 0);
+
+        Some(unsafe { core::slice::from_raw_parts_mut(ptr.cast(), elems) })
+    }
+
+    /// Hands out a slice into the allocation. Retrurns None if there is not enough room remaining
+    /// in the allocated bytes to fit the requested number of elements.
+    pub fn extract_slice<T>(&mut self, elems: usize) -> Option<&mut [MaybeUninit<T>]> {
+        // Calculate how many of our bytes will have been used after aligning our allocation
+        // as needed to have a slice of these elems.
+        let align_offset = self.pages.as_ptr().align_offset(mem::align_of::<T>());
+        let aligned_used = self.bytes_used.saturating_add(align_offset);
+
+        // Make sure we can actually fit all the elems (after aligning).
+        {
+            let bytes_remaining = self.layout.size().saturating_sub(aligned_used);
+            let bytes_desired = mem::size_of::<T>() * elems;
+
+            if bytes_desired > bytes_remaining {
+                return None;
+            }
+        }
+
+        // The slice should begin `aligned_used` bytes after our pointer,
+        // to ensure that its elements are properly aligned.
+        let ptr = (self.pages.as_ptr() as *mut u8).byte_add(aligned_used);
+
+        // The pointer should be correctly aligned for the slice.
+        debug_assert_eq!(ptr.align_offset(mem::align_of::<T>()), 0);
+
+        self.bytes_used = aligned_used + (elems * mem::size_of::<T>());
+
+        // We should not have used more than the number of bytes we allocated.
+        debug_assert!(self.bytes_used <= self.layout.size());
+
+        Some(unsafe { core::slice::from_raw_parts_mut(ptr.cast(), elems) })
+    }
+
+    pub fn bytes_remaining(&self) -> u64 {
+        self.layout.size().saturating_sub(self.bytes_used)
     }
 
     pub fn slice_mut(&mut self, layout: Layout) -> &mut [u8] {
