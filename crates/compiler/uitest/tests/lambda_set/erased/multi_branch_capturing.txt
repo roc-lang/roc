@@ -20,11 +20,11 @@ procedure Bool.2 ():
 procedure Test.1 (Test.2):
     let Test.34 : Int1 = CallByName Bool.2;
     if Test.34 then
-        dec Test.2;
         let Test.38 : FunPtr(({}) -> Str) = FunctionPointer Test.3;
         let Test.35 : ?Erased = ErasedMake { value: <null>, callee: Test.38 };
         ret Test.35;
     else
+        inc Test.2;
         let Test.33 : {Str} = Struct {Test.2};
         let Test.31 : [<rnu><null>, C {Str}] = TagId(0) Test.33;
         let Test.32 : FunPtr(({}, ?Erased) -> Str) = FunctionPointer Test.4;

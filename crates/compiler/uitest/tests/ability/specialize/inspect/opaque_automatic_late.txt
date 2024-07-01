@@ -14,6 +14,7 @@ main =
 procedure Inspect.248 (Inspect.249):
     let Inspect.313 : Str = "<opaque>";
     let Inspect.312 : Str = CallByName Inspect.59 Inspect.249 Inspect.313;
+    dec Inspect.313;
     ret Inspect.312;
 
 procedure Inspect.30 (Inspect.143):
@@ -42,7 +43,6 @@ procedure Inspect.5 (Inspect.146):
 
 procedure Inspect.59 (Inspect.296, Inspect.292):
     let Inspect.315 : Str = CallByName Str.3 Inspect.296 Inspect.292;
-    dec Inspect.292;
     ret Inspect.315;
 
 procedure Inspect.60 (Inspect.298):

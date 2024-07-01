@@ -20,7 +20,7 @@ use crate::{
         BranchInfo, Call, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
-    layout::{InLayout, LayoutInterner, STLayoutInterner},
+    layout::{InLayout, LayoutInterner, Niche, STLayoutInterner},
     low_level::HigherOrder,
 };
 
@@ -30,8 +30,12 @@ Insert the reference count operations for procedures.
 pub fn insert_inc_dec_operations<'a>(
     arena: &'a Bump,
     layout_interner: &STLayoutInterner<'a>,
-    procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
+    procedures: &mut HashMap<(Symbol, ProcLayout<'a>), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
+    let borrow_signatures =
+        crate::borrow::infer_borrow_signatures(arena, layout_interner, procedures);
+    let borrow_signatures = arena.alloc(borrow_signatures);
+
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
     // Thus, these rc operations are performed on the caller of the wrapper instead, and we skip rc on the lowlevel.
@@ -43,15 +47,13 @@ pub fn insert_inc_dec_operations<'a>(
             LowLevelWrapperType::NotALowLevelWrapper
         ) {
             let symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
-            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, proc);
+            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, borrow_signatures, proc);
         }
     }
 }
 
-/**
-Enum indicating whether a symbol should be reference counted or not.
-This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
-*/
+/// Enum indicating whether a symbol should be reference counted or not.
+/// This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
 #[derive(Copy, Clone)]
 enum VarRcType {
     ReferenceCounted,
@@ -256,6 +258,8 @@ struct RefcountEnvironment<'v> {
     // The Koka implementation assumes everything that is not owned to be borrowed.
     symbols_ownership: SymbolsOwnership,
     jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
+    // inferred borrow signatures of roc functions
+    borrow_signatures: &'v crate::borrow::BorrowSignatures<'v>,
 }
 
 impl<'v> RefcountEnvironment<'v> {
@@ -306,9 +310,13 @@ impl<'v> RefcountEnvironment<'v> {
     Add a symbol to the environment if it is reference counted.
     */
     fn add_symbol(&mut self, symbol: Symbol) {
+        self.add_symbol_with(symbol, Ownership::Owned)
+    }
+
+    fn add_symbol_with(&mut self, symbol: Symbol, ownership: Ownership) {
         match self.get_symbol_rc_type(&symbol) {
             VarRcType::ReferenceCounted => {
-                self.symbols_ownership.insert(symbol, Ownership::Owned);
+                self.symbols_ownership.insert(symbol, ownership);
             }
             VarRcType::NotReferenceCounted => {
                 // If this symbol is not reference counted, we don't need to do anything.
@@ -403,6 +411,7 @@ impl<'v> RefcountEnvironment<'v> {
 fn insert_inc_dec_operations_proc<'a>(
     arena: &'a Bump,
     mut symbol_rc_types_env: SymbolRcTypesEnv<'a, '_>,
+    borrow_signatures: &'a crate::borrow::BorrowSignatures<'a>,
     proc: &mut Proc<'a>,
 ) {
     // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
@@ -413,19 +422,26 @@ fn insert_inc_dec_operations_proc<'a>(
         symbols_rc_types: &symbol_rc_types_env.symbols_rc_type,
         symbols_ownership: MutMap::default(),
         jointpoint_closures: MutMap::default(),
+        borrow_signatures,
     };
 
     // Add all arguments to the environment (if they are reference counted)
-    let proc_symbols = proc.args.iter().map(|(_layout, symbol)| symbol);
-    for symbol in proc_symbols.clone() {
-        environment.add_symbol(*symbol);
+    let borrow_signature = borrow_signatures
+        .procs
+        .get(&(proc.name.name(), proc.proc_layout(arena)))
+        .unwrap();
+    for ((_, symbol), ownership) in proc.args.iter().zip(borrow_signature.iter()) {
+        environment.add_symbol_with(*symbol, ownership);
     }
 
     // Update the body with reference count statements.
     let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body);
 
     // Insert decrement statements for unused parameters (which are still marked as owned).
-    let rc_proc_symbols = proc_symbols
+    let rc_proc_symbols = proc
+        .args
+        .iter()
+        .map(|(_layout, symbol)| symbol)
         .filter(|symbol| environment.symbols_ownership.contains_key(symbol))
         .copied()
         .collect_in::<Vec<_>>(arena);
@@ -718,12 +734,11 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             body,
             remainder,
         } => {
-            // Assuming that the values in the closure of the body of this jointpoint are already bound.
-            // Assuming that all symbols are still owned. (So that we can determine what symbols got consumed in the join point.)
-            debug_assert!(environment
-                .symbols_ownership
-                .iter()
-                .all(|(_, ownership)| ownership.is_owned()));
+            // NOTE: Assuming that the values in the closure of the body of this jointpoint are already bound.
+
+            // NOTE: this code previously assumed that all symbols bound by the join point are owned.
+            // With borrow inference, that is no longer true but the analysis here _should_ mirror
+            // borrow inference and yield the same result.
 
             let mut body_env = environment.clone();
 
@@ -978,12 +993,42 @@ fn insert_refcount_operations_binding<'a>(
             call_type,
         }) => {
             match call_type.clone().replace_lowlevel_wrapper() {
-                // A by name call refers to a normal function call.
-                // Normal functions take all their parameters as owned, so we can mark them all as such.
-                CallType::ByName { .. } => {
-                    let new_let = new_let!(stmt);
+                CallType::ByName {
+                    name,
+                    arg_layouts,
+                    ret_layout,
+                    ..
+                } => {
+                    let proc_layout = ProcLayout {
+                        arguments: arg_layouts,
+                        result: ret_layout,
+                        niche: Niche::NONE,
+                    };
 
-                    inc_owned!(arguments.iter().copied(), new_let)
+                    let borrow_signature = match environment
+                        .borrow_signatures
+                        .procs
+                        .get(&(name.name(), proc_layout))
+                    {
+                        Some(s) => s,
+                        None => unreachable!("no borrow signature for {name:?} layout"),
+                    };
+
+                    let owned_arguments = arguments
+                        .iter()
+                        .copied()
+                        .zip(borrow_signature.iter())
+                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
+                    let borrowed_arguments = arguments
+                        .iter()
+                        .copied()
+                        .zip(borrow_signature.iter())
+                        .filter_map(|(symbol, ownership)| {
+                            ownership.is_borrowed().then_some(symbol)
+                        });
+                    let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
+                    let new_let = new_let!(new_stmt);
+                    inc_owned!(owned_arguments, new_let)
                 }
                 // A normal Roc function call, but we don't actually know where its target is.
                 // As such, we assume that it takes all parameters as owned, as will the function

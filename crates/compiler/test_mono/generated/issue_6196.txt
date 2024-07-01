@@ -37,6 +37,7 @@ procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
             let Test.14 : [C {}, C Str] = TagId(0) Test.15;
             ret Test.14;
     in
+    inc #Derived_gen.0;
     jump Test.12 #Derived_gen.0 #Derived_gen.1;
 
 procedure Test.0 ():
@@ -44,4 +45,5 @@ procedure Test.0 ():
     let Test.10 : List Str = Array [Test.35];
     let Test.11 : U64 = 0i64;
     let Test.9 : [C {}, C Str] = CallByName Test.1 Test.10 Test.11;
+    dec Test.10;
     ret Test.9;

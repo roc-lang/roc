@@ -1,5 +1,4 @@
 procedure Test.1 (Test.2):
-    dec Test.2;
     let Test.11 : Int1 = false;
     ret Test.11;
 
@@ -14,6 +13,7 @@ procedure Test.4 (Test.13):
 procedure Test.0 ():
     let Test.16 : Str = "abc";
     let Test.6 : Int1 = CallByName Test.1 Test.16;
+    dec Test.16;
     let Test.9 : {} = Struct {};
     switch Test.6:
         case 0:

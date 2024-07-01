@@ -79,6 +79,7 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
             let List.591 : [C {}, C {}] = TagId(1) List.492;
             ret List.591;
     in
+    inc #Derived_gen.1;
     jump List.590 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
 procedure Num.22 (#Attr.2, #Attr.3):
@@ -146,6 +147,7 @@ procedure Test.1 (#Derived_gen.0):
                     let Test.33 : List {[<r>C I64, C List *self], [<r>C I64, C List *self]} = CallByName List.23 Test.12 Test.14 Test.35;
                     let Test.34 : {} = Struct {};
                     let Test.29 : Int1 = CallByName List.56 Test.33 Test.34;
+                    dec Test.33;
                     if Test.29 then
                         let Test.31 : U64 = CallByName List.6 Test.12;
                         dec Test.12;

@@ -9,6 +9,7 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6];
     let #Derived_gen.4 : List {Str, Str} = CallByName TotallyNotJson.29 #Derived_gen.5;
     let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.4 #Derived.4;
+    dec #Derived_gen.4;
     ret #Derived_gen.3;
 
 procedure #Derived.5 (#Derived.6):
@@ -22,6 +23,7 @@ procedure #Derived.7 (#Derived.8, #Derived.9, #Derived.6):
     let #Derived_gen.15 : List {Str, Str} = Array [#Derived_gen.16];
     let #Derived_gen.14 : List {Str, Str} = CallByName TotallyNotJson.29 #Derived_gen.15;
     let #Derived_gen.13 : List U8 = CallByName Encode.24 #Derived.8 #Derived_gen.14 #Derived.9;
+    dec #Derived_gen.14;
     ret #Derived_gen.13;
 
 procedure Bool.11 (#Attr.2, #Attr.3):
@@ -204,6 +206,7 @@ procedure List.80 (#Derived_gen.26, #Derived_gen.27, #Derived_gen.28, #Derived_g
             let List.690 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.492;
             ret List.690;
     in
+    inc #Derived_gen.26;
     jump List.689 #Derived_gen.26 #Derived_gen.27 #Derived_gen.28 #Derived_gen.29 #Derived_gen.30;
 
 procedure List.92 (#Derived_gen.31, #Derived_gen.32, #Derived_gen.33, #Derived_gen.34, #Derived_gen.35):
@@ -220,6 +223,7 @@ procedure List.92 (#Derived_gen.31, #Derived_gen.32, #Derived_gen.33, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.31;
     jump List.597 #Derived_gen.31 #Derived_gen.32 #Derived_gen.33 #Derived_gen.34 #Derived_gen.35;
 
 procedure List.92 (#Derived_gen.36, #Derived_gen.37, #Derived_gen.38, #Derived_gen.39, #Derived_gen.40):
@@ -236,6 +240,7 @@ procedure List.92 (#Derived_gen.36, #Derived_gen.37, #Derived_gen.38, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.36;
     jump List.632 #Derived_gen.36 #Derived_gen.37 #Derived_gen.38 #Derived_gen.39 #Derived_gen.40;
 
 procedure List.92 (#Derived_gen.47, #Derived_gen.48, #Derived_gen.49, #Derived_gen.50, #Derived_gen.51):
@@ -251,6 +256,7 @@ procedure List.92 (#Derived_gen.47, #Derived_gen.48, #Derived_gen.49, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.47;
     jump List.644 #Derived_gen.47 #Derived_gen.48 #Derived_gen.49 #Derived_gen.50 #Derived_gen.51;
 
 procedure Num.127 (#Attr.2):
@@ -515,7 +521,6 @@ procedure TotallyNotJson.26 (TotallyNotJson.152):
     let TotallyNotJson.1141 : Int1 = true;
     let TotallyNotJson.154 : {U64, Int1} = Struct {TotallyNotJson.1140, TotallyNotJson.1141};
     let TotallyNotJson.1110 : {} = Struct {};
-    inc TotallyNotJson.153;
     let TotallyNotJson.155 : {U64, Int1} = CallByName List.26 TotallyNotJson.153 TotallyNotJson.154 TotallyNotJson.1110;
     let TotallyNotJson.1064 : Int1 = StructAtIndex 1 TotallyNotJson.155;
     let TotallyNotJson.1108 : Int1 = true;
@@ -534,8 +539,8 @@ procedure TotallyNotJson.26 (TotallyNotJson.152):
         let TotallyNotJson.1065 : List U8 = CallByName List.8 TotallyNotJson.1066 TotallyNotJson.1067;
         ret TotallyNotJson.1065;
     else
-        inc TotallyNotJson.153;
         let TotallyNotJson.1107 : U64 = StructAtIndex 0 TotallyNotJson.155;
+        inc TotallyNotJson.153;
         let TotallyNotJson.1106 : {List U8, List U8} = CallByName List.52 TotallyNotJson.153 TotallyNotJson.1107;
         let TotallyNotJson.179 : List U8 = StructAtIndex 0 TotallyNotJson.1106;
         let TotallyNotJson.181 : List U8 = StructAtIndex 1 TotallyNotJson.1106;
@@ -552,6 +557,7 @@ procedure TotallyNotJson.26 (TotallyNotJson.152):
         let TotallyNotJson.182 : List U8 = CallByName List.8 TotallyNotJson.1097 TotallyNotJson.179;
         let TotallyNotJson.1080 : {} = Struct {};
         let TotallyNotJson.1077 : List U8 = CallByName List.18 TotallyNotJson.181 TotallyNotJson.182 TotallyNotJson.1080;
+        dec TotallyNotJson.181;
         let TotallyNotJson.1079 : U8 = 34i64;
         let TotallyNotJson.1078 : List U8 = Array [TotallyNotJson.1079];
         let TotallyNotJson.1076 : List U8 = CallByName List.8 TotallyNotJson.1077 TotallyNotJson.1078;

@@ -26,6 +26,7 @@ procedure List.92 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.0;
     jump List.577 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Num.22 (#Attr.2, #Attr.3):
@@ -46,4 +47,5 @@ procedure Test.0 ():
     let Test.8 : List [<rnu>C *self, <null>] = Array [];
     let Test.15 : {} = Struct {};
     let Test.9 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.18 Test.8 Test.6 Test.15;
+    dec Test.8;
     ret Test.9;

@@ -566,3 +566,22 @@ fn freeing_boxes() {
         "#
     ));
 }
+
+#[test]
+fn joinpoint_that_owns() {
+    valgrind_test(indoc!(
+        r#"
+        (
+        writeIndents = \buf, indents ->
+            if indents <= 0 then
+                buf
+            else
+                buf
+                |> Str.concat "    "
+                |> writeIndents (indents - 1)
+
+        List.walk [{}, {}] "" \accum, {} -> accum |> writeIndents 4
+        )
+        "#
+    ));
+}

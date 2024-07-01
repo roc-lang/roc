@@ -3,7 +3,6 @@ procedure Bool.2 ():
     ret Bool.23;
 
 procedure Test.10 (Test.26):
-    dec Test.26;
     let Test.30 : Int1 = CallByName Bool.2;
     if Test.30 then
         let Test.31 : [<rnu><null>, C {}] = CallByName Test.0;
@@ -30,6 +29,7 @@ procedure Test.6 (Test.16, #Attr.12):
         let Test.19 : {} = Struct {};
         let Test.22 : Str = "foobar";
         let Test.20 : [<rnu><null>, C {}] = CallByName Test.8 Test.22 Test.23;
+        dec Test.22;
         let Test.21 : U8 = GetTagId Test.20;
         switch Test.21:
             case 0:

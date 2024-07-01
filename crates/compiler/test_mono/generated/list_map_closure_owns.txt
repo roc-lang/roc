@@ -4,11 +4,9 @@ procedure List.2 (List.108, List.109):
     if List.576 then
         let List.578 : Str = CallByName List.66 List.108 List.109;
         inc List.578;
-        dec List.108;
         let List.577 : [C {}, C Str] = TagId(1) List.578;
         ret List.577;
     else
-        dec List.108;
         let List.575 : {} = Struct {};
         let List.574 : [C {}, C Str] = TagId(0) List.575;
         ret List.574;
@@ -58,6 +56,7 @@ procedure Test.0 ():
     let Test.12 : List Str = CallByName Test.2;
     let Test.13 : U64 = 0i64;
     let Test.6 : [C {}, C Str] = CallByName List.2 Test.12 Test.13;
+    dec Test.12;
     let Test.9 : U8 = 1i64;
     let Test.10 : U8 = GetTagId Test.6;
     let Test.11 : Int1 = lowlevel Eq Test.9 Test.10;

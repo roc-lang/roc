@@ -12,6 +12,8 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Attr.12):
     let #Derived_gen.17 : Str = "A";
     let #Derived_gen.18 : List [] = Array [];
     let #Derived_gen.16 : {Str, List []} = CallByName TotallyNotJson.31 #Derived_gen.17 #Derived_gen.18;
+    dec #Derived_gen.17;
+    dec #Derived_gen.18;
     jump #Derived_gen.15 #Derived_gen.16;
 
 procedure #Derived.5 (#Derived.6):
@@ -28,6 +30,8 @@ procedure #Derived.7 (#Derived.8, #Derived.9, #Attr.12):
     let #Derived_gen.7 : Str = "B";
     let #Derived_gen.8 : List [] = Array [];
     let #Derived_gen.6 : {Str, List []} = CallByName TotallyNotJson.31 #Derived_gen.7 #Derived_gen.8;
+    dec #Derived_gen.8;
+    dec #Derived_gen.7;
     jump #Derived_gen.5 #Derived_gen.6;
 
 procedure Bool.2 ():
@@ -45,11 +49,6 @@ procedure Encode.23 (Encode.98):
 
 procedure Encode.23 (Encode.98):
     ret Encode.98;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    dec Encode.99;
-    let Encode.125 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
-    Crash Encode.125
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.111 : List U8 = CallByName Test.5 Encode.99 Encode.101 Encode.107;
@@ -74,6 +73,10 @@ procedure Encode.24 (Encode.99, Encode.107, Encode.101):
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.121 : List U8 = CallByName TotallyNotJson.231 Encode.99 Encode.101 Encode.107;
     ret Encode.121;
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.125 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Encode.125
 
 procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
@@ -140,6 +143,7 @@ procedure List.92 (#Derived_gen.20, #Derived_gen.21, #Derived_gen.22, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.20;
     jump List.603 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24;
 
 procedure List.92 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_gen.43, #Derived_gen.44):
@@ -155,6 +159,7 @@ procedure List.92 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.40;
     jump List.643 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
 
 procedure Num.127 (#Attr.2):
@@ -203,6 +208,8 @@ procedure Test.5 (Test.6, Test.7, Test.4):
         let Test.31 : [C {}, C {}] = CallByName #Derived.0 Test.32;
         let Test.30 : List [C {}, C {}] = Array [Test.31];
         let Test.22 : {Str, List [C {}, C {}]} = CallByName TotallyNotJson.31 Test.29 Test.30;
+        dec Test.30;
+        dec Test.29;
         jump Test.23 Test.22;
     else
         let Test.24 : Str = "B";
@@ -210,6 +217,8 @@ procedure Test.5 (Test.6, Test.7, Test.4):
         let Test.26 : [C {}, C {}] = CallByName #Derived.5 Test.27;
         let Test.25 : List [C {}, C {}] = Array [Test.26];
         let Test.22 : {Str, List [C {}, C {}]} = CallByName TotallyNotJson.31 Test.24 Test.25;
+        dec Test.24;
+        dec Test.25;
         jump Test.23 Test.22;
 
 procedure TotallyNotJson.231 (TotallyNotJson.232, TotallyNotJson.976, #Attr.12):
@@ -236,6 +245,7 @@ procedure TotallyNotJson.231 (TotallyNotJson.232, TotallyNotJson.976, #Attr.12):
     let TotallyNotJson.986 : {List U8, U64} = Struct {TotallyNotJson.234, TotallyNotJson.998};
     let TotallyNotJson.987 : {} = Struct {};
     let TotallyNotJson.985 : {List U8, U64} = CallByName List.18 TotallyNotJson.230 TotallyNotJson.986 TotallyNotJson.987;
+    dec TotallyNotJson.230;
     let TotallyNotJson.236 : List U8 = StructAtIndex 0 TotallyNotJson.985;
     let TotallyNotJson.984 : I64 = 93i64;
     let TotallyNotJson.983 : U8 = CallByName Num.127 TotallyNotJson.984;
@@ -269,6 +279,7 @@ procedure TotallyNotJson.231 (TotallyNotJson.232, TotallyNotJson.976, #Attr.12):
     let TotallyNotJson.1029 : {List U8, U64} = Struct {TotallyNotJson.234, TotallyNotJson.1041};
     let TotallyNotJson.1030 : {} = Struct {};
     let TotallyNotJson.1028 : {List U8, U64} = CallByName List.18 TotallyNotJson.230 TotallyNotJson.1029 TotallyNotJson.1030;
+    dec TotallyNotJson.230;
     let TotallyNotJson.236 : List U8 = StructAtIndex 0 TotallyNotJson.1028;
     let TotallyNotJson.1027 : I64 = 93i64;
     let TotallyNotJson.1026 : U8 = CallByName Num.127 TotallyNotJson.1027;
@@ -283,6 +294,7 @@ procedure TotallyNotJson.233 (TotallyNotJson.978, TotallyNotJson.239):
     let TotallyNotJson.238 : U64 = StructAtIndex 1 TotallyNotJson.978;
     let TotallyNotJson.1040 : {} = Struct {};
     let TotallyNotJson.240 : List U8 = CallByName Encode.24 TotallyNotJson.237 TotallyNotJson.239 TotallyNotJson.1040;
+    dec TotallyNotJson.237;
     joinpoint TotallyNotJson.1035 TotallyNotJson.241:
         let TotallyNotJson.1033 : U64 = 1i64;
         let TotallyNotJson.1032 : U64 = CallByName Num.20 TotallyNotJson.238 TotallyNotJson.1033;
@@ -321,11 +333,15 @@ procedure TotallyNotJson.233 (TotallyNotJson.978, TotallyNotJson.239):
         jump TotallyNotJson.992 TotallyNotJson.240;
 
 procedure TotallyNotJson.31 (TotallyNotJson.229, TotallyNotJson.230):
+    inc TotallyNotJson.230;
+    inc TotallyNotJson.229;
     let TotallyNotJson.1016 : {Str, List [C {}, C {}]} = Struct {TotallyNotJson.229, TotallyNotJson.230};
     let TotallyNotJson.1015 : {Str, List [C {}, C {}]} = CallByName Encode.23 TotallyNotJson.1016;
     ret TotallyNotJson.1015;
 
 procedure TotallyNotJson.31 (TotallyNotJson.229, TotallyNotJson.230):
+    inc TotallyNotJson.230;
+    inc TotallyNotJson.229;
     let TotallyNotJson.1059 : {Str, List []} = Struct {TotallyNotJson.229, TotallyNotJson.230};
     let TotallyNotJson.1058 : {Str, List []} = CallByName Encode.23 TotallyNotJson.1059;
     ret TotallyNotJson.1058;
