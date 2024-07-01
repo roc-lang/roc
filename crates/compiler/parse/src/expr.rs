@@ -1,9 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation,
-    TypeDef, TypeHeader, ValueDef,
+    is_expr_suffixed, is_top_level_suffixed, AssignedField, Collection, CommentOrNewline, Defs,
+    Expr, ExtractSpaces, Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword,
+    ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
+    ModuleImport, ModuleImportParams, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -372,14 +372,31 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     end,
                 };
 
-                parse_expr_end(
+                match parse_expr_end(
                     new_min_indent,
                     options,
                     expr_state,
                     arena,
                     state,
                     initial_state,
-                )
+                ) {
+                    Err(err) => Err(err),
+                    Ok((progress, expr, new_state)) => {
+                        // We need to check if we have just parsed a suffixed statement,
+                        // if so, this is a defs node.
+                        if is_top_level_suffixed(&expr) {
+                            let def_region = Region::new(end, new_state.pos());
+                            let value_def = ValueDef::Stmt(arena.alloc(Loc::at(def_region, expr)));
+
+                            let mut defs = Defs::default();
+                            defs.push_value_def(value_def, def_region, &[], &[]);
+
+                            return parse_defs_expr(options, min_indent, defs, arena, new_state);
+                        } else {
+                            Ok((progress, expr, new_state))
+                        }
+                    }
+                }
             }
         }
     })
@@ -1134,18 +1151,60 @@ pub fn parse_single_def_assignment<'a>(
         parse_def_expr.parse(arena, initial_state, min_indent)?;
 
     let region = Region::span_across(&def_loc_pattern.region, &first_loc_expr.region);
-    let value_def = ValueDef::Body(arena.alloc(def_loc_pattern), arena.alloc(first_loc_expr));
 
-    Ok((
-        progress_after_first,
-        Some(SingleDef {
-            type_or_value: Either::Second(value_def),
+    // If the expression is actually a suffixed statement, then we need to continue
+    // to parse the rest of the expression
+    if is_top_level_suffixed(&first_loc_expr.value) {
+        let mut defs = Defs::default();
+        // Take the suffixed value and make it a e.g. Body(`{}=`, Apply(Var(...)))
+        // we will keep the pattern `def_loc_pattern` for the new Defs
+        defs.push_value_def(
+            ValueDef::Stmt(arena.alloc(first_loc_expr)),
             region,
-            spaces_before: spaces_before_current,
-            spaces_after: &[],
-        }),
-        state_after_first_expression,
-    ))
+            spaces_before_current,
+            &[],
+        );
+
+        // Try to parse the rest of the expression as multiple defs, which may contain sub-assignments
+        match parse_defs_expr(
+            options,
+            min_indent,
+            defs,
+            arena,
+            state_after_first_expression,
+        ) {
+            Ok((progress_after_rest_of_def, expr, state_after_rest_of_def)) => {
+                let final_loc_expr = arena.alloc(Loc::at(region, expr));
+
+                let value_def = ValueDef::Body(arena.alloc(def_loc_pattern), final_loc_expr);
+
+                Ok((
+                    progress_after_rest_of_def,
+                    Some(SingleDef {
+                        type_or_value: Either::Second(value_def),
+                        region,
+                        spaces_before: spaces_before_current,
+                        spaces_after: &[],
+                    }),
+                    state_after_rest_of_def,
+                ))
+            }
+            Err((progress, err)) => Err((progress, err)),
+        }
+    } else {
+        let value_def = ValueDef::Body(arena.alloc(def_loc_pattern), arena.alloc(first_loc_expr));
+
+        Ok((
+            progress_after_first,
+            Some(SingleDef {
+                type_or_value: Either::Second(value_def),
+                region,
+                spaces_before: spaces_before_current,
+                spaces_after: &[],
+            }),
+            state_after_first_expression,
+        ))
+    }
 }
 
 /// e.g. Things that can be on their own line in a def, e.g. `expect`, `expect-fx`, or `dbg`
@@ -1378,22 +1437,29 @@ fn parse_defs_expr<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     match parse_defs_end(options, min_indent, defs, arena, state) {
         Err(bad) => Err(bad),
-        Ok((_, mut def_state, state)) => {
+        Ok((_, def_state, state)) => {
             // this is no def, because there is no `=` or `:`; parse as an expr
-            let parse_final_expr = space0_before_e(expr_start(options), EExpr::IndentEnd);
-
-            match parse_final_expr.parse(arena, state.clone(), min_indent) {
+            match space0_before_e(expr_start(options), EExpr::IndentEnd).parse(
+                arena,
+                state.clone(),
+                min_indent,
+            ) {
                 Err((_, fail)) => {
-                    // If the last def was a suffixed statement, assume this was
-                    // intentional by the application author instead of giving
-                    // an error.
-                    match def_state.last_value_suffixed() {
-                        Some(loc_ret) => Ok((
-                            MadeProgress,
-                            Expr::Defs(arena.alloc(def_state), arena.alloc(loc_ret)),
-                            state,
-                        )),
-                        _ => Err((
+                    let mut def_state = def_state;
+                    match def_state.pop_last_value() {
+                        Some(loc_ret) => {
+                            // If the poped value was the only item in defs - just return it as an expression
+                            if def_state.is_empty() {
+                                Ok((MadeProgress, loc_ret.value, state))
+                            } else {
+                                Ok((
+                                    MadeProgress,
+                                    Expr::Defs(arena.alloc(def_state), arena.alloc(loc_ret)),
+                                    state,
+                                ))
+                            }
+                        }
+                        None => Err((
                             MadeProgress,
                             EExpr::DefMissingFinalExpr2(arena.alloc(fail), state.pos()),
                         )),

@@ -532,6 +532,19 @@ pub fn split_loc_exprs_around<'a>(
     (before, after)
 }
 
+/// Checks if the bang suffix is applied only at the top level of expression
+pub fn is_top_level_suffixed(expr: &Expr) -> bool {
+    // TODO: should we check BinOps with pizza where the last expression is TaskAwaitBang?
+    match expr {
+        Expr::TaskAwaitBang(..) => true,
+        Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
+        Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
+        Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
+        _ => false,
+    }
+}
+
+/// Check if the bang suffix is applied recursevely in expression
 pub fn is_expr_suffixed(expr: &Expr) -> bool {
     match expr {
         // expression without arguments, `read!`
@@ -1177,7 +1190,7 @@ impl<'a> Defs<'a> {
         })
     }
 
-    pub fn last_value_suffixed(&mut self) -> Option<&'a Loc<Expr<'a>>> {
+    pub fn pop_last_value(&mut self) -> Option<&'a Loc<Expr<'a>>> {
         let last_value_suffix = self
             .tags
             .iter()
@@ -1192,12 +1205,8 @@ impl<'a> Defs<'a> {
                             ..
                         },
                         loc_expr,
-                    ) if collection.is_empty() && is_expr_suffixed(&loc_expr.value) => {
-                        Some((tag_index, loc_expr))
-                    }
-                    ValueDef::Stmt(loc_expr) if is_expr_suffixed(&loc_expr.value) => {
-                        Some((tag_index, loc_expr))
-                    }
+                    ) if collection.is_empty() => Some((tag_index, loc_expr)),
+                    ValueDef::Stmt(loc_expr) => Some((tag_index, loc_expr)),
                     _ => None,
                 },
             });
