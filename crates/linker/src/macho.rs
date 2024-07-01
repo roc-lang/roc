@@ -18,12 +18,12 @@ use std::{
     time::Instant,
 };
 
+use crate::util::{is_roc_definition, is_roc_undefined, report_timing};
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
     load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
     open_mmap_mut,
 };
-use crate::util::{report_timing, is_roc_undefined, is_roc_definition};
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
 

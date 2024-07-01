@@ -19,10 +19,8 @@ use roc_collections::{MutMap, VecMap};
 use roc_error_macros::internal_error;
 
 use crate::{
-    generate_dylib::APP_DLL,
-    load_struct_inplace, load_struct_inplace_mut, load_structs_inplace_mut, open_mmap,
-    open_mmap_mut,
-    util::is_roc_definition,
+    generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut,
+    load_structs_inplace_mut, open_mmap, open_mmap_mut, util::is_roc_definition,
 };
 
 /// The metadata stores information about/from the host .exe because
@@ -193,10 +191,7 @@ pub(crate) fn preprocess_windows(
         Ok(obj) => obj,
         Err(e) => internal_error!("Failed to parse shared library file: {e}"),
     };
-    let dummy_dll_symbols = shared_lib_obj
-        .symbols()
-        .filter(is_roc_definition)
-        .count();
+    let dummy_dll_symbols = shared_lib_obj.symbols().filter(is_roc_definition).count();
 
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut preprocessed = Preprocessor::preprocess(
