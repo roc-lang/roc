@@ -3173,6 +3173,22 @@ fn to_pending_value_def<'a>(
                 }
             });
 
+            match (module_import.params, env.modules_expecting_params.contains(&module_id)) {
+                (None, true) => {
+                    env.problems.push(Problem::MissingParams {
+                        module_id,
+                        region,
+                    });
+                }
+                (Some(import_params), false) => {
+                    env.problems.push(Problem::UnexpectedParams {
+                        module_id,
+                        region: import_params.params.region,
+                    });
+                }
+                (None, false) | (Some(_), true) => { /* All good */}
+            }
+
             if let Err(existing_import) =
                 scope
                     .modules

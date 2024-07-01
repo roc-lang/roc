@@ -1690,6 +1690,52 @@ fn module_params_typecheck_extra_fields() {
 }
 
 #[test]
+fn module_params_unexpected() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module [url]
+
+            url = "example.com"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api { key: 123 }
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("module_params_unexpected", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── UNEXPECTED PARAMS in tmp/module_params_unexpected/Main.roc ──────────────────
+
+            This import specifies module params:
+
+            3│  import Api { key: 123 }
+                           ^^^^^^^^^^^^
+
+            However, Api does not expect any. Did you intend to import a different
+            module?
+            "#
+        )
+    )
+}
+
+#[test]
 fn issue_2863_module_type_does_not_exist() {
     let modules = vec![
         (

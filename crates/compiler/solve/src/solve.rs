@@ -1413,33 +1413,36 @@ fn solve(
                     *type_index,
                 );
 
-                let expected = module_params_vars
-                    .get(module_id)
-                    // todo(agus): Module has no params? handle
-                    .unwrap();
-
-                match unify(
-                    &mut env.uenv(),
-                    actual,
-                    *expected,
-                    UnificationMode::EQ,
-                    Polarity::OF_VALUE,
-                ) {
-                    Success {
-                        vars,
-                        must_implement_ability: _,
-                        lambda_sets_to_specialize: _,
-                        extra_metadata: _,
-                    } => {
-                        env.introduce(rank, &vars);
-
+                match module_params_vars.get(module_id) {
+                    None => {
+                        // Module does not expect params. This will be reported by can.
                         state
                     }
+                    Some(expected) => {
+                        match unify(
+                            &mut env.uenv(),
+                            actual,
+                            *expected,
+                            UnificationMode::EQ,
+                            Polarity::OF_VALUE,
+                        ) {
+                            Success {
+                                vars,
+                                must_implement_ability: _,
+                                lambda_sets_to_specialize: _,
+                                extra_metadata: _,
+                            } => {
+                                env.introduce(rank, &vars);
 
-                    Failure(vars, _actual_type, _expected_type, _) => {
-                        env.introduce(rank, &vars);
+                                state
+                            }
 
-                        todo!("report import params mismatch")
+                            Failure(vars, _actual_type, _expected_type, _) => {
+                                env.introduce(rank, &vars);
+
+                                todo!("report import params mismatch")
+                            }
+                        }
                     }
                 }
             }

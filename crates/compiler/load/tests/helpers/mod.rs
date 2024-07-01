@@ -189,6 +189,7 @@ pub fn can_expr_with<'a>(
         home,
         Path::new("Test.roc"),
         &dep_idents,
+        Default::default(),
         &module_ids,
         None,
     );

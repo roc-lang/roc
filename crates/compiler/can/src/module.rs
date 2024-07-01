@@ -286,6 +286,7 @@ pub fn canonicalize_module_defs<'a>(
     qualified_module_ids: &'a PackageModuleIds<'a>,
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
+    modules_expecting_params: VecSet<ModuleId>,
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
     initial_scope: MutMap<Ident, (Symbol, Region)>,
@@ -311,6 +312,7 @@ pub fn canonicalize_module_defs<'a>(
         home,
         arena.alloc(Path::new(module_path)),
         dep_idents,
+        modules_expecting_params,
         qualified_module_ids,
         opt_shorthand,
     );

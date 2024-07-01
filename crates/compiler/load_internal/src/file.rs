@@ -250,6 +250,7 @@ fn start_phase<'a>(
                     .clone();
 
                 let mut aliases = MutMap::default();
+                let mut modules_expecting_params = VecSet::default();
                 let mut abilities_store = PendingAbilitiesStore::default();
 
                 for imported in parsed.available_modules.keys() {
@@ -293,6 +294,10 @@ fn start_phase<'a>(
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
                     }
+
+                    if state.module_cache.param_patterns.contains_key(imported) {
+                        modules_expecting_params.insert(*imported);
+                    }
                 }
 
                 let skip_constraint_gen = {
@@ -304,6 +309,7 @@ fn start_phase<'a>(
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
                     dep_idents,
+                    modules_expecting_params,
                     exposed_symbols,
                     qualified_module_ids,
                     aliases,
@@ -899,6 +905,7 @@ enum BuildTask<'a> {
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         qualified_module_ids: PackageModuleIds<'a>,
+        modules_expecting_params: VecSet<ModuleId>,
         dep_idents: IdentIdsByModule,
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
@@ -5018,6 +5025,7 @@ fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     qualified_module_ids: &'a PackageModuleIds<'a>,
     dep_idents: IdentIdsByModule,
+    modules_expecting_params: VecSet<ModuleId>,
     exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
@@ -5060,6 +5068,7 @@ fn canonicalize_and_constrain<'a>(
         qualified_module_ids,
         exposed_ident_ids,
         &dep_idents,
+        modules_expecting_params,
         aliases,
         imported_abilities_state,
         initial_scope,
@@ -6222,6 +6231,7 @@ fn run_task<'a>(
             parsed,
             qualified_module_ids,
             dep_idents,
+            modules_expecting_params,
             exposed_symbols,
             aliases,
             abilities_store,
@@ -6232,6 +6242,7 @@ fn run_task<'a>(
                 arena,
                 &qualified_module_ids,
                 dep_idents,
+                modules_expecting_params,
                 exposed_symbols,
                 aliases,
                 abilities_store,
