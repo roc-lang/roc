@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate indoc;
+
 #[cfg(test)]
 mod suffixed_tests {
 
@@ -912,6 +915,35 @@ mod suffixed_tests {
             "#,
             r##"Defs { tags: [Index(2147483648)], regions: [@0-48], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @0-48 Apply(@0-48 Var { module_name: "Task", ident: "await" }, [@27-29 Var { module_name: "", ident: "a" }, @0-48 Closure([@27-29 Identifier { ident: "#!a0" }], @0-48 LowLevelDbg(("test.roc:3", "  "), @27-29 Apply(@27-29 Var { module_name: "Inspect", ident: "toStr" }, [@27-29 Var { module_name: "", ident: "#!a0" }], Space), @47-48 Var { module_name: "", ident: "b" }))], BangSuffix))] }"##,
         )
+    }
+
+    #[test]
+    fn last_stmt_not_top_level_suffixed() {
+        run_test(
+            r#"
+            main =
+                x = 42
+                a b!
+            "#,
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-50], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @23-50 Defs(Defs { tags: [Index(2147483650)], regions: [@27-29], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "x" }, @27-29 Num("42")), Body(@23-24 Identifier { ident: "x" }, @27-29 Num("42")), Body(@23-24 Identifier { ident: "x" }, @27-29 Num("42"))] }, @23-50 Apply(@23-50 Var { module_name: "Task", ident: "await" }, [@48-49 Var { module_name: "", ident: "b" }, @23-50 Closure([@48-49 Identifier { ident: "#!a0" }], @46-50 Apply(@46-47 Var { module_name: "", ident: "a" }, [@48-49 Var { module_name: "", ident: "#!a0" }], Space))], BangSuffix)))] }"##,
+        );
+    }
+
+    #[test]
+    fn nested_defs() {
+        run_test(
+            indoc!(
+                r##"
+                main =
+                    x =
+                        a = b!
+                        c! a
+
+                    x
+                "##,
+            ),
+            r##"Defs { tags: [Index(2147483648)], regions: [@0-49], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@0-4 Identifier { ident: "main" }, @11-49 Defs(Defs { tags: [Index(2147483649)], regions: [@23-42], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@11-12 Identifier { ident: "x" }, @23-42 Defs(Defs { tags: [Index(2147483648)], regions: [@23-29], space_before: [Slice(start = 0, length = 0)], space_after: [Slice(start = 0, length = 0)], spaces: [], type_defs: [], value_defs: [Body(@23-24 Identifier { ident: "a" }, @27-29 TaskAwaitBang(Var { module_name: "", ident: "b" }))] }, @38-42 Apply(@38-39 TaskAwaitBang(Var { module_name: "", ident: "c" }), [@41-42 Var { module_name: "", ident: "a" }], Space))), Body(@11-12 Identifier { ident: "x" }, @27-29 Apply(@27-29 Var { module_name: "Task", ident: "await" }, [@27-29 Var { module_name: "", ident: "b" }, @27-29 Closure([@23-24 Identifier { ident: "a" }], @38-42 Apply(@38-42 Var { module_name: "", ident: "c" }, [@41-42 Var { module_name: "", ident: "a" }], Space))], BangSuffix))] }, @48-49 Var { module_name: "", ident: "x" }))] }"##,
+        );
     }
 }
 
