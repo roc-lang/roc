@@ -1,16 +1,15 @@
-app "rbtree-insert"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
-main : Task.Task {} []
+import pf.PlatformTask
+
+main : Task {} []
 main =
     tree : RedBlackTree I64 {}
     tree = insert 0 {} Empty
 
     tree
     |> show
-    |> Task.putLine
+    |> PlatformTask.putLine
 
 show : RedBlackTree I64 {} -> Str
 show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")

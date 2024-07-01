@@ -12,4 +12,5 @@ package [
     Box,
     TotallyNotJson,
     Inspect,
+    Task,
 ] {}

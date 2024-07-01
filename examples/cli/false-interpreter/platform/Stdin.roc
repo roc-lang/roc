@@ -1,9 +1,9 @@
 module [char]
 
-import pf.Effect
-import Task
+import pf.PlatformTask
 
-# line : Task.Task Str *
-# line = Effect.after Effect.getLine Task.succeed # TODO FIXME Effect.getLine should suffice
-char : Task.Task U8 *
-char = Effect.after Effect.getChar Task.succeed # TODO FIXME Effect.getLine should suffice
+line : Task Str *
+line = PlatformTask.getLine
+
+char : Task U8 *
+char = PlatformTask.getChar

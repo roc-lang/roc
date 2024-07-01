@@ -9,11 +9,10 @@ use crate::Buf;
 use bumpalo::Bump;
 use roc_parse::ast::{Collection, CommentOrNewline, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
-    AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-    ImportsKeyword, Keyword, KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader,
-    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword,
-    PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
-    WithKeyword,
+    AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword, Keyword,
+    KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader, PackageKeyword,
+    PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword, PlatformRequires,
+    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -71,8 +70,6 @@ macro_rules! keywords {
 keywords! {
     ExposesKeyword,
     ImportsKeyword,
-    WithKeyword,
-    GeneratesKeyword,
     PackageKeyword,
     PackagesKeyword,
     RequiresKeyword,
@@ -208,9 +205,6 @@ pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
     fmt_exposes(buf, header.exposes.item, indent);
     header.imports.keyword.format(buf, indent);
     fmt_imports(buf, header.imports.item, indent);
-    header.generates.format(buf, indent);
-    header.generates_with.keyword.format(buf, indent);
-    fmt_exposes(buf, header.generates_with.item, indent);
 }
 
 pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {

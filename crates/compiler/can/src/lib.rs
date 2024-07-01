@@ -14,7 +14,6 @@ pub mod copy;
 pub mod def;
 mod derive;
 pub mod desugar;
-pub mod effect_module;
 pub mod env;
 pub mod exhaustive;
 pub mod expected;
@@ -26,6 +25,7 @@ pub mod procedure;
 pub mod scope;
 pub mod string;
 pub mod suffixed;
+pub mod task_module;
 pub mod traverse;
 
 pub use derive::DERIVED_REGION;

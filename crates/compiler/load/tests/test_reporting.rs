@@ -6301,13 +6301,14 @@ In roc, functions are always written as a lambda, like{}
         )
     }
 
+    // TODO: this test seems out of date (what is the `effects` clause?) and as such should be removed
     #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
                 r#"
                 platform "folkertdev/foo"
-                    requires { main : Effect {} }
+                    requires { main : Task {} [] }
                     exposes []
                     packages {}
                     imports [Task]
@@ -6327,7 +6328,7 @@ In roc, functions are always written as a lambda, like{}
                 I am partway through parsing a header, but I got stuck here:
 
                 1│  platform "folkertdev/foo"
-                2│      requires { main : Effect {} }
+                2│      requires { main : Task {} [] }
                                    ^
 
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full

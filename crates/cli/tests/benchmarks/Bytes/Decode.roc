@@ -1,4 +1,4 @@
-interface Bytes.Decode exposes [ByteDecoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3] imports []
+module [ByteDecoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3]
 
 State : { bytes : List U8, cursor : U64 }
 

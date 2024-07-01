@@ -365,7 +365,7 @@ fn fast_forward_to(
     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Error));
 }
 
-pub const HEADER_KEYWORDS: [&str; 14] = [
+pub const HEADER_KEYWORDS: [&str; 12] = [
     "interface",
     "app",
     "package",
@@ -373,8 +373,6 @@ pub const HEADER_KEYWORDS: [&str; 14] = [
     "hosted",
     "exposes",
     "imports",
-    "with",
-    "generates",
     "package",
     "packages",
     "requires",

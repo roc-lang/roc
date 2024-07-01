@@ -1747,6 +1747,23 @@ define_builtins! {
         5 JSON_ARRAY_CLOSING_STATE: "ArrayClosingState"
         6 JSON_OBJECT_STATE: "ObjectState"
     }
+    16 TASK: "Task" => {
+        0 TASK_TASK: "Task" exposed_type=true // the Task.Task opaque type
+        1 TASK_FOREVER: "forever"
+        2 TASK_LOOP: "loop"
+        3 TASK_OK: "ok"
+        4 TASK_ERR: "err"
+        5 TASK_ATTEMPT: "attempt"
+        6 TASK_AWAIT: "await"
+        7 TASK_ON_ERR: "onErr"
+        8 TASK_MAP: "map"
+        9 TASK_MAP_ERR: "mapErr"
+        10 TASK_FROM_RESULT: "fromResult"
+        11 TASK_BATCH: "batch"
+        12 TASK_SEQ: "seq"
+        13 TASK_FOR_EACH: "forEach"
+        14 TASK_RESULT: "result"
+    }
 
-    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 17 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

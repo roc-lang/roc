@@ -92,6 +92,7 @@ impl Default for ModuleCache<'_> {
             HASH,
             INSPECT,
             JSON,
+            TASK,
         }
 
         Self {

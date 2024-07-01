@@ -2,8 +2,8 @@ app "test" provides [always] to "./platform"
 
 Effect a := {} -> a
 
-Task a err : Effect (Result a err)
+MockTask a err : Effect (Result a err)
 
-always : a -> Task a *
+always : a -> MockTask a *
 always = \x -> @Effect (\{} -> Ok x)
-#^^^^^^{-1} a -[[always(0)]]-> Task a *
+#^^^^^^{-1} a -[[always(0)]]-> MockTask a *
