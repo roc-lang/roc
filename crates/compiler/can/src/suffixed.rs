@@ -619,7 +619,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                 let after_empty = split_defs.after.is_empty();
                                 if before_empty && after_empty {
                                     // NIL before, NIL after -> SINGLE DEF
-                                    let next_expr = match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat) {
+                                    // We pass None as a def pattern here because it's desugaring of the ret expression
+                                    let next_expr = match unwrap_suffixed_expression(arena,loc_ret, None) {
                                         Ok(next_expr) => next_expr,
                                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
                                             // We need to apply Task.ok here as the defs final expression was unwrapped
@@ -649,7 +650,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                     return unwrap_suffixed_expression(arena, apply_task_await(arena,def_expr.region,unwrapped_expr,def_pattern,next_expr), maybe_def_pat);
                                 } else if after_empty {
                                     // SOME before, NIL after -> LAST DEF
-                                    match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat){
+                                    // We pass None as a def pattern here because it's desugaring of the ret expression
+                                    match unwrap_suffixed_expression(arena,loc_ret,None){
                                         Ok(new_loc_ret) => {
                                             let applied_task_await = apply_task_await(arena, loc_expr.region, unwrapped_expr, def_pattern, new_loc_ret);
                                             let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(split_defs.before), applied_task_await)));

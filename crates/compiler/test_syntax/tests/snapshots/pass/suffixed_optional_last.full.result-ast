@@ -64,7 +64,7 @@ Full {
                 @88-92 Identifier {
                     ident: "main",
                 },
-                @88-202 SpaceBefore(
+                @100-202 SpaceBefore(
                     BinOps(
                         [
                             (

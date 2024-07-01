@@ -462,10 +462,6 @@ pub enum Expr<'a> {
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
 
-    /// Used in place of an expression when the final expression is empty
-    /// This may happen if the final expression is actually a suffixed statement
-    EmptyDefsFinal,
-
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
@@ -536,6 +532,19 @@ pub fn split_loc_exprs_around<'a>(
     (before, after)
 }
 
+/// Checks if the bang suffix is applied only at the top level of expression
+pub fn is_top_level_suffixed(expr: &Expr) -> bool {
+    // TODO: should we check BinOps with pizza where the last expression is TaskAwaitBang?
+    match expr {
+        Expr::TaskAwaitBang(..) => true,
+        Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
+        Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
+        Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
+        _ => false,
+    }
+}
+
+/// Check if the bang suffix is applied recursevely in expression
 pub fn is_expr_suffixed(expr: &Expr) -> bool {
     match expr {
         // expression without arguments, `read!`
@@ -613,7 +622,6 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::Crash => false,
         Expr::Tag(_) => false,
         Expr::OpaqueRef(_) => false,
-        Expr::EmptyDefsFinal => false,
         Expr::Backpassing(_, _, _) => false, // TODO: we might want to check this?
         Expr::Expect(a, b) | Expr::Dbg(a, b) => {
             is_expr_suffixed(&a.value) || is_expr_suffixed(&b.value)
@@ -975,8 +983,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | MalformedIdent(_, _)
                 | MalformedClosure
                 | PrecedenceConflict(_)
-                | MalformedSuffixed(_)
-                | EmptyDefsFinal => { /* terminal */ }
+                | MalformedSuffixed(_) => { /* terminal */ }
             }
         }
     }
@@ -1183,51 +1190,39 @@ impl<'a> Defs<'a> {
         })
     }
 
-    // We could have a type annotation as the last tag,
-    // this helper ensures we refer to the last value_def
-    // and that we remove the correct tag
-    pub fn last_value_suffixed(&self) -> Option<(Self, &'a Loc<Expr<'a>>)> {
-        let value_indexes =
-            self.tags
-                .clone()
-                .into_iter()
-                .enumerate()
-                .filter_map(|(tag_index, tag)| match tag.split() {
-                    Ok(_) => None,
-                    Err(value_index) => Some((tag_index, value_index.index())),
-                });
+    pub fn pop_last_value(&mut self) -> Option<&'a Loc<Expr<'a>>> {
+        let last_value_suffix = self
+            .tags
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(tag_index, tag)| match tag.split() {
+                Ok(_) => None,
+                Err(value_index) => match self.value_defs[value_index.index()] {
+                    ValueDef::Body(
+                        Loc {
+                            value: Pattern::RecordDestructure(collection),
+                            ..
+                        },
+                        loc_expr,
+                    ) if collection.is_empty() => Some((tag_index, loc_expr)),
+                    ValueDef::Stmt(loc_expr) => Some((tag_index, loc_expr)),
+                    _ => None,
+                },
+            });
 
-        if let Some((tag_index, value_index)) = value_indexes.last() {
-            match self.value_defs[value_index] {
-                ValueDef::Body(
-                    Loc {
-                        value: Pattern::RecordDestructure(collection),
-                        ..
-                    },
-                    loc_expr,
-                ) if collection.is_empty() && is_expr_suffixed(&loc_expr.value) => {
-                    let mut new_defs = self.clone();
-                    new_defs.remove_value_def(tag_index);
-
-                    return Some((new_defs, loc_expr));
-                }
-                ValueDef::Stmt(loc_expr) if is_expr_suffixed(&loc_expr.value) => {
-                    let mut new_defs = self.clone();
-                    new_defs.remove_value_def(tag_index);
-
-                    return Some((new_defs, loc_expr));
-                }
-                _ => {}
-            }
+        if let Some((tag_index, loc_expr)) = last_value_suffix {
+            self.remove_tag(tag_index);
+            Some(loc_expr)
+        } else {
+            None
         }
-
-        None
     }
 
-    pub fn remove_value_def(&mut self, index: usize) {
+    pub fn remove_tag(&mut self, tag_index: usize) {
         match self
             .tags
-            .get(index)
+            .get(tag_index)
             .expect("got an invalid index for Defs")
             .split()
         {
@@ -1260,10 +1255,10 @@ impl<'a> Defs<'a> {
                 }
             }
         }
-        self.tags.remove(index);
-        self.regions.remove(index);
-        self.space_after.remove(index);
-        self.space_before.remove(index);
+        self.tags.remove(tag_index);
+        self.regions.remove(tag_index);
+        self.space_after.remove(tag_index);
+        self.space_before.remove(tag_index);
     }
 
     /// NOTE assumes the def itself is pushed already!
@@ -2394,7 +2389,6 @@ impl<'a> Malformed for Expr<'a> {
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
-            EmptyDefsFinal |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
