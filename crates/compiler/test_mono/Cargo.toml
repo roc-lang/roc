@@ -21,6 +21,7 @@ roc_mono = { path = "../mono" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
+roc_test_utils = { path = "../../test_utils" }
 roc_tracing = { path = "../../tracing" }
 
 test_mono_macros = { path = "../test_mono_macros" }

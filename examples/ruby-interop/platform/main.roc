@@ -1,12 +1,16 @@
 platform "ruby-interop"
-    requires {} { main : arg -> ret where arg implements Decoding, ret implements Encoding }
+    requires {} { main : U64 -> Str }
     exposes []
     packages {}
-    imports [TotallyNotJson]
+    imports []
     provides [mainForHost]
 
 mainForHost : List U8 -> List U8
-mainForHost = \json ->
-    when Decode.fromBytes json TotallyNotJson.json is
-        Ok arg -> Encode.toBytes (main arg) TotallyNotJson.json
+mainForHost = \input ->
+    when Str.fromUtf8 input is
+        Ok arg ->
+            when Str.toU64 arg is
+                Ok num -> main num |> Str.toUtf8
+                Err _ -> []
+
         Err _ -> [] # TODO panic so that Ruby raises an exception

@@ -5,12 +5,14 @@ use crate::helpers::llvm::assert_evals_to;
 use crate::helpers::wasm::assert_evals_to;
 
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocList;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocStr;
+
+use roc_test_utils::TAG_LEN_ENCODER_FMT;
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
@@ -352,26 +354,26 @@ fn decode() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_use_stdlib() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            HelloWorld := {} implements [Encoding {toEncoder}]
-            toEncoder = \@HelloWorld {} ->
+            {TAG_LEN_ENCODER_FMT}
+
+            HelloWorld := {{}} implements [Encoding {{toEncoder}}]
+            toEncoder = \@HelloWorld {{}} ->
                 Encode.custom \bytes, fmt ->
                     bytes
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{}}) tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\\n\""),
+        RocStr::from("s14 Hello, World!\n "),
         RocStr
     )
 }
@@ -380,23 +382,23 @@ fn encode_use_stdlib() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_use_stdlib_without_wrapping_custom() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            HelloWorld := {} implements [Encoding {toEncoder}]
-            toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
+            {TAG_LEN_ENCODER_FMT}
+
+            HelloWorld := {{}} implements [Encoding {{toEncoder}}]
+            toEncoder = \@HelloWorld {{}} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{}}) tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\\n\""),
+        RocStr::from("s14 Hello, World!\n "),
         RocStr
     )
 }
@@ -406,22 +408,22 @@ fn encode_use_stdlib_without_wrapping_custom() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derive_to_encoder_for_opaque() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            HelloWorld := { a: Str } implements [Encoding]
+            {TAG_LEN_ENCODER_FMT}
+
+            HelloWorld := {{ a: Str }} implements [Encoding]
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{ a: "Hello, World!" }}) tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"Hello, World!"}"#),
+        RocStr::from("r1 s1 a s13 Hello, World! "),
         RocStr
     )
 }
@@ -430,31 +432,33 @@ fn encode_derive_to_encoder_for_opaque() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_encoder_encode_custom_has_capture() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            HelloWorld := Str implements [Encoding {toEncoder}]
+            {TAG_LEN_ENCODER_FMT}
+
+            HelloWorld := Str implements [Encoding {{toEncoder}}]
             toEncoder = \@HelloWorld s1 ->
                 Encode.custom \bytes, fmt ->
                     bytes
                         |> Encode.appendWith (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\\n\""),
+        RocStr::from("s14 Hello, World!\n "),
         RocStr
     )
 }
 
 mod encode_immediate {
+    use super::TAG_LEN_ENCODER_FMT;
+
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
@@ -462,7 +466,7 @@ mod encode_immediate {
     use crate::helpers::wasm::assert_evals_to;
 
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-    use indoc::indoc;
+    use indoc::formatdoc;
 
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use roc_std::RocStr;
@@ -471,17 +475,19 @@ mod encode_immediate {
     #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn string() {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" TotallyNotJson.json) is
+                    when Str.fromUtf8 (Encode.toBytes "foo" tagLenFmt) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
             ),
-            RocStr::from("\"foo\""),
+            RocStr::from("s3 foo "),
             RocStr
         )
     }
@@ -490,17 +496,19 @@ mod encode_immediate {
     #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn ranged_number() {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] TotallyNotJson.json) is
+                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] tagLenFmt) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
             ),
-            RocStr::from(r"[1,2,3]"),
+            RocStr::from("l3 n1 n2 n3 "),
             RocStr
         )
     }
@@ -509,17 +517,19 @@ mod encode_immediate {
     #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn bool() {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes Bool.false TotallyNotJson.json) is
+                    when Str.fromUtf8 (Encode.toBytes Bool.false tagLenFmt) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
             ),
-            RocStr::from(r"false"),
+            RocStr::from(r"n0 "),
             RocStr
         )
     }
@@ -530,17 +540,18 @@ mod encode_immediate {
             #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
             fn $typ() {
                 assert_evals_to!(
-                    &format!(indoc!(
+                    &formatdoc!(
                         r#"
-                        app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                        app "test" provides [main] to "./platform"
+
+                        {TAG_LEN_ENCODER_FMT}
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} TotallyNotJson.json) is
+                            when Str.fromUtf8 (Encode.toBytes {}{} tagLenFmt) is
                                 Ok s -> s
                                 _ -> "<bad>"
-                        "#
-                    ), $num, stringify!($typ)),
-                    RocStr::from(format!(r"{}", $num).as_str()),
+                        "#, $num, stringify!($typ)),
+                    RocStr::from(format!(r"n{} ", $num).as_str()),
                     RocStr
                 )
             }
@@ -569,20 +580,20 @@ mod encode_immediate {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_one_field_string() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes {{a: "foo"}} tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"foo"}"#),
+        RocStr::from("r1 s1 a s3 foo "),
         RocStr
     )
 }
@@ -592,21 +603,21 @@ fn encode_derived_record_one_field_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_two_fields_strings() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                rcd = {a: "foo", b: "bar"}
-                result = Str.fromUtf8 (Encode.toBytes rcd TotallyNotJson.json)
+                rcd = {{a: "foo", b: "bar"}}
+                result = Str.fromUtf8 (Encode.toBytes rcd tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"foo","b":"bar"}"#),
+        RocStr::from("r2 s1 a s3 foo s1 b s3 bar "),
         RocStr
     )
 }
@@ -616,22 +627,22 @@ fn encode_derived_record_two_fields_strings() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_string() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                rcd = {a: {b: "bar"}}
-                encoded = Encode.toBytes rcd TotallyNotJson.json
+                rcd = {{a: {{b: "bar"}}}}
+                encoded = Encode.toBytes rcd tagLenFmt
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"b":"bar"}}"#),
+        RocStr::from("r1 s1 a r1 s1 b s3 bar "),
         RocStr
     )
 }
@@ -640,21 +651,21 @@ fn encode_derived_nested_record_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tag_one_payload_string() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":["foo"]}"#),
+        RocStr::from("l2 s1 A s3 foo "),
         RocStr
     )
 }
@@ -663,21 +674,21 @@ fn encode_derived_tag_one_payload_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tag_two_payloads_string() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":["foo","bar"]}"#),
+        RocStr::from("l3 s1 A s3 foo s3 bar "),
         RocStr
     )
 }
@@ -686,22 +697,22 @@ fn encode_derived_tag_two_payloads_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_tag_string() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x TotallyNotJson.json
+                encoded = Encode.toBytes x tagLenFmt
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":[{"B":["foo","bar"]}]}"#),
+        RocStr::from("l2 s1 A l3 s1 B s3 foo s3 bar "),
         RocStr
     )
 }
@@ -711,22 +722,22 @@ fn encode_derived_nested_tag_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                x = {a: (B ({c: "foo"}))}
-                encoded = Encode.toBytes x TotallyNotJson.json
+                x = {{a: (B ({{c: "foo"}}))}}
+                encoded = Encode.toBytes x tagLenFmt
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"B":[{"c":"foo"}]}}"#),
+        RocStr::from("r1 s1 a l2 s1 B r1 s1 c s3 foo "),
         RocStr
     )
 }
@@ -735,22 +746,22 @@ fn encode_derived_nested_record_tag_record() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_string() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 lst = ["foo", "bar", "baz"]
-                encoded = Encode.toBytes lst TotallyNotJson.json
+                encoded = Encode.toBytes lst tagLenFmt
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"["foo","bar","baz"]"#),
+        RocStr::from("l3 s3 foo s3 bar s3 baz "),
         RocStr
     )
 }
@@ -760,22 +771,22 @@ fn encode_derived_list_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_of_records() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
-                encoded = Encode.toBytes lst TotallyNotJson.json
+                lst = [{{a: "foo"}}, {{a: "bar"}}, {{a: "baz"}}]
+                encoded = Encode.toBytes lst tagLenFmt
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"[{"a":"foo"},{"a":"bar"},{"a":"baz"}]"#),
+        RocStr::from("l3 r1 s1 a s3 foo r1 s1 a s3 bar r1 s1 a s3 baz "),
         RocStr
     )
 }
@@ -784,22 +795,22 @@ fn encode_derived_list_of_records() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_of_lists_of_strings() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 lst = [["a", "b"], ["c", "d", "e"], ["f"]]
-                encoded = Encode.toBytes lst TotallyNotJson.json
+                encoded = Encode.toBytes lst tagLenFmt
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"[["a","b"],["c","d","e"],["f"]]"#),
+        RocStr::from("l3 l2 s1 a s1 b l3 s1 c s1 d s1 e l1 s1 f "),
         RocStr
     )
 }
@@ -809,24 +820,24 @@ fn encode_derived_list_of_lists_of_strings() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 fresh : [Fresh Str, Rotten Str]
                 fresh = Fresh "tomatoes"
-                rcd = {actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}
-                result = Str.fromUtf8 (Encode.toBytes rcd TotallyNotJson.json)
+                rcd = {{actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {{average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}}}
+                result = Str.fromUtf8 (Encode.toBytes rcd tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
         RocStr::from(
-            r#"{"actors":["Idris Elba","Mila Kunis"],"rating":{"average":7,"max":10,"min":1,"sentiment":{"Fresh":["tomatoes"]}},"year":2004}"#
+            "r3 s6 actors l2 s10 Idris Elba s10 Mila Kunis s6 rating r4 s7 average n7 s3 max n10 s3 min n1 s9 sentiment l2 s5 Fresh s8 tomatoes s4 year n2004 "
         ),
         RocStr
     )
@@ -836,21 +847,21 @@ fn encode_derived_record_with_many_types() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tuple_two_fields() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 tup = ("foo", 10u8)
-                result = Str.fromUtf8 (Encode.toBytes tup TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes tup tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"["foo",10]"#),
+        RocStr::from("l2 s3 foo n10 "),
         RocStr
     )
 }
@@ -859,21 +870,21 @@ fn encode_derived_tuple_two_fields() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tuple_of_tuples() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
                 tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
-                result = Str.fromUtf8 (Encode.toBytes tup TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes tup tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"[["foo",10],[23,"bar",15]]"#),
+        RocStr::from("l2 l2 s3 foo n10 l3 n23 s3 bar n15 "),
         RocStr
     )
 }
@@ -883,24 +894,24 @@ fn encode_derived_tuple_of_tuples() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_generic_record_with_different_field_types() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Q a b := {a: a, b: b} implements [Encoding]
+            {TAG_LEN_ENCODER_FMT}
 
-            q = @Q {a: 10u32, b: "fieldb"}
+            Q a b := {{a: a, b: b}} implements [Encoding]
+
+            q = @Q {{a: 10u32, b: "fieldb"}}
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes q tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":10,"b":"fieldb"}"#),
+        RocStr::from("r2 s1 a n10 s1 b s6 fieldb "),
         RocStr
     )
 }
@@ -909,11 +920,11 @@ fn encode_derived_generic_record_with_different_field_types() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_generic_tag_with_different_field_types() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             Q a b := [A a, B b] implements [Encoding]
 
@@ -921,13 +932,13 @@ fn encode_derived_generic_tag_with_different_field_types() {
             q = @Q (B 67)
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q TotallyNotJson.json)
+                result = Str.fromUtf8 (Encode.toBytes q tagLenFmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"B":[67]}"#),
+        RocStr::from("l2 s1 B n67 "),
         RocStr
     )
 }
@@ -937,21 +948,21 @@ fn encode_derived_generic_tag_with_different_field_types() {
 fn specialize_unique_newtype_records() {
     crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
 
-            main =
-                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} TotallyNotJson.json) is
-                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} TotallyNotJson.json) is
-                        Ok t -> "$(s)$(t)"
+                {TAG_LEN_ENCODER_FMT}
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes {{a: Bool.true}} tagLenFmt) is
+                        Ok s -> when Str.fromUtf8 (Encode.toBytes {{b: Bool.true}} tagLenFmt) is
+                            Ok t -> "$(s)$(t)"
+                            _ -> "<bad>"
                         _ -> "<bad>"
-                    _ -> "<bad>"
-            "#
+                "#
             ),
-            RocStr::from(r#"{"a":true}{"b":true}"#),
+            RocStr::from("r1 s1 a n1 r1 s1 b n1 "),
             RocStr
         )
     });
@@ -961,24 +972,24 @@ fn specialize_unique_newtype_records() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_use_stdlib() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            MyNum := U8 implements [Decoding {decoder: myDecoder}]
+            {TAG_LEN_ENCODER_FMT}
+
+            MyNum := U8 implements [Decoding {{decoder: myDecoder}}]
 
             myDecoder =
                 Decode.custom \bytes, fmt ->
                     when Decode.decodeWith bytes Decode.u8 fmt is
-                        {result, rest} ->
+                        {{result, rest}} ->
                             when result is
-                                Ok n -> {result: Ok (@MyNum n), rest}
-                                Err e -> {result: Err e, rest}
+                                Ok n -> {{result: Ok (@MyNum n), rest}}
+                                Err e -> {{result: Err e, rest}}
 
             main =
-                when Decode.fromBytes [49, 53] TotallyNotJson.json is
+                when Decode.fromBytes [110, 49, 53, 32] tagLenFmt is
                     Ok (@MyNum n) -> n
                     _ -> 101
             "#
@@ -995,17 +1006,17 @@ fn decode_use_stdlib() {
 ))]
 fn decode_derive_decoder_for_opaque() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            HelloWorld := { a: Str } implements [Decoding]
+            {TAG_LEN_ENCODER_FMT}
+
+            HelloWorld := {{ a: Str }} implements [Decoding]
 
             main =
-                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok (@HelloWorld {a}) -> a
+                when Str.toUtf8 "r1 s1 a s13 Hello, World! " |> Decode.fromBytes tagLenFmt is
+                    Ok (@HelloWorld {{a}}) -> a
                     _ -> "FAIL"
             "#
         ),
@@ -1013,29 +1024,26 @@ fn decode_derive_decoder_for_opaque() {
         RocStr
     )
 }
-
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn decode_use_stdlib_json_list() {
+fn decode_use_stdlib_custom_list() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test"
-                imports [TotallyNotJson]
-                provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            MyNumList := List U8 implements [Decoding {decoder: myDecoder}]
+            {TAG_LEN_ENCODER_FMT}
 
+            MyNumList := List U8 implements [Decoding {{decoder: myDecoder}}]
             myDecoder =
                 Decode.custom \bytes, fmt ->
                     when Decode.decodeWith bytes (Decode.list Decode.u8) fmt is
-                        {result, rest} ->
+                        {{result, rest}} ->
                             when result is
-                                Ok lst -> {result: Ok (@MyNumList lst), rest}
-                                Err e -> {result: Err e, rest}
-
+                                Ok lst -> {{result: Ok (@MyNumList lst), rest}}
+                                Err e -> {{result: Err e, rest}}
             main =
-                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes TotallyNotJson.json is
+                when Str.toUtf8 "l3 n1 n2 n3 " |> Decode.fromBytes tagLenFmt is
                     Ok (@MyNumList lst) -> lst
                     _ -> []
             "#
@@ -1046,6 +1054,8 @@ fn decode_use_stdlib_json_list() {
 }
 
 mod decode_immediate {
+    use super::TAG_LEN_ENCODER_FMT;
+
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
@@ -1053,7 +1063,7 @@ mod decode_immediate {
     use crate::helpers::wasm::assert_evals_to;
 
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-    use indoc::indoc;
+    use indoc::formatdoc;
 
     #[cfg(all(test, feature = "gen-llvm"))]
     use roc_std::{RocStr, I128, U128};
@@ -1063,12 +1073,14 @@ mod decode_immediate {
     fn string() {
         crate::helpers::with_larger_debug_stack(|| {
             assert_evals_to!(
-                indoc!(
+                &formatdoc!(
                     r#"
-                    app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                    app "test" provides [main] to "./platform"
+
+                    {TAG_LEN_ENCODER_FMT}
 
                     main =
-                        when Str.toUtf8 "\"foo\"" |> Decode.fromBytes TotallyNotJson.json is
+                        when Str.toUtf8 "s3 foo " |> Decode.fromBytes tagLenFmt is
                             Ok s -> s
                             _ -> "<bad>"
                     "#
@@ -1083,15 +1095,17 @@ mod decode_immediate {
     #[cfg(feature = "gen-llvm")]
     fn ranged_number() {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    input = Str.toUtf8 "[1,2,3]"
+                    input = Str.toUtf8 "l3 n1 n2 n3 "
                     expected = [1,2,3]
 
-                    actual = Decode.fromBytes input TotallyNotJson.json |> Result.withDefault []
+                    actual = Decode.fromBytes input tagLenFmt |> Result.withDefault []
 
                     actual == expected
                 "#
@@ -1105,12 +1119,14 @@ mod decode_immediate {
     #[cfg(feature = "gen-llvm")]
     fn bool() {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.toUtf8 "false" |> Decode.fromBytes TotallyNotJson.json is
+                    when Str.toUtf8 "n0 " |> Decode.fromBytes tagLenFmt is
                         Ok s -> s
                         _ -> Bool.true
                 "#
@@ -1126,16 +1142,18 @@ mod decode_immediate {
             #[cfg(feature = "gen-llvm")]
             fn $typ() {
                 assert_evals_to!(
-                    &format!(indoc!(
+                    &formatdoc!(
                         r#"
-                        app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                        app "test" provides [main] to "./platform"
+
+                        {TAG_LEN_ENCODER_FMT}
 
                         main =
-                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes TotallyNotJson.json is
+                            when Str.toUtf8 "n{} " |> Decode.fromBytes tagLenFmt is
                                 Ok n -> n
                                 _ -> 101{}
-                        "#
-                    ), $num, stringify!($typ), stringify!($typ)),
+                        "#,
+                        $num, stringify!($typ)),
                     $num,
                     $expected_type
                 )
@@ -1164,12 +1182,14 @@ mod decode_immediate {
         use roc_std::RocDec;
 
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes TotallyNotJson.json is
+                    when Str.toUtf8 "n17.23 " |> Decode.fromBytes tagLenFmt is
                         Ok n -> n
                         _ -> 101dec
                 "#
@@ -1185,12 +1205,14 @@ mod decode_immediate {
 fn decode_list_of_strings() {
     crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes TotallyNotJson.json is
+                    when Str.toUtf8 "l3 s1 a s1 b s1 c " |> Decode.fromBytes tagLenFmt is
                         Ok l -> Str.joinWith l ","
                         _ -> "<bad>"
                 "#
@@ -1206,12 +1228,14 @@ fn decode_list_of_strings() {
 fn encode_then_decode_list_of_strings() {
     crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Encode.toBytes ["a", "b", "c"] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
+                    when Encode.toBytes ["a", "b", "c"] tagLenFmt |> Decode.fromBytes tagLenFmt is
                         Ok l -> Str.joinWith l ","
                         _ -> "something went wrong"
                 "#
@@ -1224,17 +1248,18 @@ fn encode_then_decode_list_of_strings() {
 
 #[test]
 #[cfg(feature = "gen-llvm")]
-#[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_then_decode_list_of_lists_of_strings() {
     crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
-                        Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
+                    when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] tagLenFmt |> Decode.fromBytes tagLenFmt is
+                        Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith ";"
                         _ -> "something went wrong"
                 "#
             ),
@@ -1251,13 +1276,15 @@ fn encode_then_decode_list_of_lists_of_strings() {
 ))]
 fn decode_record_two_fields() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok {first: "ab", second: "cd"} -> "abcd"
+                when Str.toUtf8 "r2 s6 second s2 cd s5 first s2 ab " |> Decode.fromBytes tagLenFmt is
+                    Ok {{first: "ab", second: "cd"}} -> "abcd"
                     _ -> "something went wrong"
             "#
         ),
@@ -1273,13 +1300,15 @@ fn decode_record_two_fields() {
 ))]
 fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok {first: "ab", second: 10u8} -> "ab10"
+                when Str.toUtf8 "r2 s5 first s2 ab s6 second n10 " |> Decode.fromBytes tagLenFmt is
+                    Ok {{first: "ab", second: 10u8}} -> "ab10"
                     _ -> "something went wrong"
             "#
         ),
@@ -1295,13 +1324,15 @@ fn decode_record_two_fields_string_and_int() {
 ))]
 fn decode_record_two_fields_string_and_string_infer() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok {first, second} -> Str.concat first second
+                when Str.toUtf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.fromBytes tagLenFmt is
+                    Ok {{first, second}} -> Str.concat first second
                     _ -> "something went wrong"
             "#
         ),
@@ -1317,12 +1348,14 @@ fn decode_record_two_fields_string_and_string_infer() {
 ))]
 fn decode_record_two_fields_string_and_string_infer_local_var() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
+                decoded = Str.toUtf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.fromBytes tagLenFmt
                 when decoded is
                     Ok rcd -> Str.concat rcd.first rcd.second
                     _ -> "something went wrong"
@@ -1340,14 +1373,16 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
 ))]
 fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
+                decoded = Str.toUtf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.fromBytes tagLenFmt
                 when decoded is
-                    Ok {first, second} -> Str.concat first second
+                    Ok {{first, second}} -> Str.concat first second
                     _ -> "something went wrong"
             "#
         ),
@@ -1358,16 +1393,17 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "json parsing impl must be fixed first"]
 fn decode_empty_record() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "{}" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok {} -> "empty"
+                when Str.toUtf8 "r0 " |> Decode.fromBytes tagLenFmt is
+                    Ok {{}} -> "empty"
                     _ -> "something went wrong"
             "#
         ),
@@ -1384,13 +1420,15 @@ fn decode_empty_record() {
 ))]
 fn decode_record_of_record() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok {outer: {inner: "a"}, other: {one: "b", two: 10u8}} -> "ab10"
+                when Str.toUtf8 "r2 s5 other r2 s3 one s1 b s3 two n10 s5 outer r1 s5 inner s1 a " |> Decode.fromBytes tagLenFmt is
+                    Ok {{outer: {{inner: "a"}}, other: {{one: "b", two: 10u8}}}} -> "ab10"
                     _ -> "something went wrong"
             "#
         ),
@@ -1406,12 +1444,14 @@ fn decode_record_of_record() {
 ))]
 fn decode_tuple_two_elements() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes TotallyNotJson.json is
+                when Str.toUtf8 "l2 s2 ab n10 " |> Decode.fromBytes tagLenFmt is
                     Ok ("ab", 10u8) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1428,12 +1468,14 @@ fn decode_tuple_two_elements() {
 ))]
 fn decode_tuple_of_tuples() {
     assert_evals_to!(
-        indoc!(
+        &formatdoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes TotallyNotJson.json is
+                when Str.toUtf8 "l2 l2 s2 ab n10 l2 s2 cd n25 " |> Decode.fromBytes tagLenFmt is
                     Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -2147,20 +2189,20 @@ mod eq {
 fn issue_4772_weakened_monomorphic_destructure() {
     crate::helpers::with_larger_debug_stack(|| {
         assert_evals_to!(
-            indoc!(
+            &formatdoc!(
                 r#"
-                app "test"
-                        imports [TotallyNotJson]
-                        provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
+
+                {TAG_LEN_ENCODER_FMT}
 
                 getNumber =
-                    { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
+                    {{ result, rest }} = Decode.fromBytesPartial (Str.toUtf8 "s4 1234 ") tagLenFmt
 
                     when result is
                         Ok val ->
                             when Str.toI64 val is
                                 Ok number ->
-                                    Ok {val : number, input : rest}
+                                    Ok {{ val : number, input : rest }}
                                 Err InvalidNumStr ->
                                     Err (ParsingFailure "not a number")
 

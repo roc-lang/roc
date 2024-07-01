@@ -395,8 +395,7 @@ impl ModuleId {
     }
 
     pub fn is_automatically_imported(self) -> bool {
-        // The deprecated TotallyNotJson module is not automatically imported.
-        self.is_builtin() && self != ModuleId::JSON
+        self.is_builtin()
     }
 }
 
@@ -1738,15 +1737,6 @@ define_builtins! {
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_TO_STR: "toStr"
     }
-    15 JSON: "TotallyNotJson" => {
-        0 JSON_JSON: "TotallyNotJson"
-        1 JSON_FIELD_NAME_MAPPING: "FieldNameMapping"
-        2 JSON_NUMBER_STATE: "NumberState"
-        3 JSON_STRING_STATE: "StringState"
-        4 JSON_ARRAY_OPENING_STATE: "ArrayOpeningState"
-        5 JSON_ARRAY_CLOSING_STATE: "ArrayClosingState"
-        6 JSON_OBJECT_STATE: "ObjectState"
-    }
 
-    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }
