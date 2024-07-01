@@ -157,7 +157,6 @@ Make a file named `main.roc` and put this in it:
 app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
 
 import pf.Stdout
-import pf.Task
 
 main =
     Stdout.line! "I'm a Roc application!"
@@ -1558,7 +1557,7 @@ See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/REA
 
 ## [Tasks](#tasks) {#tasks}
 
-Tasks are not currently part of the Roc builtins—for now, each platform exposes their own `Task` implementation, but the plan is to standardize them into a builtin `Task` like module like the builtin modules we already have for `List`, `Str`, and so on—but they're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
+Tasks are provided in a builtin `Task` module like the `List`, `Str` modules. They're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
 
 In the `basic-cli` platform, here are four operations we can do:
 
@@ -1609,7 +1608,6 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 
 import pf.Stdout
 import pf.Stdin
-import pf.Task
 
 main =
     Stdout.line! "Type in something and press Enter:"
