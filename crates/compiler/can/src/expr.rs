@@ -7,6 +7,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
+use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::{QualifiedReference, References};
 use crate::scope::Scope;
@@ -1881,8 +1882,7 @@ fn canonicalize_var_lookup(
 
                 if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        // todo(agus): params for abilities?
-                        lookup.symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
@@ -1906,9 +1906,8 @@ fn canonicalize_var_lookup(
                     .insert_value_lookup(lookup.symbol, QualifiedReference::Qualified);
 
                 if scope.abilities_store.is_ability_member_name(lookup.symbol) {
-                    // todo(agus): params for abilities?
                     AbilityMember(
-                        lookup.symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )

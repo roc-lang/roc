@@ -33,7 +33,6 @@ use roc_module::ident::Lowercase;
 use roc_module::ident::ModuleName;
 use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::IdentId;
-use roc_module::symbol::LookedupSymbol;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -505,6 +504,16 @@ fn canonicalize_alias<'a>(
     }
 }
 
+#[macro_export]
+macro_rules! params_in_abilities_unimplemented {
+    ($lookup:expr) => {
+        match $lookup.params {
+            None => $lookup.symbol,
+            Some(_) => unimplemented!("params in abilities"),
+        }
+    };
+}
+
 /// Canonicalizes a claimed ability implementation like `{ eq }` or `{ eq: myEq }`.
 /// Returns a mapping of the ability member to the implementation symbol.
 /// If there was an error, a problem will be recorded and nothing is returned.
@@ -521,22 +530,19 @@ fn canonicalize_claimed_ability_impl<'a>(
             let label_str = label.value;
             let region = label.region;
 
-            let LookedupSymbol {
-                symbol: member_symbol,
-                // todo(agus): params in abilities?
-                params: _,
-            } = match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
-                Ok(symbol) => symbol,
-                Err(_) => {
-                    env.problem(Problem::NotAnAbilityMember {
-                        ability,
-                        name: label_str.to_owned(),
-                        region,
-                    });
+            let member_symbol =
+                match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
+                    Ok(lookup) => params_in_abilities_unimplemented!(lookup),
+                    Err(_) => {
+                        env.problem(Problem::NotAnAbilityMember {
+                            ability,
+                            name: label_str.to_owned(),
+                            region,
+                        });
 
-                    return Err(());
-                }
-            };
+                        return Err(());
+                    }
+                };
 
             // There are two options for how the implementation symbol is defined.
             //
@@ -569,9 +575,13 @@ fn canonicalize_claimed_ability_impl<'a>(
             // To handle both cases, try checking for a shadow first, then check for a direct
             // reference. We want to check for a direct reference second so that if there is a
             // shadow, we won't accidentally grab the imported symbol.
-            let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
-                // todo(agus): params in abilities?
-                .or_else(|| scope.lookup_str(label_str, region).map(|s| s.symbol).ok());
+            let opt_impl_symbol =
+                (scope.lookup_ability_member_shadow(member_symbol)).or_else(|| {
+                    scope
+                        .lookup_str(label_str, region)
+                        .map(|s| params_in_abilities_unimplemented!(s))
+                        .ok()
+                });
 
             match opt_impl_symbol {
                 // It's possible that even if we find a symbol it is still only the member
@@ -617,17 +627,13 @@ fn canonicalize_claimed_ability_impl<'a>(
             };
             let impl_region = value.region;
 
-            let LookedupSymbol {
-                symbol: member_symbol,
-                // todo(agus): params in abilities?
-                params: _,
-            } = match env.qualified_lookup_with_module_id(
+            let member_symbol = match env.qualified_lookup_with_module_id(
                 scope,
                 ability_home,
                 label.value,
                 label.region,
             ) {
-                Ok(symbol) => symbol,
+                Ok(lookup) => params_in_abilities_unimplemented!(lookup),
                 Err(_) => {
                     env.problem(Problem::NotAnAbilityMember {
                         ability,
@@ -638,12 +644,8 @@ fn canonicalize_claimed_ability_impl<'a>(
                 }
             };
 
-            let LookedupSymbol {
-                symbol: impl_symbol,
-                // todo(agus): params in abilities?
-                params: _,
-            } = match scope.lookup(&impl_ident.into(), impl_region) {
-                Ok(symbol) => symbol,
+            let impl_symbol = match scope.lookup(&impl_ident.into(), impl_region) {
+                Ok(symbol) => params_in_abilities_unimplemented!(symbol),
                 Err(err) => {
                     env.problem(Problem::RuntimeError(err));
                     return Err(());
