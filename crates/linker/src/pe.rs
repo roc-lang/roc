@@ -11,7 +11,7 @@ use object::{
         ImageSectionHeader, ImageThunkData64,
     },
     read::pe::ImportTable,
-    LittleEndian as LE, Object, RelocationTarget, SectionIndex,
+    LittleEndian as LE, Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ use roc_error_macros::internal_error;
 
 use crate::{
     generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut,
-    load_structs_inplace_mut, open_mmap, open_mmap_mut,
+    load_structs_inplace_mut, open_mmap, open_mmap_mut, util::is_roc_definition,
 };
 
 /// The metadata stores information about/from the host .exe because
@@ -95,8 +95,6 @@ impl PeMetadata {
     }
 
     fn from_preprocessed_host(preprocessed_data: &[u8], new_sections: &[[u8; 8]]) -> Self {
-        use object::ObjectSection;
-
         let dynhost_obj = object::read::pe::PeFile64::parse(preprocessed_data)
             .unwrap_or_else(|err| internal_error!("Failed to parse executable file: {}", err));
 
@@ -183,17 +181,23 @@ pub(crate) fn preprocess_windows(
     host_exe_filename: &Path,
     metadata_filename: &Path,
     preprocessed_filename: &Path,
-    dummy_dll_symbols: &[String],
+    shared_lib: &Path,
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
-    let data = open_mmap(host_exe_filename);
+    let exec_data = open_mmap(host_exe_filename);
+    let shared_lib_data = &*open_mmap(shared_lib);
+    let shared_lib_obj = match object::File::parse(shared_lib_data) {
+        Ok(obj) => obj,
+        Err(e) => internal_error!("Failed to parse shared library file: {e}"),
+    };
+    let dummy_dll_symbols = shared_lib_obj.symbols().filter(is_roc_definition).count();
 
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut preprocessed = Preprocessor::preprocess(
         preprocessed_filename,
-        &data,
-        dummy_dll_symbols.len(),
+        &exec_data,
+        dummy_dll_symbols,
         &new_sections,
     );
 
@@ -1164,8 +1168,6 @@ fn process_internal_relocations(
 
 impl<'a> AppSections<'a> {
     fn from_data(data: &'a [u8]) -> Self {
-        use object::ObjectSection;
-
         let file = object::File::parse(data).unwrap();
 
         let mut sections = Vec::new();
@@ -1193,8 +1195,6 @@ impl<'a> AppSections<'a> {
             for (offset_in_section, relocation) in section.relocations() {
                 match relocation.target() {
                     RelocationTarget::Symbol(symbol_index) => {
-                        use object::ObjectSymbol;
-
                         let symbol = file.symbol_by_index(symbol_index);
 
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
@@ -1252,8 +1252,6 @@ impl<'a> AppSections<'a> {
         let mut other_symbols = Vec::new();
 
         for symbol in file.symbols() {
-            use object::ObjectSymbol;
-
             if symbol.name_bytes().unwrap_or_default().starts_with(b"roc") {
                 if let object::SymbolSection::Section(index) = symbol.section() {
                     let (kind, offset_in_host_section) = section_starts[&index];
@@ -1801,7 +1799,7 @@ mod test {
             &dir.join("host.exe"),
             &dir.join("metadata"),
             &preprocessed_host_filename,
-            &names,
+            &dir.join("libapp.dll"),
             false,
             false,
         )

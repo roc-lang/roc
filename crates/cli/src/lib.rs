@@ -79,6 +79,9 @@ pub const GLUE_DIR: &str = "GLUE_DIR";
 pub const GLUE_SPEC: &str = "GLUE_SPEC";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
+pub const FLAG_PP_HOST: &str = "host";
+pub const FLAG_PP_PLATFORM: &str = "platform";
+pub const FLAG_PP_DYLIB: &str = "lib";
 
 const VERSION: &str = include_str!("../../../version.txt");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
@@ -400,18 +403,29 @@ pub fn build_app() -> Command {
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
             .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file for an app using the platform")
+                Arg::new(FLAG_PP_HOST)
+                    .help("Path to the host executable where the app was linked dynamically")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
-                Arg::new(FLAG_TARGET)
-                    .long(FLAG_TARGET)
-                    .help("Choose a different target")
-                    .default_value(Into::<&'static str>::into(Target::default()))
-                    .value_parser(build_target_values_parser)
-                    .required(false),
+                Arg::new(FLAG_PP_PLATFORM)
+                    .help("Path to the platform/main.roc file")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_PP_DYLIB)
+                    .help("Path to a stubbed app dynamic library (e.g. roc build --lib app.roc)")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while pre-processing host")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
             )
         )
         .arg(flag_optimize)

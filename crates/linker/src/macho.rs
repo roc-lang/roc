@@ -15,9 +15,10 @@ use std::{
     io::{BufReader, BufWriter},
     mem,
     path::Path,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
+use crate::util::{is_roc_definition, is_roc_undefined, report_timing};
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
     load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
@@ -102,26 +103,6 @@ impl Metadata {
             }
         }
     }
-}
-
-fn report_timing(label: &str, duration: Duration) {
-    println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
-}
-
-fn is_roc_symbol(sym: &object::Symbol) -> bool {
-    if let Ok(name) = sym.name() {
-        name.trim_start_matches('_').starts_with("roc_")
-    } else {
-        false
-    }
-}
-
-fn is_roc_definition(sym: &object::Symbol) -> bool {
-    sym.is_definition() && is_roc_symbol(sym)
-}
-
-fn is_roc_undefined(sym: &object::Symbol) -> bool {
-    sym.is_undefined() && is_roc_symbol(sym)
 }
 
 fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
@@ -1088,7 +1069,7 @@ fn gen_macho_le(
             }
         }
 
-        offset += dbg!(cmd_size);
+        offset += cmd_size;
     }
 
     // cmd_loc should be where the last offset ended

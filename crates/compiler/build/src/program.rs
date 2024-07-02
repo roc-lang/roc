@@ -1169,7 +1169,7 @@ fn build_and_preprocess_host_lowlevel(
     opt_level: OptLevel,
     target: Target,
     platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
+    _preprocessed_host_path: &Path,
     stub_dll_symbols: &[String],
 ) {
     let stub_lib =
@@ -1177,14 +1177,15 @@ fn build_and_preprocess_host_lowlevel(
 
     debug_assert!(stub_lib.exists());
 
-    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
+    let host_dest = rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
     roc_linker::preprocess_host(
         target,
+        host_dest.as_path(),
         platform_main_roc,
-        preprocessed_host_path,
         &stub_lib,
-        stub_dll_symbols,
+        false,
+        false,
     )
 }
 
