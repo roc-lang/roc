@@ -4667,10 +4667,7 @@ fn run_solve_solve(
         let ExposedModuleTypes {
             exposed_types_storage_subs: exposed_types,
             resolved_implementations: _,
-        } = exposed_for_module
-            .exposed_by_module
-            .get(&module_id)
-            .unwrap();
+        } = exposed_for_module.exposed_by_module.get(module_id).unwrap();
 
         let copied_import = exposed_types
             .storage_subs
