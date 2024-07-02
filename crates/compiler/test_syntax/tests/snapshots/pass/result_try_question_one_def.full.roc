@@ -6,10 +6,10 @@ import cli.Stdout
 
 main =
     # is this a valid statement?
-    "Foo" |> A.x!
+    "Foo" |> A.x?
 
     # what about this?
-    "Bar" |> B.y! 
+    "Bar" |> B.y? 
         { config: "config" }
 
     C.z "Bar"

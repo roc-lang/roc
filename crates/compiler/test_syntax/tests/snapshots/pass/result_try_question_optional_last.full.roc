@@ -8,5 +8,5 @@ app ""
 main = 
     "jq --version"
         |> Cmd.new
-        |> Cmd.status
-        |> Task.mapErr! UnableToCheckJQVersion
+        |> Cmd.status?
+        |> Stdout.line
