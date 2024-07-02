@@ -1,11 +1,15 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
+use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType};
 use roc_can::constraint::{Constraint, Constraints, Generalizable};
-use roc_can::expected::Expected;
-use roc_can::expr::Declarations;
+use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::{AnnotatedMark, Declarations};
 use roc_can::pattern::Pattern;
+use roc_collections::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
+use roc_types::subs::Variable;
 use roc_types::types::{AnnotationSource, Category, Type, Types};
 
 pub fn constrain_module(
@@ -14,9 +18,18 @@ pub fn constrain_module(
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     abilities_store: &PendingAbilitiesStore,
     declarations: &Declarations,
+    params_pattern: &Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(types, constraints, home, declarations);
+
+    let constraint = match params_pattern {
+        Some(params_pattern) => {
+            constrain_params(types, constraints, home, constraint, params_pattern)
+        }
+        None => constraint,
+    };
+
     let constraint = constrain_symbols_from_requires(
         types,
         constraints,
@@ -31,6 +44,63 @@ pub fn constrain_module(
     debug_assert!(constraints.contains_save_the_environment(&constraint));
 
     constraint
+}
+
+fn constrain_params(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    home: ModuleId,
+    constraint: Constraint,
+    (pattern_var, _, loc_pattern): &(Variable, AnnotatedMark, Loc<Pattern>),
+) -> Constraint {
+    let mut env = Env {
+        home,
+        rigids: MutMap::default(),
+        resolutions_to_make: vec![],
+    };
+
+    let index = constraints.push_variable(*pattern_var);
+    let expected_params = constraints.push_pat_expected_type(PExpected::NoExpectation(index));
+
+    let mut state = PatternState::default();
+
+    let closed_con = match loc_pattern.value {
+        Pattern::RecordDestructure {
+            whole_var: _,
+            ext_var,
+            destructs: _,
+        } => {
+            // Disallow record extension for module params
+            let empty_rec = constraints.push_type(types, Types::EMPTY_RECORD);
+            constraints.store(empty_rec, ext_var, file!(), line!())
+        }
+        _ => internal_error!("Only record destructures are allowed in module params. This should've been caught earlier."),
+    };
+
+    state.constraints.push(closed_con);
+
+    constrain_pattern(
+        types,
+        constraints,
+        &mut env,
+        &loc_pattern.value,
+        loc_pattern.region,
+        expected_params,
+        &mut state,
+    );
+
+    let pattern_constraints = constraints.and_constraint(state.constraints);
+
+    let cons = constraints.let_constraint(
+        [],
+        state.vars,
+        state.headers,
+        pattern_constraints,
+        constraint,
+        Generalizable(true),
+    );
+
+    constraints.exists([*pattern_var], cons)
 }
 
 fn constrain_symbols_from_requires(

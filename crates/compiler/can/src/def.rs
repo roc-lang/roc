@@ -10,6 +10,7 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
+use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
@@ -18,6 +19,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
+use crate::procedure::QualifiedReference;
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::{PendingAbilitiesInScope, Scope};
@@ -164,6 +166,13 @@ enum PendingValueDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
         &'a Loc<ast::Expr<'a>>,
     ),
+    /// Module params from an import
+    ImportParams {
+        symbol: Symbol,
+        loc_pattern: Loc<Pattern>,
+        module_id: ModuleId,
+        opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
+    },
     /// Ingested file
     IngestedFile(
         Loc<Pattern>,
@@ -178,6 +187,12 @@ impl PendingValueDef<'_> {
             PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
             PendingValueDef::Body(loc_pattern, _) => loc_pattern,
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
+            PendingValueDef::ImportParams {
+                loc_pattern,
+                symbol: _,
+                module_id: _,
+                opt_provided: _,
+            } => loc_pattern,
             PendingValueDef::IngestedFile(loc_pattern, _, _) => loc_pattern,
         }
     }
@@ -489,6 +504,16 @@ fn canonicalize_alias<'a>(
     }
 }
 
+#[macro_export]
+macro_rules! params_in_abilities_unimplemented {
+    ($lookup:expr) => {
+        match $lookup.params {
+            None => $lookup.symbol,
+            Some(_) => unimplemented!("params in abilities"),
+        }
+    };
+}
+
 /// Canonicalizes a claimed ability implementation like `{ eq }` or `{ eq: myEq }`.
 /// Returns a mapping of the ability member to the implementation symbol.
 /// If there was an error, a problem will be recorded and nothing is returned.
@@ -507,7 +532,7 @@ fn canonicalize_claimed_ability_impl<'a>(
 
             let member_symbol =
                 match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
-                    Ok(symbol) => symbol,
+                    Ok(lookup) => params_in_abilities_unimplemented!(lookup),
                     Err(_) => {
                         env.problem(Problem::NotAnAbilityMember {
                             ability,
@@ -550,8 +575,13 @@ fn canonicalize_claimed_ability_impl<'a>(
             // To handle both cases, try checking for a shadow first, then check for a direct
             // reference. We want to check for a direct reference second so that if there is a
             // shadow, we won't accidentally grab the imported symbol.
-            let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
-                .or_else(|| scope.lookup_str(label_str, region).ok());
+            let opt_impl_symbol =
+                (scope.lookup_ability_member_shadow(member_symbol)).or_else(|| {
+                    scope
+                        .lookup_str(label_str, region)
+                        .map(|s| params_in_abilities_unimplemented!(s))
+                        .ok()
+                });
 
             match opt_impl_symbol {
                 // It's possible that even if we find a symbol it is still only the member
@@ -603,7 +633,7 @@ fn canonicalize_claimed_ability_impl<'a>(
                 label.value,
                 label.region,
             ) {
-                Ok(symbol) => symbol,
+                Ok(lookup) => params_in_abilities_unimplemented!(lookup),
                 Err(_) => {
                     env.problem(Problem::NotAnAbilityMember {
                         ability,
@@ -615,7 +645,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             };
 
             let impl_symbol = match scope.lookup(&impl_ident.into(), impl_region) {
-                Ok(symbol) => symbol,
+                Ok(symbol) => params_in_abilities_unimplemented!(symbol),
                 Err(err) => {
                     env.problem(Problem::RuntimeError(err));
                     return Err(());
@@ -1111,8 +1141,33 @@ fn canonicalize_value_defs<'a>(
             PendingValue::ExpectFx(pending_expect) => {
                 pending_expect_fx.push(pending_expect);
             }
-            PendingValue::ModuleImport(introduced_import) => {
-                imports_introduced.push(introduced_import);
+            PendingValue::ModuleImport(PendingModuleImport {
+                module_id,
+                region,
+                exposed_symbols,
+                params,
+            }) => {
+                imports_introduced.push(IntroducedImport {
+                    module_id,
+                    region,
+                    exposed_symbols,
+                });
+
+                match params {
+                    PendingModuleImportParams::None => {}
+                    PendingModuleImportParams::Required {
+                        symbol,
+                        loc_pattern,
+                        opt_provided,
+                    } => {
+                        pending_value_defs.push(PendingValueDef::ImportParams {
+                            symbol,
+                            loc_pattern,
+                            module_id,
+                            opt_provided,
+                        });
+                    }
+                }
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
             PendingValue::ImportNameConflict => { /* skip */ }
@@ -1560,7 +1615,7 @@ impl DefOrdering {
     fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences) {
         match def_references {
             DefReferences::Value(references) => {
-                let it = references.value_lookups().chain(references.calls());
+                let it = references.value_lookups();
 
                 for referenced in it {
                     if let Some(ref_id) = self.get_id(*referenced) {
@@ -2354,6 +2409,55 @@ fn canonicalize_pending_value_def<'a>(
                 None,
             )
         }
+        ImportParams {
+            symbol,
+            loc_pattern,
+            module_id,
+            opt_provided,
+        } => {
+            // Insert a reference to the record so that we don't report it as unused
+            // If the whole module is unused, we'll report that separately
+            output
+                .references
+                .insert_value_lookup(symbol, QualifiedReference::Unqualified);
+
+            let (expr, references) = match opt_provided {
+                Some(params) => {
+                    let (record, can_output) =
+                        canonicalize_record(env, var_store, scope, loc_pattern.region, params);
+
+                    let references = can_output.references.clone();
+                    output.union(can_output);
+
+                    let loc_record = Loc::at(loc_pattern.region, record);
+
+                    let expr =
+                        Expr::ImportParams(Box::new(loc_record), var_store.fresh(), module_id);
+
+                    (expr, references)
+                }
+                None => (
+                    Expr::MissingImportParams(module_id, loc_pattern.region),
+                    References::new(),
+                ),
+            };
+
+            let loc_expr = Loc::at(loc_pattern.region, expr);
+
+            let def = single_can_def(
+                loc_pattern,
+                loc_expr,
+                var_store.fresh(),
+                None,
+                SendMap::default(),
+            );
+
+            DefOutput {
+                output,
+                references: DefReferences::Value(references),
+                def,
+            }
+        }
         IngestedFile(loc_pattern, opt_loc_ann, path_literal) => {
             let relative_path =
                 if let ast::StrLiteral::PlainLine(ingested_path) = path_literal.value {
@@ -2895,7 +2999,7 @@ enum PendingValue<'a> {
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
     ExpectFx(PendingExpectOrDbg<'a>),
-    ModuleImport(IntroducedImport),
+    ModuleImport(PendingModuleImport<'a>),
     SignatureDefMismatch,
     InvalidIngestedFile,
     ImportNameConflict,
@@ -2904,6 +3008,24 @@ enum PendingValue<'a> {
 struct PendingExpectOrDbg<'a> {
     condition: &'a Loc<ast::Expr<'a>>,
     preceding_comment: Region,
+}
+
+struct PendingModuleImport<'a> {
+    module_id: ModuleId,
+    region: Region,
+    exposed_symbols: Vec<(Symbol, Region)>,
+    params: PendingModuleImportParams<'a>,
+}
+
+enum PendingModuleImportParams<'a> {
+    /// The module does not require any params
+    None,
+    /// The module requires params, they may or may not have been provided
+    Required {
+        symbol: Symbol,
+        loc_pattern: Loc<Pattern>,
+        opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
+    },
 }
 
 pub struct IntroducedImport {
@@ -3056,10 +3178,45 @@ fn to_pending_value_def<'a>(
                 None => module_name.clone(),
             };
 
+            let params = if env.modules_expecting_params.contains(&module_id) {
+                let name_str = name_with_alias.as_str();
+                let sym_region = module_import.params.map(|p| p.params.region).unwrap_or(region);
+
+                match scope.introduce_str(format!("#{name_str}").as_str(), sym_region) {
+                    Ok(symbol) =>  {
+                        let loc_pattern = Loc::at(sym_region, Pattern::Identifier(symbol));
+
+                        PendingModuleImportParams::Required {
+                            symbol,
+                            loc_pattern,
+                            opt_provided: module_import.params.map(|p| p.params.value),
+                        }
+                    },
+                    Err(_) =>  {
+                        // Ignore conflict, it will be handled as a duplicate import
+                        PendingModuleImportParams::None
+                    },
+                }
+            } else {
+                if let Some(params) = module_import.params {
+                    env.problems.push(Problem::UnexpectedParams {
+                        module_id,
+                        region: params.params.region,
+                    });
+                }
+
+                PendingModuleImportParams::None
+            };
+
+            let params_sym = match params {
+                PendingModuleImportParams::Required { symbol, .. } => Some(symbol),
+                PendingModuleImportParams::None => None,
+            };
+
             if let Err(existing_import) =
                 scope
                     .modules
-                    .insert(name_with_alias.clone(), module_id, region)
+                    .insert(name_with_alias.clone(), module_id, params_sym, region)
             {
                 env.problems.push(Problem::ImportNameConflict {
                     name: name_with_alias,
@@ -3070,7 +3227,7 @@ fn to_pending_value_def<'a>(
                 });
 
                 return PendingValue::ImportNameConflict;
-            }
+            };
 
             let exposed_names = module_import
                 .exposed
@@ -3122,13 +3279,13 @@ fn to_pending_value_def<'a>(
                         }))
                     }
                 }
-
             }
 
-            PendingValue::ModuleImport(IntroducedImport {
+            PendingValue::ModuleImport(PendingModuleImport {
                 module_id,
                 region,
                 exposed_symbols,
+                params,
             })
         }
         IngestedFileImport(ingested_file) => {

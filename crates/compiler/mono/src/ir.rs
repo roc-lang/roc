@@ -4422,6 +4422,18 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
+        ParamsVar { .. } => {
+            unimplemented!("module params code generation")
+        }
+        ImportParams(loc_expr, _, _) => with_hole(
+            env,
+            loc_expr.value,
+            variable,
+            procs,
+            layout_cache,
+            assigned,
+            hole,
+        ),
         AbilityMember(member, specialization_id, specialization_var) => {
             let specialization_symbol = late_resolve_ability_specialization(
                 env,
@@ -5871,6 +5883,7 @@ pub fn with_hole<'a>(
         }
         TypedHole(_) => runtime_error(env, "Hit a blank"),
         RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
+        MissingImportParams(_, _) => runtime_error(env, env.arena.alloc("Missing import params")),
         Crash { msg, ret_var: _ } => {
             let msg_sym = possible_reuse_symbol_or_specialize(
                 env,

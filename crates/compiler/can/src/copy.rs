@@ -288,6 +288,21 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_elems: loc_elems.iter().map(|le| le.map(|e| go_help!(e))).collect(),
         },
         Var(sym, var) => Var(*sym, sub!(*var)),
+        ParamsVar {
+            symbol,
+            params,
+            var,
+        } => ParamsVar {
+            symbol: *symbol,
+            params: *params,
+            var: sub!(*var),
+        },
+        ImportParams(loc_expr, var, module_id) => ImportParams(
+            Box::new(loc_expr.map(|e| go_help!(e))),
+            sub!(*var),
+            *module_id,
+        ),
+        MissingImportParams(module_id, region) => MissingImportParams(*module_id, *region),
         &AbilityMember(sym, specialization, specialization_var) => {
             AbilityMember(sym, specialization, sub!(specialization_var))
         }

@@ -140,7 +140,9 @@ fn desugar_value_def<'a>(
             let desugared_params =
                 params.map(|ModuleImportParams { before, params }| ModuleImportParams {
                     before,
-                    params: desugar_field_collection(arena, params, src, line_info, module_path),
+                    params: params.map(|params| {
+                        desugar_field_collection(arena, *params, src, line_info, module_path)
+                    }),
                 });
 
             ModuleImport(roc_parse::ast::ModuleImport {

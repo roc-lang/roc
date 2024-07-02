@@ -933,7 +933,7 @@ fn doc_url<'a>(
                 // current module's name, but it also could be a different
                 // module - for example, if this is in scope from an
                 // unqualified import.
-                module_name = symbol.module_string(interns);
+                module_name = symbol.symbol.module_string(interns);
             }
             Err(_) => {
                 return Err((format!("[{ident}]"), LinkProblem::AutoLinkIdentNotInScope));

@@ -64,6 +64,7 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
+const UNEXPECTED_PARAMS: &str = "UNEXPECTED PARAMS";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -390,6 +391,7 @@ pub fn can_problem<'b>(
                 TopLevelDef => "a top-level definition:",
                 DefExpr => "a value definition:",
                 FunctionArg => "function arguments:",
+                ModuleParams => "module params:",
                 WhenBranch => unreachable!("all patterns are allowed in a When"),
             };
 
@@ -1310,6 +1312,20 @@ pub fn can_problem<'b>(
             let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;
             title = report.title;
+        }
+        Problem::UnexpectedParams { module_id, region } => {
+            doc = alloc.stack([
+                alloc.reflow("This import specifies module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(
+                        " does not expect any. Did you intend to import a different module?",
+                    ),
+                ]),
+            ]);
+            title = UNEXPECTED_PARAMS.to_string();
         }
     };
 

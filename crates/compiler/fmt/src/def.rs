@@ -252,14 +252,14 @@ impl<'a> Formattable for ModuleImportParams<'a> {
     fn is_multiline(&self) -> bool {
         let ModuleImportParams { before, params } = self;
 
-        !before.is_empty() || is_collection_multiline(params)
+        !before.is_empty() || is_collection_multiline(&params.value)
     }
 
     fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         let ModuleImportParams { before, params } = self;
 
         fmt_default_spaces(buf, before, indent);
-        fmt_collection(buf, indent, Braces::Curly, *params, newlines);
+        fmt_collection(buf, indent, Braces::Curly, params.value, newlines);
     }
 }
 

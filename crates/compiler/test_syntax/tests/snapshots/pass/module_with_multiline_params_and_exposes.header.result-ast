@@ -5,7 +5,7 @@ Module {
             after_keyword: [],
             params: Some(
                 ModuleParams {
-                    params: [
+                    pattern: @7-45 [
                         @8-12 Identifier {
                             ident: "echo",
                         },

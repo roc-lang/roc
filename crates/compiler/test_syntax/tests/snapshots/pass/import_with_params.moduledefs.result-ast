@@ -44,7 +44,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @15-29 [
                             @17-21 LabelOnly(
                                 @17-21 "echo",
                             ),
@@ -70,7 +70,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @42-60 [
                             @44-48 LabelOnly(
                                 @44-48 "echo",
                             ),
@@ -101,7 +101,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @73-91 [
                             @75-79 LabelOnly(
                                 @75-79 "echo",
                             ),
@@ -143,7 +143,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @109-123 [
                             @111-115 LabelOnly(
                                 @111-115 "echo",
                             ),

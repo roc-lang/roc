@@ -5006,6 +5006,27 @@ mod test_reporting {
     );
 
     test_report!(
+        unexpected_module_params,
+        indoc!(
+            r#"
+            import Dict { key: "abc" } exposing [empty]
+
+            empty {}
+            "#
+        ),@r###"
+    ── UNEXPECTED PARAMS in /code/proj/Main.roc ────────────────────────────────────
+
+    This import specifies module params:
+
+    4│      import Dict { key: "abc" } exposing [empty]
+                        ^^^^^^^^^^^^^^
+
+    However, Dict does not expect any. Did you intend to import a
+    different module?
+    "###
+    );
+
+    test_report!(
         unfinished_import_as_or_exposing,
         indoc!(
             r"

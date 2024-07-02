@@ -51,6 +51,8 @@ pub fn infer_expr(
         exposed_by_module: &Default::default(),
         derived_module,
         function_kind: FunctionKind::LambdaSet,
+        params_pattern: None,
+        module_params_vars: Default::default(),
         #[cfg(debug_assertions)]
         checkmate: None,
     };
@@ -187,6 +189,7 @@ pub fn can_expr_with<'a>(
         home,
         Path::new("Test.roc"),
         &dep_idents,
+        Default::default(),
         &module_ids,
         None,
     );
