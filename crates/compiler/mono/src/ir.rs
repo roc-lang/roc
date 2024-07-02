@@ -4423,7 +4423,7 @@ pub fn with_hole<'a>(
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         ParamsVar { .. } => {
-            todo!("agus: handle params var")
+            unimplemented!("module params code generation")
         }
         ImportParams(loc_expr, _, _) => with_hole(
             env,
