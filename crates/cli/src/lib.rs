@@ -65,7 +65,7 @@ pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_VERBOSE: &str = "verbose";
 pub const FLAG_LINKER: &str = "linker";
-pub const FLAG_PREBUILT: &str = "prebuilt-platform";
+pub const FLAG_BUILD_HOST: &str = "build-host";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_STDIN: &str = "stdin";
 pub const FLAG_STDOUT: &str = "stdout";
@@ -79,6 +79,9 @@ pub const GLUE_DIR: &str = "GLUE_DIR";
 pub const GLUE_SPEC: &str = "GLUE_SPEC";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
+pub const FLAG_PP_HOST: &str = "host";
+pub const FLAG_PP_PLATFORM: &str = "platform";
+pub const FLAG_PP_DYLIB: &str = "lib";
 
 const VERSION: &str = include_str!("../../../version.txt");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
@@ -132,9 +135,9 @@ pub fn build_app() -> Command {
         .value_parser(["surgical", "legacy"])
         .required(false);
 
-    let flag_prebuilt = Arg::new(FLAG_PREBUILT)
-        .long(FLAG_PREBUILT)
-        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled implicitly when using `roc build` with a --target other than `--target <current machine>`, unless the target is wasm.)")
+    let flag_prebuilt = Arg::new(FLAG_BUILD_HOST)
+        .long(FLAG_BUILD_HOST)
+        .help("WARNING: platforms are responsible for building hosts, this flag will be removed when internal test platforms have a build script")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -400,18 +403,29 @@ pub fn build_app() -> Command {
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
             .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file for an app using the platform")
+                Arg::new(FLAG_PP_HOST)
+                    .help("Path to the host executable where the app was linked dynamically")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
-                Arg::new(FLAG_TARGET)
-                    .long(FLAG_TARGET)
-                    .help("Choose a different target")
-                    .default_value(Into::<&'static str>::into(Target::default()))
-                    .value_parser(build_target_values_parser)
-                    .required(false),
+                Arg::new(FLAG_PP_PLATFORM)
+                    .help("Path to the platform/main.roc file")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_PP_DYLIB)
+                    .help("Path to a stubbed app dynamic library (e.g. roc build --lib app.roc)")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while pre-processing host")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
             )
         )
         .arg(flag_optimize)
@@ -834,17 +848,10 @@ pub fn build(
         LinkingStrategy::Surgical
     };
 
-    let prebuilt = {
-        let cross_compile = target != Target::default();
-        let targeting_wasm = matches!(target.architecture(), Architecture::Wasm32);
-
-        matches.get_flag(FLAG_PREBUILT) ||
-            // When compiling for a different target, assume a prebuilt platform.
-            // Otherwise compilation would most likely fail because many toolchains
-            // assume you're compiling for the current machine. We make an exception
-            // for Wasm, because cross-compiling is the norm in that case.
-            (cross_compile && !targeting_wasm)
-    };
+    // TODO: remove once host rebuilding is no longer required
+    // all hosts should be prebuilt, this flag keeps the rebuilding behvaiour
+    // until no longer required for internal tests
+    let rebuild_host = matches.get_flag(FLAG_BUILD_HOST);
 
     let fuzz = matches.get_flag(FLAG_FUZZ);
     if fuzz && !matches!(code_gen_backend, CodeGenBackend::Llvm(_)) {
@@ -880,7 +887,7 @@ pub fn build(
         emit_timings,
         link_type,
         linking_strategy,
-        prebuilt,
+        rebuild_host,
         wasm_dev_stack_bytes,
         roc_cache_dir,
         load_config,

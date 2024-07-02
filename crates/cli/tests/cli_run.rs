@@ -55,8 +55,6 @@ mod cli_run {
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
     #[allow(dead_code)]
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
-    #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
     #[derive(Debug)]
@@ -192,6 +190,8 @@ mod cli_run {
         for cli_mode in cli_commands.iter() {
             let flags = {
                 let mut vec = flags.to_vec();
+
+                vec.push("--build-host");
 
                 // max-threads segfaults on windows right now
                 if !cfg!(windows) {
@@ -1068,7 +1068,7 @@ mod cli_run {
         use cli_utils::helpers::cli_testing_dir;
 
         #[allow(unused_imports)]
-        use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
+        use super::{check_output_with_stdin, OPTIMIZE_FLAG};
 
         #[allow(unused_imports)]
         use std::{path::Path, sync::Once};
@@ -1146,7 +1146,7 @@ mod cli_run {
                 check_output_with_stdin(
                     file_name,
                     stdin,
-                    &[PREBUILT_PLATFORM],
+                    &[],
                     &[],
                     &[],
                     expected_ending,
@@ -1158,7 +1158,7 @@ mod cli_run {
             check_output_with_stdin(
                 file_name,
                 stdin,
-                &[PREBUILT_PLATFORM, OPTIMIZE_FLAG],
+                &[OPTIMIZE_FLAG],
                 &[],
                 &[],
                 expected_ending,

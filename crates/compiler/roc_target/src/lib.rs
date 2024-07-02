@@ -17,6 +17,18 @@ pub enum OperatingSystem {
     Windows,
 }
 
+impl std::fmt::Display for OperatingSystem {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let arch_str = match self {
+            OperatingSystem::Freestanding => "freestanding",
+            OperatingSystem::Linux => "linux",
+            OperatingSystem::Mac => "macos",
+            OperatingSystem::Windows => "windows",
+        };
+        write!(f, "{}", arch_str)
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtrWidth {
@@ -36,8 +48,8 @@ pub enum Architecture {
 impl std::fmt::Display for Architecture {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let arch_str = match self {
-            Architecture::Aarch32 => "aarch32",
-            Architecture::Aarch64 => "aarch64",
+            Architecture::Aarch32 => "arm",
+            Architecture::Aarch64 => "arm64",
             Architecture::Wasm32 => "wasm32",
             Architecture::X86_32 => "x86_32",
             Architecture::X86_64 => "x86_64",
@@ -147,6 +159,34 @@ impl Target {
             WinX32 | WinX64 | WinArm64 => Some("exe"),
             Wasm32 => Some("wasm"),
         }
+    }
+
+    pub fn prebuilt_static_object(&self) -> String {
+        use Target::*;
+        match self {
+            LinuxX32 | LinuxX64 | LinuxArm64 | MacX64 | MacArm64 | Wasm32 => {
+                format!("{}-{}.o", self.operating_system(), self.architecture())
+            }
+            WinX32 | WinX64 | WinArm64 => {
+                format!("{}-{}.obj", self.operating_system(), self.architecture())
+            }
+        }
+    }
+
+    pub fn prebuilt_static_library(&self) -> String {
+        use Target::*;
+        match self {
+            LinuxX32 | LinuxX64 | LinuxArm64 | MacX64 | MacArm64 | Wasm32 => {
+                format!("{}-{}.a", self.operating_system(), self.architecture())
+            }
+            WinX32 | WinX64 | WinArm64 => {
+                format!("{}-{}.lib", self.operating_system(), self.architecture())
+            }
+        }
+    }
+
+    pub fn prebuilt_surgical_host(&self) -> String {
+        format!("{}-{}.rh", self.operating_system(), self.architecture())
     }
 }
 

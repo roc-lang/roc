@@ -26,7 +26,9 @@ fn build_host() {
         std::env::set_var("NO_AVX512", "1");
     }
 
-    build_and_preprocess_host(
+    let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
+
+    build_and_preprocess_host_lowlevel(
         roc_mono::ir::OptLevel::Normal,
         target,
         &platform_main_roc,
@@ -98,13 +100,8 @@ fn valgrind_test_linux(source: &str) {
     let app_module_path = temp_dir.path().join("app.roc");
 
     let arena = bumpalo::Bump::new();
-    let assume_prebuilt = true;
-    let res_binary_path = roc_build::program::build_str_test(
-        &arena,
-        &app_module_path,
-        &app_module_source,
-        assume_prebuilt,
-    );
+    let res_binary_path =
+        roc_build::program::build_str_test(&arena, &app_module_path, &app_module_source, true);
 
     match res_binary_path {
         Ok(BuiltFile {
