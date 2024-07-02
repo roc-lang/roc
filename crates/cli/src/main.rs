@@ -169,11 +169,6 @@ fn main() -> io::Result<()> {
 
             let verbose_and_time = matches.get_one::<bool>(roc_cli::FLAG_VERBOSE).unwrap();
 
-            #[cfg(target_os = "windows")]
-            {
-                internal_error!("TODO populate stub_dll_symbols for Windows");
-            }
-
             roc_linker::preprocess_host(
                 target,
                 host_path,
