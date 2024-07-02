@@ -51,17 +51,16 @@ pub fn preprocessed_host_filename(target: Target) -> String {
     format!("{target}.{PRECOMPILED_HOST_EXT}")
 }
 
-fn metadata_file_name(target: Target) -> String {
+pub fn metadata_file_name(target: Target) -> String {
     format!("metadata_{}.rm", target)
 }
 
 pub fn link_preprocessed_host(
     target: Target,
-    platform_path: &Path,
     roc_app_bytes: &[u8],
     binary_path: &Path,
+    metadata: PathBuf,
 ) {
-    let metadata = platform_path.with_file_name(metadata_file_name(target));
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
@@ -364,31 +363,9 @@ fn stub_lib_is_up_to_date(target: Target, stub_lib_path: &Path, custom_names: &[
     it1.eq(it2)
 }
 
-pub fn preprocess_host(
-    target: Target,
-    host_path: &Path,
-    platform_path: &Path,
-    dylib_path: &Path,
-    verbose: bool,
-    time: bool,
-) {
-    let preprocessed_path = platform_path.with_file_name(format!("{}.rh", target));
-    let metadata_path = platform_path.with_file_name(metadata_file_name(target));
-
-    preprocess(
-        target,
-        host_path,
-        &metadata_path,
-        preprocessed_path.as_path(),
-        dylib_path,
-        verbose,
-        time,
-    )
-}
-
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
 #[allow(clippy::too_many_arguments)]
-fn preprocess(
+pub fn preprocess_host(
     target: Target,
     host_exe_path: &Path,
     metadata_path: &Path,

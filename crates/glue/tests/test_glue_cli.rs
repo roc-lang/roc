@@ -52,7 +52,7 @@ mod glue_cli_run {
                         let out = run_app(&dir.join("app.roc"), args);
 
                         assert!(out.status.success());
-                        let ignorable = "🔨 Rebuilding platform...\n";
+                        let ignorable = "🔨 Building host ...\n";
                         let stderr = out.stderr.replacen(ignorable, "", 1);
                         assert_eq!(stderr, "");
                         assert!(
@@ -71,11 +71,11 @@ mod glue_cli_run {
 
                     // Validate linux with the default linker.
                     if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
-                        validate(dir.clone(), std::iter::empty());
+                        validate(dir.clone(), ["--build-host"]);
                     }
 
                     if TEST_LEGACY_LINKER {
-                        validate(dir, ["--linker=legacy"]);
+                        validate(dir, ["--build-host", "--linker=legacy"]);
                     }
                 }
             )*

@@ -55,8 +55,6 @@ mod cli_run {
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
     #[allow(dead_code)]
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
-    #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
     #[derive(Debug)]
@@ -192,6 +190,8 @@ mod cli_run {
         for cli_mode in cli_commands.iter() {
             let flags = {
                 let mut vec = flags.to_vec();
+
+                vec.push("--build-host");
 
                 // max-threads segfaults on windows right now
                 if !cfg!(windows) {
@@ -540,6 +540,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     fn platform_switching_swift() {
         test_roc_app_slim(
@@ -755,6 +756,7 @@ mod cli_run {
         );
     }
 
+    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     #[cfg_attr(
         windows,
@@ -783,6 +785,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     fn hello_gui() {
         test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
@@ -941,6 +944,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     fn swift_ui() {
         test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
@@ -1087,6 +1091,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     fn inspect_gui() {
         test_roc_app_slim("examples", "inspect-gui.roc", "", UseValgrind::No)
@@ -1100,7 +1105,7 @@ mod cli_run {
         use cli_utils::helpers::cli_testing_dir;
 
         #[allow(unused_imports)]
-        use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
+        use super::{check_output_with_stdin, OPTIMIZE_FLAG};
 
         #[allow(unused_imports)]
         use std::{path::Path, sync::Once};
@@ -1178,7 +1183,7 @@ mod cli_run {
                 check_output_with_stdin(
                     file_name,
                     stdin,
-                    &[PREBUILT_PLATFORM],
+                    &[],
                     &[],
                     &[],
                     expected_ending,
@@ -1190,7 +1195,7 @@ mod cli_run {
             check_output_with_stdin(
                 file_name,
                 stdin,
-                &[PREBUILT_PLATFORM, OPTIMIZE_FLAG],
+                &[OPTIMIZE_FLAG],
                 &[],
                 &[],
                 expected_ending,

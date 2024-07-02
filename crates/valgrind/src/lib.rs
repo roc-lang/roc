@@ -7,18 +7,11 @@ static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(target_os = "linux")]
 fn build_host() {
-    use roc_build::program::build_and_preprocess_host;
-    use roc_linker::preprocessed_host_filename;
-
     let platform_main_roc =
         roc_command_utils::root_dir().join("crates/valgrind/zig-platform/main.roc");
 
     // tests always run on the host
     let target = target_lexicon::Triple::host().into();
-
-    // the preprocessed host is stored beside the platform's main.roc
-    let preprocessed_host_path =
-        platform_main_roc.with_file_name(preprocessed_host_filename(target));
 
     // valgrind does not support avx512 yet: https://bugs.kde.org/show_bug.cgi?id=383010
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -26,15 +19,12 @@ fn build_host() {
         std::env::set_var("NO_AVX512", "1");
     }
 
-    build_and_preprocess_host(
+    // build a legacy host
+    roc_build::link::rebuild_host(
         roc_mono::ir::OptLevel::Normal,
         target,
-        &platform_main_roc,
-        &preprocessed_host_path,
-        roc_linker::ExposedSymbols {
-            top_level_values: vec![String::from("mainForHost")],
-            exported_closure_types: vec![],
-        },
+        platform_main_roc.as_path(),
+        None,
     );
 }
 
@@ -98,13 +88,8 @@ fn valgrind_test_linux(source: &str) {
     let app_module_path = temp_dir.path().join("app.roc");
 
     let arena = bumpalo::Bump::new();
-    let assume_prebuilt = true;
-    let res_binary_path = roc_build::program::build_str_test(
-        &arena,
-        &app_module_path,
-        &app_module_source,
-        assume_prebuilt,
-    );
+    let res_binary_path =
+        roc_build::program::build_str_test(&arena, &app_module_path, &app_module_source, true);
 
     match res_binary_path {
         Ok(BuiltFile {

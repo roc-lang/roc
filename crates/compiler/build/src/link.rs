@@ -42,26 +42,50 @@ pub fn link(
     }
 }
 
-/// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
-pub fn legacy_host_file(target: Target, platform_main_roc: &Path) -> PathBuf {
-    let lib_ext = target.static_library_file_ext();
+/// Search for a prebuilt surgical host in the platform main directory.
+pub fn find_surgical_host(target: Target, platform_main_roc: &Path) -> Result<PathBuf, String> {
+    let surgical_host_path = platform_main_roc.with_file_name(target.prebuilt_surgical_host());
 
-    let file_name = roc_linker::preprocessed_host_filename(target)
-        .replace(roc_linker::PRECOMPILED_HOST_EXT, lib_ext);
+    let generic_host_path: PathBuf = platform_main_roc.with_file_name("host.rh");
 
-    let lib_path = platform_main_roc.with_file_name(file_name);
-
-    let default_host_path: PathBuf = platform_main_roc
-        .with_file_name("libhost")
-        .with_extension(lib_ext);
-
-    if lib_path.exists() {
-        lib_path
-    } else if default_host_path.exists() {
-        default_host_path
+    if generic_host_path.exists() {
+        Ok(generic_host_path)
+    } else if surgical_host_path.exists() {
+        Ok(surgical_host_path)
     } else {
-        let obj_ext = target.object_file_ext();
-        lib_path.with_extension(obj_ext)
+        Err(format!(
+            "\n    {}\n    {}",
+            surgical_host_path.display(),
+            generic_host_path.display(),
+        )
+        .to_string())
+    }
+}
+
+/// Search for a prebuilt legacy host in the platform main directory.
+pub fn find_legacy_host(target: Target, platform_main_roc: &Path) -> Result<PathBuf, String> {
+    let static_library_path = platform_main_roc.with_file_name(target.prebuilt_static_library());
+
+    let static_object_path = platform_main_roc.with_file_name(target.prebuilt_static_object());
+
+    let generic_host_path: PathBuf = platform_main_roc
+        .with_file_name("libhost")
+        .with_extension(target.static_library_file_ext());
+
+    if static_library_path.exists() {
+        Ok(static_library_path)
+    } else if generic_host_path.exists() {
+        Ok(generic_host_path)
+    } else if static_object_path.exists() {
+        Ok(static_object_path)
+    } else {
+        Err(format!(
+            "\n    {}\n    {}\n    {}",
+            static_library_path.display(),
+            static_object_path.display(),
+            generic_host_path.display(),
+        )
+        .to_string())
     }
 }
 
@@ -457,6 +481,7 @@ pub fn rebuild_host(
     };
 
     let host_dest = if matches!(target.architecture(), Architecture::Wasm32) {
+        // TODO verify this is corect, how do we do get here with OptLevel::Development
         if matches!(opt_level, OptLevel::Development) {
             platform_main_roc.with_extension("o")
         } else {
@@ -467,7 +492,7 @@ pub fn rebuild_host(
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        legacy_host_file(target, platform_main_roc)
+        platform_main_roc.with_file_name(target.prebuilt_static_object())
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -1330,9 +1355,9 @@ pub fn llvm_module_to_dylib(
     unsafe { Library::new(path) }
 }
 
-pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &Path) {
+pub fn preprocess_host_wasm32(host_input_path: &Path, host_output_path: &Path) {
     let host_input = host_input_path.to_str().unwrap();
-    let output_file = preprocessed_host_path.to_str().unwrap();
+    let output_file = host_output_path.to_str().unwrap();
 
     /*
     Notes:

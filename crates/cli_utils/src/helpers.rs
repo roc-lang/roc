@@ -50,7 +50,7 @@ where
 
 pub fn has_error(stderr: &str) -> bool {
     let stderr_stripped = stderr
-        .replacen("🔨 Rebuilding platform...\n", "", 1)
+        .replacen("🔨 Building host ...\n", "", 1)
         // for some reason, llvm prints out this warning when targeting windows
         .replacen(
             "warning: ignoring debug info with an invalid version (0) in app\r\n",

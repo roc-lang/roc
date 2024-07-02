@@ -3208,7 +3208,7 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-    let uses_prebuilt_platform = match platform_data {
+    let needs_prebuilt_host = match platform_data {
         Some(data) => data.is_prebuilt,
         // If there's no platform data (e.g. because we're building a module)
         // then there's no prebuilt platform either!
@@ -3231,7 +3231,7 @@ fn finish_specialization<'a>(
         timings: state.timings,
         toplevel_expects,
         glue_layouts: GlueLayouts { getters: vec![] },
-        uses_prebuilt_platform,
+        needs_prebuilt_host,
     })
 }
 
