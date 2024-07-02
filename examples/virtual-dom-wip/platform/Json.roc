@@ -1,18 +1,10 @@
-## THIS MODULE IS DEPRECATED AND CURRENTLY IN THE PROCESS OF BEING REMOVED
-## FROM STD LIBRARY
 module [
     Json,
     json,
     jsonWithOptions,
 ]
 
-import List
-import Str
-import Result
-import Encode exposing [EncoderFormatting, appendWith]
-import Decode exposing [DecoderFormatting, DecodeResult]
-import Num exposing [U8, U16, U64, F32, F64, Dec]
-import Bool exposing [Bool]
+import Encode exposing [appendWith]
 
 ## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.

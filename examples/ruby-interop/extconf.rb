@@ -2,9 +2,8 @@
 require 'mkmf'
 
 # preparation for compilation goes here
-dir_config('') # include the current directory in the library search path
-have_library('hello') # depend on `libhello.dylib` being in the current path
-                      # (.dylib is macOS-specific; other OSes would have different extensions)
+# HACK: pass 'demo.c' as a header because otherwise ruby complains that roc_*alloc are not defined
+have_library('hello', nil, 'demo.c')
 
 create_header
 create_makefile 'demo'

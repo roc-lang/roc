@@ -768,7 +768,6 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
 impl<'a> RemoveSpaces<'a> for Expr<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Expr::EmptyDefsFinal => Expr::EmptyDefsFinal,
             Expr::Float(a) => Expr::Float(a),
             Expr::Num(a) => Expr::Num(a),
             Expr::NonBase10Int {

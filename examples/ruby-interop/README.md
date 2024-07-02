@@ -47,7 +47,7 @@ This uses the `Makefile` generated earlier to take the compiled Roc library and 
 You can now try this out in Ruby's REPL (`irb`), like so:
 
 ```sh
-$ irb
+$ LD_LIBRARY_PATH="$PWD" irb
 irb(main):001:0> require_relative 'demo'
 => true
 irb(main):002:0> RocApp::call_roc 42

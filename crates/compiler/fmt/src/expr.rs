@@ -45,7 +45,6 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | EmptyDefsFinal
             | Crash => false,
 
             RecordAccess(inner, _)
@@ -421,9 +420,6 @@ impl<'a> Formattable for Expr<'a> {
                                 indent,
                             );
                         }
-                        EmptyDefsFinal => {
-                            // no need to print anything
-                        }
                         _ => {
                             buf.ensure_ends_with_newline();
                             buf.indent(indent);
@@ -439,9 +435,6 @@ impl<'a> Formattable for Expr<'a> {
                     buf.indent(indent);
                     buf.push(')');
                 }
-            }
-            EmptyDefsFinal => {
-                // no need to print anything
             }
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
