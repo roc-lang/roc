@@ -4797,10 +4797,10 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let opt_params_var = match module.params_pattern {
-        Some((params_var, _, _)) => Some(params_var),
-        None => None,
-    };
+    let opt_params_var = module
+        .params_pattern
+        .as_ref()
+        .map(|(params_var, _, _)| *params_var);
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
