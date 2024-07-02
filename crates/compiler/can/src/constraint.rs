@@ -689,11 +689,11 @@ impl Constraints {
 
     pub fn import_params(
         &mut self,
-        type_index: TypeOrVar,
+        opt_type_index: Option<TypeOrVar>,
         module_id: ModuleId,
         region: Region,
     ) -> Constraint {
-        Constraint::ImportParams(type_index, module_id, region)
+        Constraint::ImportParams(opt_type_index, module_id, region)
     }
 }
 
@@ -797,7 +797,7 @@ pub enum Constraint {
     CheckCycle(Index<Cycle>, IllegalCycleMark),
 
     IngestedFile(TypeOrVar, Box<PathBuf>, Arc<Vec<u8>>),
-    ImportParams(TypeOrVar, ModuleId, Region),
+    ImportParams(Option<TypeOrVar>, ModuleId, Region),
 }
 
 #[derive(Debug, Clone, Copy, Default)]

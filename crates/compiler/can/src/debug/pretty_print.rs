@@ -210,6 +210,9 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             pp_sym(c, f, *sym)
         }
         ImportParams(loc_expr, _, _) => expr(c, p, f, &loc_expr.value),
+        MissingImportParams(module_id, _) => {
+            text!(f, "<missing params for {:?}>", module_id)
+        }
         When {
             loc_cond, branches, ..
         } => maybe_paren!(

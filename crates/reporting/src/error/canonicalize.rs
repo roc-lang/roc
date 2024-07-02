@@ -1313,7 +1313,6 @@ pub fn can_problem<'b>(
             doc = report.doc;
             title = report.title;
         }
-        Problem::MissingParams { .. } => todo!("agus"),
         Problem::UnexpectedParams { module_id, region } => {
             doc = alloc.stack([
                 alloc.reflow("This import specifies module params:"),

@@ -1401,24 +1401,20 @@ fn solve(
                     }
                 }
             }
-            ImportParams(type_index, module_id, _region) => {
-                let actual = either_type_index_to_var(
-                    env,
-                    rank,
-                    problems,
-                    abilities_store,
-                    obligation_cache,
-                    &mut can_types,
-                    aliases,
-                    *type_index,
-                );
+            ImportParams(opt_provided, module_id, region) => {
+                match (module_params_vars.get(module_id), opt_provided) {
+                    (Some(expected), Some(provided)) => {
+                        let actual = either_type_index_to_var(
+                            env,
+                            rank,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            &mut can_types,
+                            aliases,
+                            *provided,
+                        );
 
-                match module_params_vars.get(module_id) {
-                    None => {
-                        // Module does not expect params. This will be reported by can.
-                        state
-                    }
-                    Some(expected) => {
                         match unify(
                             &mut env.uenv(),
                             actual,
@@ -1443,6 +1439,22 @@ fn solve(
                                 todo!("report import params mismatch")
                             }
                         }
+                    }
+                    (Some(expected), None) => {
+                        let err_type = env.uenv().var_to_error_type(*expected, Polarity::Neg);
+
+                        problems.push(TypeError::MissingImportParams {
+                            module_id: *module_id,
+                            region: *region,
+                            expected: err_type,
+                        });
+
+                        state
+                    }
+                    (None, Some(_)) | (None, None) => {
+                        // Module does not expect params.
+                        // If provided still, canonicalization will produce a warning.
+                        state
                     }
                 }
             }

@@ -186,6 +186,9 @@ pub enum Expr {
 
     /// Module params expression in import
     ImportParams(Box<Loc<Expr>>, Variable, ModuleId),
+    /// The imported module requires params but none were provided
+    /// We delay this error until solve, so we can report the expected type
+    MissingImportParams(ModuleId, Region),
 
     /// The "crash" keyword
     Crash {
@@ -340,6 +343,7 @@ impl Expr {
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
             Self::ImportParams(loc_expr, _, _) => loc_expr.value.category(),
+            Self::MissingImportParams(_, _) => Category::Unknown,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -1966,6 +1970,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
+        | other @ MissingImportParams(_, _)
         | other @ Crash { .. } => other,
 
         List {
@@ -3270,6 +3275,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
+            | Expr::MissingImportParams(_, _)
             | Expr::OpaqueWrapFunction(_) => {}
         }
     }

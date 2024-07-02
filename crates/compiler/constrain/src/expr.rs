@@ -595,9 +595,12 @@ pub fn constrain_expr(
                 &params.value,
                 expected_params,
             );
-            let params_con = constraints.import_params(index, *module_id, params.region);
+            let params_con = constraints.import_params(Some(index), *module_id, params.region);
             let expr_and_params = constraints.and_constraint([expr_con, params_con]);
             constraints.exists([*var], expr_and_params)
+        }
+        MissingImportParams(module_id, region) => {
+            constraints.import_params(None, *module_id, *region)
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
@@ -4136,6 +4139,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
+            | MissingImportParams(_, _)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
             | Tag { .. }

@@ -171,7 +171,7 @@ enum PendingValueDef<'a> {
         symbol: Symbol,
         loc_pattern: Loc<Pattern>,
         module_id: ModuleId,
-        params: ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>,
+        opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
     },
     /// Ingested file
     IngestedFile(
@@ -191,7 +191,7 @@ impl PendingValueDef<'_> {
                 loc_pattern,
                 symbol: _,
                 module_id: _,
-                params: _,
+                opt_provided: _,
             } => loc_pattern,
             PendingValueDef::IngestedFile(loc_pattern, _, _) => loc_pattern,
         }
@@ -1141,25 +1141,32 @@ fn canonicalize_value_defs<'a>(
             PendingValue::ExpectFx(pending_expect) => {
                 pending_expect_fx.push(pending_expect);
             }
-            PendingValue::ModuleImport {
+            PendingValue::ModuleImport(PendingModuleImport {
                 module_id,
                 region,
                 exposed_symbols,
                 params,
-            } => {
+            }) => {
                 imports_introduced.push(IntroducedImport {
                     module_id,
                     region,
                     exposed_symbols,
                 });
 
-                if let Some((symbol, loc_pattern, params)) = params {
-                    pending_value_defs.push(PendingValueDef::ImportParams {
+                match params {
+                    PendingModuleImportParams::None => {}
+                    PendingModuleImportParams::Required {
                         symbol,
                         loc_pattern,
-                        module_id,
-                        params,
-                    });
+                        opt_provided,
+                    } => {
+                        pending_value_defs.push(PendingValueDef::ImportParams {
+                            symbol,
+                            loc_pattern,
+                            module_id,
+                            opt_provided,
+                        });
+                    }
                 }
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
@@ -2406,26 +2413,36 @@ fn canonicalize_pending_value_def<'a>(
             symbol,
             loc_pattern,
             module_id,
-            params,
+            opt_provided,
         } => {
-            let (record, can_output) =
-                canonicalize_record(env, var_store, scope, loc_pattern.region, params);
-
             // Insert a reference to the record so that we don't report it as unused
             // If the whole module is unused, we'll report that separately
             output
                 .references
                 .insert_value_lookup(symbol, QualifiedReference::Unqualified);
 
-            let references = DefReferences::Value(can_output.references.clone());
-            output.union(can_output);
+            let (expr, references) = match opt_provided {
+                Some(params) => {
+                    let (record, can_output) =
+                        canonicalize_record(env, var_store, scope, loc_pattern.region, params);
 
-            let loc_record = Loc::at(loc_pattern.region, record);
+                    let references = can_output.references.clone();
+                    output.union(can_output);
 
-            let loc_expr = Loc::at(
-                loc_pattern.region,
-                Expr::ImportParams(Box::new(loc_record), var_store.fresh(), module_id),
-            );
+                    let loc_record = Loc::at(loc_pattern.region, record);
+
+                    let expr =
+                        Expr::ImportParams(Box::new(loc_record), var_store.fresh(), module_id);
+
+                    (expr, references)
+                }
+                None => (
+                    Expr::MissingImportParams(module_id, loc_pattern.region),
+                    References::new(),
+                ),
+            };
+
+            let loc_expr = Loc::at(loc_pattern.region, expr);
 
             let def = single_can_def(
                 loc_pattern,
@@ -2437,7 +2454,7 @@ fn canonicalize_pending_value_def<'a>(
 
             DefOutput {
                 output,
-                references,
+                references: DefReferences::Value(references),
                 def,
             }
         }
@@ -2982,16 +2999,7 @@ enum PendingValue<'a> {
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
     ExpectFx(PendingExpectOrDbg<'a>),
-    ModuleImport {
-        module_id: ModuleId,
-        region: Region,
-        exposed_symbols: Vec<(Symbol, Region)>,
-        params: Option<(
-            Symbol,
-            Loc<Pattern>,
-            ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>,
-        )>,
-    },
+    ModuleImport(PendingModuleImport<'a>),
     SignatureDefMismatch,
     InvalidIngestedFile,
     ImportNameConflict,
@@ -3000,6 +3008,24 @@ enum PendingValue<'a> {
 struct PendingExpectOrDbg<'a> {
     condition: &'a Loc<ast::Expr<'a>>,
     preceding_comment: Region,
+}
+
+struct PendingModuleImport<'a> {
+    module_id: ModuleId,
+    region: Region,
+    exposed_symbols: Vec<(Symbol, Region)>,
+    params: PendingModuleImportParams<'a>,
+}
+
+enum PendingModuleImportParams<'a> {
+    /// The module does not require any params
+    None,
+    /// The module requires params, they may or may not have been provided
+    Required {
+        symbol: Symbol,
+        loc_pattern: Loc<Pattern>,
+        opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
+    },
 }
 
 pub struct IntroducedImport {
@@ -3152,42 +3178,40 @@ fn to_pending_value_def<'a>(
                 None => module_name.clone(),
             };
 
-            let mut params_sym = None;
-
-            let params = module_import.params.and_then(|params| {
+            let params = if env.modules_expecting_params.contains(&module_id) {
                 let name_str = name_with_alias.as_str();
+                let sym_region = module_import.params.map(|p| p.params.region).unwrap_or(region);
 
-                let params_region = params.params.region;
+                match scope.introduce_str(format!("#{name_str}").as_str(), sym_region) {
+                    Ok(symbol) =>  {
+                        let loc_pattern = Loc::at(sym_region, Pattern::Identifier(symbol));
 
-                match scope.introduce_str(format!("#{name_str}").as_str(), params_region) {
-                    Ok(sym) => {
-                        params_sym = Some(sym);
-
-                        let loc_pattern = Loc::at(params_region, Pattern::Identifier(sym));
-                        Some((sym, loc_pattern, params.params.value))
+                        PendingModuleImportParams::Required {
+                            symbol,
+                            loc_pattern,
+                            opt_provided: module_import.params.map(|p| p.params.value),
+                        }
                     },
-                    Err(_) => {
+                    Err(_) =>  {
                         // Ignore conflict, it will be handled as a duplicate import
-                        None
-                    }
+                        PendingModuleImportParams::None
+                    },
                 }
-            });
-
-            match (module_import.params, env.modules_expecting_params.contains(&module_id)) {
-                (None, true) => {
-                    env.problems.push(Problem::MissingParams {
-                        module_id,
-                        region,
-                    });
-                }
-                (Some(import_params), false) => {
+            } else {
+                if let Some(params) = module_import.params {
                     env.problems.push(Problem::UnexpectedParams {
                         module_id,
-                        region: import_params.params.region,
+                        region: params.params.region,
                     });
                 }
-                (None, false) | (Some(_), true) => { /* All good */}
-            }
+
+                PendingModuleImportParams::None
+            };
+
+            let params_sym = match params {
+                PendingModuleImportParams::Required { symbol, .. } => Some(symbol),
+                PendingModuleImportParams::None => None,
+            };
 
             if let Err(existing_import) =
                 scope
@@ -3257,12 +3281,12 @@ fn to_pending_value_def<'a>(
                 }
             }
 
-            PendingValue::ModuleImport {
+            PendingValue::ModuleImport(PendingModuleImport {
                 module_id,
                 region,
                 exposed_symbols,
                 params,
-            }
+            })
         }
         IngestedFileImport(ingested_file) => {
             let loc_name = ingested_file.name.item;

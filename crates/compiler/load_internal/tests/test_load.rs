@@ -27,10 +27,11 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
-use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_reporting::report::{strip_colors, RenderTarget};
+use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_solve::FunctionKind;
+use roc_solve_problem::TypeError;
 use roc_target::Target;
 use roc_test_utils_dir::TmpDir;
 use roc_types::pretty_print::name_and_print_var;
@@ -107,6 +108,33 @@ fn format_can_problems(
     buf
 }
 
+fn format_type_problems(
+    problems: Vec<TypeError>,
+    home: ModuleId,
+    interns: &Interns,
+    filename: PathBuf,
+    src: &str,
+) -> String {
+    use ven_pretty::DocAllocator;
+
+    let src_lines: Vec<&str> = src.split('\n').collect();
+    let lines = LineInfo::new(src);
+    let alloc = RocDocAllocator::new(&src_lines, home, interns);
+    let reports = problems
+        .into_iter()
+        .flat_map(|problem| type_problem(&alloc, &lines, filename.clone(), problem))
+        .map(|report| report.pretty(&alloc));
+
+    let mut buf = String::new();
+    alloc
+        .stack(reports)
+        .append(alloc.line())
+        .1
+        .render_raw(70, &mut roc_reporting::report::CiWrite::new(&mut buf))
+        .unwrap();
+    buf
+}
+
 fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
     let arena = Bump::new();
     let arena = &arena;
@@ -130,11 +158,19 @@ fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModu
                 ));
             }
 
-            assert!(loaded_module
+            let type_problems = loaded_module
                 .type_problems
                 .remove(&home)
-                .unwrap_or_default()
-                .is_empty(),);
+                .unwrap_or_default();
+            if !type_problems.is_empty() {
+                return Err(format_type_problems(
+                    type_problems,
+                    home,
+                    &loaded_module.interns,
+                    filepath.clone(),
+                    src,
+                ));
+            }
 
             Ok(loaded_module)
         }
@@ -1730,6 +1766,60 @@ fn module_params_unexpected() {
 
             However, Api does not expect any. Did you intend to import a different
             module?
+            "#
+        )
+    )
+}
+
+#[test]
+fn module_params_missing() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key, exp } -> [url]
+
+            url = "example.com/$(key)?exp=$(Num.toStr exp)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("module_params_missing", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            ── MISSING PARAMS in tmp/module_params_missing/Main.roc ────────────────────────
+
+            This import specifies no module params:
+
+            3│  import Api
+                ^^^^^^^^^^
+
+            However, Api expects the following to be provided:
+
+                {
+                    exp : Num *,
+                    key : Str,
+                }
+
+            You can provide params after the module name, like:
+
+                import Menu { echo, read }
             "#
         )
     )

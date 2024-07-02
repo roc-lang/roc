@@ -247,6 +247,32 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        MissingImportParams {
+            module_id,
+            region,
+            expected,
+        } => {
+            let stack = [
+                alloc.reflow("This import specifies no module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(" expects the following to be provided:"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, expected)),
+                alloc.reflow("You can provide params after the module name, like:"),
+                alloc
+                    .parser_suggestion("import Menu { echo, read }")
+                    .indent(4),
+            ];
+            Some(Report {
+                title: "MISSING PARAMS".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 

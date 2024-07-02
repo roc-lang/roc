@@ -236,10 +236,6 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
-    MissingParams {
-        module_id: ModuleId,
-        region: Region,
-    },
     UnexpectedParams {
         module_id: ModuleId,
         region: Region,
@@ -316,7 +312,6 @@ impl Problem {
             Problem::OverAppliedCrash { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
-            Problem::MissingParams { .. } => Warning,
             Problem::UnexpectedParams { .. } => Warning,
         }
     }
@@ -475,7 +470,6 @@ impl Problem {
             | Problem::OverAppliedCrash { region }
             | Problem::UnappliedCrash { region }
             | Problem::DefsOnlyUsedInRecursion(_, region)
-            | Problem::MissingParams { region, .. }
             | Problem::UnexpectedParams { region, .. } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {

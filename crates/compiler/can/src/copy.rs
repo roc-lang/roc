@@ -302,6 +302,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             sub!(*var),
             *module_id,
         ),
+        MissingImportParams(module_id, region) => MissingImportParams(*module_id, *region),
         &AbilityMember(sym, specialization, specialization_var) => {
             AbilityMember(sym, specialization, sub!(specialization_var))
         }

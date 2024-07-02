@@ -404,6 +404,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
+        Expr::MissingImportParams(..) => { /* terminal */ }
     }
 }
 

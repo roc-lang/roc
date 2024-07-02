@@ -1149,6 +1149,7 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
+        | MissingImportParams(_, _)
         | RecordAccessor { .. } => {}
 
         List { loc_elems, .. } => {
