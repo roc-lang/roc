@@ -1424,11 +1424,26 @@ fn solve(
                         ) {
                             Success {
                                 vars,
-                                must_implement_ability: _,
-                                lambda_sets_to_specialize: _,
+                                must_implement_ability,
+                                lambda_sets_to_specialize,
                                 extra_metadata: _,
                             } => {
                                 env.introduce(rank, &vars);
+
+                                problems.extend(obligation_cache.check_obligations(
+                                    env.subs,
+                                    abilities_store,
+                                    must_implement_ability,
+                                    AbilityImplError::DoesNotImplement,
+                                ));
+                                compact_lambdas_and_check_obligations(
+                                    env,
+                                    problems,
+                                    abilities_store,
+                                    obligation_cache,
+                                    awaiting_specializations,
+                                    lambda_sets_to_specialize,
+                                );
 
                                 state
                             }
