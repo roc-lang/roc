@@ -1,0 +1,98 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+        Index(2147483650),
+    ],
+    regions: [
+        @0-22,
+        @27-40,
+        @46-50,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
+        Slice(start = 1, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
+        Slice(start = 1, length = 0),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @12-22 SpaceBefore(
+                Apply(
+                    @12-13 ResultTryQuestion(
+                        Var {
+                            module_name: "",
+                            ident: "a",
+                        },
+                    ),
+                    [
+                        @17-22 Str(
+                            PlainLine(
+                                "Bar",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+        Body(
+            @27-28 Identifier {
+                ident: "x",
+            },
+            @30-40 Apply(
+                @30-33 ResultTryQuestion(
+                    Var {
+                        module_name: "B",
+                        ident: "b",
+                    },
+                ),
+                [
+                    @35-40 Str(
+                        PlainLine(
+                            "Foo",
+                        ),
+                    ),
+                ],
+                Space,
+            ),
+        ),
+        Stmt(
+            @46-50 SpaceBefore(
+                Apply(
+                    @46-47 ResultTryQuestion(
+                        Var {
+                            module_name: "",
+                            ident: "c",
+                        },
+                    ),
+                    [
+                        @49-50 Var {
+                            module_name: "",
+                            ident: "x",
+                        },
+                    ],
+                    Space,
+                ),
+                [
+                    Newline,
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+}

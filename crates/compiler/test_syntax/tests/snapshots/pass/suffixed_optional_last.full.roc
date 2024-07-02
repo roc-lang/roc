@@ -2,7 +2,7 @@ app ""
     packages {
         cli: "",
     }
-    imports [cli.Stdout, cli.Task]
+    imports []
     provides [main] to cli
 
 main = 

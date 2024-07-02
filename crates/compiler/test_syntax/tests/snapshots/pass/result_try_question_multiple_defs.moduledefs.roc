@@ -1,5 +1,5 @@
 main = 
-    a? "Bar"
-    y = B.b? "Foo"
+    a?   "Bar"
+    x= B.b? "Foo"
 
-    c y
+    c? x
