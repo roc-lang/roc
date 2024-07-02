@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
 mod file;
 mod native_path;
