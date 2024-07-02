@@ -36,11 +36,8 @@ pub enum TypeError {
     },
     IngestedFileBadUtf8(Box<PathBuf>, Utf8Error),
     IngestedFileUnsupportedType(Box<PathBuf>, ErrorType),
-    MissingImportParams {
-        module_id: ModuleId,
-        region: Region,
-        expected: ErrorType,
-    },
+    MissingImportParams(Region, ModuleId, ErrorType),
+    ImportParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
 }
 
 impl TypeError {
@@ -60,7 +57,8 @@ impl TypeError {
             TypeError::Exhaustive(exhtv) => exhtv.severity(),
             TypeError::StructuralSpecialization { .. } => RuntimeError,
             TypeError::WrongSpecialization { .. } => RuntimeError,
-            TypeError::MissingImportParams { .. } => RuntimeError,
+            TypeError::MissingImportParams(..) => RuntimeError,
+            TypeError::ImportParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
         }
@@ -76,7 +74,8 @@ impl TypeError {
             | TypeError::StructuralSpecialization { region, .. }
             | TypeError::WrongSpecialization { region, .. }
             | TypeError::BadPatternMissingAbility(region, ..)
-            | TypeError::MissingImportParams { region, .. } => Some(*region),
+            | TypeError::MissingImportParams(region, ..)
+            | TypeError::ImportParamsMismatch(region, ..) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),

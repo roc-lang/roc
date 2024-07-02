@@ -1662,7 +1662,6 @@ fn module_params_optional() {
 }
 
 #[test]
-#[should_panic(expected = "report import params mismatch")]
 fn module_params_typecheck_fail() {
     let modules = vec![
         (
@@ -1689,13 +1688,85 @@ fn module_params_typecheck_fail() {
         ),
     ];
 
-    let _ = multiple_modules("module_params_typecheck_fail", modules);
-    // todo(agus): test reporting
+    let result = multiple_modules("module_params_typecheck_fail", modules).unwrap_err();
+    assert_eq!(
+        result,
+        indoc!(
+            r#"
+            ── IMPORT PARAMS MISMATCH in tmp/module_params_typecheck_fail/Main.roc ─────────
+
+            Something is off with the params provided by this import:
+
+            3│  import Api { key: 123 }
+                           ^^^^^^^^^^^^
+
+            This is the type I inferred:
+
+                { key : Num * }
+
+            However, Api expects:
+
+                { key : Str }
+            "#
+        )
+    );
 }
 
 #[test]
-#[should_panic(expected = "report import params mismatch")]
-fn module_params_typecheck_extra_fields() {
+fn module_params_missing_fields() {
+    let modules = vec![
+        (
+            "Api.roc",
+            indoc!(
+                r#"
+            module { key } -> [url]
+
+            url = "example.com/$(key)"
+            "#
+            ),
+        ),
+        (
+            "Main.roc",
+            indoc!(
+                r#"
+        module [example]
+
+        import Api {}
+
+        example = Api.url
+            "#
+            ),
+        ),
+    ];
+
+    let result = multiple_modules("module_params_missing_fields", modules).unwrap_err();
+    assert_eq!(
+        result,
+        indoc!(
+            r#"
+            ── IMPORT PARAMS MISMATCH in tmp/module_params_missing_fields/Main.roc ─────────
+
+            Something is off with the params provided by this import:
+
+            3│  import Api {}
+                           ^^
+
+            This is the type I inferred:
+
+                {}
+
+            However, Api expects:
+
+                { key : Str }
+
+            Tip: Looks like the key field is missing.
+            "#
+        )
+    );
+}
+
+#[test]
+fn module_params_extra_fields() {
     let modules = vec![
         (
             "Api.roc",
@@ -1721,8 +1792,30 @@ fn module_params_typecheck_extra_fields() {
         ),
     ];
 
-    let _ = multiple_modules("module_params_typecheck_extra_fields", modules);
-    // todo(agus): test reporting
+    let result = multiple_modules("module_params_extra_fields", modules).unwrap_err();
+    assert_eq!(
+        result,
+        indoc!(
+            r#"
+            ── IMPORT PARAMS MISMATCH in tmp/module_params_extra_fields/Main.roc ───────────
+
+            Something is off with the params provided by this import:
+
+            3│  import Api { key: "123", doesNotExist: Bool.true }
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            This is the type I inferred:
+
+                { doesNotExist : Bool, … }
+
+            However, Api expects:
+
+                { … }
+
+
+            "#
+        )
+    );
 }
 
 #[test]

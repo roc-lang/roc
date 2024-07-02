@@ -1448,21 +1448,28 @@ fn solve(
                                 state
                             }
 
-                            Failure(vars, _actual_type, _expected_type, _) => {
+                            Failure(vars, actual_type, expected_type, _) => {
                                 env.introduce(rank, &vars);
 
-                                todo!("report import params mismatch")
+                                problems.push(TypeError::ImportParamsMismatch(
+                                    *region,
+                                    *module_id,
+                                    actual_type,
+                                    expected_type,
+                                ));
+
+                                state
                             }
                         }
                     }
                     (Some(expected), None) => {
-                        let err_type = env.uenv().var_to_error_type(*expected, Polarity::Neg);
+                        let expected_type = env.uenv().var_to_error_type(*expected, Polarity::Neg);
 
-                        problems.push(TypeError::MissingImportParams {
-                            module_id: *module_id,
-                            region: *region,
-                            expected: err_type,
-                        });
+                        problems.push(TypeError::MissingImportParams(
+                            *region,
+                            *module_id,
+                            expected_type,
+                        ));
 
                         state
                     }
