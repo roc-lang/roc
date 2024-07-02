@@ -13,3 +13,4 @@ main =
         { config: "config" }
 
     C.z "Bar"
+
