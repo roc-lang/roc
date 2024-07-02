@@ -8515,8 +8515,8 @@ In roc, functions are always written as a lambda, like{}
 
         Type
         Unsigned8
+        Unsigned32
         Unsigned16
-        Unsigned64
 
     ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
@@ -8529,8 +8529,8 @@ In roc, functions are always written as a lambda, like{}
 
         Type
         Unsigned8
+        Unsigned32
         Unsigned16
-        Unsigned64
     "
     );
 
@@ -11179,7 +11179,7 @@ In roc, functions are always written as a lambda, like{}
             import Decode exposing [decoder]
 
             main =
-                myDecoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
+                myDecoder : Decoder (List U8) (a -> a) fmt [TooShort] where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -11212,7 +11212,7 @@ In roc, functions are always written as a lambda, like{}
             A := {}
 
             main =
-                myDecoder : Decoder {x : A} fmt where fmt implements DecoderFormatting
+                myDecoder : Decoder (List U8) {x : A} fmt [TooShort] where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -11436,11 +11436,11 @@ In roc, functions are always written as a lambda, like{}
             decodeDec = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
             decodeBool = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
             decodeString = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decodeList : Decoder elem (ErrDecoder) -> Decoder (List elem) (ErrDecoder)
+            decodeList : Decoder (List U8) elem (ErrDecoder) [TooShort] -> Decoder (List U8) (List elem) (ErrDecoder) [TooShort]
             decodeList = \_ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decodeRecord : state, (state, Str -> [Keep (Decoder state (ErrDecoder)), Skip]), (state, (ErrDecoder) -> Result val DecodeError) -> Decoder val (ErrDecoder)
+            decodeRecord : state, (state, Str -> [Keep (Decoder (List U8) state (ErrDecoder) [TooShort]), Skip]), (state, (ErrDecoder) -> Result val [TooShort]) -> Decoder (List U8) val (ErrDecoder) [TooShort]
             decodeRecord =\_, _, _ ->  Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
-            decodeTuple : state, (state, U64 -> [Next (Decoder state (ErrDecoder)), TooLong]), (state -> Result val DecodeError) -> Decoder val (ErrDecoder)
+            decodeTuple : state, (state, U64 -> [Next (Decoder (List U8) state (ErrDecoder) [TooShort]), TooLong]), (state -> Result val [TooShort]) -> Decoder (List U8) val (ErrDecoder) [TooShort]
             decodeTuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
 
             main =
@@ -11475,7 +11475,7 @@ In roc, functions are always written as a lambda, like{}
              import Decode exposing [decoder]
 
              main =
-                 myDecoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
+                 myDecoder : Decoder (List U8) {x : Str, y ? Str} fmt [TooShort] where fmt implements DecoderFormatting
                  myDecoder = decoder
 
                  myDecoder
@@ -14045,7 +14045,7 @@ In roc, functions are always written as a lambda, like{}
             import Decode exposing [decoder]
 
             main =
-                myDecoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
+                myDecoder : Decoder (List U8) (U32, Str) fmt [TooShort] where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -14062,7 +14062,7 @@ In roc, functions are always written as a lambda, like{}
             import Decode exposing [decoder]
 
             main =
-                myDecoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
+                myDecoder : Decoder (List U8) (U32, {} -> {}) fmt [TooShort] where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
