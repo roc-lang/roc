@@ -3846,6 +3846,7 @@ dependencies = [
  "roc_solve",
  "roc_std",
  "roc_target",
+ "roc_test_utils",
  "roc_types",
  "roc_unify",
  "roc_wasm_interp",
@@ -3870,6 +3871,7 @@ dependencies = [
  "roc_packaging",
  "roc_reporting",
  "roc_target",
+ "roc_test_utils",
  "roc_tracing",
  "test_mono_macros",
 ]

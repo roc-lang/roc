@@ -227,15 +227,7 @@ PyObject * call_roc(PyObject *self, PyObject *args)
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
     // Create a Python string from the heap-allocated JSON bytes the Roc function returned.
-    PyObject* json_bytes = PyUnicode_FromStringAndSize((char*)ret.bytes, ret.len);
-    PyObject* json_module = PyImport_ImportModule("json");
-    PyObject* loads_func = PyObject_GetAttrString(json_module, "loads");
-    PyObject *loads_args = PyTuple_Pack(1, json_bytes);
-    PyObject* py_obj = PyObject_CallObject(loads_func, loads_args);
-    Py_XDECREF(loads_args);
-    Py_XDECREF(loads_func);
-    Py_XDECREF(json_module);
-    Py_XDECREF(json_bytes);
+    PyObject* py_obj = PyUnicode_FromStringAndSize((char*)ret.bytes, ret.len);
 
     // Now that we've created py_str, we're no longer referencing the RocBytes.
     decref((void *)&ret, alignof(uint8_t *));

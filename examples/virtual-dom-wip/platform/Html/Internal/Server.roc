@@ -4,7 +4,7 @@ module [
 ]
 
 import Html.Internal.Shared exposing [Html, Attribute, App, translateStatic, text, element]
-import TotallyNotJson
+import Json
 
 # -------------------------------
 #   STATIC HTML
@@ -69,7 +69,7 @@ insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     encode =
         \value ->
             value
-            |> Encode.toBytes TotallyNotJson.json
+            |> Encode.toBytes Json.json
             |> Str.fromUtf8
             |> Result.withDefault ""
 

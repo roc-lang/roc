@@ -42,7 +42,7 @@ The roc_language_server binary is included with the [nightly releases](https://g
 
 Follow the [building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md) instructions for roc. Then run:
 
-```
+```bash
 # do `nix develop` first if you're using nix!
 cargo build --bin roc_language_server --release
 ```
@@ -61,7 +61,7 @@ Please follow your editor's language server implementation's documentation to se
 
 Add the following to your coc JSON configuration file:
 
-```
+```json
 {
   "languageserver": {
     "roc": {
@@ -73,6 +73,18 @@ Add the following to your coc JSON configuration file:
 ```
 
 If you're using coc.nvim and want to use the configuration above, be sure to also instruct your vim that `*.roc` files have roc filetype.
+
+#### [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig)
+
+Add the following to your lspconfig setup:
+
+```lua
+local lspconfig = require('lspconfig')
+lspconfig.roc_ls.setup()
+```
+
+Make sure that the roc binary is on your `PATH`.
+Further instructions on how to setup nvim-lspconfig can be found in their [docs](https://github.com/neovim/nvim-lspconfig?tab=readme-ov-file#quickstart).
 
 ## Debug
 

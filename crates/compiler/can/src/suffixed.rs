@@ -129,46 +129,7 @@ pub fn unwrap_suffixed_expression<'a>(
                 internal_error!("BinOps should have been desugared in desugar_expr");
             }
 
-            Expr::LowLevelDbg(dbg_src, arg, rest) => {
-                if is_expr_suffixed(&arg.value) {
-                    // we cannot unwrap a suffixed expression within dbg
-                    // e.g. dbg (foo! "bar")
-                    return Err(EUnwrapped::Malformed);
-                }
-
-                match unwrap_suffixed_expression(arena, rest, maybe_def_pat) {
-                    Ok(unwrapped_expr) => {
-                        let new_dbg = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
-                        ));
-                        return Ok(new_dbg);
-                    }
-                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
-                        let new_dbg = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
-                        ));
-                        Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
-                    }
-                    Err(EUnwrapped::UnwrappedSubExpr {
-                        sub_arg: unwrapped_expr,
-                        sub_pat,
-                        sub_new,
-                    }) => {
-                        let new_dbg = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
-                        ));
-                        Err(EUnwrapped::UnwrappedSubExpr {
-                            sub_arg: new_dbg,
-                            sub_pat,
-                            sub_new,
-                        })
-                    }
-                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
-                }
-            }
+            Expr::LowLevelDbg(..) => unwrap_low_level_dbg(arena, loc_expr, maybe_def_pat),
 
             Expr::Expect(condition, continuation) => {
                 if is_expr_suffixed(&condition.value) {
@@ -658,7 +619,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                 let after_empty = split_defs.after.is_empty();
                                 if before_empty && after_empty {
                                     // NIL before, NIL after -> SINGLE DEF
-                                    let next_expr = match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat) {
+                                    // We pass None as a def pattern here because it's desugaring of the ret expression
+                                    let next_expr = match unwrap_suffixed_expression(arena,loc_ret, None) {
                                         Ok(next_expr) => next_expr,
                                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
                                             // We need to apply Task.ok here as the defs final expression was unwrapped
@@ -688,7 +650,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                     return unwrap_suffixed_expression(arena, apply_task_await(arena,def_expr.region,unwrapped_expr,def_pattern,next_expr), maybe_def_pat);
                                 } else if after_empty {
                                     // SOME before, NIL after -> LAST DEF
-                                    match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat){
+                                    // We pass None as a def pattern here because it's desugaring of the ret expression
+                                    match unwrap_suffixed_expression(arena,loc_ret,None){
                                         Ok(new_loc_ret) => {
                                             let applied_task_await = apply_task_await(arena, loc_expr.region, unwrapped_expr, def_pattern, new_loc_ret);
                                             let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(split_defs.before), applied_task_await)));
@@ -764,6 +727,87 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
             }
         },
         _ => internal_error!("unreachable, expected a Defs node to be passed into unwrap_suffixed_expression_defs_help"),
+    }
+}
+
+fn unwrap_low_level_dbg<'a>(
+    arena: &'a Bump,
+    loc_expr: &'a Loc<Expr<'a>>,
+    maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
+) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
+    match loc_expr.value {
+        LowLevelDbg(dbg_src, arg, rest) => {
+            if is_expr_suffixed(&arg.value) {
+                return match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, unwrapped_expr, rest),
+                        ));
+
+                        unwrap_low_level_dbg(arena, new_dbg, maybe_def_pat)
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, sub_new, rest),
+                        ));
+
+                        unwrap_suffixed_expression(
+                            arena,
+                            apply_task_await(arena, new_dbg.region, sub_arg, sub_pat, new_dbg),
+                            maybe_def_pat,
+                        )
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                        internal_error!(
+                            "unreachable, arg of LowLevelDbg should generate UnwrappedSubExpr instead"
+                        );
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                };
+            }
+
+            match unwrap_suffixed_expression(arena, rest, maybe_def_pat) {
+                Ok(unwrapped_expr) => {
+                    let new_dbg = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                    ));
+                    Ok(&*new_dbg)
+                }
+                Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                    let new_dbg = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                    ));
+                    Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
+                }
+                Err(EUnwrapped::UnwrappedSubExpr {
+                    sub_arg: unwrapped_expr,
+                    sub_pat,
+                    sub_new,
+                }) => {
+                    let new_dbg = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                    ));
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: new_dbg,
+                        sub_pat,
+                        sub_new,
+                    })
+                }
+                Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+            }
+        }
+        _ => internal_error!(
+            "unreachable, expected a LowLevelDbg node to be passed into unwrap_low_level_dbg"
+        ),
     }
 }
 

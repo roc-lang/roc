@@ -988,20 +988,14 @@ fn link_linux(
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path_str.to_string()],
+            [scrt1_path_str.as_ref()],
             output_path,
         ),
         LinkType::Dylib => {
             let mut output_path = output_path;
             output_path.set_extension("so");
 
-            (
-                // TODO: find a way to avoid using a vec! here - should theoretically be
-                // able to do this somehow using &[] but the borrow checker isn't having it.
-                // Also find a way to have these be string slices instead of Strings.
-                vec!["-shared".to_string()],
-                output_path,
-            )
+            (["-shared"], output_path)
         }
         LinkType::None => internal_error!("link_linux should not be called with link type of none"),
     };
@@ -1032,7 +1026,7 @@ fn link_linux(
             &crti_path_str,
             &crtn_path_str,
         ])
-        .args(&base_args)
+        .args(base_args)
         .args(["-dynamic-linker", ld_linux_path_str])
         .args(input_paths)
         .args(extra_link_flags())

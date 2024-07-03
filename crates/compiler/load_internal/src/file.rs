@@ -3630,7 +3630,6 @@ fn load_module<'a>(
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
-        "TotallyNotJson", ModuleId::JSON
         "Task", ModuleId::TASK
     }
 

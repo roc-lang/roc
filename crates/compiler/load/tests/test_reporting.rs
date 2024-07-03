@@ -10503,6 +10503,29 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        issue_6825,
+        indoc!(
+            r#"
+            when [] is
+                [] | [_, .. as rest] if List.isEmpty rest -> []
+                _ -> []
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
+
+        `rest` is not bound in all patterns of this `when` branch
+
+        5│          [] | [_, .. as rest] if List.isEmpty rest -> []
+                                   ^^^^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+        "###
+    );
+
+    test_report!(
         flip_flop_catch_all_branches_not_exhaustive,
         indoc!(
             r#"
@@ -11379,10 +11402,50 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" imports [] provides [main] to "./platform"
 
-            import TotallyNotJson
+            ErrDecoder := {} implements [DecoderFormatting {
+                u8: decodeU8,
+                u16: decodeU16,
+                u32: decodeU32,
+                u64: decodeU64,
+                u128: decodeU128,
+                i8: decodeI8,
+                i16: decodeI16,
+                i32: decodeI32,
+                i64: decodeI64,
+                i128: decodeI128,
+                f32: decodeF32,
+                f64: decodeF64,
+                dec: decodeDec,
+                bool: decodeBool,
+                string: decodeString,
+                list: decodeList,
+                record: decodeRecord,
+                tuple: decodeTuple,
+            }]
+            decodeU8 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU16 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU128 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI8 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI16 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI128 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeF32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeF64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeDec = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeBool = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeString = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeList : Decoder elem (ErrDecoder) -> Decoder (List elem) (ErrDecoder)
+            decodeList = \_ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeRecord : state, (state, Str -> [Keep (Decoder state (ErrDecoder)), Skip]), (state, (ErrDecoder) -> Result val DecodeError) -> Decoder val (ErrDecoder)
+            decodeRecord =\_, _, _ ->  Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeTuple : state, (state, U64 -> [Next (Decoder state (ErrDecoder)), TooLong]), (state -> Result val DecodeError) -> Decoder val (ErrDecoder)
+            decodeTuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes (@ErrDecoder {})
                 when decoded is
                     Ok rcd -> rcd.first rcd.second
                     _ -> "something went wrong"
@@ -11393,8 +11456,8 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    8│          Ok rcd -> rcd.first rcd.second
-                          ^^^^^^^^^
+    48│          Ok rcd -> rcd.first rcd.second
+                           ^^^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 

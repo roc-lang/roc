@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 mod elf;
 mod macho;
 mod pe;
+mod util;
 
 mod generate_dylib;
 
@@ -365,27 +366,23 @@ fn stub_lib_is_up_to_date(target: Target, stub_lib_path: &Path, custom_names: &[
 
 pub fn preprocess_host(
     target: Target,
-    platform_main_roc: &Path,
-    preprocessed_path: &Path,
-    shared_lib: &Path,
-    stub_dll_symbols: &[String],
+    host_path: &Path,
+    platform_path: &Path,
+    dylib_path: &Path,
+    verbose: bool,
+    time: bool,
 ) {
-    let metadata_path = platform_main_roc.with_file_name(metadata_file_name(target));
-    let host_exe_path = if target.operating_system() == OperatingSystem::Windows {
-        platform_main_roc.with_file_name("dynhost.exe")
-    } else {
-        platform_main_roc.with_file_name("dynhost")
-    };
+    let preprocessed_path = platform_path.with_file_name(format!("{}.rh", target));
+    let metadata_path = platform_path.with_file_name(metadata_file_name(target));
 
     preprocess(
         target,
-        &host_exe_path,
+        host_path,
         &metadata_path,
-        preprocessed_path,
-        shared_lib,
-        stub_dll_symbols,
-        false,
-        false,
+        preprocessed_path.as_path(),
+        dylib_path,
+        verbose,
+        time,
     )
 }
 
@@ -397,7 +394,6 @@ fn preprocess(
     metadata_path: &Path,
     preprocessed_path: &Path,
     shared_lib: &Path,
-    stub_dll_symbols: &[String],
     verbose: bool,
     time: bool,
 ) {
@@ -433,7 +429,7 @@ fn preprocess(
                 host_exe_path,
                 metadata_path,
                 preprocessed_path,
-                stub_dll_symbols,
+                shared_lib,
                 verbose,
                 time,
             )

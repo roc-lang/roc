@@ -1,7 +1,6 @@
 use bitvec::vec::BitVec;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use core::panic;
 use roc_wasm_module::linking::IndexRelocType;
 
 use roc_error_macros::internal_error;

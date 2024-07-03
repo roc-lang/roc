@@ -9,7 +9,7 @@
 - [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/www/content/faq.md)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
-If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
+If you'd like to contribute, [get started here](CONTRIBUTING.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 
@@ -35,6 +35,8 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+- [Barry Moore](https://github.com/chiroptical)
+- Eric Andresen
 - [Jackson Lucky](https://github.com/jluckyiv)
 - [Agus Zubiaga](https://github.com/agu-z)
 - [Angelo Ceccato](https://github.com/AngeloChecked)
