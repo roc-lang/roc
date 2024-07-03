@@ -1,8 +1,11 @@
 use crate::native_path::NativePath;
-use core::mem::MaybeUninit;
+use core::{fmt, mem::MaybeUninit};
 
 #[cfg(windows)]
 use widestring::U16CString;
+
+#[cfg(unix)]
+use core::ffi::{c_char, c_int};
 
 #[cfg(unix)]
 pub struct File {
@@ -16,11 +19,12 @@ pub struct File {
 
 #[cfg(unix)]
 extern "C" {
-    fn open(pathname: *const i8, flags: i32, mode: i32) -> i32;
-    fn close(fd: i32) -> i32;
-    fn read(fd: i32, buf: *mut MaybeUninit<u8>, count: usize) -> isize;
-    fn mkstemp(template: *mut i8) -> i32;
-    fn unlink(pathname: *const i8) -> i32;
+    fn open(pathname: *const c_char, flags: c_int, ...) -> c_int;
+    fn close(fd: c_int) -> c_int;
+    fn read(fd: c_int, buf: *mut MaybeUninit<u8>, count: usize) -> isize;
+    fn write(fd: c_int, buf: *const u8, count: usize) -> isize;
+    fn mkstemp(template: *mut c_char) -> c_int;
+    fn unlink(pathname: *const c_char) -> c_int;
 }
 
 #[cfg(unix)]
@@ -51,6 +55,13 @@ extern "system" {
         lpNumberOfBytesRead: *mut u32,
         lpOverlapped: *mut core::ffi::c_void,
     ) -> i32;
+    fn WriteFile(
+        hFile: isize,
+        lpBuffer: *const u8,
+        nNumberOfBytesToWrite: u32,
+        lpNumberOfBytesWritten: *mut u32,
+        lpOverlapped: *mut core::ffi::c_void,
+    ) -> i32;
     fn DeleteFileW(lpFileName: *const u16) -> i32;
     fn GetTempPathW(nBufferLength: u32, lpBuffer: *mut u16) -> u32;
     fn CreateDirectoryW(
@@ -68,41 +79,55 @@ impl Drop for File {
     }
 }
 
+#[repr(transparent)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct FileIoErr(i32);
+
+impl fmt::Debug for FileIoErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FileIoErr {
+    // https://docs.rs/libc/latest/libc/constant.ENOENT.html
+    pub const NOT_FOUND: Self = Self(2);
+}
+
 //// OPEN FILE ////
 
 #[cfg(unix)]
 impl File {
-    const O_CREAT: i32 = 0x40;
-    const O_RDWR: i32 = 2;
-    const S_IRUSR: i32 = 0o400; // Read permission, owner
-    const S_IWUSR: i32 = 0o200; // Write permission, owner
+    const O_WRONLY: c_int = 1;
+    const O_RDWR: c_int = 2;
+
+    /// source: https://github.com/apple-open-source/macos/blob/8038f956fee603c486e75adbf93cac7a66064f02/Libc/exclave/sys/fcntl.h#L104
+    #[cfg(target_os = "macos")]
+    const O_CREAT: c_int = 512;
+
+    #[cfg(not(target_os = "macos"))]
+    const O_CREAT: c_int = 64;
 
     #[cfg(target_os = "macos")]
-    fn errno() -> i32 {
+    fn errno() -> FileIoErr {
         extern "C" {
-            fn __error() -> *mut i32;
+            fn __error() -> *mut FileIoErr;
         }
 
         unsafe { *__error() }
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn errno() -> i32 {
+    fn errno() -> FileIoErr {
         extern "C" {
-            fn __errno_location() -> *mut i32;
+            fn __errno_location() -> *mut FileIoErr;
         }
 
         unsafe { errno = *__errno_location() }
     }
 
     pub fn open(path: &NativePath) -> Option<Self> {
-        let fd = unsafe {
-            open(
-                path.inner.as_ptr(),
-                Self::O_RDWR,
-                Self::S_IRUSR | Self::S_IWUSR,
-            )
-        };
+        let fd = unsafe { open(path.inner.as_ptr(), Self::O_RDWR) };
 
         if fd != -1 {
             Some(File { fd })
@@ -115,8 +140,8 @@ impl File {
         let fd = unsafe {
             open(
                 path.inner.as_ptr(),
-                Self::O_CREAT | Self::O_RDWR,
-                Self::S_IRUSR | Self::S_IWUSR,
+                Self::O_CREAT | Self::O_WRONLY,
+                0o644, // read/write mode
             )
         };
 
@@ -195,15 +220,11 @@ impl File {
 
 //// TEMPFILE ////
 
-trait TempFile: Sized {
-    fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T;
-}
-
 #[cfg(unix)]
-impl TempFile for File {
+impl File {
     /// Create a tempfile, open it as a File, pass that File and its generated path
     /// to the given function, and then delete it after the function returns.
-    fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T {
+    pub fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T {
         const TEMPLATE: &[u8] = b"/tmp/roc_tempfile_XXXXXX\0";
 
         let mut template = [0; TEMPLATE.len()];
@@ -229,13 +250,11 @@ impl TempFile for File {
             run(None)
         }
     }
-}
 
-#[cfg(windows)]
-impl TempFile for File {
+    #[cfg(windows)]
     /// Create a tempfile, open it as a File, pass that File and its generated path
     /// to the given function, and then delete it after the function returns.
-    fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T {
+    pub fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T {
         let mut temp_path_buf = [0u16; 261];
         let temp_path_len =
             unsafe { GetTempPathW(temp_path_buf.len() as u32, temp_path_buf.as_mut_ptr()) };
@@ -306,28 +325,20 @@ impl TempFile for File {
 
 //// READ FILE ////
 
-pub trait ReadFile {
-    /// Returns either the number of bytes read, or None if the read failed.
-    /// (Does not specify what went wrong if the read failed.)
-    fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Option<usize>;
-}
-
-#[cfg(unix)]
-impl ReadFile for File {
-    fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Option<usize> {
+impl File {
+    #[cfg(unix)]
+    pub fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, FileIoErr> {
         let bytes_read = unsafe { read(self.fd, buf.as_mut_ptr(), buf.len()) };
 
         if bytes_read >= 0 {
-            Some(bytes_read as usize)
+            Ok(bytes_read as usize)
         } else {
-            None
+            Err(Self::errno())
         }
     }
-}
 
-#[cfg(windows)]
-impl ReadFile for File {
-    fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Option<usize> {
+    #[cfg(windows)]
+    pub fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, FileIoErr> {
         let mut bytes_read: u32 = 0;
 
         let result = unsafe {
@@ -340,17 +351,53 @@ impl ReadFile for File {
             )
         };
 
-        if result != 0 {
-            Some(bytes_read as usize)
+        if result >= 0 {
+            Ok(bytes_read as usize)
         } else {
-            None
+            Err(Self::errno())
+        }
+    }
+}
+
+//// WRITE FILE ////
+
+impl File {
+    #[cfg(unix)]
+    pub fn write(&mut self, buf: &[u8]) -> Result<usize, FileIoErr> {
+        let bytes_written = unsafe { write(self.fd, buf.as_ptr(), buf.len()) };
+
+        if bytes_written >= 0 {
+            Ok(bytes_written as usize)
+        } else {
+            Err(Self::errno())
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn write(&mut self, buf: &[u8]) -> Result<usize, FileIoErr> {
+        let mut bytes_written: u32 = 0;
+
+        let result = unsafe {
+            WriteFile(
+                self.handle,
+                buf.as_ptr(),
+                buf.len() as u32,
+                &mut bytes_written,
+                core::ptr::null_mut(),
+            )
+        };
+
+        if result != 0 {
+            Ok(bytes_written as usize)
+        } else {
+            Err(Self::errno())
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{File, ReadFile, TempFile};
+    use super::File;
     use crate::native_path::NativePath;
     use core::mem::MaybeUninit;
 
@@ -383,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn test_open_file_failed() {
+    fn open_file_failed() {
         let path = mock_path("test_file_that_should_not_exist\0");
         let file = File::open(&path);
         assert!(
@@ -393,46 +440,24 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_file() {
-        let path = mock_path("roc_test_remove_file\0");
-
-        // Verify that the file exists
-        let file = File::create(&path);
-        assert!(
-            file.is_some(),
-            "The file should exist: roc_test_remove_file"
-        );
-
-        // Close the file by dropping the file descriptor
-        drop(file);
-
-        // Remove the file
-        let result = File::remove(&path);
-        assert!(result, "Failed to remove the file: roc_test_remove_file");
-
-        // Verify that the file no longer exists
-        let file_exists = File::open(&path).is_none();
-        assert!(
-            file_exists,
-            "The file should not exist after removal: roc_test_remove_file"
-        );
-    }
-
-    #[test]
-    fn create_read_write() {
+    fn create_write_read_delete() {
         let path = mock_path("roc_test_read_file\0");
         let mut file = File::create(&path).unwrap();
 
         // Write some data to the file
-        todo!("This is wrong, it doesn't write the data (we don't have File::write yet)");
         let write_data = [42u8; 10];
-        let write_result = file.read_into(&mut write_data.map(MaybeUninit::new));
+        let write_result = file.write(&write_data);
         assert!(
-            write_result.is_some(),
+            write_result.is_ok(),
             "Failed to write data to the file: roc_test_read_file"
         );
+        assert_eq!(
+            write_result,
+            Ok(write_data.len()),
+            "Only wrote some of the bytes requested, not all of them."
+        );
 
-        // Drop the file descriptor to close the file
+        // Close the file by dropping the file descriptor
         drop(file);
 
         // Reopen the file
@@ -440,8 +465,27 @@ mod tests {
         let mut buffer = [MaybeUninit::uninit(); 10];
         let bytes_read = file.read_into(&mut buffer);
         assert!(
-            bytes_read.is_some(),
+            bytes_read.is_ok(),
             "Failed to read data from the file: roc_test_read_file"
+        );
+        assert_eq!(
+            bytes_read,
+            Ok(write_data.len()),
+            "Only read some of the bytes that were originally written."
+        );
+
+        // Close the file by dropping the file descriptor
+        drop(file);
+
+        // Remove the file
+        let result = File::remove(&path);
+        assert!(result, "Failed to remove the file: roc_test_read_file");
+
+        // Verify that the file no longer exists
+        let file_exists = File::open(&path).is_none();
+        assert!(
+            file_exists,
+            "The file should not exist after removal: roc_test_read_file"
         );
     }
 
@@ -455,18 +499,18 @@ mod tests {
             let bytes_written = file.read_into(&mut buffer);
 
             assert!(
-                bytes_written.is_some(),
+                bytes_written.is_ok(),
                 "Failed to write data to the temporary file"
             );
         });
     }
 
     #[test]
-    fn test_with_tempfile_execution() {
+    fn with_tempfile_execution() {
         let result = File::with_tempfile(|file| {
             if let Some(mut f) = file {
                 let mut buffer = [MaybeUninit::uninit(); 10];
-                f.read_into(&mut buffer).is_some()
+                f.read_into(&mut buffer).is_ok()
             } else {
                 false
             }
