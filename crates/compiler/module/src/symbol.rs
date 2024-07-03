@@ -462,6 +462,13 @@ impl<'a, T> PackageQualified<'a, T> {
         }
     }
 
+    pub fn unqualified(&self) -> Option<&T> {
+        match self {
+            PackageQualified::Unqualified(name) => Some(name),
+            PackageQualified::Qualified(_, _) => None,
+        }
+    }
+
     pub fn package_shorthand(&self) -> Option<&'a str> {
         match self {
             PackageQualified::Unqualified(_) => None,

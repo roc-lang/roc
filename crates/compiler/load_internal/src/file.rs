@@ -3599,9 +3599,9 @@ fn load_module<'a>(
 
     macro_rules! load_builtins {
         ($($name:literal, $module_id:path)*) => {
-            match module_name.as_inner().as_str() {
+            match module_name.unqualified().map(|name| name.as_str()) {
             $(
-                $name => {
+                Some($name) => {
                     let (module_id, msg) = load_builtin_module(
                         arena,
                         module_ids,
