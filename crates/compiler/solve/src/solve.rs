@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
@@ -18,6 +16,7 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -245,7 +244,7 @@ fn solve(
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
     params_pattern: Option<roc_can::pattern::Pattern>,
-    module_params_vars: HashMap<ModuleId, Variable>,
+    module_params_vars: VecMap<ModuleId, Variable>,
 ) -> State {
     let scope = Scope::new(params_pattern);
 

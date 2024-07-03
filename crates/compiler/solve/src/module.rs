@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::solve::RunSolveOutput;
 use crate::FunctionKind;
 use crate::{aliases::Aliases, solve};
@@ -85,7 +83,7 @@ pub struct SolveConfig<'a> {
 
     /// Module params
     pub params_pattern: Option<roc_can::pattern::Pattern>,
-    pub module_params_vars: HashMap<ModuleId, Variable>,
+    pub module_params_vars: VecMap<ModuleId, Variable>,
 }
 
 pub struct SolveOutput {
@@ -163,9 +161,8 @@ pub fn exposed_types_storage_subs(
         stored_vars_by_symbol.insert(*symbol, new_var);
     }
 
-    if let Some(params_var) = params_var {
-        storage_subs.import_variable_from(subs, params_var);
-    }
+    let stored_params_var =
+        params_var.map(|params_var| storage_subs.import_variable_from(subs, params_var).variable);
 
     let mut stored_specialization_lambda_set_vars =
         VecMap::with_capacity(solved_implementations.len());
@@ -224,6 +221,7 @@ pub fn exposed_types_storage_subs(
         stored_vars_by_symbol,
         stored_specialization_lambda_set_vars,
         stored_ability_member_vars,
+        stored_params_var,
     }
 }
 
