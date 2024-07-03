@@ -11784,6 +11784,30 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        import_qualified_builtin,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../tests/platform.roc" }
+
+            import pf.Bool
+
+            main =
+                ""
+            "#
+        ),
+        @r###"
+    [1;36m── FILE NOT FOUND in tmp/import_qualified_builtin/../../tests/Bool.roc ─────────[0m
+
+    I am looking for this file, but it's not there:
+
+        [1;33mtmp/import_qualified_builtin/../../tests/Bool.roc[0m
+
+    Is the file supposed to be there? Maybe there is a typo in the file
+    name?
+    "###
+    );
+
+    test_report!(
         invalid_toplevel_cycle,
         indoc!(
             r#"
