@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
-use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
+use roc_can::expr::{AnnotatedMark, DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ResolvedImplementations, TypeState,
@@ -407,6 +407,8 @@ fn start_phase<'a>(
                 let build_expects =
                     matches!(state.exec_mode, ExecutionMode::Test) && expectations.is_some();
 
+                let params_pattern = state.module_cache.param_patterns.get(&module_id).cloned();
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
                     module_id,
@@ -422,6 +424,7 @@ fn start_phase<'a>(
                     derived_module,
                     expectations,
                     build_expects,
+                    params_pattern,
                 }
             }
             Phase::MakeSpecializations => {
@@ -511,6 +514,8 @@ fn start_phase<'a>(
                     )
                 };
 
+                let params_pattern = state.module_cache.param_patterns.get(&module_id).cloned();
+
                 if module_id == ModuleId::DERIVED_GEN {
                     load_derived_partial_procs(
                         module_id,
@@ -523,6 +528,7 @@ fn start_phase<'a>(
                         &state.exposed_types,
                         &mut procs_base,
                         &mut state.world_abilities,
+                        &params_pattern,
                     );
                 }
 
@@ -541,6 +547,7 @@ fn start_phase<'a>(
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
                     expectations,
+                    params_pattern,
                 }
             }
         }
@@ -923,6 +930,7 @@ enum BuildTask<'a> {
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
         build_expects: bool,
+        params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -936,6 +944,7 @@ enum BuildTask<'a> {
         world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
+        params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     },
 }
 
@@ -5500,6 +5509,7 @@ fn make_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
+    params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -5519,6 +5529,7 @@ fn make_specializations<'a>(
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
+        params_pattern,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -5589,6 +5600,7 @@ fn build_pending_specializations<'a>(
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
     build_expects: bool,
+    params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
 
@@ -5622,6 +5634,7 @@ fn build_pending_specializations<'a>(
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
+        params_pattern,
     };
 
     let layout_cache_snapshot = layout_cache.snapshot();
@@ -6065,6 +6078,7 @@ fn load_derived_partial_procs<'a>(
     exposed_by_module: &ExposedByModule,
     procs_base: &mut ProcsBase<'a>,
     world_abilities: &mut WorldAbilities,
+    params_pattern: &Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
 ) {
     debug_assert_eq!(home, ModuleId::DERIVED_GEN);
 
@@ -6103,6 +6117,7 @@ fn load_derived_partial_procs<'a>(
             exposed_by_module,
             derived_module,
             struct_indexing: UsageTrackingMap::default(),
+            params_pattern: params_pattern.clone(),
         };
 
         let partial_proc = match derived_expr {
@@ -6275,6 +6290,7 @@ fn run_task<'a>(
             derived_module,
             expectations,
             build_expects,
+            params_pattern,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -6291,6 +6307,7 @@ fn run_task<'a>(
             derived_module,
             expectations,
             build_expects,
+            params_pattern,
         )),
         MakeSpecializations {
             module_id,
@@ -6304,6 +6321,7 @@ fn run_task<'a>(
             exposed_by_module,
             derived_module,
             expectations,
+            params_pattern,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -6318,6 +6336,7 @@ fn run_task<'a>(
             &exposed_by_module,
             derived_module,
             expectations,
+            params_pattern,
         )),
     };
 

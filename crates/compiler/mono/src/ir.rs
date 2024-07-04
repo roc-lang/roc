@@ -1372,6 +1372,7 @@ pub struct Env<'a, 'i> {
     pub exposed_by_module: &'i ExposedByModule,
     pub derived_module: &'i SharedDerivedModule,
     pub struct_indexing: UsageTrackingMap<(Symbol, u64), Symbol>,
+    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -2810,8 +2811,13 @@ fn patterns_to_when<'a>(
     body_var: Variable,
     body: Loc<roc_can::expr::Expr>,
 ) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
-    let mut arg_vars = Vec::with_capacity_in(patterns.len(), env.arena);
-    let mut symbols = Vec::with_capacity_in(patterns.len(), env.arena);
+    let params_pattern = env.params_pattern.clone();
+    let params_pattern_iter = params_pattern.iter();
+    let capacity = params_pattern_iter.len() + patterns.len();
+    let patterns_iter = params_pattern_iter.chain(patterns.iter()).cloned();
+
+    let mut arg_vars = Vec::with_capacity_in(capacity, env.arena);
+    let mut symbols = Vec::with_capacity_in(capacity, env.arena);
     let mut body = Ok(body);
 
     // patterns that are not yet in a when (e.g. in let or function arguments) must be irrefutable
@@ -2821,7 +2827,7 @@ fn patterns_to_when<'a>(
     // NOTE this fails if the pattern contains rigid variables,
     // see https://github.com/roc-lang/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
-    for (pattern_var, annotated_mark, pattern) in patterns.into_iter() {
+    for (pattern_var, annotated_mark, pattern) in patterns_iter {
         if annotated_mark.exhaustive.is_non_exhaustive(env.subs) {
             // Even if the body was Ok, replace it with this Err.
             // If it was already an Err, leave it at that Err, so the first
