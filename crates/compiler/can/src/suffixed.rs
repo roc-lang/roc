@@ -819,12 +819,6 @@ pub fn apply_task_await<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
     loc_new: &'a Loc<Expr<'a>>,
 ) -> &'a Loc<Expr<'a>> {
-    // If the pattern and the new are the same then we don't need to unwrap anything
-    // e.g. `Task.await foo \{} -> Task.ok {}` is the same as `foo`
-    if is_matching_empty_record(loc_pat, loc_new) {
-        return loc_arg;
-    }
-
     // If the pattern and the new are matching answers then we don't need to unwrap anything
     // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
     if is_matching_intermediate_answer(loc_pat, loc_new) {
@@ -870,26 +864,6 @@ fn extract_wrapped_task_ok_value<'a>(loc_expr: &'a Loc<Expr<'a>>) -> Option<&'a 
         },
         _ => None,
     }
-}
-
-fn is_matching_empty_record<'a>(
-    loc_pat: &'a Loc<Pattern<'a>>,
-    loc_expr: &'a Loc<Expr<'a>>,
-) -> bool {
-    let is_empty_record = match extract_wrapped_task_ok_value(loc_expr) {
-        Some(task_expr) => match task_expr.value {
-            Expr::Record(collection) => collection.is_empty(),
-            _ => false,
-        },
-        None => false,
-    };
-
-    let is_pattern_empty_record = match loc_pat.value {
-        Pattern::RecordDestructure(collection) => collection.is_empty(),
-        _ => false,
-    };
-
-    is_empty_record && is_pattern_empty_record
 }
 
 pub fn is_matching_intermediate_answer<'a>(
