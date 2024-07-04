@@ -1,21 +1,35 @@
 const std = @import("std");
 const crypto = std.crypto;
 const sha2 = crypto.hash.sha2;
+const list = @importg("list.zig")
+const utils = @import("utils.zig");
 
-pub fn sha256( )sha2.Sha256{
-    return sha2.Sha256.init(.{});
+const Sha256 = extern struct{
+    location:usize,
+    pub fn pointer(self : Sha256) *sha2.Sha256{
+        return @ptrFromInt(self.location);
+    }
+    }
+
+pub fn sha256() callconv(.C) Sha256{
+    const allocation = utils.allocateWithRefcount(@sizeOf(sha2.Sha256), @alignOf(sha2.Sha256));
+    const ptr:*sha2.Sha256 = @ptrCast(allocation);
+    ptr.* = sha2.Sha256.init(.{});
+    return Sha256{.location = @intFromPtr(ptr)),};
 }
 
-pub fn addBytes(hasher: sha2.Sha256, bytes:[] const u8)sha2.Sha256{
-    var out = hasher;
-    out.update(bytes);
+pub fn addBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256{
+    var out = sha256();
+    if(data.bytes)|bytes|{
+        out.pointer.*.update(bytes);
+    }
     return out;
 }
 
 const sha256_digest_length = 32;
 
-pub const sha256_digest =  [sha256_digest_length]u8;
+pub const Digest256 =  [sha256_digest_length]u8;
 
-pub fn digest(hasher: sha2.Sha256 ) sha256_digest{
-    return hasher.peek();
+pub fn digest(sha: Sha256 ) callCov(.C) Digest256{
+    return sha.pointer.*.peek();
 }
