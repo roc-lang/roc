@@ -3610,7 +3610,7 @@ fn issue_6606_2() {
 }
 
 #[mono_test]
-fn type_expansion() {
+fn type_expansion_basic() {
     indoc!(
         r#"
         app "test" provides [expandError] to "./platform"
@@ -3651,6 +3651,7 @@ fn type_expansion_two_tags_to_three() {
     )
 }
 
+// failing
 #[mono_test]
 fn type_expansion_implicitly_inside_record() {
     indoc!(
@@ -3665,6 +3666,7 @@ fn type_expansion_implicitly_inside_record() {
     )
 }
 
+// failing
 #[mono_test]
 fn type_expansion_inside_record() {
     indoc!(
