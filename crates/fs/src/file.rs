@@ -139,7 +139,7 @@ impl FileIoErr {
     }
 }
 
-//// OPEN FILE ////
+// OPEN FILE //
 
 #[cfg(unix)]
 impl File {
@@ -227,7 +227,7 @@ impl File {
     }
 }
 
-//// REMOVE ////
+// REMOVE //
 
 #[cfg(unix)]
 impl File {
@@ -245,7 +245,7 @@ impl File {
     }
 }
 
-//// TEMPFILE ////
+// TEMPFILE //
 
 #[cfg(unix)]
 impl File {
@@ -356,7 +356,7 @@ impl File {
     }
 }
 
-//// READ FILE ////
+// READ FILE //
 
 impl File {
     #[cfg(unix)]
@@ -405,7 +405,7 @@ impl File {
     }
 }
 
-//// WRITE FILE ////
+// WRITE FILE //
 
 impl File {
     #[cfg(unix)]
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn create_write_read_delete() {
         let path = mock_path("roc_test_read_file\0");
-        let mut file = File::create(&path).unwrap();
+        let mut file = File::create(path).unwrap();
 
         // Write some data to the file
         let write_data: &[u8] = &[42u8; 10];
@@ -517,7 +517,7 @@ mod tests {
         drop(file);
 
         // Remove the file
-        let result = File::remove(&path);
+        let result = File::remove(path);
         assert!(result, "Failed to remove the file: roc_test_read_file");
 
         // Verify that the file no longer exists
