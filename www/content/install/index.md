@@ -3,7 +3,7 @@
 Roc is a very young language with many incomplete features and known bugs. It doesn't even have a numbered release yet, but it does have [nightly builds](https://github.com/roc-lang/roc/releases) that you can download if you'd like to try it out without [building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)!
 
 <div class="banner">
-    Roc is a <b>Work in Progress</b>, see our <a href="/plans">plans</a> page for more information.
+    Roc is a <b>Work in Progress</b>! see our <a href="/plans">plans</a> page for more information.
 </div>
 
 There are currently a few known OS-specific issues:
