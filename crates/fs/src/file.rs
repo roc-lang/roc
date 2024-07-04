@@ -79,22 +79,38 @@ impl Drop for File {
     }
 }
 
-#[repr(transparent)]
+#[cfg_attr(unix, repr(i32))]
+#[cfg_attr(windows, repr(u32))]
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct FileIoErr(#[cfg(unix)] i32, #[cfg(windows)] u32);
+#[non_exhaustive] // There are tons of other error numbers that functions which return this might return!
+pub enum FileIoErr {
+    /// "File not found" is the same code (namely, 2) on both UNIX and Windows:
+    /// ENOENT on UNIX: https://www.man7.org/linux/man-pages/man3/errno.3.html
+    /// ERROR_FILE_NOT_FOUND on Windows:  // https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+    NotFound = 2,
+
+    #[cfg(unix)]
+    /// EACCES: https://www.man7.org/linux/man-pages/man3/errno.3.html
+    AccessDenied = 13,
+
+    #[cfg(windows)]
+    /// ERROR_ACCESS_DENIED: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+    AccessDenied = 5,
+}
 
 impl fmt::Debug for FileIoErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        match self {
+            FileIoErr::NotFound => write!(f, "NotFound ({})", *self as i32),
+            #[cfg(unix)]
+            FileIoErr::AccessDenied => write!(f, "AccessDenied ({})", *self as i32),
+            #[cfg(windows)]
+            FileIoErr::AccessDenied => write!(f, "AccessDenied ({})", *self as i32),
+        }
     }
 }
 
 impl FileIoErr {
-    // "File not found" is the same code (namely, 2) on both UNIX and Windows:
-    // ENOENT on UNIX: https://docs.rs/libc/latest/libc/constant.ENOENT.html
-    // ERROR_FILE_NOT_FOUND on Windows:  // https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
-    pub const NOT_FOUND: Self = Self(2);
-
     #[cfg(target_os = "macos")]
     fn most_recent() -> FileIoErr {
         extern "C" {
@@ -465,7 +481,7 @@ mod tests {
 
         assert_eq!(
             file_result.map(|_| ()),
-            Err(FileIoErr::NOT_FOUND),
+            Err(FileIoErr::NotFound),
             "File should not exist: test_file_that_should_not_exist"
         );
     }
@@ -509,7 +525,7 @@ mod tests {
 
         assert_eq!(
             file_result.map(|_| ()),
-            Err(FileIoErr::NOT_FOUND),
+            Err(FileIoErr::NotFound),
             "File should not exist after removal: roc_test_read_file"
         );
     }
