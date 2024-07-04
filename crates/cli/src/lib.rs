@@ -473,6 +473,7 @@ pub fn test(_matches: &ArgMatches, _target: Target) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
 }
 
+#[cfg(not(windows))]
 struct ModuleTestResults {
     module_id: ModuleId,
     failed_count: usize,
