@@ -1,5 +1,5 @@
 use crate::native_path::NativePath;
-use core::{fmt, mem::MaybeUninit};
+use core::{ffi::CStr, fmt, mem::MaybeUninit};
 
 #[cfg(windows)]
 use widestring::U16CString;
@@ -235,7 +235,9 @@ impl File {
 impl File {
     /// Create a tempfile, open it as a File, pass that File and its generated path
     /// to the given function, and then delete it after the function returns.
-    pub fn with_tempfile<T>(run: impl FnOnce(Result<Self, FileIoErr>) -> T) -> T {
+    pub fn with_tempfile<T>(
+        run: impl FnOnce(Result<(&NativePath, &mut Self), FileIoErr>) -> T,
+    ) -> T {
         const TEMPLATE: &[u8] = b"/tmp/roc_tempfile_XXXXXX\0";
 
         let mut template = [0; TEMPLATE.len()];
@@ -245,16 +247,20 @@ impl File {
         let fd = unsafe { mkstemp(template.as_mut_ptr().cast()) };
 
         if fd != -1 {
-            // Unlink the file *before* we continue. This won't delete the file yet, because
-            // we have an open file descriptor to it. Unlinking it up front ensures that if
-            // the program crashes, it will get deleted properly anyway (once the fd gets closed).
+            let path_cstr = unsafe { CStr::from_bytes_with_nul_unchecked(&template) };
+            let native_path: &NativePath = path_cstr.into();
+            let mut file = File { fd };
+
+            // Since we pass an owned File, it will get closed automatically once dropped.
+            // This in turn will result in the file getting deleted, since we already unlinked it.
+            let answer = run(Ok((native_path, &mut file)));
+
+            // Unlink the file now that we're done with it.
             unsafe {
                 unlink(template.as_ptr().cast());
             }
 
-            // Since we pass an owned File, it will get closed automatically once dropped.
-            // This in turn will result in the file getting deleted, since we already unlinked it.
-            run(Ok(File { fd }))
+            answer
         } else {
             // Here we assume that since mkstemp errored out, the file was not created
             // and we shouldn't attempt to unlink it.
@@ -265,7 +271,7 @@ impl File {
     #[cfg(windows)]
     /// Create a tempfile, open it as a File, pass that File and its generated path
     /// to the given function, and then delete it after the function returns.
-    pub fn with_tempfile<T>(run: impl FnOnce(Result<Self, FileIoErr>) -> T) -> T {
+    pub fn with_tempfile<T>(run: impl FnOnce(Result<(&NativePath, Self), FileIoErr>) -> T) -> T {
         let mut temp_path_buf = [0u16; 261];
         let temp_path_len =
             unsafe { GetTempPathW(temp_path_buf.len() as u32, temp_path_buf.as_mut_ptr()) };
@@ -423,7 +429,7 @@ impl File {
 mod tests {
     use super::{File, FileIoErr};
     use crate::native_path::NativePath;
-    use core::mem::{self, MaybeUninit};
+    use core::mem::MaybeUninit;
 
     #[cfg(unix)]
     use core::ffi::CStr;
@@ -486,7 +492,7 @@ mod tests {
         let mut input_buf = [MaybeUninit::uninit(); 10];
         let result = file.read_into(&mut input_buf);
         assert_eq!(
-            result.map(|slice| &*slice),
+            result.map(|mut_slice| &*mut_slice),
             Ok(write_data),
             "Failed to read all the data from the file: roc_test_read_file"
         );
@@ -511,8 +517,10 @@ mod tests {
     #[test]
     fn tempfile() {
         const DATA: &[u8] = &[42; 10];
-        let answer = File::with_tempfile(|file_result| {
-            let mut file = file_result.unwrap();
+        let buf = &mut [MaybeUninit::uninit(); DATA.len()];
+
+        let answer = File::with_tempfile(|result| {
+            let (native_path, file) = result.unwrap();
 
             // Write some data to the tempfile
             assert_eq!(
@@ -521,23 +529,14 @@ mod tests {
                 "Failed to write all the bytes to the tempfile"
             );
 
-            // Read the data back from the tempfile
-            let mut buf = [MaybeUninit::uninit()];
-
-            assert_eq!(
-                Ok(DATA),
-                file.read_into(&mut buf).map(|slice| &*slice),
-                "Failed to read all the bytes that were originally written."
-            );
-
-            buf
+            // Reopen the tempfile with a fresh file descriptor, and read the data back in from it
+            File::open(native_path).unwrap().read_into(buf)
         });
 
         // The data read should match the data written
         assert_eq!(
-            DATA,
-            // Assume it's initialized, since we already verified that it was Ok and the correct length.
-            unsafe { mem::transmute::<&[MaybeUninit<u8>], &[u8]>(&answer) },
+            Ok(DATA),
+            answer.map(|mut_slice| &*mut_slice),
             "Data read from the file does not match data written to the file"
         );
     }
