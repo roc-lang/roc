@@ -111,8 +111,9 @@ pub enum Expr {
     /// Like Var, but from a module with params
     ParamsVar {
         symbol: Symbol,
-        params: Symbol,
         var: Variable,
+        params_symbol: Symbol,
+        params_var: Variable,
     },
     AbilityMember(
         /// Actual member name
@@ -320,8 +321,9 @@ impl Expr {
             &Self::Var(sym, _) => Category::Lookup(sym),
             &Self::ParamsVar {
                 symbol,
-                params: _,
                 var: _,
+                params_symbol: _,
+                params_var: _,
             } => Category::Lookup(symbol),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
@@ -1924,7 +1926,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    lookup_to_expr(lookup, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1949,7 +1951,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    lookup_to_expr(lookup, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1968,20 +1970,21 @@ fn canonicalize_var_lookup(
 }
 
 fn lookup_to_expr(
+    var_store: &mut VarStore,
     SymbolLookup {
         symbol,
-        module_params: params,
+        module_params,
     }: SymbolLookup,
-    var: Variable,
 ) -> Expr {
-    if let Some(params) = params {
+    if let Some((params_var, params_symbol)) = module_params {
         Expr::ParamsVar {
             symbol,
-            params,
-            var,
+            var: var_store.fresh(),
+            params_symbol,
+            params_var,
         }
     } else {
-        Expr::Var(symbol, var)
+        Expr::Var(symbol, var_store.fresh())
     }
 }
 
@@ -3201,8 +3204,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Var(symbol, var)
             | Expr::ParamsVar {
                 symbol,
-                params: _,
                 var,
+                params_symbol: _,
+                params_var: _,
             }
             | Expr::RecordUpdate {
                 symbol,
