@@ -162,6 +162,13 @@ impl File {
     #[cfg(not(target_os = "macos"))]
     const O_CREAT: c_int = 64;
 
+    /// source: https://github.com/apple-open-source/macos/blob/8038f956fee603c486e75adbf93cac7a66064f02/Libc/exclave/sys/fcntl.h#L106
+    #[cfg(target_os = "macos")]
+    const O_EXCL: c_int = 2048;
+
+    #[cfg(not(target_os = "macos"))]
+    const O_EXCL: c_int = 128;
+
     pub fn open(path: &NativePath) -> Result<Self, FileIoErr> {
         let fd = unsafe { open(path.inner.as_ptr(), Self::O_RDWR) };
 
@@ -176,8 +183,9 @@ impl File {
         let fd = unsafe {
             open(
                 path.inner.as_ptr(),
-                Self::O_CREAT | Self::O_WRONLY,
-                0o644, // read/write mode
+                Self::O_CREAT | Self::O_WRONLY | Self::O_EXCL, // O_EXCL means fail if it already exists
+                // read/write mode
+                0o644,
             )
         };
 
@@ -574,24 +582,23 @@ mod tests {
     fn create_file_that_already_exists() {
         let path = mock_path("roc_test_already_exists\0");
 
-        // Create the file for the first time
-        let file_result = File::create(path);
+        let first = File::create(path); // Create the file for the first time
+        let second = File::create(path); // Attempt to create the same file again
+        let removed = File::remove(path); // Remove the file now that we're done with it (before we do any assertions!)
+
         assert!(
-            file_result.is_ok(),
+            first.is_ok(),
             "Failed to create the file: roc_test_already_exists"
         );
 
-        // Attempt to create the same file again
-        let file_result = File::create(path);
         assert_eq!(
-            file_result.map(|_| ()),
+            second.map(|_| ()),
             Err(FileIoErr::AlreadyExists),
             "File should already exist: roc_test_already_exists"
         );
 
-        // Remove the file now that we're done with it
         assert!(
-            File::remove(path),
+            removed,
             "Failed to remove the file: roc_test_already_exists"
         );
     }
