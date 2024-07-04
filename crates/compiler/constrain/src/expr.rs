@@ -569,8 +569,8 @@ pub fn constrain_expr(
         Var(symbol, variable)
         | ParamsVar {
             symbol,
-            params: _,
             var: variable,
+            ..
         } => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
             let expected_type = *constraints[expected].get_type_ref();

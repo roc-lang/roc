@@ -165,6 +165,7 @@ enum PendingValueDef<'a> {
     /// Module params from an import
     ImportParams {
         symbol: Symbol,
+        variable: Variable,
         loc_pattern: Loc<Pattern>,
         module_id: ModuleId,
         opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
@@ -186,6 +187,7 @@ impl PendingValueDef<'_> {
             PendingValueDef::ImportParams {
                 loc_pattern,
                 symbol: _,
+                variable: _,
                 module_id: _,
                 opt_provided: _,
             } => loc_pattern,
@@ -1153,6 +1155,7 @@ fn canonicalize_value_defs<'a>(
 
                 pending_value_defs.push(PendingValueDef::ImportParams {
                     symbol: params.symbol,
+                    variable: params.variable,
                     loc_pattern: params.loc_pattern,
                     opt_provided: params.opt_provided,
                     module_id,
@@ -2400,6 +2403,7 @@ fn canonicalize_pending_value_def<'a>(
         }
         ImportParams {
             symbol,
+            variable,
             loc_pattern,
             module_id,
             opt_provided,
@@ -2418,7 +2422,7 @@ fn canonicalize_pending_value_def<'a>(
                     let references = can_output.references.clone();
                     output.union(can_output);
 
-                    (Some((var_store.fresh(), Box::new(record))), references)
+                    (Some((variable, Box::new(record))), references)
                 }
                 None => (None, References::new()),
             };
@@ -3003,6 +3007,7 @@ struct PendingModuleImport<'a> {
 
 struct PendingModuleImportParams<'a> {
     symbol: Symbol,
+    variable: Variable,
     loc_pattern: Loc<Pattern>,
     opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
 }
@@ -3160,15 +3165,17 @@ fn to_pending_value_def<'a>(
             // We do this even if params weren't provided so that solve can report if they are missing
             let params_sym = scope.gen_unique_symbol();
             let params_region = module_import.params.map(|p| p.params.region).unwrap_or(region);
+            let params_var = var_store.fresh();
             let params =
                 PendingModuleImportParams {
                     symbol: params_sym,
+                    variable: params_var,
                     loc_pattern: Loc::at(params_region, Pattern::Identifier(params_sym)),
                     opt_provided: module_import.params.map(|p| p.params.value),
                 };
-            let provided_params_sym = if module_import.params.is_some() {
+            let provided_params = if module_import.params.is_some() {
                 // Only add params to scope if they are provided
-                Some(params_sym)
+                Some((params_var, params_sym))
             } else {
                 None
             };
@@ -3176,7 +3183,7 @@ fn to_pending_value_def<'a>(
             if let Err(existing_import) =
                 scope
                     .modules
-                    .insert(name_with_alias.clone(), module_id, provided_params_sym, region)
+                    .insert(name_with_alias.clone(), module_id, provided_params, region)
             {
                 env.problems.push(Problem::ImportNameConflict {
                     name: name_with_alias,

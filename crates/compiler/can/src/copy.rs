@@ -290,12 +290,14 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         Var(sym, var) => Var(*sym, sub!(*var)),
         ParamsVar {
             symbol,
-            params,
             var,
+            params_symbol,
+            params_var,
         } => ParamsVar {
             symbol: *symbol,
-            params: *params,
             var: sub!(*var),
+            params_symbol: *params_symbol,
+            params_var: sub!(*params_var),
         },
         ImportParams(module_id, region, opt_provided) => ImportParams(
             *module_id,
