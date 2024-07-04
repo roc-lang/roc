@@ -411,6 +411,10 @@ pub fn canonicalize_module_defs<'a>(
 
             let loc_pattern = Loc::at(pattern.region, can_pattern);
 
+            for (symbol, _) in BindingsFromPattern::new(&loc_pattern) {
+                env.top_level_symbols.insert(symbol);
+            }
+
             (
                 var_store.fresh(),
                 AnnotatedMark::new(var_store),
