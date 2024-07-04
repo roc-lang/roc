@@ -1,11 +1,11 @@
 use crate::native_path::NativePath;
-use core::{ffi::CStr, fmt, mem::MaybeUninit};
+use core::{fmt, mem::MaybeUninit};
 
 #[cfg(windows)]
-use widestring::U16CString;
+use widestring::U16CStr;
 
 #[cfg(unix)]
-use core::ffi::{c_char, c_int};
+use core::ffi::{c_char, c_int, CStr};
 
 #[cfg(unix)]
 pub struct File {
@@ -96,6 +96,14 @@ pub enum FileIoErr {
     #[cfg(windows)]
     /// ERROR_ACCESS_DENIED: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
     AccessDenied = 5,
+
+    #[cfg(unix)]
+    /// EEXIST: https://www.man7.org/linux/man-pages/man3/errno.3.html
+    AlreadyExists = 17,
+
+    #[cfg(windows)]
+    /// ERROR_FILE_EXISTS: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+    AlreadyExists = 80,
 }
 
 impl fmt::Debug for FileIoErr {
@@ -106,6 +114,7 @@ impl fmt::Debug for FileIoErr {
             FileIoErr::AccessDenied => write!(f, "AccessDenied ({})", *self as i32),
             #[cfg(windows)]
             FileIoErr::AccessDenied => write!(f, "AccessDenied ({})", *self as i32),
+            FileIoErr::AlreadyExists => write!(f, "AlreadyExists ({})", *self as i32),
         }
     }
 }
@@ -126,16 +135,16 @@ impl FileIoErr {
             fn __errno_location() -> *mut FileIoErr;
         }
 
-        unsafe { errno = *__errno_location() }
+        unsafe { *__errno_location() }
     }
 
     #[cfg(windows)]
     fn most_recent() -> FileIoErr {
         extern "system" {
-            fn GetLastError() -> u32;
+            fn GetLastError() -> FileIoErr;
         }
 
-        unsafe { FileIoErr(GetLastError()) }
+        unsafe { GetLastError() }
     }
 }
 
@@ -182,9 +191,13 @@ impl File {
 
 #[cfg(windows)]
 impl File {
+    const GENERIC_READ: u32 = 0x80000000;
     const GENERIC_WRITE: u32 = 0x40000000;
+    const FILE_SHARE_READ: u32 = 1;
+    const FILE_SHARE_WRITE: u32 = 2;
+    const CREATE_NEW: u32 = 1;
     const CREATE_ALWAYS: u32 = 2;
-    const FILE_SHARE_WRITE: u32 = 0x00000002;
+    const OPEN_EXISTING: u32 = 3;
 
     pub fn open(path: &NativePath) -> Result<Self, FileIoErr> {
         let handle = unsafe {
@@ -202,7 +215,7 @@ impl File {
         if handle != -1 {
             Ok(File { handle })
         } else {
-            Err(FileIoErr::errno())
+            Err(FileIoErr::most_recent())
         }
     }
 
@@ -222,7 +235,7 @@ impl File {
         if handle != -1 {
             Ok(File { handle })
         } else {
-            Err(FileIoErr::errno())
+            Err(FileIoErr::most_recent())
         }
     }
 }
@@ -451,7 +464,7 @@ mod tests {
     use core::ffi::CStr;
 
     #[cfg(windows)]
-    use widestring::U16CString;
+    use widestring::U16CStr;
 
     #[cfg(unix)]
     fn str_to_cstr(s: &str) -> &CStr {
@@ -554,6 +567,32 @@ mod tests {
             Ok(DATA),
             answer.map(|mut_slice| &*mut_slice),
             "Data read from the file does not match data written to the file"
+        );
+    }
+
+    #[test]
+    fn create_file_that_already_exists() {
+        let path = mock_path("roc_test_already_exists\0");
+
+        // Create the file for the first time
+        let file_result = File::create(path);
+        assert!(
+            file_result.is_ok(),
+            "Failed to create the file: roc_test_already_exists"
+        );
+
+        // Attempt to create the same file again
+        let file_result = File::create(path);
+        assert_eq!(
+            file_result.map(|_| ()),
+            Err(FileIoErr::AlreadyExists),
+            "File should already exist: roc_test_already_exists"
+        );
+
+        // Remove the file now that we're done with it
+        assert!(
+            File::remove(path),
+            "Failed to remove the file: roc_test_already_exists"
         );
     }
 }

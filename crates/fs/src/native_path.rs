@@ -34,8 +34,8 @@ impl<'a> From<&'a CStr> for &'a NativePath {
 
 #[cfg(windows)]
 impl<'a> From<&'a U16CStr> for &'a NativePath {
-    fn from(inner: &'a U16CStr) -> Self {
+    fn from(u16_c_str: &'a U16CStr) -> Self {
         // Safety: Self is repr(transparent)
-        unsafe { mem::transmute(c_str) }
+        unsafe { mem::transmute(u16_c_str) }
     }
 }
