@@ -81,7 +81,7 @@ impl Drop for File {
 
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct FileIoErr(i32);
+pub struct FileIoErr(#[cfg(unix)] i32, #[cfg(windows)] u32);
 
 impl fmt::Debug for FileIoErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -90,8 +90,37 @@ impl fmt::Debug for FileIoErr {
 }
 
 impl FileIoErr {
-    // https://docs.rs/libc/latest/libc/constant.ENOENT.html
+    // "File not found" is the same code (namely, 2) on both UNIX and Windows:
+    // ENOENT on UNIX: https://docs.rs/libc/latest/libc/constant.ENOENT.html
+    // ERROR_FILE_NOT_FOUND on Windows:  // https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
     pub const NOT_FOUND: Self = Self(2);
+
+    #[cfg(target_os = "macos")]
+    fn most_recent() -> FileIoErr {
+        extern "C" {
+            fn __error() -> *mut FileIoErr;
+        }
+
+        unsafe { *__error() }
+    }
+
+    #[cfg(all(target_family = "unix", not(target_os = "macos")))]
+    fn most_recent() -> FileIoErr {
+        extern "C" {
+            fn __errno_location() -> *mut FileIoErr;
+        }
+
+        unsafe { errno = *__errno_location() }
+    }
+
+    #[cfg(windows)]
+    fn most_recent() -> FileIoErr {
+        extern "system" {
+            fn GetLastError() -> u32;
+        }
+
+        unsafe { FileIoErr(GetLastError()) }
+    }
 }
 
 //// OPEN FILE ////
@@ -108,35 +137,17 @@ impl File {
     #[cfg(not(target_os = "macos"))]
     const O_CREAT: c_int = 64;
 
-    #[cfg(target_os = "macos")]
-    fn errno() -> FileIoErr {
-        extern "C" {
-            fn __error() -> *mut FileIoErr;
-        }
-
-        unsafe { *__error() }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn errno() -> FileIoErr {
-        extern "C" {
-            fn __errno_location() -> *mut FileIoErr;
-        }
-
-        unsafe { errno = *__errno_location() }
-    }
-
-    pub fn open(path: &NativePath) -> Option<Self> {
+    pub fn open(path: &NativePath) -> Result<Self, FileIoErr> {
         let fd = unsafe { open(path.inner.as_ptr(), Self::O_RDWR) };
 
         if fd != -1 {
-            Some(File { fd })
+            Ok(File { fd })
         } else {
-            None
+            Err(FileIoErr::most_recent())
         }
     }
 
-    pub fn create(path: &NativePath) -> Option<Self> {
+    pub fn create(path: &NativePath) -> Result<Self, FileIoErr> {
         let fd = unsafe {
             open(
                 path.inner.as_ptr(),
@@ -146,9 +157,9 @@ impl File {
         };
 
         if fd != -1 {
-            Some(File { fd })
+            Ok(File { fd })
         } else {
-            None
+            Err(FileIoErr::most_recent())
         }
     }
 }
@@ -159,7 +170,7 @@ impl File {
     const CREATE_ALWAYS: u32 = 2;
     const FILE_SHARE_WRITE: u32 = 0x00000002;
 
-    pub fn open(path: &NativePath) -> Option<Self> {
+    pub fn open(path: &NativePath) -> Result<Self, FileIoErr> {
         let handle = unsafe {
             CreateFileW(
                 path.inner.as_ptr(),
@@ -173,13 +184,13 @@ impl File {
         };
 
         if handle != -1 {
-            Some(File { handle })
+            Ok(File { handle })
         } else {
-            None
+            Err(FileIoErr::errno())
         }
     }
 
-    pub fn create(path: &NativePath) -> Option<Self> {
+    pub fn create(path: &NativePath) -> Result<Self, FileIoErr> {
         let handle = unsafe {
             CreateFileW(
                 path.inner.as_ptr(),
@@ -193,9 +204,9 @@ impl File {
         };
 
         if handle != -1 {
-            Some(File { handle })
+            Ok(File { handle })
         } else {
-            None
+            Err(FileIoErr::errno())
         }
     }
 }
@@ -224,7 +235,7 @@ impl File {
 impl File {
     /// Create a tempfile, open it as a File, pass that File and its generated path
     /// to the given function, and then delete it after the function returns.
-    pub fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T {
+    pub fn with_tempfile<T>(run: impl FnOnce(Result<Self, FileIoErr>) -> T) -> T {
         const TEMPLATE: &[u8] = b"/tmp/roc_tempfile_XXXXXX\0";
 
         let mut template = [0; TEMPLATE.len()];
@@ -243,18 +254,18 @@ impl File {
 
             // Since we pass an owned File, it will get closed automatically once dropped.
             // This in turn will result in the file getting deleted, since we already unlinked it.
-            run(Some(File { fd }))
+            run(Ok(File { fd }))
         } else {
             // Here we assume that since mkstemp errored out, the file was not created
             // and we shouldn't attempt to unlink it.
-            run(None)
+            run(Err(FileIoErr::most_recent()))
         }
     }
 
     #[cfg(windows)]
     /// Create a tempfile, open it as a File, pass that File and its generated path
     /// to the given function, and then delete it after the function returns.
-    pub fn with_tempfile<T>(run: impl FnOnce(Option<Self>) -> T) -> T {
+    pub fn with_tempfile<T>(run: impl FnOnce(Result<Self, FileIoErr>) -> T) -> T {
         let mut temp_path_buf = [0u16; 261];
         let temp_path_len =
             unsafe { GetTempPathW(temp_path_buf.len() as u32, temp_path_buf.as_mut_ptr()) };
@@ -327,18 +338,28 @@ impl File {
 
 impl File {
     #[cfg(unix)]
-    pub fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, FileIoErr> {
+    pub fn read_into<'buf>(
+        &mut self,
+        buf: &'buf mut [MaybeUninit<u8>],
+    ) -> Result<&'buf mut [u8], FileIoErr> {
         let bytes_read = unsafe { read(self.fd, buf.as_mut_ptr(), buf.len()) };
 
         if bytes_read >= 0 {
-            Ok(bytes_read as usize)
+            // Return the subset of the buf that we actually initialized.
+            let buf_ptr = buf.as_mut_ptr();
+            let len = bytes_read as usize;
+
+            Ok(unsafe { core::slice::from_raw_parts_mut(buf_ptr.cast(), len) })
         } else {
-            Err(Self::errno())
+            Err(FileIoErr::most_recent())
         }
     }
 
     #[cfg(windows)]
-    pub fn read_into(&mut self, buf: &mut [MaybeUninit<u8>]) -> Result<usize, FileIoErr> {
+    pub fn read_into<'buf>(
+        &mut self,
+        buf: &'buf mut [MaybeUninit<u8>],
+    ) -> Result<&'buf mut [u8], FileIoErr> {
         let mut bytes_read: u32 = 0;
 
         let result = unsafe {
@@ -352,9 +373,12 @@ impl File {
         };
 
         if result >= 0 {
-            Ok(bytes_read as usize)
+            let buf_ptr = buf.as_mut_ptr();
+            let len = bytes_read as usize;
+
+            Ok(unsafe { core::slice::from_raw_parts_mut(buf_ptr.cast(), len) })
         } else {
-            Err(Self::errno())
+            Err(FileIoErr::most_recent())
         }
     }
 }
@@ -369,7 +393,7 @@ impl File {
         if bytes_written >= 0 {
             Ok(bytes_written as usize)
         } else {
-            Err(Self::errno())
+            Err(FileIoErr::most_recent())
         }
     }
 
@@ -390,7 +414,7 @@ impl File {
         if result != 0 {
             Ok(bytes_written as usize)
         } else {
-            Err(Self::errno())
+            Err(FileIoErr::most_recent())
         }
     }
 }
@@ -399,7 +423,7 @@ impl File {
 mod tests {
     use super::{File, FileIoErr};
     use crate::native_path::NativePath;
-    use core::mem::MaybeUninit;
+    use core::mem::{self, MaybeUninit};
 
     #[cfg(unix)]
     use core::ffi::CStr;
@@ -430,11 +454,12 @@ mod tests {
     }
 
     #[test]
-    fn open_file_failed() {
-        let path = mock_path("test_file_that_should_not_exist\0");
-        let file = File::open(&path);
-        assert!(
-            file.is_none(),
+    fn file_not_found() {
+        let file_result = File::open(mock_path("test_file_that_should_not_exist\0"));
+
+        assert_eq!(
+            file_result.map(|_| ()),
+            Err(FileIoErr::NOT_FOUND),
             "File should not exist: test_file_that_should_not_exist"
         );
     }
@@ -445,33 +470,25 @@ mod tests {
         let mut file = File::create(&path).unwrap();
 
         // Write some data to the file
-        let write_data = [42u8; 10];
-        let write_result = file.write(&write_data);
-        assert!(
-            write_result.is_ok(),
-            "Failed to write data to the file: roc_test_read_file"
-        );
+        let write_data: &[u8] = &[42u8; 10];
+        let write_result = file.write(write_data);
         assert_eq!(
             write_result,
             Ok(write_data.len()),
-            "Only wrote some of the bytes requested, not all of them."
+            "Failed to write all data to the file: roc_test_read_file"
         );
 
         // Close the file by dropping the file descriptor
         drop(file);
 
         // Reopen the file
-        let mut file = File::open(&path).unwrap();
-        let mut buffer = [MaybeUninit::uninit(); 10];
-        let bytes_read = file.read_into(&mut buffer);
-        assert!(
-            bytes_read.is_ok(),
-            "Failed to read data from the file: roc_test_read_file"
-        );
+        let mut file = File::open(path).unwrap();
+        let mut input_buf = [MaybeUninit::uninit(); 10];
+        let result = file.read_into(&mut input_buf);
         assert_eq!(
-            bytes_read,
-            Ok(write_data.len()),
-            "Only read some of the bytes that were originally written."
+            result.map(|slice| &*slice),
+            Ok(write_data),
+            "Failed to read all the data from the file: roc_test_read_file"
         );
 
         // Close the file by dropping the file descriptor
@@ -482,58 +499,46 @@ mod tests {
         assert!(result, "Failed to remove the file: roc_test_read_file");
 
         // Verify that the file no longer exists
-        let file_exists = File::open(&path).is_none();
-        assert!(
-            file_exists,
-            "The file should not exist after removal: roc_test_read_file"
+        let file_result = File::open(path);
+
+        assert_eq!(
+            file_result.map(|_| ()),
+            Err(FileIoErr::NOT_FOUND),
+            "File should not exist after removal: roc_test_read_file"
         );
     }
 
     #[test]
-    fn write_to_tempfile() {
-        File::with_tempfile(|opt_file| {
-            let mut file = opt_file.unwrap();
+    fn tempfile() {
+        const DATA: &[u8] = &[42; 10];
+        let answer = File::with_tempfile(|file_result| {
+            let mut file = file_result.unwrap();
 
-            // Write some data to the file
-            let mut buffer = [MaybeUninit::new(42); 10];
-            let bytes_written = file.read_into(&mut buffer);
-
-            assert!(
-                bytes_written.is_ok(),
-                "Failed to write data to the temporary file"
+            // Write some data to the tempfile
+            assert_eq!(
+                Ok(DATA.len()),
+                file.write(DATA),
+                "Failed to write all the bytes to the tempfile"
             );
+
+            // Read the data back from the tempfile
+            let mut buf = [MaybeUninit::uninit()];
+
+            assert_eq!(
+                Ok(DATA),
+                file.read_into(&mut buf).map(|slice| &*slice),
+                "Failed to read all the bytes that were originally written."
+            );
+
+            buf
         });
-    }
 
-    #[test]
-    fn with_tempfile_execution() {
-        let result = File::with_tempfile(|file| {
-            if let Some(mut f) = file {
-                let mut buffer = [MaybeUninit::uninit(); 10];
-                f.read_into(&mut buffer).is_ok()
-            } else {
-                false
-            }
-        });
-        assert!(result);
-    }
-
-    #[test]
-    fn file_not_found_error() {
-        let path = mock_path("non_existent_file\0");
-        let file = File::open(&path);
-        assert!(file.is_none(), "File should not exist: non_existent_file");
-
-        #[cfg(unix)]
-        {
-            let error = File::errno();
-            assert_eq!(error, FileIoErr::NOT_FOUND, "Expected NOT_FOUND error");
-        }
-
-        #[cfg(windows)]
-        {
-            let error = unsafe { FileIoErr(winapi::um::errhandlingapi::GetLastError() as i32) };
-            assert_eq!(error, FileIoErr::NOT_FOUND, "Expected NOT_FOUND error");
-        }
+        // The data read should match the data written
+        assert_eq!(
+            DATA,
+            // Assume it's initialized, since we already verified that it was Ok and the correct length.
+            unsafe { mem::transmute::<&[MaybeUninit<u8>], &[u8]>(&answer) },
+            "Data read from the file does not match data written to the file"
+        );
     }
 }
