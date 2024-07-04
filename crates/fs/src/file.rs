@@ -397,7 +397,7 @@ impl File {
 
 #[cfg(test)]
 mod tests {
-    use super::File;
+    use super::{File, FileIoErr};
     use crate::native_path::NativePath;
     use core::mem::MaybeUninit;
 
@@ -516,5 +516,24 @@ mod tests {
             }
         });
         assert!(result);
+    }
+
+    #[test]
+    fn file_not_found_error() {
+        let path = mock_path("non_existent_file\0");
+        let file = File::open(&path);
+        assert!(file.is_none(), "File should not exist: non_existent_file");
+
+        #[cfg(unix)]
+        {
+            let error = File::errno();
+            assert_eq!(error, FileIoErr::NOT_FOUND, "Expected NOT_FOUND error");
+        }
+
+        #[cfg(windows)]
+        {
+            let error = unsafe { FileIoErr(winapi::um::errhandlingapi::GetLastError() as i32) };
+            assert_eq!(error, FileIoErr::NOT_FOUND, "Expected NOT_FOUND error");
+        }
     }
 }
