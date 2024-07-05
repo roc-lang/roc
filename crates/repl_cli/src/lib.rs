@@ -92,8 +92,8 @@ pub fn main() -> i32 {
                 return 0;
             }
             Err(ReadlineError::Interrupted) => {
+                // Ctrl-C was pressed
                 eprintln!("CTRL-C");
-                return 1;
             }
             Err(err) => {
                 eprintln!("REPL error: {err:?}");
