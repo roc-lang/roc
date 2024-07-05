@@ -1677,6 +1677,10 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
+
+    /// Underscore pattern
+    /// Contains the name of underscore pattern (e.g. "a" is for "_a" in code)
+    /// Empty string is unnamed pattern ("" is for "_" in code)
     Underscore(&'a str),
     SingleQuote(&'a str),
 
