@@ -15,27 +15,13 @@ thread_local! {
     static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Provide an intermediate answer expression and pattern when unwrapping a
-/// (sub) expression
-///
-/// e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
-fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
-    // Use the thread-local counter
+/// Generates a unique identifier, useful for intermediate items during desugaring
+fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
         let count = counter.get();
         counter.set(count + 1);
 
-        let answer_ident = arena.alloc(format!("#!a{}", count));
-
-        (
-            Expr::Var {
-                module_name: "",
-                ident: answer_ident,
-            },
-            Pattern::Identifier {
-                ident: answer_ident.as_str(),
-            },
-        )
+        format!("#!a{}", count)
     })
 }
 
@@ -69,9 +55,23 @@ fn init_unwrapped_err<'a>(
             Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr))
         }
         None => {
-            let (answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
-            let sub_new = arena.alloc(Loc::at(unwrapped_expr.region, answer_var));
-            let sub_pat = arena.alloc(Loc::at(unwrapped_expr.region, answer_pat));
+            // Provide an intermediate answer expression and pattern when unwrapping a
+            // (sub) expression
+            // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
+            let answer_ident = arena.alloc(next_unique_suffixed_ident());
+            let sub_new = arena.alloc(Loc::at(
+                unwrapped_expr.region,
+                Expr::Var {
+                    module_name: "",
+                    ident: answer_ident,
+                },
+            ));
+            let sub_pat = arena.alloc(Loc::at(
+                unwrapped_expr.region,
+                Pattern::Identifier {
+                    ident: answer_ident,
+                },
+            ));
 
             Err(EUnwrapped::UnwrappedSubExpr {
                 sub_arg: unwrapped_expr,
