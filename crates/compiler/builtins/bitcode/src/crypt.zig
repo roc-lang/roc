@@ -11,7 +11,9 @@ const Sha256 = extern struct{
     }
     };
 
-pub fn emptySha256() callconv(.C) Sha256{
+const EmptyStruct = extern struct{};
+
+pub fn emptySha256(_: EmptyStruct) callconv(.C) Sha256{
     const allocation = utils.allocateWithRefcount(@sizeOf(sha2.Sha256), @alignOf(sha2.Sha256));
     const ptr:*sha2.Sha256 = @alignCast(@ptrCast(allocation));
     ptr.* = sha2.Sha256.init(.{});
@@ -19,7 +21,7 @@ pub fn emptySha256() callconv(.C) Sha256{
 }
 
 pub fn addBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256{
-    var out = emptySha256();
+    var out = emptySha256(undefined);
     out.pointer().* = sha.pointer().*;
     if(data.bytes)|bytes|{
         const byteSlice : []u8 = bytes[0..data.length];
