@@ -167,6 +167,10 @@ pub(crate) fn infer_borrow_signatures<'a>(
                 // NOTE: this does not directly include updates to join point signatures. The
                 // assumption is that a relevant change in join point signature is immediately
                 // (i.e. no fixpoint is required) reflected in the proc signature.
+                //
+                // TODO: this is a load-bearing assert! There must be UB somewhere, removing this
+                // assert causes the code to run into an infinite loop that terminates when the
+                // memory on the system is exhausted.
                 assert_eq!(
                     state.modified,
                     borrow_signatures
