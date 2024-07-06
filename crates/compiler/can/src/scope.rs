@@ -1,8 +1,8 @@
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName};
-use roc_module::symbol::{IdentId, IdentIds, LookedupSymbol, ModuleId, ScopeModules, Symbol};
-use roc_problem::can::RuntimeError;
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_problem::can::{RuntimeError, ScopeModuleSource};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
@@ -653,6 +653,134 @@ impl ScopedIdentIds {
         self.regions.push(Region::zero());
 
         id
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopeModules {
+    modules: VecMap<ModuleName, ModuleId>,
+    sources: Vec<ScopeModuleSource>,
+    params: Vec<Option<Symbol>>,
+}
+
+impl ScopeModules {
+    pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
+        let builtins = ModuleIds::default();
+        let builtins_iter = builtins.iter();
+        let count = builtins_iter.len();
+
+        let mut modules = VecMap::with_capacity(count + 1);
+        let mut sources = vec![ScopeModuleSource::Builtin; count];
+        let mut params = vec![None; count];
+
+        for (module_id, module_name) in builtins_iter {
+            modules.insert(module_name.clone(), module_id);
+        }
+
+        if !home_id.is_builtin() {
+            modules.insert(home_name, home_id);
+            sources.push(ScopeModuleSource::Current);
+            params.push(None);
+        }
+
+        Self {
+            modules,
+            sources,
+            params,
+        }
+    }
+
+    pub fn lookup(&self, module_name: &ModuleName) -> Option<LookedupModule> {
+        self.modules
+            .get_with_index(module_name)
+            .map(|(index, module_id)| LookedupModule {
+                id: *module_id,
+                params: self.params.get(index).copied().unwrap(),
+            })
+    }
+
+    pub fn lookup_by_id(&self, module_id: &ModuleId) -> Option<LookedupModule> {
+        self.modules
+            .get_index_by_value(module_id)
+            .map(|index| LookedupModule {
+                id: *module_id,
+                params: self.params.get(index).copied().unwrap(),
+            })
+    }
+
+    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
+        self.modules.keys()
+    }
+
+    pub fn insert(
+        &mut self,
+        module_name: ModuleName,
+        module_id: ModuleId,
+        params_symbol: Option<Symbol>,
+        region: Region,
+    ) -> Result<(), ScopeModuleSource> {
+        if let Some((index, existing_module_id)) = self.modules.get_with_index(&module_name) {
+            if *existing_module_id == module_id {
+                return Ok(());
+            }
+
+            return Err(*self.sources.get(index).unwrap());
+        }
+
+        self.modules.insert(module_name, module_id);
+        self.sources.push(ScopeModuleSource::Import(region));
+        self.params.push(params_symbol);
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.modules.len(), self.sources.len());
+        debug_assert_eq!(self.modules.len(), self.params.len());
+        self.modules.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
+        debug_assert_eq!(self.modules.is_empty(), self.params.is_empty());
+        self.modules.is_empty()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.modules.truncate(len);
+        self.sources.truncate(len);
+        self.params.truncate(len);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LookedupSymbol {
+    pub symbol: Symbol,
+    pub params: Option<Symbol>,
+}
+
+impl LookedupSymbol {
+    pub fn new(symbol: Symbol, params: Option<Symbol>) -> Self {
+        Self { symbol, params }
+    }
+
+    pub fn no_params(symbol: Symbol) -> Self {
+        Self::new(symbol, None)
+    }
+}
+
+pub struct LookedupModule {
+    pub id: ModuleId,
+    pub params: Option<Symbol>,
+}
+
+impl LookedupModule {
+    pub fn into_symbol(&self, symbol: Symbol) -> LookedupSymbol {
+        debug_assert_eq!(symbol.module_id(), self.id);
+
+        LookedupSymbol {
+            symbol,
+            params: self.params,
+        }
     }
 }
 

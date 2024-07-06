@@ -10,7 +10,7 @@ use crate::num::{
 use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::Scope;
+use crate::scope::{LookedupSymbol, Scope};
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
@@ -18,7 +18,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{LookedupSymbol, ModuleId, Symbol};
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;

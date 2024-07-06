@@ -1,9 +1,9 @@
 use crate::env::Env;
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::{PendingAbilitiesInScope, Scope};
+use crate::scope::{LookedupSymbol, PendingAbilitiesInScope, Scope};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::symbol::{LookedupSymbol, Symbol};
+use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};

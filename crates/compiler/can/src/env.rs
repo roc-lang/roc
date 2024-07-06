@@ -1,14 +1,11 @@
 use std::path::Path;
 
 use crate::procedure::References;
-use crate::scope::Scope;
+use crate::scope::{LookedupModule, LookedupSymbol, Scope};
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, ModuleName};
-use roc_module::symbol::{
-    IdentIdsByModule, LookedupModule, LookedupSymbol, ModuleId, PQModuleName, PackageModuleIds,
-    Symbol,
-};
+use roc_module::symbol::{IdentIdsByModule, ModuleId, PQModuleName, PackageModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 

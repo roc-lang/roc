@@ -1,10 +1,10 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{ScopeModuleSource, DERIVABLE_ABILITIES};
+use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
-    ShadowKind,
+    ScopeModuleSource, ShadowKind,
 };
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
