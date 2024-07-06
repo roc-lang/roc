@@ -76,7 +76,7 @@ impl Scope {
         }
     }
 
-    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<LookedupSymbol, RuntimeError> {
+    pub fn lookup(&self, ident: &Ident, region: Region) -> Result<SymbolLookup, RuntimeError> {
         self.lookup_str(ident.as_str(), region)
     }
 
@@ -91,7 +91,7 @@ impl Scope {
             .push(("Set".into(), Symbol::SET_SET, Region::zero()));
     }
 
-    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<LookedupSymbol, RuntimeError> {
+    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<SymbolLookup, RuntimeError> {
         use ContainsIdent::*;
 
         match self.scope_contains_ident(ident) {
@@ -205,14 +205,14 @@ impl Scope {
         }
     }
 
-    fn has_imported_symbol(&self, ident: &str) -> Option<(LookedupSymbol, Region)> {
+    fn has_imported_symbol(&self, ident: &str) -> Option<(SymbolLookup, Region)> {
         self.imported_symbols
             .iter()
             .find_map(|(import, symbol, original_region)| {
                 if ident == import.as_str() {
                     match self.modules.lookup_by_id(&symbol.module_id()) {
                         Some(module) => Some((module.into_symbol(*symbol), *original_region)),
-                        None => Some((LookedupSymbol::no_params(*symbol), *original_region)),
+                        None => Some((SymbolLookup::no_params(*symbol), *original_region)),
                     }
                 } else {
                     None
@@ -394,9 +394,13 @@ impl Scope {
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
         match self.scope_contains_ident(ident.as_str()) {
-            ContainsIdent::InScope(LookedupSymbol { symbol, params: _ }, region) => {
-                Err((symbol, region))
-            }
+            ContainsIdent::InScope(
+                SymbolLookup {
+                    symbol,
+                    module_params: _,
+                },
+                region,
+            ) => Err((symbol, region)),
             ContainsIdent::NotPresent | ContainsIdent::NotInScope(_) => {
                 self.imported_symbols.push((ident, symbol, region));
                 Ok(())
@@ -541,7 +545,7 @@ pub fn create_alias(
 
 #[derive(Debug)]
 enum ContainsIdent {
-    InScope(LookedupSymbol, Region),
+    InScope(SymbolLookup, Region),
     NotInScope(IdentId),
     NotPresent,
 }
@@ -582,7 +586,7 @@ impl ScopedIdentIds {
             let index = ident_id.index();
             if self.in_scope[index] {
                 return InScope(
-                    LookedupSymbol::no_params(Symbol::new(self.home, ident_id)),
+                    SymbolLookup::no_params(Symbol::new(self.home, ident_id)),
                     self.regions[index],
                 );
             } else {
@@ -699,21 +703,21 @@ impl ScopeModules {
         }
     }
 
-    pub fn lookup(&self, module_name: &ModuleName) -> Option<LookedupModule> {
+    pub fn lookup(&self, module_name: &ModuleName) -> Option<ModuleLookup> {
         self.names
             .iter()
             .position(|name| name == module_name)
-            .map(|index| LookedupModule {
+            .map(|index| ModuleLookup {
                 id: self.ids[index],
                 params: self.params[index],
             })
     }
 
-    pub fn lookup_by_id(&self, module_id: &ModuleId) -> Option<LookedupModule> {
+    pub fn lookup_by_id(&self, module_id: &ModuleId) -> Option<ModuleLookup> {
         self.ids
             .iter()
             .position(|id| id == module_id)
-            .map(|index| LookedupModule {
+            .map(|index| ModuleLookup {
                 id: self.ids[index],
                 params: self.params[index],
             })
@@ -765,14 +769,17 @@ impl ScopeModules {
 }
 
 #[derive(Debug, Clone)]
-pub struct LookedupSymbol {
+pub struct SymbolLookup {
     pub symbol: Symbol,
-    pub params: Option<Symbol>,
+    pub module_params: Option<Symbol>,
 }
 
-impl LookedupSymbol {
+impl SymbolLookup {
     pub fn new(symbol: Symbol, params: Option<Symbol>) -> Self {
-        Self { symbol, params }
+        Self {
+            symbol,
+            module_params: params,
+        }
     }
 
     pub fn no_params(symbol: Symbol) -> Self {
@@ -780,18 +787,18 @@ impl LookedupSymbol {
     }
 }
 
-pub struct LookedupModule {
+pub struct ModuleLookup {
     pub id: ModuleId,
     pub params: Option<Symbol>,
 }
 
-impl LookedupModule {
-    pub fn into_symbol(&self, symbol: Symbol) -> LookedupSymbol {
+impl ModuleLookup {
+    pub fn into_symbol(&self, symbol: Symbol) -> SymbolLookup {
         debug_assert_eq!(symbol.module_id(), self.id);
 
-        LookedupSymbol {
+        SymbolLookup {
             symbol,
-            params: self.params,
+            module_params: self.params,
         }
     }
 }

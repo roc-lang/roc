@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::procedure::References;
-use crate::scope::{LookedupModule, LookedupSymbol, Scope};
+use crate::scope::{ModuleLookup, Scope, SymbolLookup};
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, ModuleName};
@@ -78,7 +78,7 @@ impl<'a> Env<'a> {
         module_name_str: &str,
         ident: &str,
         region: Region,
-    ) -> Result<LookedupSymbol, RuntimeError> {
+    ) -> Result<SymbolLookup, RuntimeError> {
         debug_assert!(
             !module_name_str.is_empty(),
             "Called env.qualified_lookup with an unqualified ident: {ident:?}"
@@ -112,7 +112,7 @@ impl<'a> Env<'a> {
         module_id: ModuleId,
         ident: &str,
         region: Region,
-    ) -> Result<LookedupSymbol, RuntimeError> {
+    ) -> Result<SymbolLookup, RuntimeError> {
         if let Some(module) = scope.modules.lookup_by_id(&module_id) {
             self.qualified_lookup_help(scope, module, ident, region)
         } else {
@@ -124,10 +124,10 @@ impl<'a> Env<'a> {
     fn qualified_lookup_help(
         &mut self,
         scope: &Scope,
-        module: LookedupModule,
+        module: ModuleLookup,
         ident: &str,
         region: Region,
-    ) -> Result<LookedupSymbol, RuntimeError> {
+    ) -> Result<SymbolLookup, RuntimeError> {
         let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
 
         // You can do qualified lookups on your own module, e.g.
@@ -143,7 +143,7 @@ impl<'a> Env<'a> {
                         self.qualified_value_lookups.insert(symbol);
                     }
 
-                    Ok(LookedupSymbol::no_params(symbol))
+                    Ok(SymbolLookup::no_params(symbol))
                 }
                 None => {
                     let error = RuntimeError::LookupNotInScope {

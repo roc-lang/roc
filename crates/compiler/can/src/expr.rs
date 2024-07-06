@@ -10,7 +10,7 @@ use crate::num::{
 use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::{LookedupSymbol, Scope};
+use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
@@ -1934,7 +1934,13 @@ fn canonicalize_var_lookup(
     (can_expr, output)
 }
 
-fn lookup_to_expr(LookedupSymbol { symbol, params }: LookedupSymbol, var: Variable) -> Expr {
+fn lookup_to_expr(
+    SymbolLookup {
+        symbol,
+        module_params: params,
+    }: SymbolLookup,
+    var: Variable,
+) -> Expr {
     if let Some(params) = params {
         Expr::ParamsVar {
             symbol,

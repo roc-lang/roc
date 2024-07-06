@@ -507,7 +507,7 @@ fn canonicalize_alias<'a>(
 #[macro_export]
 macro_rules! params_in_abilities_unimplemented {
     ($lookup:expr) => {
-        match $lookup.params {
+        match $lookup.module_params {
             None => $lookup.symbol,
             Some(_) => unimplemented!("params in abilities"),
         }
