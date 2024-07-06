@@ -327,6 +327,8 @@ pub(crate) fn canonicalize_annotation(
         AnnotationFor::Opaque => CanPolarity::InOpaque,
     };
 
+    //dbg!("111");
+
     let typ = can_annotation_help(
         env,
         pol,
@@ -338,6 +340,8 @@ pub(crate) fn canonicalize_annotation(
         &mut aliases,
         &mut references,
     );
+
+    //dbg!(&typ);
 
     Annotation {
         typ,
@@ -955,6 +959,10 @@ fn can_annotation_help(
             }
         }
         TagUnion { tags, ext, .. } => {
+
+            //dbg!(tags);
+            //dbg!(ext);
+
             let (ext_type, is_implicit_openness) = can_extension_type(
                 env,
                 pol,
@@ -967,8 +975,12 @@ fn can_annotation_help(
                 roc_problem::can::ExtensionTypeKind::TagUnion,
             );
 
+            //dbg!(&ext_type);
+            //dbg!(is_implicit_openness);
+
             if tags.is_empty() {
-                match ext {
+                //dbg!("emptyy");
+                /*match ext {
                     Some(_) => {
                         // just `a` does not mean the same as `[]`, so even
                         // if there are no fields, still make this a `TagUnion`,
@@ -980,7 +992,12 @@ fn can_annotation_help(
                     }
 
                     None => Type::EmptyTagUnion,
-                }
+                }*/
+
+                Type::TagUnion(
+                    Default::default(),
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             } else {
                 let mut tag_types = can_tags(
                     env,
@@ -1173,6 +1190,7 @@ fn can_extension_type(
                 local_aliases,
                 references,
             );
+
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
                     && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
