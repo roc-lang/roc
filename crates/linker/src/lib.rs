@@ -559,6 +559,7 @@ pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .unwrap_or_else(|e| internal_error!("failed to create or open file {path:?}: {e}"));
     out_file

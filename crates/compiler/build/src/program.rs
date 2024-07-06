@@ -22,7 +22,6 @@ use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
     path::{Path, PathBuf},
-    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -915,11 +914,6 @@ fn build_loaded_file<'a>(
     let problems = report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
-    enum HostRebuildTiming {
-        BeforeApp(u128),
-        ConcurrentWithApp(JoinHandle<u128>),
-    }
-
     let opt_rebuild_timing = if let Some(rebuild_thread) = rebuild_thread {
         if linking_strategy == LinkingStrategy::Additive {
             let rebuild_duration = rebuild_thread
@@ -930,9 +924,9 @@ fn build_loaded_file<'a>(
                 println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
             }
 
-            Some(HostRebuildTiming::BeforeApp(rebuild_duration))
+            None
         } else {
-            Some(HostRebuildTiming::ConcurrentWithApp(rebuild_thread))
+            Some(rebuild_thread)
         }
     } else {
         None
@@ -977,7 +971,7 @@ fn build_loaded_file<'a>(
         );
     }
 
-    if let Some(HostRebuildTiming::ConcurrentWithApp(thread)) = opt_rebuild_timing {
+    if let Some(thread) = opt_rebuild_timing {
         let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
 
         if emit_timings && !is_platform_prebuilt {
