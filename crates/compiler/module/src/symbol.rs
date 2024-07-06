@@ -1738,7 +1738,7 @@ define_builtins! {
     15 CRYPT: "Crypt" =>{
         0 CRYPT_SHA256: "Sha256" exposed_type=true
         1 CRYPT_EMPTY_STRUCT: "EmptyStruct" exposed_type=true
-        3 CRYPT_DIGEST256: "Digest256" exposed_type
+        3 CRYPT_DIGEST256: "Digest256" exposed_type=true
         4 CRYPT_EMPTY_SHA256: "emptySha256"
         5 CRYPT_ADD_BYTES: "addBytes"
         6 CRYPT_DIGEST: "digest"

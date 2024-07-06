@@ -1609,6 +1609,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
         ListIsUnique => RC::Rc,
         ListClone => RC::Rc,
+        CryptEmptySha256 | CryptAddBytes | CryptDigest => RC::NoRc,
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")
