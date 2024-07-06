@@ -658,8 +658,13 @@ impl ScopedIdentIds {
 
 #[derive(Debug, Clone)]
 pub struct ScopeModules {
-    modules: VecMap<ModuleName, ModuleId>,
+    /// The ids of all modules in scope
+    ids: Vec<ModuleId>,
+    /// The alias or original name of each module in scope
+    names: Vec<ModuleName>,
+    /// Why is this module in scope?
     sources: Vec<ScopeModuleSource>,
+    /// The params of a module if any
     params: Vec<Option<Symbol>>,
 }
 
@@ -669,47 +674,53 @@ impl ScopeModules {
         let builtins_iter = builtins.iter();
         let count = builtins_iter.len();
 
-        let mut modules = VecMap::with_capacity(count + 1);
+        let mut ids = Vec::with_capacity(count + 1);
+        let mut names = Vec::with_capacity(count + 1);
         let mut sources = vec![ScopeModuleSource::Builtin; count];
         let mut params = vec![None; count];
 
         for (module_id, module_name) in builtins_iter {
-            modules.insert(module_name.clone(), module_id);
+            ids.push(module_id);
+            names.push(module_name.clone());
         }
 
         if !home_id.is_builtin() {
-            modules.insert(home_name, home_id);
+            ids.push(home_id);
+            names.push(home_name);
             sources.push(ScopeModuleSource::Current);
             params.push(None);
         }
 
         Self {
-            modules,
+            ids,
+            names,
             sources,
             params,
         }
     }
 
     pub fn lookup(&self, module_name: &ModuleName) -> Option<LookedupModule> {
-        self.modules
-            .get_with_index(module_name)
-            .map(|(index, module_id)| LookedupModule {
-                id: *module_id,
-                params: self.params.get(index).copied().unwrap(),
+        self.names
+            .iter()
+            .position(|name| name == module_name)
+            .map(|index| LookedupModule {
+                id: self.ids[index],
+                params: self.params[index],
             })
     }
 
     pub fn lookup_by_id(&self, module_id: &ModuleId) -> Option<LookedupModule> {
-        self.modules
-            .get_index_by_value(module_id)
+        self.ids
+            .iter()
+            .position(|id| id == module_id)
             .map(|index| LookedupModule {
-                id: *module_id,
-                params: self.params.get(index).copied().unwrap(),
+                id: self.ids[index],
+                params: self.params[index],
             })
     }
 
     pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
-        self.modules.keys()
+        self.names.iter()
     }
 
     pub fn insert(
@@ -719,34 +730,35 @@ impl ScopeModules {
         params_symbol: Option<Symbol>,
         region: Region,
     ) -> Result<(), ScopeModuleSource> {
-        if let Some((index, existing_module_id)) = self.modules.get_with_index(&module_name) {
-            if *existing_module_id == module_id {
+        if let Some(index) = self.names.iter().position(|name| name == &module_name) {
+            if self.ids[index] == module_id {
                 return Ok(());
             }
 
-            return Err(*self.sources.get(index).unwrap());
+            return Err(self.sources[index]);
         }
 
-        self.modules.insert(module_name, module_id);
+        self.ids.push(module_id);
+        self.names.push(module_name);
         self.sources.push(ScopeModuleSource::Import(region));
         self.params.push(params_symbol);
         Ok(())
     }
 
     pub fn len(&self) -> usize {
-        debug_assert_eq!(self.modules.len(), self.sources.len());
-        debug_assert_eq!(self.modules.len(), self.params.len());
-        self.modules.len()
+        debug_assert_eq!(self.ids.len(), self.names.len());
+        debug_assert_eq!(self.ids.len(), self.sources.len());
+        debug_assert_eq!(self.ids.len(), self.params.len());
+        self.ids.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
-        debug_assert_eq!(self.modules.is_empty(), self.params.is_empty());
-        self.modules.is_empty()
+        self.ids.is_empty()
     }
 
     pub fn truncate(&mut self, len: usize) {
-        self.modules.truncate(len);
+        self.ids.truncate(len);
+        self.names.truncate(len);
         self.sources.truncate(len);
         self.params.truncate(len);
     }
