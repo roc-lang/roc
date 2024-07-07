@@ -940,9 +940,6 @@ fn refcount_str<'a>(
     ))
 }
 
-// TODO: This needs to be updated.
-// It probably can just generate a call to `list.incref/decref` from zig bitcode.
-// That said, not sure how to generate a pass along function pointers here.
 fn refcount_list<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -953,21 +950,34 @@ fn refcount_list<'a>(
 
     let ret_stmt = arena.alloc(rc_return_stmt(root, ident_ids, ctx));
 
-    let lowlevel = match ctx.op {
-        HelperOp::IncN | HelperOp::Inc => LowLevel::ListIncref,
-        HelperOp::DecRef(_) | HelperOp::Dec => LowLevel::ListDecref,
+    let list = Symbol::ARG_1;
+    let rc_list_expr = match ctx.op {
+        HelperOp::IncN | HelperOp::Inc => {
+            // TODO: refcount_args is totally wrong here.
+            // Should be list, amount, elements_refcounted
+            let rc_list_args = refcount_args(root, ctx, list);
+            Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::ListIncref,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: rc_list_args,
+            })
+        }
+        HelperOp::DecRef(_) | HelperOp::Dec => {
+            // TODO: refcount_args is totally wrong here.
+            // Should be list, alignment, element_width, elements_refcounted, element_def_fn
+            let rc_list_args = refcount_args(root, ctx, list);
+            Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::ListDecref,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: rc_list_args,
+            })
+        }
         _ => unreachable!(),
     };
-
-    let list = Symbol::ARG_1;
-    let rc_list_args = refcount_args(root, ctx, list);
-    let rc_list_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: lowlevel,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: rc_list_args,
-    });
     let rc_list_unit = root.create_symbol(ident_ids, "rc_list");
     Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt)
 }
