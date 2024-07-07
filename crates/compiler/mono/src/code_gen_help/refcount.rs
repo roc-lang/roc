@@ -196,14 +196,7 @@ pub fn refcount_generic<'a>(
             rc_return_stmt(root, ident_ids, ctx)
         }
         LayoutRepr::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
-        LayoutRepr::Builtin(Builtin::List(element_layout)) => refcount_list(
-            root,
-            ident_ids,
-            ctx,
-            layout_interner,
-            element_layout,
-            structure,
-        ),
+        LayoutRepr::Builtin(Builtin::List(_)) => refcount_list(root, ident_ids, ctx, structure),
         LayoutRepr::Struct(field_layouts) => refcount_struct(
             root,
             ident_ids,
@@ -951,98 +944,42 @@ fn refcount_list<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    element_layout: InLayout<'a>,
-    structure: Symbol,
+    _structure: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;
-    let layout_isize = root.layout_isize;
 
-    let rc_list_unit = root.create_symbol(ident_ids, "rc_list");
     let ret_stmt = arena.alloc(rc_return_stmt(root, ident_ids, ctx));
 
-    let is_refcounted = root.create_symbol(ident_ids, "is_refcounted");
-    let is_refcounted_expr =
-        Expr::Literal(Literal::Bool(layout_interner.is_refcounted(element_layout)));
-    let is_refcounted_stmt = |next| Stmt::Let(is_refcounted, is_refcounted_expr, LAYOUT_BOOL, next);
-
     let list = Symbol::ARG_1;
-    match ctx.op {
-        HelperOp::IncN => {
-            let amount = Symbol::ARG_2;
-            let rc_list_expr = Expr::Call(Call {
+    let rc_list_expr = match ctx.op {
+        HelperOp::IncN | HelperOp::Inc => {
+            // TODO: refcount_args is totally wrong here.
+            // Should be list, amount, elements_refcounted
+            let rc_list_args = refcount_args(root, ctx, list);
+            Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::ListIncref,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([list, amount, is_refcounted]),
-            });
-            is_refcounted_stmt(arena.alloc(
-                //
-                Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt),
-            ))
-        }
-        HelperOp::Inc => {
-            let one = root.create_symbol(ident_ids, "one");
-            let one_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
-            let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
-
-            let rc_list_expr = Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::ListIncref,
-                    update_mode: UpdateModeId::BACKEND_DUMMY,
-                },
-                arguments: root.arena.alloc([list, one, is_refcounted]),
-            });
-            one_stmt(arena.alloc(
-                //
-                is_refcounted_stmt(arena.alloc(
-                    //
-                    Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt),
-                )),
-            ))
+                arguments: rc_list_args,
+            })
         }
         HelperOp::DecRef(_) | HelperOp::Dec => {
+            // TODO: refcount_args is totally wrong here.
             // Should be list, alignment, element_width, elements_refcounted, element_def_fn
-            let (element_width, element_alignment) =
-                layout_interner.stack_size_and_alignment(element_layout);
-
-            let width = root.create_symbol(ident_ids, "width");
-            let width_expr = Expr::Literal(Literal::Int((element_width as u128).to_ne_bytes()));
-            let width_stmt = |next| Stmt::Let(width, width_expr, layout_isize, next);
-
-            let alignment = root.create_symbol(ident_ids, "alignment");
-            let alignment_expr =
-                Expr::Literal(Literal::Int((element_alignment as u128).to_ne_bytes()));
-            let alignment_stmt = |next| Stmt::Let(alignment, alignment_expr, LAYOUT_U32, next);
-
-            // let orig_op = ctx.op;
-            // ctx.op = HelperOp::IndirectDec;
-            // let dec_elem_fn =
-            //     root.find_or_create_proc(ident_ids, ctx, layout_interner, element_layout);
-            // ctx.op = orig_op;
-            // TODO: How do I load a proc symbol to a pointer???
-
-            let rc_list_expr = Expr::Call(Call {
+            let rc_list_args = refcount_args(root, ctx, list);
+            Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::ListDecref,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([list, alignment, width, is_refcounted]),
-            });
-            width_stmt(arena.alloc(
-                //
-                alignment_stmt(arena.alloc(
-                    //
-                    is_refcounted_stmt(arena.alloc(
-                        //
-                        Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt),
-                    )),
-                )),
-            ))
+                arguments: rc_list_args,
+            })
         }
         _ => unreachable!(),
-    }
+    };
+    let rc_list_unit = root.create_symbol(ident_ids, "rc_list");
+    Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt)
 }
 
 fn refcount_struct<'a>(
