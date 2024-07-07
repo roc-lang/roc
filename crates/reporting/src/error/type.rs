@@ -247,7 +247,7 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
-        UnexpectedImportParams(region, module_id) => {
+        UnexpectedModuleParams(region, module_id) => {
             let stack = [
                 alloc.reflow("This import specifies module params:"),
                 alloc.region(lines.convert_region(region), severity),
@@ -261,13 +261,13 @@ pub fn type_problem<'b>(
             ];
 
             Some(Report {
-                title: "UNEXPECTED PARAMS".to_string(),
+                title: "UNEXPECTED MODULE PARAMS".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
             })
         }
-        MissingImportParams(region, module_id, expected) => {
+        MissingModuleParams(region, module_id, expected) => {
             let stack = [
                 alloc.reflow("This import specifies no module params:"),
                 alloc.region(lines.convert_region(region), severity),
@@ -283,13 +283,13 @@ pub fn type_problem<'b>(
                     .indent(4),
             ];
             Some(Report {
-                title: "MISSING PARAMS".to_string(),
+                title: "MISSING MODULE PARAMS".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
             })
         }
-        ImportParamsMismatch(region, module_id, actual_type, expected_type) => {
+        ModuleParamsMismatch(region, module_id, actual_type, expected_type) => {
             let stack = [
                 alloc.reflow("Something is off with the params provided by this import:"),
                 alloc.region(lines.convert_region(region), severity),
@@ -308,7 +308,7 @@ pub fn type_problem<'b>(
                 ),
             ];
             Some(Report {
-                title: "IMPORT PARAMS MISMATCH".to_string(),
+                title: "MODULE PARAMS MISMATCH".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,

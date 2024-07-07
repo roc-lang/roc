@@ -36,9 +36,9 @@ pub enum TypeError {
     },
     IngestedFileBadUtf8(Box<PathBuf>, Utf8Error),
     IngestedFileUnsupportedType(Box<PathBuf>, ErrorType),
-    UnexpectedImportParams(Region, ModuleId),
-    MissingImportParams(Region, ModuleId, ErrorType),
-    ImportParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
+    UnexpectedModuleParams(Region, ModuleId),
+    MissingModuleParams(Region, ModuleId, ErrorType),
+    ModuleParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
 }
 
 impl TypeError {
@@ -58,9 +58,9 @@ impl TypeError {
             TypeError::Exhaustive(exhtv) => exhtv.severity(),
             TypeError::StructuralSpecialization { .. } => RuntimeError,
             TypeError::WrongSpecialization { .. } => RuntimeError,
-            TypeError::UnexpectedImportParams(..) => Warning,
-            TypeError::MissingImportParams(..) => RuntimeError,
-            TypeError::ImportParamsMismatch(..) => RuntimeError,
+            TypeError::UnexpectedModuleParams(..) => Warning,
+            TypeError::MissingModuleParams(..) => RuntimeError,
+            TypeError::ModuleParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
         }
@@ -76,9 +76,9 @@ impl TypeError {
             | TypeError::StructuralSpecialization { region, .. }
             | TypeError::WrongSpecialization { region, .. }
             | TypeError::BadPatternMissingAbility(region, ..)
-            | TypeError::UnexpectedImportParams(region, ..)
-            | TypeError::MissingImportParams(region, ..)
-            | TypeError::ImportParamsMismatch(region, ..) => Some(*region),
+            | TypeError::UnexpectedModuleParams(region, ..)
+            | TypeError::MissingModuleParams(region, ..)
+            | TypeError::ModuleParamsMismatch(region, ..) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),

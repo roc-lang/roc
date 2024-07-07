@@ -1706,7 +1706,7 @@ fn module_params_typecheck_fail() {
         result,
         indoc!(
             r#"
-            ── IMPORT PARAMS MISMATCH in tmp/module_params_typecheck_fail/Main.roc ─────────
+            ── MODULE PARAMS MISMATCH in tmp/module_params_typecheck_fail/Main.roc ─────────
 
             Something is off with the params provided by this import:
 
@@ -1757,7 +1757,7 @@ fn module_params_missing_fields() {
         result,
         indoc!(
             r#"
-            ── IMPORT PARAMS MISMATCH in tmp/module_params_missing_fields/Main.roc ─────────
+            ── MODULE PARAMS MISMATCH in tmp/module_params_missing_fields/Main.roc ─────────
 
             Something is off with the params provided by this import:
 
@@ -1810,7 +1810,7 @@ fn module_params_extra_fields() {
         result,
         indoc!(
             r#"
-            ── IMPORT PARAMS MISMATCH in tmp/module_params_extra_fields/Main.roc ───────────
+            ── MODULE PARAMS MISMATCH in tmp/module_params_extra_fields/Main.roc ───────────
 
             Something is off with the params provided by this import:
 
@@ -1863,7 +1863,7 @@ fn module_params_unexpected() {
         err,
         indoc!(
             r#"
-            ── UNEXPECTED PARAMS in tmp/module_params_unexpected/Main.roc ──────────────────
+            ── UNEXPECTED MODULE PARAMS in tmp/module_params_unexpected/Main.roc ───────────
 
             This import specifies module params:
 
@@ -1909,7 +1909,7 @@ fn module_params_missing() {
         err,
         indoc!(
             r#"
-            ── MISSING PARAMS in tmp/module_params_missing/Main.roc ────────────────────────
+            ── MISSING MODULE PARAMS in tmp/module_params_missing/Main.roc ─────────────────
 
             This import specifies no module params:
 

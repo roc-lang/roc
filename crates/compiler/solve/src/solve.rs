@@ -1450,7 +1450,7 @@ fn solve(
                             Failure(vars, actual_type, expected_type, _) => {
                                 env.introduce(rank, &vars);
 
-                                problems.push(TypeError::ImportParamsMismatch(
+                                problems.push(TypeError::ModuleParamsMismatch(
                                     *region,
                                     *module_id,
                                     actual_type,
@@ -1464,7 +1464,7 @@ fn solve(
                     (Some(expected), None) => {
                         let expected_type = env.uenv().var_to_error_type(*expected, Polarity::Neg);
 
-                        problems.push(TypeError::MissingImportParams(
+                        problems.push(TypeError::MissingModuleParams(
                             *region,
                             *module_id,
                             expected_type,
@@ -1473,7 +1473,7 @@ fn solve(
                         state
                     }
                     (None, Some(_)) => {
-                        problems.push(TypeError::UnexpectedImportParams(*region, *module_id));
+                        problems.push(TypeError::UnexpectedModuleParams(*region, *module_id));
 
                         state
                     }
