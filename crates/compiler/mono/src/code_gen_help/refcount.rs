@@ -953,8 +953,6 @@ fn refcount_list<'a>(
     let list = Symbol::ARG_1;
     let rc_list_expr = match ctx.op {
         HelperOp::IncN | HelperOp::Inc => {
-            // TODO: refcount_args is totally wrong here.
-            // Should be list, amount, elements_refcounted
             let rc_list_args = refcount_args(root, ctx, list);
             Expr::Call(Call {
                 call_type: CallType::LowLevel {
@@ -965,8 +963,6 @@ fn refcount_list<'a>(
             })
         }
         HelperOp::DecRef(_) | HelperOp::Dec => {
-            // TODO: refcount_args is totally wrong here.
-            // Should be list, alignment, element_width, elements_refcounted, element_def_fn
             let rc_list_args = refcount_args(root, ctx, list);
             Expr::Call(Call {
                 call_type: CallType::LowLevel {
