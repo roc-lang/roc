@@ -93,7 +93,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::RefCountIsUnique => unimplemented!(),
                 LowLevel::ListIncref => unimplemented!(),
                 LowLevel::ListDecref => unimplemented!(),
-                LowLevel::ListElemDecFnPtr => unimplemented!(),
 
                 LowLevel::SetJmp => unimplemented!(),
                 LowLevel::LongJmp => unimplemented!(),

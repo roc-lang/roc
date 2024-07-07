@@ -1411,7 +1411,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
         }
 
-        ListElemDecFnPtr | ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
+        ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
             unreachable!("only inserted in dev backend codegen")
         }
     }

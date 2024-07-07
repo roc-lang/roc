@@ -465,12 +465,12 @@ trait Backend<'a> {
         element_increment
     }
 
-    fn decrement_fn_pointer(&mut self, layout: InLayout<'a>, out: Option<Symbol>) -> Symbol {
+    fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
             .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
-        let element_decrement = out.unwrap_or(self.debug_symbol("element_decrement"));
+        let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
 
         let element_decrement_string = self.lambda_name_to_string(
@@ -1923,7 +1923,7 @@ trait Backend<'a> {
                     list_argument.element_refcounted,
                     start,
                     len,
-                    self.decrement_fn_pointer(element_layout, None),
+                    self.decrement_fn_pointer(element_layout),
                 ];
 
                 let layout_usize = Layout::U64;
@@ -1953,7 +1953,7 @@ trait Backend<'a> {
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 let inc_elem_fn = self.increment_fn_pointer(list_argument.element_layout);
-                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout, None);
+                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
 
@@ -2005,7 +2005,7 @@ trait Backend<'a> {
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 let inc_elem_fn = self.increment_fn_pointer(list_argument.element_layout);
-                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout, None);
+                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
 
@@ -2079,7 +2079,7 @@ trait Backend<'a> {
                 let list_layout = arg_layouts[0];
                 let list_argument = self.list_argument(list_layout);
 
-                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout, None);
+                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
 
@@ -2110,13 +2110,6 @@ trait Backend<'a> {
                 );
             }
 
-            LowLevel::ListElemDecFnPtr => {
-                let list_layout = arg_layouts[0];
-                let list_argument = self.list_argument(list_layout);
-
-                _ = self.decrement_fn_pointer(list_argument.element_layout, Some(*sym));
-            }
-
             LowLevel::ListDropAt => {
                 let list = args[0];
                 let drop_index = args[1];
@@ -2130,7 +2123,7 @@ trait Backend<'a> {
 
                 let layout_usize = Layout::U64;
                 let element_increment = self.increment_fn_pointer(element_layout);
-                let element_decrement = self.decrement_fn_pointer(element_layout, None);
+                let element_decrement = self.decrement_fn_pointer(element_layout);
 
                 //    list: RocList,
                 //    alignment: u32,

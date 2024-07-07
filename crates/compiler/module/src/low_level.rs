@@ -50,7 +50,6 @@ pub enum LowLevel {
     ListConcatUtf8,
     ListIncref,
     ListDecref,
-    ListElemDecFnPtr,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -244,7 +243,6 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::RefCountIsUnique => unimplemented!(),
                 LowLevel::ListIncref => unimplemented!(),
                 LowLevel::ListDecref => unimplemented!(),
-                LowLevel::ListElemDecFnPtr => unimplemented!(),
 
                 LowLevel::SetJmp => unimplemented!(),
                 LowLevel::LongJmp => unimplemented!(),
