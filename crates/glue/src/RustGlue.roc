@@ -644,12 +644,46 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 else
                     "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.$(name)) }"
 
+            (borrow, borrowType) =
+                if canDeriveCopy types shape then
+                    ("unsafe { self.payload.$(name) }", payloadType)
+                else
+                    (
+                        """
+                        use core::borrow::Borrow;
+                        unsafe { self.payload.$(name).borrow() }
+                        """,
+                        "&$(payloadType)",
+                    )
+
+            (borrowMut, borrowMutType) =
+                if canDeriveCopy types shape then
+                    ("unsafe { &mut self.payload.$(name) }", "&mut $(payloadType)")
+                else
+                    (
+                        """
+                        use core::borrow::BorrowMut;
+                        unsafe { self.payload.$(name).borrow_mut() }
+                        """,
+                        "&mut $(payloadType)",
+                    )
+
             """
             $(buf)
 
                 pub fn unwrap_$(name)(mut self) -> $(payloadType) {
                     debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
                     $(take)
+                }
+
+                pub fn borrow_$(name)(&self) -> $(borrowType) {
+                    debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
+                    $(borrow)
+                }
+
+                pub fn borrow_mut_$(name)(&mut self) -> $(borrowMutType) {
+                    debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
+                    $(borrowMut)
                 }
 
                 pub fn is_$(name)(&self) -> bool {
