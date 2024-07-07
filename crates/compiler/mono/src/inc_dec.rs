@@ -1357,6 +1357,8 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         StrReleaseExcessCapacity => &[OWNED],
         ListIncref => &[OWNED],
         ListDecref => &[OWNED],
+        // This doesn't really use the list. It just generates a functions from the layout.
+        ListElemDecFnPtr => &[BORROWED],
 
         Eq | NotEq => &[BORROWED, BORROWED],
 

@@ -1621,8 +1621,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         PtrLoad => RC::NoRc,
         PtrCast => RC::NoRc,
 
-        PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
-        | RefCountDecDataPtr | RefCountIsUnique => {
+        ListElemDecFnPtr | PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr
+        | RefCountIncDataPtr | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
 

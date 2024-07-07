@@ -2846,7 +2846,7 @@ impl<
                 self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
 
                 let inc_elem_fn = self.increment_fn_pointer(element_layout);
-                let dec_elem_fn = self.decrement_fn_pointer(element_layout);
+                let dec_elem_fn = self.decrement_fn_pointer(element_layout, None);
 
                 //    input: RocList,
                 //    caller: CompareFn,
@@ -2925,7 +2925,7 @@ impl<
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
 
         let inc_elem_fn = self.increment_fn_pointer(elem_layout);
-        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout, None);
 
         // Setup the return location.
         let base_offset =
@@ -3276,7 +3276,7 @@ impl<
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
 
         let inc_elem_fn = self.increment_fn_pointer(elem_layout);
-        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout, None);
 
         // Setup the return location.
         let base_offset =
@@ -3387,7 +3387,7 @@ impl<
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
 
         let inc_elem_fn = self.increment_fn_pointer(elem_layout);
-        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout, None);
 
         // Setup the return location.
         let base_offset =

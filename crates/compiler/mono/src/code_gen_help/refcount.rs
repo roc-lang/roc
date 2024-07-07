@@ -953,7 +953,7 @@ fn refcount_list<'a>(
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
     element_layout: InLayout<'a>,
-    structure: Symbol,
+    _structure: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;
     let layout_isize = root.layout_isize;
@@ -1016,27 +1016,36 @@ fn refcount_list<'a>(
                 Expr::Literal(Literal::Int((element_alignment as u128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment, alignment_expr, LAYOUT_U32, next);
 
-            // let orig_op = ctx.op;
-            // ctx.op = HelperOp::IndirectDec;
-            // let dec_elem_fn =
-            //     root.find_or_create_proc(ident_ids, ctx, layout_interner, element_layout);
-            // ctx.op = orig_op;
-            // TODO: How do I load a proc symbol to a pointer???
+            let dec_elem_ptr = root.create_symbol(ident_ids, "dec_elem_ptr");
+            let dec_elem_ptr_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::ListElemDecFnPtr,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                arguments: root.arena.alloc([list]),
+            });
+            let dec_elem_ptr_stmt =
+                |next| Stmt::Let(dec_elem_ptr, dec_elem_ptr_expr, Layout::OPAQUE_PTR, next);
 
             let rc_list_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::ListDecref,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([list, alignment, width, is_refcounted]),
+                arguments: root
+                    .arena
+                    .alloc([list, alignment, width, is_refcounted, dec_elem_ptr]),
             });
             width_stmt(arena.alloc(
                 //
                 alignment_stmt(arena.alloc(
                     //
-                    is_refcounted_stmt(arena.alloc(
+                    dec_elem_ptr_stmt(arena.alloc(
                         //
-                        Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt),
+                        is_refcounted_stmt(arena.alloc(
+                            //
+                            Stmt::Let(rc_list_unit, rc_list_expr, LAYOUT_UNIT, ret_stmt),
+                        )),
                     )),
                 )),
             ))

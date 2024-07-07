@@ -368,6 +368,17 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_DECREF);
             }
 
+            ListElemDecFnPtr => {
+                let input_list: Symbol = self.arguments[0];
+                let list_layout = backend
+                    .layout_interner
+                    .get_repr(backend.storage.symbol_layouts[&input_list]);
+                let elem_in_layout = unwrap_list_elem_layout(list_layout);
+                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+
+                backend.code_builder.i32_const(dec_fn_ptr);
+            }
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
