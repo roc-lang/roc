@@ -695,20 +695,9 @@ pub fn standard_load_config(
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
     };
 
-    // UNSTABLE(lambda-erasure)
-    let function_kind = if cfg!(debug_assertions) {
-        if std::env::var("EXPERIMENTAL_ROC_ERASE").is_ok() {
-            FunctionKind::Erased
-        } else {
-            FunctionKind::LambdaSet
-        }
-    } else {
-        FunctionKind::LambdaSet
-    };
-
     LoadConfig {
         target,
-        function_kind,
+        function_kind: FunctionKind::from_env(),
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
@@ -1202,8 +1191,7 @@ pub fn check_file<'a>(
 
     let load_config = LoadConfig {
         target,
-        // TODO: we may not want this for just checking.
-        function_kind: FunctionKind::LambdaSet,
+        function_kind: FunctionKind::from_env(),
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
