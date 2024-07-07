@@ -117,7 +117,7 @@ mod glue_cli_run {
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
-        "#), 
+        "#),
         nullable_wrapped:"nullable-wrapped" => indoc!(r#"
             tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
             `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
@@ -232,7 +232,7 @@ mod glue_cli_run {
             .join("RustGlue.roc");
 
         // Generate a fresh test_glue for this platform
-        let glue_out = run_glue(
+        let parts : Vec<_> =
             // converting these all to String avoids lifetime issues
             std::iter::once("glue".to_string()).chain(
                 args.into_iter().map(|arg| arg.to_string()).chain([
@@ -240,12 +240,13 @@ mod glue_cli_run {
                     glue_dir.to_str().unwrap().to_string(),
                     platform_module_path.to_str().unwrap().to_string(),
                 ]),
-            ),
-        );
+            ).collect();
+        let glue_out = run_glue(parts.iter());
 
         if has_error(&glue_out.stderr) {
             panic!(
-                "`roc glue` command had unexpected stderr: {}",
+                "`roc {}` command had unexpected stderr: {}",
+                parts.join(" "),
                 glue_out.stderr
             );
         }

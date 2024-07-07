@@ -90,6 +90,7 @@ procedure List.92 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.13;
     jump List.577 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
 
 procedure Num.127 (#Attr.2):
@@ -145,6 +146,7 @@ procedure Test.2 ():
     ret Test.258;
 
 procedure Test.20 (Test.58, Test.59):
+    inc Test.58;
     let Test.265 : {List Str, {}} = Struct {Test.58, Test.59};
     let Test.264 : {List Str, {}} = CallByName Encode.23 Test.265;
     ret Test.264;
@@ -158,6 +160,7 @@ procedure Test.23 (Test.77, Test.78):
     let Test.284 : Str = CallByName Test.19 Test.77;
     let Test.261 : List Str = CallByName List.13 Test.78 Test.284;
     let Test.260 : {List Str, {}} = CallByName Test.22 Test.261;
+    dec Test.261;
     ret Test.260;
 
 procedure Test.3 (Test.48, Test.49, Test.50):
@@ -187,6 +190,7 @@ procedure Test.60 (Test.61, Test.266, #Attr.12):
     let Test.275 : U64 = CallByName List.6 Test.58;
     let Test.62 : List U8 = CallByName Test.3 Test.61 Test.274 Test.275;
     let Test.268 : List U8 = CallByName List.18 Test.58 Test.62 Test.59;
+    dec Test.58;
     ret Test.268;
 
 procedure Test.63 (Test.64, Test.65, Test.59):

@@ -1,9 +1,9 @@
 procedure Test.1 (Test.2, Test.3):
-    dec Test.3;
     ret Test.2;
 
 procedure Test.0 ():
     let Test.5 : List I64 = Array [1i64, 2i64, 3i64];
     let Test.6 : List I64 = Array [3i64, 2i64, 1i64];
     let Test.4 : List I64 = CallByName Test.1 Test.5 Test.6;
+    dec Test.6;
     ret Test.4;

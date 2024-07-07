@@ -16,6 +16,7 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6, #Derived_gen.7];
     let #Derived_gen.4 : List {Str, Str} = CallByName Test.21 #Derived_gen.5;
     let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.4 #Derived.4;
+    dec #Derived_gen.4;
     ret #Derived_gen.3;
 
 procedure Encode.23 (Encode.98):
@@ -91,6 +92,7 @@ procedure List.92 (#Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.17;
     jump List.577 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21;
 
 procedure Num.127 (#Attr.2):
