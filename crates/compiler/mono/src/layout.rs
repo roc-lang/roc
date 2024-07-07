@@ -3362,32 +3362,36 @@ fn layout_from_flat_type<'a>(
                 }
             }
 
-            sortables.sort_by(|(label1, layout1), (label2, layout2)| {
-                cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
-            });
-
-            let ordered_field_names = Vec::from_iter_in(
-                sortables
-                    .iter()
-                    .map(|(label, _)| &*arena.alloc_str(label.as_str())),
-                arena,
-            )
-            .into_bump_slice();
-            let semantic = SemanticRepr::record(ordered_field_names);
-
-            let repr = if sortables.len() == 1 {
-                // If the record has only one field that isn't zero-sized,
-                // unwrap it.
-                let inner_repr = sortables.pop().unwrap().1;
-                inner_repr.newtype()
+            if sortables.is_empty() {
+                Cacheable(Ok(Layout::UNIT), criteria)
             } else {
-                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                LayoutRepr::Struct(layouts.into_bump_slice()).direct()
-            };
+                sortables.sort_by(|(label1, layout1), (label2, layout2)| {
+                    cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
+                });
 
-            let result = Ok(env.cache.put_in(Layout { repr, semantic }));
+                let ordered_field_names = Vec::from_iter_in(
+                    sortables
+                        .iter()
+                        .map(|(label, _)| &*arena.alloc_str(label.as_str())),
+                    arena,
+                )
+                .into_bump_slice();
+                let semantic = SemanticRepr::record(ordered_field_names);
 
-            Cacheable(result, criteria)
+                let repr = if sortables.len() == 1 {
+                    // If the record has only one field that isn't zero-sized,
+                    // unwrap it.
+                    let inner_repr = sortables.pop().unwrap().1;
+                    inner_repr.newtype()
+                } else {
+                    let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+                    LayoutRepr::struct_(layouts.into_bump_slice()).direct()
+                };
+
+                let result = Ok(env.cache.put_in(Layout { repr, semantic }));
+
+                Cacheable(result, criteria)
+            }
         }
         Tuple(elems, ext_var) => {
             let mut criteria = CACHEABLE;
