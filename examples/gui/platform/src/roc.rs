@@ -82,12 +82,12 @@ pub enum RocElemTag {
 }
 
 impl RocRefcounted for RocElem {
-    fn inc(&mut self, n: usize) {
+    fn inc(&mut self) {
         unsafe {
             match self.tag() {
-                RocElemTag::Button => (*self.entry).button.deref_mut().inc(n),
-                RocElemTag::Text => (*self.entry).text.deref_mut().inc(n),
-                RocElemTag::Col | RocElemTag::Row => (*self.entry).row_or_col.deref_mut().inc(n),
+                RocElemTag::Button => (*self.entry).button.deref_mut().inc(),
+                RocElemTag::Text => (*self.entry).text.deref_mut().inc(),
+                RocElemTag::Col | RocElemTag::Row => (*self.entry).row_or_col.deref_mut().inc(),
             }
         }
     }
@@ -115,8 +115,8 @@ pub struct RocButton {
 }
 
 impl RocRefcounted for RocButton {
-    fn inc(&mut self, n: usize) {
-        self.child.deref_mut().inc(n);
+    fn inc(&mut self) {
+        self.child.deref_mut().inc();
     }
 
     fn dec(&mut self) {
@@ -135,8 +135,8 @@ pub struct RocRowOrCol {
 }
 
 impl RocRefcounted for RocRowOrCol {
-    fn inc(&mut self, n: usize) {
-        self.children.inc(n);
+    fn inc(&mut self) {
+        self.children.inc();
     }
 
     fn dec(&mut self) {
