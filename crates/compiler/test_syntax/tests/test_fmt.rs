@@ -6113,6 +6113,31 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn issue_6215() {
+        expr_formats_to(
+            indoc!(
+                r"
+                when list is
+                    [first as last]
+                    | [first, last]   ->
+                        first
+                    _->Not
+                "
+            ),
+            indoc!(
+                r"
+                when list is
+                    [first as last]
+                    | [first, last] ->
+                        first
+                
+                    _ -> Not
+                "
+            ),
+        );
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

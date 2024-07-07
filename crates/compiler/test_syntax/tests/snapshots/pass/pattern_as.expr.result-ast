@@ -7,11 +7,8 @@ When(
             patterns: [
                 @14-20 SpaceBefore(
                     As(
-                        @14-15 SpaceAfter(
-                            Underscore(
-                                "",
-                            ),
-                            [],
+                        @14-15 Underscore(
+                            "",
                         ),
                         PatternAs {
                             spaces_before: [],
