@@ -21,8 +21,6 @@ pub struct Env<'a> {
 
     pub qualified_module_ids: &'a PackageModuleIds<'a>,
 
-    pub modules_expecting_params: VecSet<ModuleId>,
-
     /// Problems we've encountered along the way, which will be reported to the user at the end.
     pub problems: Vec<Problem>,
 
@@ -51,7 +49,6 @@ impl<'a> Env<'a> {
         home: ModuleId,
         module_path: &'a Path,
         dep_idents: &'a IdentIdsByModule,
-        modules_expecting_params: VecSet<ModuleId>,
         qualified_module_ids: &'a PackageModuleIds<'a>,
         opt_shorthand: Option<&'a str>,
     ) -> Env<'a> {
@@ -60,7 +57,6 @@ impl<'a> Env<'a> {
             home,
             module_path,
             dep_idents,
-            modules_expecting_params,
             qualified_module_ids,
             problems: Vec::new(),
             closures: MutMap::default(),

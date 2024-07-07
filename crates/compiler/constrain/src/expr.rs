@@ -580,26 +580,20 @@ pub fn constrain_expr(
 
             constraints.and_constraint([store_expected, lookup_constr])
         }
-        ImportParams(params, var, module_id) => {
+        ImportParams(module_id, region, Some((var, params))) => {
             let index = constraints.push_variable(*var);
             let expected_params = constraints.push_expected_type(Expected::ForReason(
                 Reason::ImportParams(*module_id),
                 index,
-                params.region,
+                *region,
             ));
-            let expr_con = constrain_expr(
-                types,
-                constraints,
-                env,
-                params.region,
-                &params.value,
-                expected_params,
-            );
-            let params_con = constraints.import_params(Some(index), *module_id, params.region);
+            let expr_con =
+                constrain_expr(types, constraints, env, *region, params, expected_params);
+            let params_con = constraints.import_params(Some(index), *module_id, *region);
             let expr_and_params = constraints.and_constraint([expr_con, params_con]);
             constraints.exists([*var], expr_and_params)
         }
-        MissingImportParams(module_id, region) => {
+        ImportParams(module_id, region, None) => {
             constraints.import_params(None, *module_id, *region)
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
@@ -4116,7 +4110,8 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 return true;
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
-            ImportParams(loc_expr, _, _) => expr = &loc_expr.value,
+            ImportParams(_, _, Some((_, params))) => expr = params,
+            ImportParams(_, _, None) => return false,
             Str(_)
             | IngestedFile(..)
             | List { .. }
@@ -4139,7 +4134,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
-            | MissingImportParams(_, _)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
             | Tag { .. }

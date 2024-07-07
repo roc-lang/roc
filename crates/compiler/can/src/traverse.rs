@@ -318,7 +318,8 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             .iter()
             .for_each(|(var, elem)| visitor.visit_expr(&elem.value, elem.region, *var)),
         Expr::EmptyRecord => { /* terminal */ }
-        Expr::ImportParams(expr, _, _) => visitor.visit_expr(&expr.value, expr.region, var),
+        Expr::ImportParams(_, region, Some((_, expr))) => visitor.visit_expr(expr, *region, var),
+        Expr::ImportParams(_, _, None) => { /* terminal */ }
         Expr::RecordAccess {
             field_var,
             loc_expr,
@@ -404,7 +405,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
-        Expr::MissingImportParams(..) => { /* terminal */ }
     }
 }
 

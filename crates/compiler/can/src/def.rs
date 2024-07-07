@@ -1153,21 +1153,12 @@ fn canonicalize_value_defs<'a>(
                     exposed_symbols,
                 });
 
-                match params {
-                    PendingModuleImportParams::None => {}
-                    PendingModuleImportParams::Required {
-                        symbol,
-                        loc_pattern,
-                        opt_provided,
-                    } => {
-                        pending_value_defs.push(PendingValueDef::ImportParams {
-                            symbol,
-                            loc_pattern,
-                            module_id,
-                            opt_provided,
-                        });
-                    }
-                }
+                pending_value_defs.push(PendingValueDef::ImportParams {
+                    symbol: params.symbol,
+                    loc_pattern: params.loc_pattern,
+                    opt_provided: params.opt_provided,
+                    module_id,
+                });
             }
             PendingValue::InvalidIngestedFile => { /* skip */ }
             PendingValue::ImportNameConflict => { /* skip */ }
@@ -2421,7 +2412,7 @@ fn canonicalize_pending_value_def<'a>(
                 .references
                 .insert_value_lookup(symbol, QualifiedReference::Unqualified);
 
-            let (expr, references) = match opt_provided {
+            let (opt_var_record, references) = match opt_provided {
                 Some(params) => {
                     let (record, can_output) =
                         canonicalize_record(env, var_store, scope, loc_pattern.region, params);
@@ -2429,20 +2420,15 @@ fn canonicalize_pending_value_def<'a>(
                     let references = can_output.references.clone();
                     output.union(can_output);
 
-                    let loc_record = Loc::at(loc_pattern.region, record);
-
-                    let expr =
-                        Expr::ImportParams(Box::new(loc_record), var_store.fresh(), module_id);
-
-                    (expr, references)
+                    (Some((var_store.fresh(), Box::new(record))), references)
                 }
-                None => (
-                    Expr::MissingImportParams(module_id, loc_pattern.region),
-                    References::new(),
-                ),
+                None => (None, References::new()),
             };
 
-            let loc_expr = Loc::at(loc_pattern.region, expr);
+            let loc_expr = Loc::at(
+                loc_pattern.region,
+                Expr::ImportParams(module_id, loc_pattern.region, opt_var_record),
+            );
 
             let def = single_can_def(
                 loc_pattern,
@@ -3017,15 +3003,10 @@ struct PendingModuleImport<'a> {
     params: PendingModuleImportParams<'a>,
 }
 
-enum PendingModuleImportParams<'a> {
-    /// The module does not require any params
-    None,
-    /// The module requires params, they may or may not have been provided
-    Required {
-        symbol: Symbol,
-        loc_pattern: Loc<Pattern>,
-        opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
-    },
+struct PendingModuleImportParams<'a> {
+    symbol: Symbol,
+    loc_pattern: Loc<Pattern>,
+    opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
 }
 
 pub struct IntroducedImport {
@@ -3178,45 +3159,27 @@ fn to_pending_value_def<'a>(
                 None => module_name.clone(),
             };
 
-            let params = if env.modules_expecting_params.contains(&module_id) {
-                let name_str = name_with_alias.as_str();
-                let sym_region = module_import.params.map(|p| p.params.region).unwrap_or(region);
-
-                match scope.introduce_str(format!("#{name_str}").as_str(), sym_region) {
-                    Ok(symbol) =>  {
-                        let loc_pattern = Loc::at(sym_region, Pattern::Identifier(symbol));
-
-                        PendingModuleImportParams::Required {
-                            symbol,
-                            loc_pattern,
-                            opt_provided: module_import.params.map(|p| p.params.value),
-                        }
-                    },
-                    Err(_) =>  {
-                        // Ignore conflict, it will be handled as a duplicate import
-                        PendingModuleImportParams::None
-                    },
-                }
+            // Generate a symbol for the module params def
+            // We do this even if params weren't provided so that solve can report if they are missing
+            let params_sym = scope.gen_unique_symbol();
+            let params_region = module_import.params.map(|p| p.params.region).unwrap_or(region);
+            let params =
+                PendingModuleImportParams {
+                    symbol: params_sym,
+                    loc_pattern: Loc::at(params_region, Pattern::Identifier(params_sym)),
+                    opt_provided: module_import.params.map(|p| p.params.value),
+                };
+            let provided_params_sym = if module_import.params.is_some() {
+                // Only add params to scope if they are provided
+                Some(params_sym)
             } else {
-                if let Some(params) = module_import.params {
-                    env.problems.push(Problem::UnexpectedParams {
-                        module_id,
-                        region: params.params.region,
-                    });
-                }
-
-                PendingModuleImportParams::None
-            };
-
-            let params_sym = match params {
-                PendingModuleImportParams::Required { symbol, .. } => Some(symbol),
-                PendingModuleImportParams::None => None,
+                None
             };
 
             if let Err(existing_import) =
                 scope
                     .modules
-                    .insert(name_with_alias.clone(), module_id, params_sym, region)
+                    .insert(name_with_alias.clone(), module_id, provided_params_sym, region)
             {
                 env.problems.push(Problem::ImportNameConflict {
                     name: name_with_alias,

@@ -80,13 +80,11 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     );
 
     let dep_idents = IdentIds::exposed_builtins(0);
-    let modules_expecting_params = Default::default();
     let mut env = Env::new(
         arena,
         home,
         Path::new("Test.roc"),
         &dep_idents,
-        modules_expecting_params,
         &qualified_module_ids,
         None,
     );

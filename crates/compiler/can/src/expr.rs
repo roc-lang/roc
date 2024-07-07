@@ -185,10 +185,7 @@ pub enum Expr {
     },
 
     /// Module params expression in import
-    ImportParams(Box<Loc<Expr>>, Variable, ModuleId),
-    /// The imported module requires params but none were provided
-    /// We delay this error until solve, so we can report the expected type
-    MissingImportParams(ModuleId, Region),
+    ImportParams(ModuleId, Region, Option<(Variable, Box<Expr>)>),
 
     /// The "crash" keyword
     Crash {
@@ -342,8 +339,8 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
-            Self::ImportParams(loc_expr, _, _) => loc_expr.value.category(),
-            Self::MissingImportParams(_, _) => Category::Unknown,
+            Self::ImportParams(_, _, Some((_, expr))) => expr.category(),
+            Self::ImportParams(_, _, None) => Category::Unknown,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -1976,7 +1973,6 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
         | other @ OpaqueWrapFunction(_)
-        | other @ MissingImportParams(_, _)
         | other @ Crash { .. } => other,
 
         List {
@@ -2235,10 +2231,13 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
-        ImportParams(loc_expr, var, module_id) => {
-            let loc_expr = Loc::at(loc_expr.region, inline_calls(var_store, loc_expr.value));
-            ImportParams(Box::new(loc_expr), var, module_id)
-        }
+        ImportParams(module_id, region, Some((var, expr))) => ImportParams(
+            module_id,
+            region,
+            Some((var, Box::new(inline_calls(var_store, *expr)))),
+        ),
+
+        ImportParams(module_id, region, None) => ImportParams(module_id, region, None),
 
         RecordAccess {
             record_var,
@@ -3252,8 +3251,8 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
-            Expr::ImportParams(loc_expr, _, _) => {
-                stack.push(&loc_expr.value);
+            Expr::ImportParams(_, _, Some((_, expr))) => {
+                stack.push(expr);
             }
             Expr::Expect {
                 loc_continuation, ..
@@ -3281,7 +3280,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
-            | Expr::MissingImportParams(_, _)
+            | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}
         }
     }

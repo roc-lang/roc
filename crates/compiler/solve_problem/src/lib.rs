@@ -36,6 +36,7 @@ pub enum TypeError {
     },
     IngestedFileBadUtf8(Box<PathBuf>, Utf8Error),
     IngestedFileUnsupportedType(Box<PathBuf>, ErrorType),
+    UnexpectedImportParams(Region, ModuleId),
     MissingImportParams(Region, ModuleId, ErrorType),
     ImportParamsMismatch(Region, ModuleId, ErrorType, ErrorType),
 }
@@ -57,6 +58,7 @@ impl TypeError {
             TypeError::Exhaustive(exhtv) => exhtv.severity(),
             TypeError::StructuralSpecialization { .. } => RuntimeError,
             TypeError::WrongSpecialization { .. } => RuntimeError,
+            TypeError::UnexpectedImportParams(..) => Warning,
             TypeError::MissingImportParams(..) => RuntimeError,
             TypeError::ImportParamsMismatch(..) => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
@@ -74,6 +76,7 @@ impl TypeError {
             | TypeError::StructuralSpecialization { region, .. }
             | TypeError::WrongSpecialization { region, .. }
             | TypeError::BadPatternMissingAbility(region, ..)
+            | TypeError::UnexpectedImportParams(region, ..)
             | TypeError::MissingImportParams(region, ..)
             | TypeError::ImportParamsMismatch(region, ..) => Some(*region),
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),

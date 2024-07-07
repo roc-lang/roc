@@ -1472,11 +1472,12 @@ fn solve(
 
                         state
                     }
-                    (None, Some(_)) | (None, None) => {
-                        // Module does not expect params.
-                        // If provided still, canonicalization will produce a warning.
+                    (None, Some(_)) => {
+                        problems.push(TypeError::UnexpectedImportParams(*region, *module_id));
+
                         state
                     }
+                    (None, None) => state,
                 }
             }
         };

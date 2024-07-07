@@ -209,9 +209,9 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         Var(sym, _) | ParamsVar { symbol: sym, .. } | AbilityMember(sym, _, _) => {
             pp_sym(c, f, *sym)
         }
-        ImportParams(loc_expr, _, _) => expr(c, p, f, &loc_expr.value),
-        MissingImportParams(module_id, _) => {
-            text!(f, "<missing params for {:?}>", module_id)
+        ImportParams(_, _, Some((_, params_expr))) => expr(c, p, f, params_expr),
+        ImportParams(module_id, _, None) => {
+            text!(f, "<no params for {:?}>", module_id)
         }
         When {
             loc_cond, branches, ..

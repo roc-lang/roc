@@ -315,6 +315,13 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
 
         match declarations.declarations[index] {
             Value | Function(_) | Recursive(_) | TailRecursive(_) => {
+                let body = declarations.expressions[index].clone();
+
+                if let roc_can::expr::Expr::ImportParams(_, _, None) = body.value {
+                    // Skip import defs without params
+                    continue;
+                }
+
                 let symbol = declarations.symbols[index].value;
                 let expr_var = declarations.variables[index];
 
@@ -443,7 +450,13 @@ fn module_with_deps() {
 
         match declarations.declarations[index] {
             Value | Function(_) | Recursive(_) | TailRecursive(_) => {
-                def_count += 1;
+                let body = declarations.expressions[index].clone();
+
+                if let roc_can::expr::Expr::ImportParams(_, _, None) = body.value {
+                    // Skip import defs without params
+                } else {
+                    def_count += 1;
+                }
             }
             Destructure(_) => {
                 def_count += 1;

@@ -247,6 +247,26 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        UnexpectedImportParams(region, module_id) => {
+            let stack = [
+                alloc.reflow("This import specifies module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(
+                        " does not expect any. Did you intend to import a different module?",
+                    ),
+                ]),
+            ];
+
+            Some(Report {
+                title: "UNEXPECTED PARAMS".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
         MissingImportParams(region, module_id, expected) => {
             let stack = [
                 alloc.reflow("This import specifies no module params:"),

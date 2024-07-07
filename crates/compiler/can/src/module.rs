@@ -286,7 +286,6 @@ pub fn canonicalize_module_defs<'a>(
     qualified_module_ids: &'a PackageModuleIds<'a>,
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
-    modules_expecting_params: VecSet<ModuleId>,
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
     initial_scope: MutMap<Ident, (Symbol, Region)>,
@@ -312,7 +311,6 @@ pub fn canonicalize_module_defs<'a>(
         home,
         arena.alloc(Path::new(module_path)),
         dep_idents,
-        modules_expecting_params,
         qualified_module_ids,
         opt_shorthand,
     );
@@ -1153,7 +1151,6 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
-        | MissingImportParams(_, _)
         | RecordAccessor { .. } => {}
 
         List { loc_elems, .. } => {
@@ -1260,13 +1257,11 @@ fn fix_values_captured_in_closure_expr(
             }
         }
 
-        ImportParams(loc_expr, _, _) => {
-            fix_values_captured_in_closure_expr(
-                &mut loc_expr.value,
-                no_capture_symbols,
-                closure_captures,
-            );
+        ImportParams(_, _, Some((_, expr))) => {
+            fix_values_captured_in_closure_expr(expr, no_capture_symbols, closure_captures);
         }
+
+        ImportParams(_, _, None) => {}
 
         Tuple { elems, .. } => {
             for (_var, expr) in elems.iter_mut() {
