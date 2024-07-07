@@ -2438,6 +2438,7 @@ impl<
                 //    alignment: u32,
                 //    old_element_width: usize,
                 //    new_element_width: usize,
+                //    inc_old_element: Inc,
                 //    new_element_refcounted: bool,
 
                 let arguments = [
@@ -2645,6 +2646,9 @@ impl<
                 //    old_element_width1: usize,
                 //    old_element_width2: usize,
                 //    new_element_width: usize,
+                //    inc1: Inc
+                //    inc2: Inc
+                //    inc3: Inc
                 //    new_element_refcounted: bool,
 
                 let arguments = [
@@ -2895,6 +2899,7 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
         }
     }
