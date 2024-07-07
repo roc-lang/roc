@@ -516,8 +516,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     }
 
     let arena = &arena;
-    // TODO may need to determine this dynamically based on dev builds.
-    let function_kind = FunctionKind::LambdaSet;
+    let function_kind = FunctionKind::from_env();
 
     let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
 

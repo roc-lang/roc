@@ -109,13 +109,16 @@ pub const INTERNAL_ERROR_MESSAGE: &str = concat!(
 #[macro_export]
 macro_rules! internal_error {
     () => ({
-        $crate::error_and_exit(format_args!("{}", $crate::INTERNAL_ERROR_MESSAGE))
+        $crate::error_and_exit(format_args!("{}\nLocation: {}:{}:{}", $crate::INTERNAL_ERROR_MESSAGE, file!(), line!(), column!()))
     });
     ($($arg:tt)*) => ({
         $crate::error_and_exit(format_args!(
-            "{}{}",
+            "{}{}\nLocation: {}:{}:{}",
             $crate::INTERNAL_ERROR_MESSAGE,
-            format_args!($($arg)*)
+            format_args!($($arg)*),
+            file!(),
+            line!(),
+            column!(),
         ))
     })
 }
@@ -132,13 +135,16 @@ pub const USER_ERROR_MESSAGE: &str = concat!(
 #[macro_export]
 macro_rules! user_error {
     () => ({
-        $crate::error_and_exit(format_args!("{}", $crate::USER_ERROR_MESSAGE))
+        $crate::error_and_exit(format_args!("{}\nLocation: {}:{}:{}", $crate::USER_ERROR_MESSAGE, file!(), line!(), column!()))
     });
     ($($arg:tt)*) => ({
         $crate::error_and_exit(format_args!(
-            "{}{}",
+            "{}{}\nLocation: {}:{}:{}",
             $crate::USER_ERROR_MESSAGE,
-            format_args!($($arg)*)
+            format_args!($($arg)*),
+            file!(),
+            line!(),
+            column!(),
         ))
     })
 }
