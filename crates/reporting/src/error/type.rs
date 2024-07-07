@@ -1145,7 +1145,7 @@ fn to_expr_report<'b>(
                             ]),
                             alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
-                                CalledVia::RecordBuilder => {
+                                CalledVia::OldRecordBuilder => {
                                     alloc.hint("Did you mean to apply it to a function first?")
                                 },
                                 _ => {
@@ -1167,12 +1167,20 @@ fn to_expr_report<'b>(
                             ]),
                             alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
-                                CalledVia::RecordBuilder => {
+                                CalledVia::OldRecordBuilder => {
                                     alloc.concat([
                                         alloc.tip(),
                                         alloc.reflow("Remove "),
                                         alloc.keyword("<-"),
                                         alloc.reflow(" to assign the field directly.")
+                                    ])
+                                }
+                                CalledVia::NewRecordBuilder => {
+                                    alloc.concat([
+                                        alloc.note(""),
+                                        alloc.reflow("Record builders need a mapper function before the "),
+                                        alloc.keyword("<-"),
+                                        alloc.reflow(" to combine fields together with.")
                                     ])
                                 }
                                 _ => {

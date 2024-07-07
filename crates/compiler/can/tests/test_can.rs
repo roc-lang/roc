@@ -17,9 +17,12 @@ mod test_can {
     use core::panic;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::{ClosureData, IntValue, Recursive};
+    use roc_can::pattern::Pattern;
+    use roc_module::called_via::CalledVia;
     use roc_module::symbol::Symbol;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-    use roc_region::all::{Position, Region};
+    use roc_region::all::{Loc, Position, Region};
+    use roc_types::subs::Variable;
     use std::{f64, i64};
 
     fn assert_can_runtime_error(input: &str, expected: RuntimeError) {
@@ -651,7 +654,7 @@ mod test_can {
 
     // RECORD BUILDERS
     #[test]
-    fn record_builder_desugar() {
+    fn old_record_builder_desugar() {
         let src = indoc!(
             r#"
                 succeed = \_ -> crash "succeed"
@@ -766,7 +769,7 @@ mod test_can {
     }
 
     #[test]
-    fn record_builder_field_names_do_not_shadow() {
+    fn old_record_builder_field_names_do_not_shadow() {
         let src = indoc!(
             r#"
             succeed = \_ -> crash "succeed"
@@ -806,7 +809,7 @@ mod test_can {
     }
 
     #[test]
-    fn multiple_record_builders_error() {
+    fn multiple_old_record_builders_error() {
         let src = indoc!(
             r#"
                 succeed
@@ -822,17 +825,17 @@ mod test_can {
         assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| matches!(
             problem,
-            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleOldRecordBuilders { .. })
         )));
 
         assert!(matches!(
             loc_expr.value,
-            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleOldRecordBuilders { .. })
         ));
     }
 
     #[test]
-    fn hanging_record_builder() {
+    fn hanging_old_record_builder() {
         let src = indoc!(
             r#"
                 { a: <- apply "a" }
@@ -846,13 +849,191 @@ mod test_can {
         assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| matches!(
             problem,
-            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
+            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedOldRecordBuilder { .. })
         )));
 
         assert!(matches!(
             loc_expr.value,
-            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
+            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedOldRecordBuilder { .. })
         ));
+    }
+
+    #[test]
+    fn new_record_builder_desugar() {
+        let src = indoc!(
+            r#"
+                map2 = \a, b, combine -> combine a b
+                double = \n -> n * 2
+
+                c = 3
+
+                { map2 <-
+                    a: 1,
+                    b: double 2,
+                    c
+                }
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we desugar to:
+        //
+        // map2
+        //     (1)
+        //     (map2
+        //         (double 2)
+        //         (c)
+        //         (\#a, #b -> (#a, #b))
+        //     )
+        //     (\a, (b, c) -> { a: #a, b: #b, c: #c })
+
+        let first_map2_args = assert_func_call(
+            &out.loc_expr.value,
+            "map2",
+            CalledVia::NewRecordBuilder,
+            &out.interns,
+        );
+        let (first_arg, second_arg, third_arg) = match &first_map2_args[..] {
+            [first, second, third] => (&first.1.value, &second.1.value, &third.1.value),
+            _ => panic!("map2 didn't receive three arguments"),
+        };
+
+        assert_num_value(first_arg, 1);
+
+        let inner_map2_args = assert_func_call(
+            second_arg,
+            "map2",
+            CalledVia::NewRecordBuilder,
+            &out.interns,
+        );
+        let (first_inner_arg, second_inner_arg, third_inner_arg) = match &inner_map2_args[..] {
+            [first, second, third] => (&first.1.value, &second.1.value, &third.1.value),
+            _ => panic!("inner map2 didn't receive three arguments"),
+        };
+
+        let double_args =
+            assert_func_call(first_inner_arg, "double", CalledVia::Space, &out.interns);
+        assert_eq!(double_args.len(), 1);
+        assert_num_value(&double_args[0].1.value, 2);
+
+        assert_var_usage(second_inner_arg, "c", &out.interns);
+
+        match third_inner_arg {
+            Expr::Closure(ClosureData {
+                arguments,
+                loc_body,
+                ..
+            }) => {
+                assert_eq!(arguments.len(), 2);
+                assert_pattern_name(
+                    &arguments[0].2.value,
+                    "#record_builder_closure_arg_a",
+                    &out.interns,
+                );
+                assert_pattern_name(
+                    &arguments[1].2.value,
+                    "#record_builder_closure_arg_b",
+                    &out.interns,
+                );
+
+                match &loc_body.value {
+                    Expr::Tuple { elems, .. } => {
+                        assert_eq!(elems.len(), 2);
+                        assert_var_usage(
+                            &elems[0].1.value,
+                            "#record_builder_closure_arg_a",
+                            &out.interns,
+                        );
+                        assert_var_usage(
+                            &elems[1].1.value,
+                            "#record_builder_closure_arg_b",
+                            &out.interns,
+                        );
+                    }
+                    _ => panic!("Closure body was not a tuple"),
+                }
+            }
+            _ => panic!("inner map2's combiner was not a closure"),
+        }
+
+        match third_arg {
+            Expr::Closure(ClosureData {
+                arguments,
+                loc_body,
+                ..
+            }) => {
+                assert_eq!(arguments.len(), 2);
+                assert_pattern_name(&arguments[0].2.value, "#a", &out.interns);
+                match &arguments[1].2.value {
+                    Pattern::TupleDestructure { destructs, .. } => {
+                        assert_eq!(destructs.len(), 2);
+                        assert_pattern_name(&destructs[0].value.typ.1.value, "#b", &out.interns);
+                        assert_pattern_name(&destructs[1].value.typ.1.value, "#c", &out.interns);
+                    }
+                    _ => panic!("Second arg to builder func was not a tuple destructure"),
+                }
+
+                match &loc_body.value {
+                    Expr::Record { fields, .. } => {
+                        assert_eq!(fields.len(), 3);
+
+                        assert_eq!(get_field_var_sym(fields, "a").as_str(&out.interns), "#a");
+                        assert_eq!(get_field_var_sym(fields, "b").as_str(&out.interns), "#b");
+                        assert_eq!(get_field_var_sym(fields, "c").as_str(&out.interns), "#c");
+                    }
+                    _ => panic!("Closure body was not a tuple"),
+                }
+            }
+            _ => panic!("inner map2's combiner was not a closure"),
+        }
+    }
+
+    fn assert_num_value(expr: &Expr, num: usize) {
+        match expr {
+            Expr::Num(_, num_str, _, _) => {
+                assert_eq!(&**num_str, &num.to_string())
+            }
+            _ => panic!("Expr wasn't a Num with value {num}: {:?}", expr),
+        }
+    }
+
+    fn assert_var_usage(expr: &Expr, name: &str, interns: &roc_module::symbol::Interns) {
+        match expr {
+            Expr::Var(sym, _) => assert_eq!(sym.as_str(interns), name),
+            _ => panic!("Expr was not a variable usage: {:?}", expr),
+        }
+    }
+
+    fn assert_func_call(
+        expr: &Expr,
+        name: &str,
+        called_via: CalledVia,
+        interns: &roc_module::symbol::Interns,
+    ) -> Vec<(Variable, Loc<Expr>)> {
+        match expr {
+            Expr::LetNonRec(_, loc_expr) => {
+                assert_func_call(&loc_expr.value, name, called_via, interns)
+            }
+            Expr::Call(fun, args, called) if called == &called_via => {
+                match &fun.1.value {
+                    Expr::Var(sym, _) => assert_eq!(sym.as_str(interns), name),
+                    _ => panic!("Builder didn't desugar with mapper at front"),
+                };
+
+                args.clone()
+            }
+            _ => panic!("Expr was not a NewRecordBuilder Call: {:?}", expr),
+        }
+    }
+
+    fn assert_pattern_name(pattern: &Pattern, name: &str, interns: &roc_module::symbol::Interns) {
+        match pattern {
+            Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), name),
+            _ => panic!("Pattern was not an identifier: {:?}", pattern),
+        }
     }
 
     // TAIL CALLS

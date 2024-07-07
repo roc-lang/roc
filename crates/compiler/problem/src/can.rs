@@ -412,8 +412,14 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
-            | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
-            | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::MultipleOldRecordBuilders(region))
+            | Problem::RuntimeError(RuntimeError::UnappliedOldRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::EmptyNewRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::SingleFieldNewRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::OptionalFieldInNewRecordBuilder {
+                record: _,
+                field: region,
+            })
             | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
@@ -663,8 +669,15 @@ pub enum RuntimeError {
 
     DegenerateBranch(Region),
 
-    MultipleRecordBuilders(Region),
-    UnappliedRecordBuilder(Region),
+    MultipleOldRecordBuilders(Region),
+    UnappliedOldRecordBuilder(Region),
+
+    EmptyNewRecordBuilder(Region),
+    SingleFieldNewRecordBuilder(Region),
+    OptionalFieldInNewRecordBuilder {
+        record: Region,
+        field: Region,
+    },
 
     MalformedSuffixed(Region),
 }
@@ -709,8 +722,14 @@ impl RuntimeError {
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
             | RuntimeError::InvalidHexadecimal(region)
-            | RuntimeError::MultipleRecordBuilders(region)
-            | RuntimeError::UnappliedRecordBuilder(region)
+            | RuntimeError::MultipleOldRecordBuilders(region)
+            | RuntimeError::UnappliedOldRecordBuilder(region)
+            | RuntimeError::EmptyNewRecordBuilder(region)
+            | RuntimeError::SingleFieldNewRecordBuilder(region)
+            | RuntimeError::OptionalFieldInNewRecordBuilder {
+                record: _,
+                field: region,
+            }
             | RuntimeError::ReadIngestedFileError { region, .. } => *region,
             RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
