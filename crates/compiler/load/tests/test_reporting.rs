@@ -10935,25 +10935,24 @@ In roc, functions are always written as a lambda, like{}
         record_builder_with_non_function_mapper,
         indoc!(
             r#"
-            x = "abc"
+            xyz = "abc"
 
-            { x <-
+            { xyz <-
                 b: 123,
                 c: 456
             }
             "#
         ),
         @r#"
-    ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
-    
-    Optional fields are not allowed to be used in record builders.
-    
-    4│       { a <-
-    5│           b: 123,
-    6│>          c? 456
-    7│       }
-    
-    Record builders can only have required values for their fields.
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+
+    The `xyz` value is not a function, but it was given 3 arguments:
+
+    6│      { xyz <-
+              ^^^
+
+    Note: Record builders need a mapper function before the `<-` to combine
+    fields together with.
     "#
     );
 
