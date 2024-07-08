@@ -15,7 +15,7 @@ thread_local! {
     static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Generates a unique identifier, useful for intermediate items during desugaring. 
+/// Generates a unique identifier, useful for intermediate items during desugaring.
 fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
         let count = counter.get();
