@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    Pattern, RecordBuilderField, WhenBranch,
+    OldRecordBuilderField, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -85,8 +85,11 @@ impl<'a> Formattable for Expr<'a> {
             | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
             })
-            | MultipleRecordBuilders(loc_subexpr)
-            | UnappliedRecordBuilder(loc_subexpr) => loc_subexpr.is_multiline(),
+            | MultipleOldRecordBuilders(loc_subexpr)
+            | UnappliedOldRecordBuilder(loc_subexpr)
+            | EmptyRecordBuilder(loc_subexpr)
+            | SingleFieldRecordBuilder(loc_subexpr)
+            | OptionalFieldInRecordBuilder(_, loc_subexpr) => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) => subexpr.is_multiline(),
 
@@ -109,7 +112,8 @@ impl<'a> Formattable for Expr<'a> {
             Record(fields) => is_collection_multiline(fields),
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
-            RecordBuilder(fields) => is_collection_multiline(fields),
+            OldRecordBuilder(fields) => is_collection_multiline(fields),
+            RecordBuilder { fields, .. } => is_collection_multiline(fields),
         }
     }
 
@@ -237,7 +241,7 @@ impl<'a> Formattable for Expr<'a> {
                                     Expr::Tuple(_)
                                         | Expr::List(_)
                                         | Expr::Record(_)
-                                        | Expr::RecordBuilder(_)
+                                        | Expr::OldRecordBuilder(_)
                                 )
                                 && a.extract_spaces().before == [CommentOrNewline::Newline]
                         })
@@ -365,14 +369,24 @@ impl<'a> Formattable for Expr<'a> {
             RecordUpdate { update, fields } => {
                 fmt_record_like(
                     buf,
-                    Some(*update),
+                    Some(RecordPrefix::Update(update)),
                     *fields,
                     indent,
                     format_assigned_field_multiline,
                     assigned_field_to_space_before,
                 );
             }
-            RecordBuilder(fields) => {
+            RecordBuilder { mapper, fields } => {
+                fmt_record_like(
+                    buf,
+                    Some(RecordPrefix::Mapper(mapper)),
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                );
+            }
+            OldRecordBuilder(fields) => {
                 fmt_record_like(
                     buf,
                     None,
@@ -520,8 +534,11 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
-            MultipleRecordBuilders { .. } => {}
-            UnappliedRecordBuilder { .. } => {}
+            MultipleOldRecordBuilders { .. } => {}
+            UnappliedOldRecordBuilder { .. } => {}
+            EmptyRecordBuilder { .. } => {}
+            SingleFieldRecordBuilder { .. } => {}
+            OptionalFieldInRecordBuilder(_, _) => {}
         }
     }
 }
@@ -582,7 +599,7 @@ fn is_outdentable(expr: &Expr) -> bool {
         Expr::Tuple(_)
             | Expr::List(_)
             | Expr::Record(_)
-            | Expr::RecordBuilder(_)
+            | Expr::OldRecordBuilder(_)
             | Expr::Closure(..)
     )
 }
@@ -1366,9 +1383,14 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
+enum RecordPrefix<'a> {
+    Update(&'a Loc<Expr<'a>>),
+    Mapper(&'a Loc<Expr<'a>>),
+}
+
 fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     buf: &mut Buf,
-    update: Option<&'a Loc<Expr<'a>>>,
+    prefix: Option<RecordPrefix<'a>>,
     fields: Collection<'a, Loc<Field>>,
     indent: u16,
     format_field_multiline: Format,
@@ -1381,21 +1403,26 @@ fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && update.is_none() {
+    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && prefix.is_none() {
         buf.push_str("{}");
     } else {
         buf.push('{');
 
-        match update {
+        match prefix {
             None => {}
             // We are presuming this to be a Var()
             // If it wasnt a Var() we would not have made
             // it this far. For example "{ 4 & hello = 9 }"
             // doesnt make sense.
-            Some(record_var) => {
+            Some(RecordPrefix::Update(record_var)) => {
                 buf.spaces(1);
                 record_var.format(buf, indent);
                 buf.push_str(" &");
+            }
+            Some(RecordPrefix::Mapper(mapper_var)) => {
+                buf.spaces(1);
+                mapper_var.format(buf, indent);
+                buf.push_str(" <-");
             }
         }
 
@@ -1554,11 +1581,11 @@ fn assigned_field_to_space_before<'a, T>(
 
 fn format_record_builder_field_multiline(
     buf: &mut Buf,
-    field: &RecordBuilderField,
+    field: &OldRecordBuilderField,
     indent: u16,
     separator_prefix: &str,
 ) {
-    use self::RecordBuilderField::*;
+    use self::OldRecordBuilderField::*;
     match field {
         Value(name, spaces, ann) => {
             buf.newline();
@@ -1651,10 +1678,10 @@ fn format_record_builder_field_multiline(
 }
 
 fn record_builder_field_to_space_before<'a>(
-    field: &'a RecordBuilderField<'a>,
-) -> Option<(&RecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
+    field: &'a OldRecordBuilderField<'a>,
+) -> Option<(&OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
     match field {
-        RecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
+        OldRecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
         _ => None,
     }
 }

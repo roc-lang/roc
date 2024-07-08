@@ -560,21 +560,21 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD RECORD BUILDER".to_string(),
+                title: "BAD OLD-STYLE RECORD BUILDER".to_string(),
                 severity,
             }
         }
 
-        EExpr::RecordUpdateBuilder(region) => {
+        EExpr::RecordUpdateAccumulator(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
             let doc = alloc.stack([
                 alloc.reflow(
-                    r"I am partway through parsing a record update, and I found a record builder field:",
+                    r"I am partway through parsing a record update, and I found an old-style record builder field:",
                 ),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("Record builders cannot be updated like records."),
+                alloc.reflow("Old-style record builders cannot be updated like records."),
             ]);
 
             Report {
@@ -1547,13 +1547,13 @@ fn to_import_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("This looks like a record builder field, but those are not allowed in module params."),
+                alloc.reflow("This looks like an old-style record builder field, but those are not allowed in module params."),
             ]);
 
             Report {
                 filename,
                 doc,
-                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
+                title: "OLD-STYLE RECORD BUILDER IN MODULE PARAMS".to_string(),
                 severity,
             }
         }
@@ -1571,6 +1571,23 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "RECORD UPDATE IN MODULE PARAMS".to_string(),
+                severity,
+            }
+        }
+        Params(EImportParams::RecordBuilderFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.reflow("It looks like you're trying to use a record builder, but module params require a standalone record literal."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
                 severity,
             }
         }

@@ -438,7 +438,21 @@ pub enum Expr<'a> {
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     // Record Builders
-    RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
+    /// Applicative record builders, e.g.
+    /// build {
+    ///     foo: <- getData Foo,
+    ///     bar: <- getData Bar,
+    /// }
+    OldRecordBuilder(Collection<'a, Loc<OldRecordBuilderField<'a>>>),
+    /// Mapper-based record builders, e.g.
+    /// { Task.parallel <-
+    ///     foo: Task.getData Foo,
+    ///     bar: Task.getData Bar,
+    /// }
+    RecordBuilder {
+        mapper: &'a Loc<Expr<'a>>,
+        fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    },
 
     // Lookups
     Var {
@@ -501,8 +515,11 @@ pub enum Expr<'a> {
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
-    MultipleRecordBuilders(&'a Loc<Expr<'a>>),
-    UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
+    MultipleOldRecordBuilders(&'a Loc<Expr<'a>>),
+    UnappliedOldRecordBuilder(&'a Loc<Expr<'a>>),
+    EmptyRecordBuilder(&'a Loc<Expr<'a>>),
+    SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
+    OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
 }
 
 impl Expr<'_> {
@@ -615,9 +632,12 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
             .iter()
             .any(|field| is_assigned_value_suffixed(&field.value)),
         Expr::Tuple(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
-        Expr::RecordBuilder(items) => items
+        Expr::OldRecordBuilder(items) => items
             .iter()
             .any(|rbf| is_record_builder_field_suffixed(&rbf.value)),
+        Expr::RecordBuilder { mapper: _, fields } => fields
+            .iter()
+            .any(|field| is_assigned_value_suffixed(&field.value)),
         Expr::Underscore(_) => false,
         Expr::Crash => false,
         Expr::Tag(_) => false,
@@ -637,8 +657,11 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::MalformedClosure => false,
         Expr::MalformedSuffixed(_) => false,
         Expr::PrecedenceConflict(_) => false,
-        Expr::MultipleRecordBuilders(_) => false,
-        Expr::UnappliedRecordBuilder(_) => false,
+        Expr::MultipleOldRecordBuilders(_) => false,
+        Expr::UnappliedOldRecordBuilder(_) => false,
+        Expr::EmptyRecordBuilder(_) => false,
+        Expr::SingleFieldRecordBuilder(_) => false,
+        Expr::OptionalFieldInRecordBuilder(_, _) => false,
     }
 }
 
@@ -663,14 +686,14 @@ fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
     }
 }
 
-fn is_record_builder_field_suffixed(field: &RecordBuilderField<'_>) -> bool {
+fn is_record_builder_field_suffixed(field: &OldRecordBuilderField<'_>) -> bool {
     match field {
-        RecordBuilderField::Value(_, _, a) => is_expr_suffixed(&a.value),
-        RecordBuilderField::ApplyValue(_, _, _, a) => is_expr_suffixed(&a.value),
-        RecordBuilderField::LabelOnly(_) => false,
-        RecordBuilderField::SpaceBefore(a, _) => is_record_builder_field_suffixed(a),
-        RecordBuilderField::SpaceAfter(a, _) => is_record_builder_field_suffixed(a),
-        RecordBuilderField::Malformed(_) => false,
+        OldRecordBuilderField::Value(_, _, a) => is_expr_suffixed(&a.value),
+        OldRecordBuilderField::ApplyValue(_, _, _, a) => is_expr_suffixed(&a.value),
+        OldRecordBuilderField::LabelOnly(_) => false,
+        OldRecordBuilderField::SpaceBefore(a, _) => is_record_builder_field_suffixed(a),
+        OldRecordBuilderField::SpaceAfter(a, _) => is_record_builder_field_suffixed(a),
+        OldRecordBuilderField::Malformed(_) => false,
     }
 }
 
@@ -840,10 +863,10 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         use AssignedField::*;
 
                         match current {
-                            RequiredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
-                            OptionalValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
-                            SpaceBefore(next, _) => current = *next,
-                            SpaceAfter(next, _) => current = *next,
+                            RequiredValue(_, _, loc_val) | OptionalValue(_, _, loc_val) => {
+                                break expr_stack.push(&loc_val.value)
+                            }
+                            SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
                             LabelOnly(_) | Malformed(_) => break,
                         }
                     }
@@ -881,13 +904,13 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         expr_stack.push(&loc_expr.value);
                     }
                 }
-                RecordBuilder(fields) => {
+                OldRecordBuilder(fields) => {
                     expr_stack.reserve(fields.len());
                     for loc_record_builder_field in fields.items {
                         let mut current_field = loc_record_builder_field.value;
 
                         loop {
-                            use RecordBuilderField::*;
+                            use OldRecordBuilderField::*;
 
                             match current_field {
                                 Value(_, _, loc_val) => break expr_stack.push(&loc_val.value),
@@ -900,6 +923,14 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                             }
                         }
                     }
+                }
+                RecordBuilder {
+                    mapper: map2,
+                    fields,
+                } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&map2.value);
+                    push_stack_from_record_fields!(fields);
                 }
                 Closure(_, body) => expr_stack.push(&body.value),
                 Backpassing(_, a, b) => {
@@ -965,9 +996,11 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | SpaceAfter(expr, _)
                 | ParensAround(expr) => expr_stack.push(expr),
 
-                MultipleRecordBuilders(loc_expr) | UnappliedRecordBuilder(loc_expr) => {
-                    expr_stack.push(&loc_expr.value)
-                }
+                MultipleOldRecordBuilders(loc_expr)
+                | UnappliedOldRecordBuilder(loc_expr)
+                | EmptyRecordBuilder(loc_expr)
+                | SingleFieldRecordBuilder(loc_expr)
+                | OptionalFieldInRecordBuilder(_, loc_expr) => expr_stack.push(&loc_expr.value),
 
                 Float(_)
                 | Num(_)
@@ -1570,7 +1603,7 @@ impl<'a, Val> AssignedField<'a, Val> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RecordBuilderField<'a> {
+pub enum OldRecordBuilderField<'a> {
     // A field with a value, e.g. `{ name: "blah" }`
     Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
 
@@ -1586,8 +1619,8 @@ pub enum RecordBuilderField<'a> {
     LabelOnly(Loc<&'a str>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a OldRecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
@@ -2105,12 +2138,12 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
 }
 
-impl<'a> Spaceable<'a> for RecordBuilderField<'a> {
+impl<'a> Spaceable<'a> for OldRecordBuilderField<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        RecordBuilderField::SpaceBefore(self, spaces)
+        OldRecordBuilderField::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        RecordBuilderField::SpaceAfter(self, spaces)
+        OldRecordBuilderField::SpaceAfter(self, spaces)
     }
 }
 
@@ -2409,7 +2442,8 @@ impl<'a> Malformed for Expr<'a> {
             Record(items) => items.is_malformed(),
             Tuple(items) => items.is_malformed(),
 
-            RecordBuilder(items) => items.is_malformed(),
+            OldRecordBuilder(items) => items.is_malformed(),
+            RecordBuilder { mapper: map2, fields } => map2.is_malformed() || fields.is_malformed(),
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
@@ -2431,8 +2465,11 @@ impl<'a> Malformed for Expr<'a> {
             MalformedClosure |
             MalformedSuffixed(..) |
             PrecedenceConflict(_) |
-            MultipleRecordBuilders(_) |
-            UnappliedRecordBuilder(_) => true,
+            MultipleOldRecordBuilders(_) |
+            UnappliedOldRecordBuilder(_) |
+            EmptyRecordBuilder(_) |
+            SingleFieldRecordBuilder(_) |
+            OptionalFieldInRecordBuilder(_, _) => true,
         }
     }
 }
@@ -2509,15 +2546,15 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     }
 }
 
-impl<'a> Malformed for RecordBuilderField<'a> {
+impl<'a> Malformed for OldRecordBuilderField<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            RecordBuilderField::Value(_, _, expr)
-            | RecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
-            RecordBuilderField::LabelOnly(_) => false,
-            RecordBuilderField::SpaceBefore(field, _)
-            | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
-            RecordBuilderField::Malformed(_) => true,
+            OldRecordBuilderField::Value(_, _, expr)
+            | OldRecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
+            OldRecordBuilderField::LabelOnly(_) => false,
+            OldRecordBuilderField::SpaceBefore(field, _)
+            | OldRecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
+            OldRecordBuilderField::Malformed(_) => true,
         }
     }
 }

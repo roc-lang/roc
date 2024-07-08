@@ -6,8 +6,8 @@ use roc_parse::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
         Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
         ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
-        IngestedFileImport, Module, ModuleImport, ModuleImportParams, Pattern, PatternAs,
-        RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
+        IngestedFileImport, Module, ModuleImport, ModuleImportParams, OldRecordBuilderField,
+        Pattern, PatternAs, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
     header::{
@@ -717,26 +717,26 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
     }
 }
 
-impl<'a> RemoveSpaces<'a> for RecordBuilderField<'a> {
+impl<'a> RemoveSpaces<'a> for OldRecordBuilderField<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            RecordBuilderField::Value(a, _, c) => RecordBuilderField::Value(
+            OldRecordBuilderField::Value(a, _, c) => OldRecordBuilderField::Value(
                 a.remove_spaces(arena),
                 &[],
                 arena.alloc(c.remove_spaces(arena)),
             ),
-            RecordBuilderField::ApplyValue(a, _, _, c) => RecordBuilderField::ApplyValue(
+            OldRecordBuilderField::ApplyValue(a, _, _, c) => OldRecordBuilderField::ApplyValue(
                 a.remove_spaces(arena),
                 &[],
                 &[],
                 arena.alloc(c.remove_spaces(arena)),
             ),
-            RecordBuilderField::LabelOnly(a) => {
-                RecordBuilderField::LabelOnly(a.remove_spaces(arena))
+            OldRecordBuilderField::LabelOnly(a) => {
+                OldRecordBuilderField::LabelOnly(a.remove_spaces(arena))
             }
-            RecordBuilderField::Malformed(a) => RecordBuilderField::Malformed(a),
-            RecordBuilderField::SpaceBefore(a, _) => a.remove_spaces(arena),
-            RecordBuilderField::SpaceAfter(a, _) => a.remove_spaces(arena),
+            OldRecordBuilderField::Malformed(a) => OldRecordBuilderField::Malformed(a),
+            OldRecordBuilderField::SpaceBefore(a, _) => a.remove_spaces(arena),
+            OldRecordBuilderField::SpaceAfter(a, _) => a.remove_spaces(arena),
         }
     }
 }
@@ -790,7 +790,11 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
-            Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
+            Expr::OldRecordBuilder(a) => Expr::OldRecordBuilder(a.remove_spaces(arena)),
+            Expr::RecordBuilder { mapper, fields } => Expr::RecordBuilder {
+                mapper: arena.alloc(mapper.remove_spaces(arena)),
+                fields: fields.remove_spaces(arena),
+            },
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
@@ -857,8 +861,13 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
-            Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
-            Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
+            Expr::MultipleOldRecordBuilders(a) => Expr::MultipleOldRecordBuilders(a),
+            Expr::UnappliedOldRecordBuilder(a) => Expr::UnappliedOldRecordBuilder(a),
+            Expr::EmptyRecordBuilder(a) => Expr::EmptyRecordBuilder(a),
+            Expr::SingleFieldRecordBuilder(a) => Expr::SingleFieldRecordBuilder(a),
+            Expr::OptionalFieldInRecordBuilder(name, a) => {
+                Expr::OptionalFieldInRecordBuilder(name, a)
+            }
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
