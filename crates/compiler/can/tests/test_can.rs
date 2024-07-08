@@ -893,7 +893,7 @@ mod test_can {
         let first_map2_args = assert_func_call(
             &out.loc_expr.value,
             "map2",
-            CalledVia::NewRecordBuilder,
+            CalledVia::RecordBuilder,
             &out.interns,
         );
         let (first_arg, second_arg, third_arg) = match &first_map2_args[..] {
@@ -903,12 +903,8 @@ mod test_can {
 
         assert_num_value(first_arg, 1);
 
-        let inner_map2_args = assert_func_call(
-            second_arg,
-            "map2",
-            CalledVia::NewRecordBuilder,
-            &out.interns,
-        );
+        let inner_map2_args =
+            assert_func_call(second_arg, "map2", CalledVia::RecordBuilder, &out.interns);
         let (first_inner_arg, second_inner_arg, third_inner_arg) = match &inner_map2_args[..] {
             [first, second, third] => (&first.1.value, &second.1.value, &third.1.value),
             _ => panic!("inner map2 didn't receive three arguments"),
@@ -1025,7 +1021,7 @@ mod test_can {
 
                 args.clone()
             }
-            _ => panic!("Expr was not a NewRecordBuilder Call: {:?}", expr),
+            _ => panic!("Expr was not a RecordBuilder Call: {:?}", expr),
         }
     }
 

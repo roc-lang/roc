@@ -1024,7 +1024,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::OldRecordBuilder(_) => {
             internal_error!("Old record builder should have been desugared by now")
         }
-        ast::Expr::NewRecordBuilder { .. } => {
+        ast::Expr::RecordBuilder { .. } => {
             internal_error!("New record builder should have been desugared by now")
         }
         ast::Expr::Backpassing(_, _, _) => {
@@ -1359,27 +1359,27 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::EmptyNewRecordBuilder(sub_expr) => {
+        ast::Expr::EmptyRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = EmptyNewRecordBuilder(sub_expr.region);
+            let problem = EmptyRecordBuilder(sub_expr.region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::SingleFieldNewRecordBuilder(sub_expr) => {
+        ast::Expr::SingleFieldRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = SingleFieldNewRecordBuilder(sub_expr.region);
+            let problem = SingleFieldRecordBuilder(sub_expr.region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::OptionalFieldInNewRecordBuilder(loc_name, loc_value) => {
+        ast::Expr::OptionalFieldInRecordBuilder(loc_name, loc_value) => {
             use roc_problem::can::RuntimeError::*;
 
             let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInNewRecordBuilder {record: region, field: sub_region };
+            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -2445,9 +2445,9 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::MalformedSuffixed(loc_expr)
         | ast::Expr::MultipleOldRecordBuilders(loc_expr)
         | ast::Expr::UnappliedOldRecordBuilder(loc_expr)
-        | ast::Expr::EmptyNewRecordBuilder(loc_expr)
-        | ast::Expr::SingleFieldNewRecordBuilder(loc_expr)
-        | ast::Expr::OptionalFieldInNewRecordBuilder(_, loc_expr)
+        | ast::Expr::EmptyRecordBuilder(loc_expr)
+        | ast::Expr::SingleFieldRecordBuilder(loc_expr)
+        | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)
         | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
@@ -2510,7 +2510,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                 | ast::OldRecordBuilderField::SpaceAfter(_, _) => false,
             })
         }
-        ast::Expr::NewRecordBuilder { mapper, fields } => {
+        ast::Expr::RecordBuilder { mapper, fields } => {
             is_valid_interpolation(&mapper.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)

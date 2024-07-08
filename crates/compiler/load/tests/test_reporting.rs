@@ -10856,7 +10856,7 @@ In roc, functions are always written as a lambda, like{}
     // );
 
     test_report!(
-        empty_new_record_builder,
+        empty_record_builder,
         indoc!(
             r#"
             { a <- }
@@ -10870,12 +10870,12 @@ In roc, functions are always written as a lambda, like{}
     4│      { a <- }
             ^^^^^^^^
     
-    Note: We need at least two fields to combine their values into a record.
+    I need at least two fields to combine their values into a record.
     "#
     );
 
     test_report!(
-        single_field_new_record_builder,
+        single_field_record_builder,
         indoc!(
             r#"
             { a <-
@@ -10892,12 +10892,12 @@ In roc, functions are always written as a lambda, like{}
     5│>          b: 123
     6│>      }
     
-    Note: We need at least two fields to combine their values into a record.
+    I need at least two fields to combine their values into a record.
     "#
     );
 
     test_report!(
-        optional_field_in_new_record_builder,
+        optional_field_in_record_builder,
         indoc!(
             r#"
             { a <-
@@ -10916,7 +10916,44 @@ In roc, functions are always written as a lambda, like{}
     6│>          c? 456
     7│       }
     
-    Note: Record builders can only have required values for their fields.
+    Record builders can only have required values for their fields.
+    "#
+    );
+
+    // CalledVia::RecordBuilder => {
+    //     alloc.concat([
+    //         alloc.note(""),
+    //         alloc.reflow("Record builders need a mapper function before the "),
+    //         alloc.keyword("<-"),
+    //         alloc.reflow(" to combine fields together with.")
+    //     ])
+    // }
+    // _ => {
+    //     alloc.reflow("Are there any missing commas? Or missing parentheses?")
+
+    test_report!(
+        record_builder_with_non_function_mapper,
+        indoc!(
+            r#"
+            x = "abc"
+
+            { x <-
+                b: 123,
+                c: 456
+            }
+            "#
+        ),
+        @r#"
+    ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
+    
+    Optional fields are not allowed to be used in record builders.
+    
+    4│       { a <-
+    5│           b: 123,
+    6│>          c? 456
+    7│       }
+    
+    Record builders can only have required values for their fields.
     "#
     );
 

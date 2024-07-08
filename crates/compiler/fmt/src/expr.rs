@@ -87,9 +87,9 @@ impl<'a> Formattable for Expr<'a> {
             })
             | MultipleOldRecordBuilders(loc_subexpr)
             | UnappliedOldRecordBuilder(loc_subexpr)
-            | EmptyNewRecordBuilder(loc_subexpr)
-            | SingleFieldNewRecordBuilder(loc_subexpr)
-            | OptionalFieldInNewRecordBuilder(_, loc_subexpr) => loc_subexpr.is_multiline(),
+            | EmptyRecordBuilder(loc_subexpr)
+            | SingleFieldRecordBuilder(loc_subexpr)
+            | OptionalFieldInRecordBuilder(_, loc_subexpr) => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) => subexpr.is_multiline(),
 
@@ -113,7 +113,7 @@ impl<'a> Formattable for Expr<'a> {
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
             OldRecordBuilder(fields) => is_collection_multiline(fields),
-            NewRecordBuilder { fields, .. } => is_collection_multiline(fields),
+            RecordBuilder { fields, .. } => is_collection_multiline(fields),
         }
     }
 
@@ -376,7 +376,7 @@ impl<'a> Formattable for Expr<'a> {
                     assigned_field_to_space_before,
                 );
             }
-            NewRecordBuilder { mapper, fields } => {
+            RecordBuilder { mapper, fields } => {
                 fmt_record_like(
                     buf,
                     Some(RecordPrefix::Mapper(mapper)),
@@ -536,9 +536,9 @@ impl<'a> Formattable for Expr<'a> {
             PrecedenceConflict { .. } => {}
             MultipleOldRecordBuilders { .. } => {}
             UnappliedOldRecordBuilder { .. } => {}
-            EmptyNewRecordBuilder { .. } => {}
-            SingleFieldNewRecordBuilder { .. } => {}
-            OptionalFieldInNewRecordBuilder(_, _) => {}
+            EmptyRecordBuilder { .. } => {}
+            SingleFieldRecordBuilder { .. } => {}
+            OptionalFieldInRecordBuilder(_, _) => {}
         }
     }
 }

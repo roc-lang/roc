@@ -104,7 +104,7 @@ pub enum CalledVia {
     /// ```roc
     /// Task.parallel (get "a") (get "b") \foo, bar -> { foo, bar }
     /// ```
-    NewRecordBuilder,
+    RecordBuilder,
 
     /// This call is the result of desugaring a Task.await from `!` syntax
     /// e.g. Stdout.line! "Hello" becomes Task.await (Stdout.line "Hello") \{} -> ...

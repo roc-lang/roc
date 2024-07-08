@@ -449,7 +449,7 @@ pub enum Expr<'a> {
     ///     foo: Task.getData Foo,
     ///     bar: Task.getData Bar,
     /// }
-    NewRecordBuilder {
+    RecordBuilder {
         mapper: &'a Loc<Expr<'a>>,
         fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     },
@@ -517,9 +517,9 @@ pub enum Expr<'a> {
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
     MultipleOldRecordBuilders(&'a Loc<Expr<'a>>),
     UnappliedOldRecordBuilder(&'a Loc<Expr<'a>>),
-    EmptyNewRecordBuilder(&'a Loc<Expr<'a>>),
-    SingleFieldNewRecordBuilder(&'a Loc<Expr<'a>>),
-    OptionalFieldInNewRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
+    EmptyRecordBuilder(&'a Loc<Expr<'a>>),
+    SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
+    OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
 }
 
 impl Expr<'_> {
@@ -635,7 +635,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::OldRecordBuilder(items) => items
             .iter()
             .any(|rbf| is_record_builder_field_suffixed(&rbf.value)),
-        Expr::NewRecordBuilder { mapper: _, fields } => fields
+        Expr::RecordBuilder { mapper: _, fields } => fields
             .iter()
             .any(|field| is_assigned_value_suffixed(&field.value)),
         Expr::Underscore(_) => false,
@@ -659,9 +659,9 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::PrecedenceConflict(_) => false,
         Expr::MultipleOldRecordBuilders(_) => false,
         Expr::UnappliedOldRecordBuilder(_) => false,
-        Expr::EmptyNewRecordBuilder(_) => false,
-        Expr::SingleFieldNewRecordBuilder(_) => false,
-        Expr::OptionalFieldInNewRecordBuilder(_, _) => false,
+        Expr::EmptyRecordBuilder(_) => false,
+        Expr::SingleFieldRecordBuilder(_) => false,
+        Expr::OptionalFieldInRecordBuilder(_, _) => false,
     }
 }
 
@@ -924,7 +924,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         }
                     }
                 }
-                NewRecordBuilder {
+                RecordBuilder {
                     mapper: map2,
                     fields,
                 } => {
@@ -998,9 +998,9 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
 
                 MultipleOldRecordBuilders(loc_expr)
                 | UnappliedOldRecordBuilder(loc_expr)
-                | EmptyNewRecordBuilder(loc_expr)
-                | SingleFieldNewRecordBuilder(loc_expr)
-                | OptionalFieldInNewRecordBuilder(_, loc_expr) => expr_stack.push(&loc_expr.value),
+                | EmptyRecordBuilder(loc_expr)
+                | SingleFieldRecordBuilder(loc_expr)
+                | OptionalFieldInRecordBuilder(_, loc_expr) => expr_stack.push(&loc_expr.value),
 
                 Float(_)
                 | Num(_)
@@ -2437,7 +2437,7 @@ impl<'a> Malformed for Expr<'a> {
             Tuple(items) => items.is_malformed(),
 
             OldRecordBuilder(items) => items.is_malformed(),
-            NewRecordBuilder { mapper: map2, fields } => map2.is_malformed() || fields.is_malformed(),
+            RecordBuilder { mapper: map2, fields } => map2.is_malformed() || fields.is_malformed(),
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
@@ -2461,9 +2461,9 @@ impl<'a> Malformed for Expr<'a> {
             PrecedenceConflict(_) |
             MultipleOldRecordBuilders(_) |
             UnappliedOldRecordBuilder(_) |
-            EmptyNewRecordBuilder(_) |
-            SingleFieldNewRecordBuilder(_) |
-            OptionalFieldInNewRecordBuilder(_, _) => true,
+            EmptyRecordBuilder(_) |
+            SingleFieldRecordBuilder(_) |
+            OptionalFieldInRecordBuilder(_, _) => true,
         }
     }
 }

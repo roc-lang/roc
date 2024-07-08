@@ -991,6 +991,38 @@ mod cli_run {
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
+    fn combine_tasks_with_record_builder() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "combine-tasks.roc",
+            &[],
+            &[],
+            &[],
+            "For multiple tasks: {a: 123, b: \"abc\", c: [123], d: [\"abc\"], e: {\"a\": \"b\"}}\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn parse_args_with_record_builder() {
+        test_roc_app(
+            "crates/cli/tests/cli",
+            "parse-args.roc",
+            &[],
+            &[],
+            &[],
+            "Success: {count: 5, doubled: 14, file: \"file.txt\"}\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
             "crates/cli/tests/cli",

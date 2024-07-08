@@ -998,13 +998,13 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
         |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
             if let Some(prefix) = record.prefix {
                 match prefix {
-                    RecordHelpPrefix::Update(update) => {
+                    (update, RecordHelpPrefix::Update) => {
                         return Err((
                             MadeProgress,
                             EImportParams::RecordUpdateFound(update.region),
                         ))
                     }
-                    RecordHelpPrefix::Mapper(mapper) => {
+                    (mapper, RecordHelpPrefix::Mapper) => {
                         return Err((
                             MadeProgress,
                             EImportParams::RecordBuilderFound(mapper.region),
@@ -2381,7 +2381,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::SpaceAfter(..)
         | Expr::ParensAround(..)
         | Expr::OldRecordBuilder(..)
-        | Expr::NewRecordBuilder { .. } => unreachable!(),
+        | Expr::RecordBuilder { .. } => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -2430,9 +2430,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::PrecedenceConflict { .. }
         | Expr::MultipleOldRecordBuilders { .. }
         | Expr::UnappliedOldRecordBuilder { .. }
-        | Expr::EmptyNewRecordBuilder(_)
-        | Expr::SingleFieldNewRecordBuilder(_)
-        | Expr::OptionalFieldInNewRecordBuilder(_, _)
+        | Expr::EmptyRecordBuilder(_)
+        | Expr::SingleFieldRecordBuilder(_)
+        | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
         | Expr::TaskAwaitBang(..)
@@ -3241,27 +3241,20 @@ fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> 
     )
 }
 
-fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
+fn record_prefix_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
     specialize_err(
-        |_, pos| ERecord::Updateable(pos),
+        |_, pos| ERecord::Prefix(pos),
         map_with_arena(parse_ident, ident_to_expr),
     )
 }
 
-fn record_builder_mapper_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
-    specialize_err(
-        |_, pos| ERecord::BuilderMapper(pos),
-        map_with_arena(parse_ident, ident_to_expr),
-    )
-}
-
-enum RecordHelpPrefix<'a> {
-    Update(Loc<Expr<'a>>),
-    Mapper(Loc<Expr<'a>>),
+enum RecordHelpPrefix {
+    Update,
+    Mapper,
 }
 
 struct RecordHelp<'a> {
-    prefix: Option<RecordHelpPrefix<'a>>,
+    prefix: Option<(Loc<Expr<'a>>, RecordHelpPrefix)>,
     fields: Collection<'a, Loc<RecordField<'a>>>,
 }
 
@@ -3271,28 +3264,25 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
         reset_min_indent(record!(RecordHelp {
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
-            prefix: optional(map_with_arena(
-                either(
-                    backtrackable(skip_second(
-                        spaces_around(
-                            // We wrap the ident in an Expr here,
-                            // so that we have a Spaceable value to work with,
-                            // and then in canonicalization verify that it's an Expr::Var
-                            // (and not e.g. an `Expr::Access`) and extract its string.
-                            loc(record_updateable_identifier()),
-                        ),
-                        byte(b'&', ERecord::Ampersand)
-                    )),
-                    backtrackable(skip_second(
-                        spaces_around(loc(record_builder_mapper_identifier()),),
-                        two_bytes(b'<', b'-', ERecord::Arrow),
-                    )),
+            prefix: optional(backtrackable(and(
+                spaces_around(
+                    // We wrap the ident in an Expr here,
+                    // so that we have a Spaceable value to work with,
+                    // and then in canonicalization verify that it's an Expr::Var
+                    // (and not e.g. an `Expr::Access`) and extract its string.
+                    loc(record_prefix_identifier()),
                 ),
-                |_arena, output| match output {
-                    Either::First(update) => RecordHelpPrefix::Update(update),
-                    Either::Second(mapper) => RecordHelpPrefix::Mapper(mapper),
-                }
-            )),
+                map_with_arena(
+                    either(
+                        byte(b'&', ERecord::Ampersand),
+                        two_bytes(b'<', b'-', ERecord::Arrow),
+                    ),
+                    |_arena, output| match output {
+                        Either::First(()) => RecordHelpPrefix::Update,
+                        Either::Second(()) => RecordHelpPrefix::Mapper,
+                    }
+                )
+            ))),
             fields: collection_inner(
                 loc(record_field()),
                 byte(b',', ERecord::End),
@@ -3312,10 +3302,10 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
         ),
         move |arena, state, _, (record, accessors)| {
             let expr_result = match record.prefix {
-                Some(RecordHelpPrefix::Update(update)) => {
+                Some((update, RecordHelpPrefix::Update)) => {
                     record_update_help(arena, update, record.fields)
                 }
-                Some(RecordHelpPrefix::Mapper(mapper)) => {
+                Some((mapper, RecordHelpPrefix::Mapper)) => {
                     new_record_builder_help(arena, mapper, record.fields)
                 }
                 None => {
@@ -3384,7 +3374,7 @@ fn new_record_builder_help<'a>(
         }
     });
 
-    result.map(|fields| Expr::NewRecordBuilder {
+    result.map(|fields| Expr::RecordBuilder {
         mapper: &*arena.alloc(mapper),
         fields,
     })

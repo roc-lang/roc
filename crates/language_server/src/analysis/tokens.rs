@@ -684,7 +684,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Record(rcd) => rcd.iter_tokens(arena),
             Expr::Tuple(tup) => tup.iter_tokens(arena),
             Expr::OldRecordBuilder(rb) => rb.iter_tokens(arena),
-            Expr::NewRecordBuilder { mapper, fields } => (mapper.iter_tokens(arena).into_iter())
+            Expr::RecordBuilder { mapper, fields } => (mapper.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
                 .collect_in(arena),
             Expr::Var { .. } => onetoken(Token::Variable, region, arena),
@@ -732,9 +732,9 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::ParensAround(e) => Loc::at(region, *e).iter_tokens(arena),
             Expr::MultipleOldRecordBuilders(e) => e.iter_tokens(arena),
             Expr::UnappliedOldRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::EmptyNewRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::SingleFieldNewRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::OptionalFieldInNewRecordBuilder(_name, e) => e.iter_tokens(arena),
+            Expr::EmptyRecordBuilder(e) => e.iter_tokens(arena),
+            Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
+            Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
             Expr::MalformedIdent(_, _)
             | Expr::MalformedClosure
             | Expr::PrecedenceConflict(_)

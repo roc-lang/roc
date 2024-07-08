@@ -422,8 +422,7 @@ pub enum ERecord<'a> {
     End(Position),
     Open(Position),
 
-    Updateable(Position),
-    BuilderMapper(Position),
+    Prefix(Position),
     Field(Position),
     Colon(Position),
     QuestionMark(Position),
@@ -739,8 +738,7 @@ pub enum ETypeAbilityImpl<'a> {
 
     Space(BadInputError, Position),
 
-    Updateable(Position),
-    BuilderMapper(Position),
+    Prefix(Position),
     QuestionMark(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
@@ -757,8 +755,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
-            ERecord::Updateable(p) => ETypeAbilityImpl::Updateable(p),
-            ERecord::BuilderMapper(p) => ETypeAbilityImpl::BuilderMapper(p),
+            ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),

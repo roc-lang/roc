@@ -791,7 +791,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
             Expr::OldRecordBuilder(a) => Expr::OldRecordBuilder(a.remove_spaces(arena)),
-            Expr::NewRecordBuilder { mapper, fields } => Expr::NewRecordBuilder {
+            Expr::RecordBuilder { mapper, fields } => Expr::RecordBuilder {
                 mapper: arena.alloc(mapper.remove_spaces(arena)),
                 fields: fields.remove_spaces(arena),
             },
@@ -863,10 +863,10 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::MultipleOldRecordBuilders(a) => Expr::MultipleOldRecordBuilders(a),
             Expr::UnappliedOldRecordBuilder(a) => Expr::UnappliedOldRecordBuilder(a),
-            Expr::EmptyNewRecordBuilder(a) => Expr::EmptyNewRecordBuilder(a),
-            Expr::SingleFieldNewRecordBuilder(a) => Expr::SingleFieldNewRecordBuilder(a),
-            Expr::OptionalFieldInNewRecordBuilder(name, a) => {
-                Expr::OptionalFieldInNewRecordBuilder(name, a)
+            Expr::EmptyRecordBuilder(a) => Expr::EmptyRecordBuilder(a),
+            Expr::SingleFieldRecordBuilder(a) => Expr::SingleFieldRecordBuilder(a),
+            Expr::OptionalFieldInRecordBuilder(name, a) => {
+                Expr::OptionalFieldInRecordBuilder(name, a)
             }
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),

@@ -1175,7 +1175,7 @@ fn to_expr_report<'b>(
                                         alloc.reflow(" to assign the field directly.")
                                     ])
                                 }
-                                CalledVia::NewRecordBuilder => {
+                                CalledVia::RecordBuilder => {
                                     alloc.concat([
                                         alloc.note(""),
                                         alloc.reflow("Record builders need a mapper function before the "),

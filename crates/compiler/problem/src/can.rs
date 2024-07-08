@@ -414,9 +414,9 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
             | Problem::RuntimeError(RuntimeError::MultipleOldRecordBuilders(region))
             | Problem::RuntimeError(RuntimeError::UnappliedOldRecordBuilder(region))
-            | Problem::RuntimeError(RuntimeError::EmptyNewRecordBuilder(region))
-            | Problem::RuntimeError(RuntimeError::SingleFieldNewRecordBuilder(region))
-            | Problem::RuntimeError(RuntimeError::OptionalFieldInNewRecordBuilder {
+            | Problem::RuntimeError(RuntimeError::EmptyRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::SingleFieldRecordBuilder(region))
+            | Problem::RuntimeError(RuntimeError::OptionalFieldInRecordBuilder {
                 record: _,
                 field: region,
             })
@@ -672,9 +672,9 @@ pub enum RuntimeError {
     MultipleOldRecordBuilders(Region),
     UnappliedOldRecordBuilder(Region),
 
-    EmptyNewRecordBuilder(Region),
-    SingleFieldNewRecordBuilder(Region),
-    OptionalFieldInNewRecordBuilder {
+    EmptyRecordBuilder(Region),
+    SingleFieldRecordBuilder(Region),
+    OptionalFieldInRecordBuilder {
         record: Region,
         field: Region,
     },
@@ -724,9 +724,9 @@ impl RuntimeError {
             | RuntimeError::InvalidHexadecimal(region)
             | RuntimeError::MultipleOldRecordBuilders(region)
             | RuntimeError::UnappliedOldRecordBuilder(region)
-            | RuntimeError::EmptyNewRecordBuilder(region)
-            | RuntimeError::SingleFieldNewRecordBuilder(region)
-            | RuntimeError::OptionalFieldInNewRecordBuilder {
+            | RuntimeError::EmptyRecordBuilder(region)
+            | RuntimeError::SingleFieldRecordBuilder(region)
+            | RuntimeError::OptionalFieldInRecordBuilder {
                 record: _,
                 field: region,
             }

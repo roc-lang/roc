@@ -2447,25 +2447,25 @@ fn pretty_runtime_error<'b>(
 
             title = "UNAPPLIED OLD-STYLE RECORD BUILDER";
         }
-        RuntimeError::EmptyNewRecordBuilder(region) => {
+        RuntimeError::EmptyRecordBuilder(region) => {
             doc = alloc.stack([
                 alloc.reflow("This record builder has no fields:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.note("We need at least two fields to combine their values into a record."),
+                alloc.reflow("I need at least two fields to combine their values into a record."),
             ]);
 
             title = "EMPTY RECORD BUILDER";
         }
-        RuntimeError::SingleFieldNewRecordBuilder(region) => {
+        RuntimeError::SingleFieldRecordBuilder(region) => {
             doc = alloc.stack([
                 alloc.reflow("This record builder only has one field:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.note("We need at least two fields to combine their values into a record."),
+                alloc.reflow("I need at least two fields to combine their values into a record."),
             ]);
 
             title = "NOT ENOUGH FIELDS IN RECORD BUILDER";
         }
-        RuntimeError::OptionalFieldInNewRecordBuilder {
+        RuntimeError::OptionalFieldInRecordBuilder {
             record: record_region,
             field: field_region,
         } => {
@@ -2476,7 +2476,7 @@ fn pretty_runtime_error<'b>(
                     lines.convert_region(field_region),
                     severity,
                 ),
-                alloc.note("Record builders can only have required values for their fields."),
+                alloc.reflow("Record builders can only have required values for their fields."),
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
