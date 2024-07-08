@@ -1,7 +1,7 @@
 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            Index(2147483648),
         ],
         regions: [
             @0-39,
@@ -15,45 +15,6 @@ Defs(
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-1 Identifier {
-                    ident: "f",
-                },
-                @3-27 Function(
-                    [
-                        @3-13 Tuple {
-                            elems: [
-                                @4-7 Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                                @9-12 Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                            ],
-                            ext: None,
-                        },
-                    ],
-                    @17-27 Tuple {
-                        elems: [
-                            @18-21 Apply(
-                                "",
-                                "Str",
-                                [],
-                            ),
-                            @23-26 Apply(
-                                "",
-                                "Str",
-                                [],
-                            ),
-                        ],
-                        ext: None,
-                    },
-                ),
-            ),
             AnnotatedBody {
                 ann_pattern: @0-1 Identifier {
                     ident: "f",
