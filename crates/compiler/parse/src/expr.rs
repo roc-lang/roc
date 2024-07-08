@@ -349,11 +349,12 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
 
 fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     line_min_indent(move |arena, state: State<'a>, min_indent: u32| {
+        let end = state.pos();
+
         let (_, expr, state) =
             loc_possibly_negative_or_negated_term(options).parse(arena, state, min_indent)?;
 
         let initial_state = state.clone();
-        let end = state.pos();
 
         let new_min_indent = if is_expr_suffixed(&expr.value) {
             min_indent + 1
@@ -369,7 +370,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     arguments: Vec::new_in(arena),
                     expr,
                     spaces_after: spaces_before_op,
-                    end,
+                    end: initial_state.pos(),
                 };
 
                 match parse_expr_end(

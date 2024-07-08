@@ -1146,8 +1146,6 @@ impl<'a> ImportAlias<'a> {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
-    /// A collection of references by index to either `type_defs` or `value_defs`
-    /// It's an entry point for actual definitions, while `type_defs` and `value_defs` are append-only collections
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
     pub regions: std::vec::Vec<Region>,
     pub space_before: std::vec::Vec<Slice<CommentOrNewline<'a>>>,
@@ -1227,29 +1225,25 @@ impl<'a> Defs<'a> {
             .split()
         {
             Ok(type_index) => {
-                let index = type_index.index();
-
                 // remove from vec
-                self.type_defs.remove(index);
+                self.type_defs.remove(type_index.index());
 
                 // update all of the remaining indexes in type_defs
-                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+                for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
                     // only update later indexes into type_defs
-                    if tag_index > index && tag.split().is_ok() {
+                    if current_tag_index > tag_index && tag.split().is_ok() {
                         tag.decrement_index();
                     }
                 }
             }
             Err(value_index) => {
-                let index: usize = value_index.index();
-
                 // remove from vec
-                self.value_defs.remove(index);
+                self.value_defs.remove(value_index.index());
 
                 // update all of the remaining indexes in value_defs
-                for (tag_index, tag) in self.tags.iter_mut().enumerate() {
+                for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
                     // only update later indexes into value_defs
-                    if tag_index > index && tag.split().is_err() {
+                    if current_tag_index > tag_index && tag.split().is_err() {
                         tag.decrement_index();
                     }
                 }
@@ -1292,18 +1286,26 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
-    /// Replace the `value_def` at the given index
+    /// Replace with `value_def` at the given index
     pub fn replace_with_value_def(
         &mut self,
-        index: usize,
+        tag_index: usize,
         value_def: ValueDef<'a>,
         region: Region,
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
-        let tag = EitherIndex::from_right(value_def_index);
-
-        self.tags[index] = tag;
-        self.regions[index] = region;
+        // split() converts `EitherIndex<TypeDef<'a>, ValueDef<'a>>` to:
+        // `Result<Index<TypeDef<'a>>, Index<ValueDef<'a>>>`
+        //
+        match self.tags[tag_index].split() {
+            Ok(_type_index) => {
+                self.remove_tag(tag_index);
+                self.push_value_def(value_def, region, &[], &[]);
+            }
+            Err(value_index) => {
+                self.regions[tag_index] = region;
+                self.value_defs[value_index.index()] = value_def;
+            }
+        }
     }
 
     pub fn push_type_def(
@@ -1677,6 +1679,10 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
+
+    /// Underscore pattern
+    /// Contains the name of underscore pattern (e.g. "a" is for "_a" in code)
+    /// Empty string is unnamed pattern ("" is for "_" in code)
     Underscore(&'a str),
     SingleQuote(&'a str),
 
