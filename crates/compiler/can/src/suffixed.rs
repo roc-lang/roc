@@ -15,12 +15,14 @@ thread_local! {
     static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Generates a unique identifier, useful for intermediate items during desugaring
+/// Generates a unique identifier, useful for intermediate items during desugaring. 
 fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
         let count = counter.get();
         counter.set(count + 1);
 
+        // # is used as prefix because it's impossible for code authors to define names like this.
+        // This makes it easy to see this identifier was created by the compiler.
         format!("#!a{}", count)
     })
 }
@@ -56,7 +58,7 @@ fn init_unwrapped_err<'a>(
         }
         None => {
             // Provide an intermediate answer expression and pattern when unwrapping a
-            // (sub) expression
+            // (sub) expression.
             // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
             let answer_ident = arena.alloc(next_unique_suffixed_ident());
             let sub_new = arena.alloc(Loc::at(

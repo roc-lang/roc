@@ -1293,8 +1293,11 @@ impl<'a> Defs<'a> {
         value_def: ValueDef<'a>,
         region: Region,
     ) {
+        // split() converts `EitherIndex<TypeDef<'a>, ValueDef<'a>>` to:
+        // `Result<Index<TypeDef<'a>>, Index<ValueDef<'a>>>`
+        //
         match self.tags[tag_index].split() {
-            Ok(_) => {
+            Ok(_type_index) => {
                 self.remove_tag(tag_index);
                 self.push_value_def(value_def, region, &[], &[]);
             }
