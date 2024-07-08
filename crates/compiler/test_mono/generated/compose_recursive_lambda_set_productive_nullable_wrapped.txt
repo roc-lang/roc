@@ -29,6 +29,7 @@ procedure List.92 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.5;
     jump List.577 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9;
 
 procedure Num.22 (#Attr.2, #Attr.3):
@@ -162,6 +163,7 @@ procedure Test.0 ():
     let Test.23 : Int1 = CallByName Bool.2;
     let Test.22 : Int1 = CallByName Test.1 Test.23;
     let Test.16 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.18 Test.20 Test.21 Test.22;
+    dec Test.20;
     let Test.18 : Str = "hello";
     let Test.19 : U8 = GetTagId Test.16;
     switch Test.19:

@@ -11,11 +11,9 @@ procedure List.2 (List.108, List.109):
     let List.584 : Int1 = CallByName Num.22 List.109 List.588;
     if List.584 then
         let List.586 : I64 = CallByName List.66 List.108 List.109;
-        dec List.108;
         let List.585 : [C {}, C I64] = TagId(1) List.586;
         ret List.585;
     else
-        dec List.108;
         let List.583 : {} = Struct {};
         let List.582 : [C {}, C I64] = TagId(0) List.583;
         ret List.582;
@@ -57,7 +55,6 @@ procedure Str.42 (#Attr.2):
 
 procedure Str.60 (Str.185):
     let Str.186 : {I64, U8} = CallByName Str.42 Str.185;
-    dec Str.185;
     let Str.238 : U8 = StructAtIndex 1 Str.186;
     let Str.239 : U8 = 0i64;
     let Str.235 : Int1 = CallByName Bool.11 Str.238 Str.239;
@@ -75,8 +72,10 @@ procedure Test.0 ():
     if Test.3 then
         let Test.5 : List I64 = Array [];
         let Test.4 : [C Int1, C I64] = CallByName List.9 Test.5;
+        dec Test.5;
         ret Test.4;
     else
         let Test.2 : Str = "";
         let Test.1 : [C Int1, C I64] = CallByName Str.27 Test.2;
+        dec Test.2;
         ret Test.1;

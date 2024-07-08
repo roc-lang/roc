@@ -155,6 +155,7 @@ procedure List.92 (#Derived_gen.29, #Derived_gen.30, #Derived_gen.31, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.29;
     jump List.577 #Derived_gen.29 #Derived_gen.30 #Derived_gen.31 #Derived_gen.32 #Derived_gen.33;
 
 procedure List.92 (#Derived_gen.52, #Derived_gen.53, #Derived_gen.54, #Derived_gen.55, #Derived_gen.56):
@@ -171,6 +172,7 @@ procedure List.92 (#Derived_gen.52, #Derived_gen.53, #Derived_gen.54, #Derived_g
             dec List.163;
             ret List.164;
     in
+    inc #Derived_gen.52;
     jump List.604 #Derived_gen.52 #Derived_gen.53 #Derived_gen.54 #Derived_gen.55 #Derived_gen.56;
 
 procedure Num.127 (#Attr.2):
@@ -198,6 +200,7 @@ procedure Str.36 (#Attr.2):
     ret Str.237;
 
 procedure Test.20 (Test.58):
+    inc Test.58;
     let Test.299 : [C {}, C {}, C Str] = TagId(2) Test.58;
     let Test.298 : [C {}, C {}, C Str] = CallByName Encode.23 Test.299;
     ret Test.298;
@@ -207,11 +210,13 @@ procedure Test.20 (Test.58):
     ret Test.342;
 
 procedure Test.21 (Test.61, Test.62):
+    inc Test.61;
     let Test.278 : {List [C {}, C {}, C Str], {}} = Struct {Test.61, Test.62};
     let Test.277 : {List [C {}, C {}, C Str], {}} = CallByName Encode.23 Test.278;
     ret Test.277;
 
 procedure Test.21 (Test.61, Test.62):
+    inc Test.61;
     let Test.322 : {List Str, {}} = Struct {Test.61, Test.62};
     let Test.321 : {List Str, {}} = CallByName Encode.23 Test.322;
     ret Test.321;
@@ -228,6 +233,7 @@ procedure Test.213 (Test.214, Test.215, Test.212):
         let Test.315 : [C {}, C {}, C Str] = CallByName #Derived.0 Test.316;
         let Test.314 : List [C {}, C {}, C Str] = Array [Test.315];
         let Test.269 : {List [C {}, C {}, C Str], {}} = CallByName Test.24 Test.313 Test.314;
+        dec Test.313;
         jump Test.270 Test.269;
     else
         let Test.271 : Str = "B";
@@ -235,6 +241,7 @@ procedure Test.213 (Test.214, Test.215, Test.212):
         let Test.310 : [C {}, C {}, C Str] = CallByName #Derived.5 Test.311;
         let Test.272 : List [C {}, C {}, C Str] = Array [Test.310];
         let Test.269 : {List [C {}, C {}, C Str], {}} = CallByName Test.24 Test.271 Test.272;
+        dec Test.271;
         jump Test.270 Test.269;
 
 procedure Test.23 (Test.77):
@@ -251,12 +258,14 @@ procedure Test.24 (Test.80, Test.81):
     let Test.297 : [C {}, C {}, C Str] = CallByName Test.20 Test.80;
     let Test.274 : List [C {}, C {}, C Str] = CallByName List.13 Test.81 Test.297;
     let Test.273 : {List [C {}, C {}, C Str], {}} = CallByName Test.23 Test.274;
+    dec Test.274;
     ret Test.273;
 
 procedure Test.24 (Test.80, Test.81):
     let Test.355 : Str = CallByName Test.20 Test.80;
     let Test.354 : List Str = CallByName List.13 Test.81 Test.355;
     let Test.353 : {List Str, {}} = CallByName Test.23 Test.354;
+    dec Test.354;
     ret Test.353;
 
 procedure Test.3 ():
@@ -311,6 +320,7 @@ procedure Test.63 (Test.64, Test.279, #Attr.12):
     let Test.332 : U64 = CallByName List.6 Test.61;
     let Test.65 : List U8 = CallByName Test.4 Test.64 Test.331 Test.332;
     let Test.325 : List U8 = CallByName List.18 Test.61 Test.65 Test.62;
+    dec Test.61;
     ret Test.325;
 
 procedure Test.63 (Test.64, Test.279, #Attr.12):
@@ -320,6 +330,7 @@ procedure Test.63 (Test.64, Test.279, #Attr.12):
     let Test.288 : U64 = CallByName List.6 Test.61;
     let Test.65 : List U8 = CallByName Test.4 Test.64 Test.287 Test.288;
     let Test.281 : List U8 = CallByName List.18 Test.61 Test.65 Test.62;
+    dec Test.61;
     ret Test.281;
 
 procedure Test.66 (Test.67, Test.68, Test.62):

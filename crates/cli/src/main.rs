@@ -126,7 +126,7 @@ fn main() -> io::Result<()> {
                 .get_one::<String>(FLAG_TARGET)
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
-            let function_kind = FunctionKind::LambdaSet;
+            let function_kind = FunctionKind::from_env();
             roc_linker::generate_stub_lib(
                 input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
