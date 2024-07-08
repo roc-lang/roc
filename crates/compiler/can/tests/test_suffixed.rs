@@ -546,6 +546,18 @@ mod suffixed_tests {
             "##
         );
     }
+
+    #[test]
+    fn type_annotation() {
+        run_test!(
+            r##"
+            f = \x ->
+                r : A
+                r = x!
+                Task.ok r
+            "##
+        );
+    }
 }
 
 #[cfg(test)]
