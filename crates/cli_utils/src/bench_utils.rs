@@ -5,6 +5,7 @@ use std::{path::Path, thread};
 const CFOLD_STACK_SIZE: usize = 8192 * 100000;
 
 const OPTIMIZE_FLAG: &str = "--optimize";
+const BUILD_HOST_FLAG: &str = "--build-host";
 
 fn exec_bench_w_input<T: Measurement>(
     file: &Path,
@@ -14,7 +15,12 @@ fn exec_bench_w_input<T: Measurement>(
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
     let compile_out = run_roc(
-        ["build", OPTIMIZE_FLAG, file.to_str().unwrap()],
+        [
+            "build",
+            BUILD_HOST_FLAG,
+            OPTIMIZE_FLAG,
+            file.to_str().unwrap(),
+        ],
         &[stdin_str],
         &[],
     );
