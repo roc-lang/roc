@@ -54,69 +54,6 @@ pub fn link_preprocessed_host(
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
-// Exposed function to load a platform file and generate a stub lib for it.
-pub fn generate_stub_lib(
-    input_path: &Path,
-    roc_cache_dir: RocCacheDir<'_>,
-    target: Target,
-    function_kind: FunctionKind,
-) -> (PathBuf, PathBuf, Vec<String>) {
-    // Note: this should theoretically just be able to load the host, I think.
-    // Instead, I am loading an entire app because that was simpler and had example code.
-    // If this was expected to stay around for the the long term, we should change it.
-    // But hopefully it will be removable once we have surgical linking on all platforms.
-    let arena = &bumpalo::Bump::new();
-    let loaded = roc_load::load_and_monomorphize(
-        arena,
-        input_path.to_path_buf(),
-        None,
-        roc_cache_dir,
-        LoadConfig {
-            target,
-            function_kind,
-            render: RenderTarget::Generic,
-            palette: DEFAULT_PALETTE,
-            threading: Threading::AllAvailable,
-            exec_mode: ExecutionMode::Executable,
-        },
-    )
-    .unwrap_or_else(|problem| todo!("{:?}", problem));
-
-    let exposed_to_host = loaded
-        .exposed_to_host
-        .top_level_values
-        .keys()
-        .map(|x| x.as_str(&loaded.interns).to_string())
-        .collect();
-
-    let exported_closure_types = loaded
-        .exposed_to_host
-        .closure_types
-        .iter()
-        .map(|x| {
-            format!(
-                "{}_{}",
-                x.module_string(&loaded.interns),
-                x.as_str(&loaded.interns)
-            )
-        })
-        .collect();
-
-    let exposed_symbols = ExposedSymbols {
-        top_level_values: exposed_to_host,
-        exported_closure_types,
-    };
-
-    if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
-        let stub_lib = platform_path.with_file_name(target.stub_app_lib_file_name());
-        let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
-        generate_dynamic_lib(target, &stub_dll_symbols, stub_lib.as_path());
-        (platform_path.into(), stub_lib, stub_dll_symbols)
-    } else {
-        unreachable!();
-    }
-}
-
 pub fn generate_stub_lib_from_loaded(
     target: Target,
     platform_main_roc: &Path,
