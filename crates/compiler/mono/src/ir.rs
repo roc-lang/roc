@@ -1042,7 +1042,10 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
-        let raw_layout = layout_cache.raw_from_var(env.arena, annotation, env.subs)?;
+        let raw_layout = layout_cache.raw_from_var(
+            env.arena, annotation, env.subs, // todo(agus): params?
+            None,
+        )?;
 
         let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
@@ -1407,6 +1410,10 @@ impl<'a, 'i> Env<'a, 'i> {
             // The Derived_gen module takes responsibility for code-generating symbols in the
             // Derived_synth module.
             && !(self.home == ModuleId::DERIVED_GEN && sym_module == ModuleId::DERIVED_SYNTH)
+    }
+
+    pub fn params_var(&self) -> Option<&Variable> {
+        self.params_pattern.as_ref().map(|(var, _, _)| var)
     }
 
     /// While specializing the Derived_gen module, derived implementation symbols from the
@@ -3147,10 +3154,14 @@ fn specialize_host_specializations<'a>(
 
             let mut layout_env = layout::Env::from_components(layout_cache, env.subs, env.arena);
             let lambda_set = env.subs.get_lambda_set(var);
-            let raw_function_layout =
-                RawFunctionLayout::from_var(&mut layout_env, lambda_set.ambient_function)
-                    .value()
-                    .unwrap();
+            let raw_function_layout = RawFunctionLayout::from_var(
+                &mut layout_env,
+                lambda_set.ambient_function,
+                // todo(agus)
+                None,
+            )
+            .value()
+            .unwrap();
 
             let (key, (top_level, proc)) = generate_host_exposed_function(
                 env,
@@ -3844,7 +3855,7 @@ fn build_specialized_proc_from_var<'a>(
     pattern_symbols: &[Symbol],
     fn_var: Variable,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
-    match layout_cache.raw_from_var(env.arena, fn_var, env.subs)? {
+    match layout_cache.raw_from_var(env.arena, fn_var, env.subs, env.params_var())? {
         RawFunctionLayout::Function(pattern_layouts, closure_layout, ret_layout) => {
             let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
             pattern_layouts_vec.extend_from_slice(pattern_layouts);
@@ -4050,7 +4061,7 @@ fn specialize_variable<'a>(
     // for debugging only
     // TODO: can we get rid of raw entirely?
     let raw = layout_cache
-        .raw_from_var(env.arena, fn_var, env.subs)
+        .raw_from_var(env.arena, fn_var, env.subs, /* todo(agus) */ None)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {err:?}"));
 
     let raw = if procs.is_module_thunk(proc_name.name()) {
@@ -4205,6 +4216,7 @@ fn specialize_naked_symbol<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
     symbol: Symbol,
+    opt_params: Option<(Variable, Symbol)>,
 ) -> Stmt<'a> {
     if procs.is_module_thunk(symbol) {
         let fn_var = variable;
@@ -4219,6 +4231,7 @@ fn specialize_naked_symbol<'a>(
             layout_cache,
             assigned,
             hole,
+            opt_params,
         );
 
         return result;
@@ -4236,6 +4249,7 @@ fn specialize_naked_symbol<'a>(
                     layout_cache,
                     assigned,
                     hole,
+                    opt_params,
                 );
 
                 return result;
@@ -4447,11 +4461,32 @@ pub fn with_hole<'a>(
                 symbol = real_symbol;
             }
 
-            specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
+            specialize_naked_symbol(
+                env,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+                symbol,
+                None,
+            )
         }
-        ParamsVar { .. } => {
-            unimplemented!("module params code generation")
-        }
+        ParamsVar {
+            symbol,
+            params_var,
+            params_symbol,
+            ..
+        } => specialize_naked_symbol(
+            env,
+            variable,
+            procs,
+            layout_cache,
+            assigned,
+            hole,
+            symbol,
+            Some((params_var, params_symbol)),
+        ),
         ImportParams(_, _, Some((_, value))) => {
             with_hole(env, *value, variable, procs, layout_cache, assigned, hole)
         }
@@ -4474,6 +4509,7 @@ pub fn with_hole<'a>(
                 assigned,
                 hole,
                 specialization_symbol,
+                None,
             )
         }
         Tag {
@@ -5012,7 +5048,12 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_type, env.subs),
+                        layout_cache.raw_from_var(
+                            env.arena,
+                            function_type,
+                            env.subs,
+                            /* todo(agus) */ None
+                        ),
                         "Expr::Accessor"
                     );
 
@@ -5110,7 +5151,13 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_type, env.subs),
+                        layout_cache.raw_from_var(
+                            env.arena,
+                            function_type,
+                            env.subs,
+                            // todo(agus)
+                            None
+                        ),
                         "Expr::OpaqueWrapFunction"
                     );
 
@@ -5344,7 +5391,12 @@ pub fn with_hole<'a>(
         }) => {
             let loc_body = *boxed_body;
 
-            let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
+            let raw = layout_cache.raw_from_var(
+                env.arena,
+                function_type,
+                env.subs,
+                /* todo(agus) */ None,
+            );
 
             match return_on_layout_error!(env, raw, "Expr::Closure") {
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
@@ -5462,6 +5514,27 @@ pub fn with_hole<'a>(
                         layout_cache,
                         assigned,
                         hole,
+                        // todo(agus)
+                        None,
+                    )
+                }
+                roc_can::expr::Expr::ParamsVar {
+                    symbol: proc_name,
+                    var: _,
+                    params_symbol,
+                    params_var,
+                } => {
+                    // a call by a known name with params
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                        assigned,
+                        hole,
+                        Some((params_var, params_symbol)),
                     )
                 }
                 roc_can::expr::Expr::AbilityMember(member, specialization_id, _) => {
@@ -5477,6 +5550,8 @@ pub fn with_hole<'a>(
                         layout_cache,
                         assigned,
                         hole,
+                        // todo(agus)
+                        None,
                     )
                 }
                 _ => {
@@ -5512,7 +5587,8 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, fn_var, env.subs),
+                        layout_cache
+                            .raw_from_var(env.arena, fn_var, env.subs, /* todo(agus) */ None),
                         "Expr::Call"
                     );
 
@@ -5631,6 +5707,8 @@ pub fn with_hole<'a>(
                                         layout_cache,
                                         assigned,
                                         hole,
+                                        // todo(agus)
+                                        None,
                                     );
                                 }
                             }
@@ -5773,7 +5851,7 @@ pub fn with_hole<'a>(
 
                     let closure_data_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs),
+                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs, /* todo(agus) */ None),
                         "match_on_closure_argument"
                     );
 
@@ -6697,7 +6775,7 @@ fn tag_union_to_function<'a>(
             // only need to construct closure data
             let raw_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, whole_var, env.subs),
+                layout_cache.raw_from_var(env.arena, whole_var, env.subs, /* todo(agus) */ None),
                 "tag_union_to_function"
             );
 
@@ -6888,7 +6966,12 @@ fn register_capturing_closure<'a>(
                     captured_symbols.is_empty(),
                     "{:?} with layout {:?} {:?} {:?}",
                     &captured_symbols,
-                    layout_cache.raw_from_var(env.arena, function_type, env.subs,),
+                    layout_cache.raw_from_var(
+                        env.arena,
+                        function_type,
+                        env.subs,
+                        /* todo(agus) */ None
+                    ),
                     env.subs,
                     (function_type, closure_type),
                 );
@@ -8214,7 +8297,9 @@ fn specialize_symbol<'a>(
                     if env.is_imported_symbol(original)
                         || env.is_unloaded_derived_symbol(original, procs) =>
                 {
-                    let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
+                    let raw = match layout_cache
+                        .raw_from_var(env.arena, arg_var, env.subs, /* todo(agus) */ None)
+                    {
                         Ok(v) => v,
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
@@ -8306,7 +8391,7 @@ fn specialize_symbol<'a>(
             // to it in the IR.
             let res_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, arg_var, env.subs),
+                layout_cache.raw_from_var(env.arena, arg_var, env.subs, /* todo(agus) */ None),
                 "specialize_symbol res_layout"
             );
 
@@ -8587,9 +8672,12 @@ fn call_by_name<'a>(
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
+    opt_params: Option<(Variable, Symbol)>,
 ) -> Stmt<'a> {
+    let opt_params_var = opt_params.as_ref().map(|(var, _)| var);
+
     // Register a pending_specialization for this function
-    match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
+    match layout_cache.raw_from_var(env.arena, fn_var, env.subs, opt_params_var) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
                 "Hit an unresolved type variable {var:?} when creating a layout for {proc_name:?} (var {fn_var:?})"
@@ -8684,6 +8772,7 @@ fn call_by_name<'a>(
                     layout_cache,
                     assigned,
                     hole,
+                    opt_params,
                 )
             }
         }
@@ -8757,12 +8846,31 @@ fn call_by_name_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
+    params: Option<(Variable, Symbol)>,
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
     let arena = env.arena;
 
+    let loc_args = match params {
+        None => loc_args,
+        Some((params_var, params_sym)) => {
+            let mut args = std::vec::Vec::with_capacity(loc_args.len() + 1);
+            let params_arg = (
+                params_var,
+                Loc::at(
+                    Region::zero(),
+                    roc_can::expr::Expr::Var(params_sym, params_var),
+                ),
+            );
+            args.push(params_arg);
+            args.extend(loc_args);
+            args
+        }
+    };
+
     // the arguments given to the function, stored in symbols
     let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
+
     field_symbols.extend(loc_args.iter().map(|(arg_var, arg_expr)| {
         possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg_expr.value, *arg_var)
     }));
@@ -8802,7 +8910,8 @@ fn call_by_name_help<'a>(
 
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
-    for (var, _) in &loc_args {
+
+    for (var, _) in loc_args.iter() {
         match layout_cache.from_var(env.arena, *var, env.subs) {
             Ok(_) => {
                 pattern_vars.push(*var);

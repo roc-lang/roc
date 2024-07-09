@@ -177,6 +177,7 @@ impl<'a> LayoutCache<'a> {
         arena: &'a Bump,
         var: Variable,
         subs: &Subs,
+        opt_module_params: Option<&Variable>,
     ) -> Result<RawFunctionLayout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
@@ -189,7 +190,8 @@ impl<'a> LayoutCache<'a> {
         };
 
         // [Layout::from_var] should query the cache!
-        let Cacheable(value, criteria) = RawFunctionLayout::from_var(&mut env, var);
+        let Cacheable(value, criteria) =
+            RawFunctionLayout::from_var(&mut env, var, opt_module_params);
         debug_assert!(
             criteria.is_cacheable(),
             "{value:?} not cacheable as top-level"
@@ -502,20 +504,22 @@ impl<'a> RawFunctionLayout<'a> {
         env: &mut Env<'a, 'b>,
         var: Variable,
         content: Content,
+        opt_module_params: Option<&Variable>,
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
         use roc_types::subs::Content::*;
+
         match content {
             FlexVar(_) | RigidVar(_) => cacheable(Err(LayoutProblem::UnresolvedTypeVar(var))),
             FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
-                Self::new_help(env, structure, *structure_content)
+                Self::new_help(env, structure, *structure_content, opt_module_params)
             }
             LambdaSet(_) => {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
             ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
-            Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
+            Structure(flat_type) => Self::layout_from_flat_type(env, flat_type, opt_module_params),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
             // Ints
@@ -572,13 +576,13 @@ impl<'a> RawFunctionLayout<'a> {
                 cacheable(Ok(Self::ZeroArgumentThunk(Layout::F32)))
             }
 
-            Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var),
+            Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var, opt_module_params),
 
             Alias(symbol, _, var, _) if symbol.is_builtin() => {
                 Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk)
             }
 
-            Alias(_, _, var, _) => Self::from_var(env, var),
+            Alias(_, _, var, _) => Self::from_var(env, var, opt_module_params),
             Error => cacheable(Err(LayoutProblem::Erroneous)),
         }
     }
@@ -586,6 +590,7 @@ impl<'a> RawFunctionLayout<'a> {
     fn layout_from_flat_type(
         env: &mut Env<'a, '_>,
         flat_type: FlatType,
+        opt_module_params: Option<&Variable>,
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
         use roc_types::subs::FlatType::*;
 
@@ -596,6 +601,12 @@ impl<'a> RawFunctionLayout<'a> {
                 let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
                 let mut cache_criteria = CACHEABLE;
+
+                if let Some(params_var) = opt_module_params {
+                    let layout =
+                        cached!(Layout::from_var(env, *params_var), cache_criteria, env.subs);
+                    fn_args.push(layout);
+                }
 
                 for index in args.into_iter() {
                     let arg_var = env.subs[index];
@@ -626,7 +637,7 @@ impl<'a> RawFunctionLayout<'a> {
                 let var_index = slice.into_iter().next().unwrap();
                 let var = env.subs[var_index];
 
-                Self::from_var(env, var)
+                Self::from_var(env, var, opt_module_params)
             }
             Record(fields, ext) if fields.len() == 1 => {
                 debug_assert!(ext_var_is_empty_record(env.subs, ext));
@@ -634,11 +645,12 @@ impl<'a> RawFunctionLayout<'a> {
                 let var_index = fields.iter_variables().next().unwrap();
                 let var = env.subs[var_index];
 
-                Self::from_var(env, var)
+                Self::from_var(env, var, opt_module_params)
             }
             _ => {
                 let mut criteria = CACHEABLE;
                 let layout = cached!(layout_from_flat_type(env, flat_type), criteria, env.subs);
+
                 Cacheable(Ok(Self::ZeroArgumentThunk(layout)), criteria)
             }
         }
@@ -650,13 +662,14 @@ impl<'a> RawFunctionLayout<'a> {
     pub(crate) fn from_var(
         env: &mut Env<'a, '_>,
         var: Variable,
+        opt_module_params: Option<&Variable>,
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
         env.cached_raw_function_or(var, |env| {
             if env.is_seen(var) {
                 unreachable!("The initial variable of a signature cannot be seen already")
             } else {
                 let content = env.subs.get_content_without_compacting(var);
-                Self::new_help(env, var, *content)
+                Self::new_help(env, var, *content, opt_module_params)
             }
         })
     }
