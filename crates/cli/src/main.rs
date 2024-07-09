@@ -13,7 +13,7 @@ use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{FunctionKind, LoadingProblem, Threading};
+use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_target::Target;
 use std::fs::{self, FileType};

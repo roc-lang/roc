@@ -6,11 +6,8 @@
 use memmap2::{Mmap, MmapMut};
 use object::Object;
 use roc_error_macros::internal_error;
-use roc_load::{EntryPoint, ExecutionMode, ExposedToHost, LoadConfig, Threading};
+use roc_load::ExposedToHost;
 use roc_module::symbol::Interns;
-use roc_packaging::cache::RocCacheDir;
-use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use roc_solve::FunctionKind;
 use roc_target::{Architecture, OperatingSystem, Target};
 use std::cmp::Ordering;
 use std::mem;
