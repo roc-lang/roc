@@ -42,7 +42,7 @@ fn build_host() {
         Some(&stub_lib),
     );
 
-    let preprocessed_path = platform_main_roc.with_file_name(format!("{}.rh", target));
+    let preprocessed_path = platform_main_roc.with_file_name(target.prebuilt_surgical_host());
     let metadata_path = platform_main_roc.with_file_name(roc_linker::metadata_file_name(target));
 
     roc_linker::preprocess_host(

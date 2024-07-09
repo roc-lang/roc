@@ -771,7 +771,7 @@ fn build_loaded_file<'a>(
 
     let output_exe_path = get_exe_path(
         out_path,
-        &app_module_path,
+        app_module_path.as_path(),
         target,
         linking_strategy,
         link_type,
@@ -866,8 +866,7 @@ fn build_loaded_file<'a>(
 
     match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
-            let metadata_file =
-                platform_main_roc.with_file_name(roc_linker::metadata_file_name(target));
+            let metadata_file = platform_main_roc.with_file_name(target.metadata_file_name());
 
             roc_linker::link_preprocessed_host(
                 target,
@@ -950,7 +949,7 @@ fn build_loaded_file<'a>(
 /// use that directory, but use the app module's filename for the filename.
 fn get_exe_path(
     out_path: Option<&Path>,
-    app_module_path: &PathBuf,
+    app_module_path: &Path,
     target: Target,
     linking_strategy: LinkingStrategy,
     link_type: LinkType,
@@ -986,7 +985,7 @@ fn get_exe_path(
                 path.to_path_buf()
             }
         }
-        None => with_output_extension(&app_module_path, target, linking_strategy, link_type),
+        None => with_output_extension(app_module_path, target, linking_strategy, link_type),
     }
 }
 
@@ -1000,8 +999,7 @@ fn get_host_path(
     output_exe_path: &Path,
     dll_stub_symbols: Vec<String>,
 ) -> PathBuf {
-    let preprocessed_host_path =
-        platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target));
+    let preprocessed_host_path = platform_main_roc.with_file_name(target.prebuilt_surgical_host());
 
     if build_host_requested {
         let rebuild_thread = match linking_strategy {
@@ -1012,9 +1010,9 @@ fn get_host_path(
                 preprocessed_host_path.to_owned(),
             ),
             LinkingStrategy::Surgical => {
-                let preprocessed_path = platform_main_roc.with_file_name(format!("{}.rh", target));
-                let metadata_path =
-                    platform_main_roc.with_file_name(roc_linker::metadata_file_name(target));
+                let preprocessed_path =
+                    platform_main_roc.with_file_name(target.prebuilt_surgical_host());
+                let metadata_path = platform_main_roc.with_file_name(target.metadata_file_name());
 
                 spawn_surgical_host_build_thread(
                     code_gen_options.opt_level,
@@ -1139,7 +1137,7 @@ fn spawn_surgical_host_build_thread(
 
         // Copy preprocessed host to executable location.
         // The surgical linker will modify that copy in-place.
-        std::fs::copy(&preprocessed_path, output_exe_path.to_owned()).unwrap();
+        std::fs::copy(&preprocessed_path, &output_exe_path).unwrap();
 
         (start.elapsed().as_millis(), output_exe_path)
     })

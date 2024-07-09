@@ -134,6 +134,7 @@ impl Target {
         self.architecture().ptr_alignment_bytes()
     }
 
+    // file extension for an object file
     pub const fn object_file_ext(&self) -> &str {
         use Target::*;
         match self {
@@ -143,6 +144,7 @@ impl Target {
         }
     }
 
+    // file extension for a static library file
     pub const fn static_library_file_ext(&self) -> &str {
         use Target::*;
         match self {
@@ -152,6 +154,18 @@ impl Target {
         }
     }
 
+    // file extension for a dynamic/shared library file
+    pub const fn dynamic_library_file_ext(&self) -> &str {
+        use Target::*;
+        match self {
+            LinuxX32 | LinuxX64 | LinuxArm64 => "so",
+            MacX64 | MacArm64 => "dylib",
+            WinX32 | WinX64 | WinArm64 => "dll",
+            Wasm32 => "wasm",
+        }
+    }
+
+    // file extension for an executable file
     pub const fn executable_file_ext(&self) -> Option<&str> {
         use Target::*;
         match self {
@@ -161,32 +175,49 @@ impl Target {
         }
     }
 
+    // file name for a prebuilt host object file
+    // used for legacy linking
     pub fn prebuilt_static_object(&self) -> String {
         use Target::*;
         match self {
             LinuxX32 | LinuxX64 | LinuxArm64 | MacX64 | MacArm64 | Wasm32 => {
-                format!("{}-{}.o", self.operating_system(), self.architecture())
+                format!("{}.o", self)
             }
             WinX32 | WinX64 | WinArm64 => {
-                format!("{}-{}.obj", self.operating_system(), self.architecture())
+                format!("{}.obj", self)
             }
         }
     }
 
+    // file name for a prebuilt host static library file
+    // used for legacy linking
     pub fn prebuilt_static_library(&self) -> String {
         use Target::*;
         match self {
             LinuxX32 | LinuxX64 | LinuxArm64 | MacX64 | MacArm64 | Wasm32 => {
-                format!("{}-{}.a", self.operating_system(), self.architecture())
+                format!("{}.a", self)
             }
             WinX32 | WinX64 | WinArm64 => {
-                format!("{}-{}.lib", self.operating_system(), self.architecture())
+                format!("{}.lib", self)
             }
         }
     }
 
+    // file name for a preprocessed host executable file
+    // used for surgical linking
     pub fn prebuilt_surgical_host(&self) -> String {
-        format!("{}-{}.rh", self.operating_system(), self.architecture())
+        format!("{}.rh", self) // short for roc host
+    }
+
+    // file name for a preprocessed host metadata file
+    // used for surgical linking
+    pub fn metadata_file_name(&self) -> String {
+        format!("metadata_{}.rm", self) // short for roc metadata
+    }
+
+    // file name for a stubbed app dynamic library file
+    pub fn stub_app_lib_file_name(&self) -> String {
+        format!("libapp.{}", self.dynamic_library_file_ext())
     }
 }
 

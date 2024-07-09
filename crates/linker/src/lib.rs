@@ -45,16 +45,6 @@ pub fn supported(link_type: LinkType, target: Target) -> bool {
     }
 }
 
-pub const PRECOMPILED_HOST_EXT: &str = "rh"; // Short for "roc host"
-
-pub fn preprocessed_host_filename(target: Target) -> String {
-    format!("{target}.{PRECOMPILED_HOST_EXT}")
-}
-
-pub fn metadata_file_name(target: Target) -> String {
-    format!("metadata_{}.rm", target)
-}
-
 pub fn link_preprocessed_host(
     target: Target,
     roc_app_bytes: &[u8],
@@ -118,14 +108,9 @@ pub fn generate_stub_lib(
     };
 
     if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
-        let stub_lib = if target.operating_system() == OperatingSystem::Windows {
-            platform_path.with_file_name("libapp.obj")
-        } else {
-            platform_path.with_file_name("libapp.so")
-        };
-
+        let stub_lib = platform_path.with_file_name(target.stub_app_lib_file_name());
         let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
-        generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
+        generate_dynamic_lib(target, &stub_dll_symbols, stub_lib.as_path());
         (platform_path.into(), stub_lib, stub_dll_symbols)
     } else {
         unreachable!();
@@ -137,15 +122,10 @@ pub fn generate_stub_lib_from_loaded(
     platform_main_roc: &Path,
     stub_dll_symbols: &[String],
 ) -> PathBuf {
-    let stub_lib_path = if target.operating_system() == OperatingSystem::Windows {
-        platform_main_roc.with_file_name("libapp.dll")
-    } else {
-        platform_main_roc.with_file_name("libapp.so")
-    };
+    let stub_lib = platform_main_roc.with_file_name(target.stub_app_lib_file_name());
+    generate_dynamic_lib(target, stub_dll_symbols, stub_lib.as_path());
 
-    generate_dynamic_lib(target, stub_dll_symbols, &stub_lib_path);
-
-    stub_lib_path
+    stub_lib
 }
 
 pub struct ExposedSymbols {

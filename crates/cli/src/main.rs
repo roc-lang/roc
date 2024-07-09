@@ -169,14 +169,13 @@ fn main() -> io::Result<()> {
 
             let verbose_and_time = matches.get_one::<bool>(roc_cli::FLAG_VERBOSE).unwrap();
 
-            let preprocessed_path = platform_path.with_file_name(format!("{}.rh", target));
-            let metadata_path =
-                platform_path.with_file_name(roc_linker::metadata_file_name(target));
+            let preprocessed_path = platform_path.with_file_name(target.prebuilt_surgical_host());
+            let metadata_path = platform_path.with_file_name(target.metadata_file_name());
 
             roc_linker::preprocess_host(
                 target,
                 host_path,
-                &metadata_path,
+                metadata_path.as_path(),
                 preprocessed_path.as_path(),
                 dylib_path,
                 *verbose_and_time,
