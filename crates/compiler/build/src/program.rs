@@ -989,6 +989,7 @@ fn get_exe_path(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn get_host_path(
     target: Target,
     code_gen_options: CodeGenOptions,

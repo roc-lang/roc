@@ -43,7 +43,7 @@ fn build_host() {
     );
 
     let preprocessed_path = platform_main_roc.with_file_name(target.prebuilt_surgical_host());
-    let metadata_path = platform_main_roc.with_file_name(roc_linker::metadata_file_name(target));
+    let metadata_path = platform_main_roc.with_file_name(target.metadata_file_name());
 
     roc_linker::preprocess_host(
         target,
