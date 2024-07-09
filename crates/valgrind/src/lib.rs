@@ -19,13 +19,41 @@ fn build_host() {
         std::env::set_var("NO_AVX512", "1");
     }
 
-    // build a legacy host
-    roc_build::link::rebuild_host(
-        roc_mono::ir::OptLevel::Normal,
+    let stub_dll_symbols = roc_linker::ExposedSymbols {
+        top_level_values: vec![String::from("mainForHost")],
+        exported_closure_types: vec![],
+    }
+    .stub_dll_symbols();
+
+    let opt_level = roc_mono::ir::OptLevel::Normal;
+
+    let stub_lib = roc_linker::generate_stub_lib_from_loaded(
         target,
         platform_main_roc.as_path(),
-        None,
+        stub_dll_symbols.as_slice(),
     );
+
+    debug_assert!(stub_lib.exists());
+
+    let host_dest = roc_build::link::rebuild_host(
+        opt_level,
+        target,
+        platform_main_roc.as_path(),
+        Some(&stub_lib),
+    );
+
+    let preprocessed_path = platform_main_roc.with_file_name(format!("{}.rh", target));
+    let metadata_path = platform_main_roc.with_file_name(roc_linker::metadata_file_name(target));
+
+    roc_linker::preprocess_host(
+        target,
+        host_dest.as_path(),
+        metadata_path.as_path(),
+        preprocessed_path.as_path(),
+        &stub_lib,
+        false,
+        false,
+    )
 }
 
 fn valgrind_test(source: &str) {
@@ -88,8 +116,13 @@ fn valgrind_test_linux(source: &str) {
     let app_module_path = temp_dir.path().join("app.roc");
 
     let arena = bumpalo::Bump::new();
-    let res_binary_path =
-        roc_build::program::build_str_test(&arena, &app_module_path, &app_module_source, true);
+    let assume_prebuilt = true;
+    let res_binary_path = roc_build::program::build_str_test(
+        &arena,
+        &app_module_path,
+        &app_module_source,
+        assume_prebuilt,
+    );
 
     match res_binary_path {
         Ok(BuiltFile {
