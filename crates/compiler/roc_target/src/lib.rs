@@ -4,6 +4,7 @@
 #![allow(clippy::large_enum_variant)]
 
 use std::str::FromStr;
+use std::path::{PathBuf, Path};
 
 use roc_error_macros::user_error;
 use strum_macros::{EnumCount, EnumIter};
@@ -85,6 +86,14 @@ pub enum Target {
     WinArm64,
     Wasm32,
 }
+
+
+#[derive(Debug)]
+pub struct SurgicalHostArtifacts {
+    pub metadata: PathBuf,
+    pub preprocessed_host: PathBuf,
+}
+
 
 impl Target {
     pub const fn architecture(&self) -> Architecture {
@@ -216,9 +225,66 @@ impl Target {
     }
 
     // file name for a stubbed app dynamic library file
-    pub fn stub_app_lib_file_name(&self) -> String {
+    pub fn stub_app_lib_file_name() -> String {
         format!("libapp.{}", self.dynamic_library_file_ext())
     }
+
+    /// Search for a prebuilt legacy host in the platform main directory.
+    pub fn find_legacy_host(&self, platform_main_roc: &Path) -> Result<PathBuf, String> {
+        let static_library_path = platform_main_roc.with_file_name(self.prebuilt_static_library());
+
+        let static_object_path = platform_main_roc.with_file_name(self.prebuilt_static_object());
+
+        let generic_host_path: PathBuf = platform_main_roc
+            .with_file_name("libhost")
+            .with_extension(self.static_library_file_ext());
+
+        if static_library_path.exists() {
+            Ok(static_library_path)
+        } else if generic_host_path.exists() {
+            Ok(generic_host_path)
+        } else if static_object_path.exists() {
+            Ok(static_object_path)
+        } else {
+            Err(format!(
+                "\n    {}\n    {}\n    {}",
+                static_library_path.display(),
+                static_object_path.display(),
+                generic_host_path.display(),
+            )
+            .to_string())
+        }
+    }
+
+    /// Search for a prebuilt surgical host in the platform main directory.
+    pub fn find_surgical_host(&self, platform_main_roc: &Path) -> Result<SurgicalHostArtifacts, String> {
+        let surgical_metadata = platform_main_roc.with_file_name(self.metadata_file_name());
+        let surgical_host_path = platform_main_roc.with_file_name(self.prebuilt_surgical_host());
+
+        let generic_host_path: PathBuf = platform_main_roc.with_file_name("host.rh");
+        let generic_metadata: PathBuf = platform_main_roc.with_file_name("metadata_host.rm");
+
+        if generic_host_path.exists() && generic_metadata.exists() {
+            Ok(SurgicalHostArtifacts {
+                metadata: generic_metadata,
+                preprocessed_host: generic_host_path,
+            })
+        } else if surgical_host_path.exists() && surgical_metadata.exists() {
+            Ok(SurgicalHostArtifacts {
+                metadata: surgical_metadata,
+                preprocessed_host: surgical_host_path,
+            })
+        } else {
+            Err(format!(
+                "\n    {}\n    {}",
+                surgical_host_path.display(),
+                generic_host_path.display(),
+            )
+            .to_string())
+        }
+    }
+
+
 }
 
 pub enum ParseError {

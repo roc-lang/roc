@@ -42,53 +42,6 @@ pub fn link(
     }
 }
 
-/// Search for a prebuilt surgical host in the platform main directory.
-pub fn find_surgical_host(target: Target, platform_main_roc: &Path) -> Result<PathBuf, String> {
-    let surgical_host_path = platform_main_roc.with_file_name(target.prebuilt_surgical_host());
-
-    let generic_host_path: PathBuf = platform_main_roc.with_file_name("host.rh");
-
-    if generic_host_path.exists() {
-        Ok(generic_host_path)
-    } else if surgical_host_path.exists() {
-        Ok(surgical_host_path)
-    } else {
-        Err(format!(
-            "\n    {}\n    {}",
-            surgical_host_path.display(),
-            generic_host_path.display(),
-        )
-        .to_string())
-    }
-}
-
-/// Search for a prebuilt legacy host in the platform main directory.
-pub fn find_legacy_host(target: Target, platform_main_roc: &Path) -> Result<PathBuf, String> {
-    let static_library_path = platform_main_roc.with_file_name(target.prebuilt_static_library());
-
-    let static_object_path = platform_main_roc.with_file_name(target.prebuilt_static_object());
-
-    let generic_host_path: PathBuf = platform_main_roc
-        .with_file_name("libhost")
-        .with_extension(target.static_library_file_ext());
-
-    if static_library_path.exists() {
-        Ok(static_library_path)
-    } else if generic_host_path.exists() {
-        Ok(generic_host_path)
-    } else if static_object_path.exists() {
-        Ok(static_object_path)
-    } else {
-        Err(format!(
-            "\n    {}\n    {}\n    {}",
-            static_library_path.display(),
-            static_object_path.display(),
-            generic_host_path.display(),
-        )
-        .to_string())
-    }
-}
-
 // Attempts to find a file that is stored relative to the roc executable.
 // Since roc is built in target/debug/roc, we may need to drop that path to find the file.
 // This is used to avoid depending on the current working directory.
