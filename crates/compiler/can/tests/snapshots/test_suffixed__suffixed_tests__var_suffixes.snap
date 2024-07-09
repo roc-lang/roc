@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -44,27 +46,27 @@ Defs {
                                 ident: "await",
                             },
                             [
-                                @24-33 Var {
+                                @28-33 Var {
                                     module_name: "",
                                     ident: "bar",
                                 },
                                 @15-19 Closure(
                                     [
-                                        @24-33 Identifier {
+                                        @28-33 Identifier {
                                             ident: "#!0_arg",
                                         },
                                     ],
-                                    @24-33 Apply(
-                                        @24-33 Var {
+                                    @28-33 Apply(
+                                        @28-33 Var {
                                             module_name: "Task",
                                             ident: "await",
                                         },
                                         [
-                                            @24-33 Var {
+                                            @28-33 Var {
                                                 module_name: "",
                                                 ident: "#!0_arg",
                                             },
-                                            @24-33 Closure(
+                                            @28-33 Closure(
                                                 [
                                                     @24-25 Identifier {
                                                         ident: "b",

@@ -13,33 +13,56 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
             @0-4 Identifier {
                 ident: "main",
             },
-            @11-31 Expect(
-                @18-24 Apply(
-                    @20-22 Var {
-                        module_name: "Bool",
-                        ident: "isEq",
-                    },
-                    [
-                        @18-19 Num(
-                            "1",
-                        ),
-                        @23-24 Num(
-                            "2",
-                        ),
+            @11-31 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
                     ],
-                    BinOp(
-                        Equals,
-                    ),
-                ),
+                    regions: [
+                        @11-24,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Expect {
+                            condition: @18-24 Apply(
+                                @20-22 Var {
+                                    module_name: "Bool",
+                                    ident: "isEq",
+                                },
+                                [
+                                    @18-19 Num(
+                                        "1",
+                                    ),
+                                    @23-24 Num(
+                                        "2",
+                                    ),
+                                ],
+                                BinOp(
+                                    Equals,
+                                ),
+                            ),
+                            preceding_comment: @11-11,
+                        },
+                    ],
+                },
                 @29-31 Var {
                     module_name: "",
                     ident: "x",

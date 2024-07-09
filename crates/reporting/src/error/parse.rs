@@ -695,6 +695,29 @@ fn to_expr_report<'a>(
                 severity,
             }
         }
+        EExpr::StmtAfterExpr(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
+                alloc.reflow(
+                    r"and this line is indented as if it's intended to be part of that expression:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions.",
+                )]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "STATEMENT AFTER EXPRESSION".to_string(),
+                severity,
+            }
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }

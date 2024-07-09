@@ -4,12 +4,12 @@ use roc_parse::{
     ast::{Defs, Expr, Malformed, Module},
     module::parse_module_defs,
     parser::{Parser, SyntaxError},
+    remove_spaces::RemoveSpaces,
     state::State,
     test_helpers::{parse_defs_with, parse_expr_with, parse_header_with},
 };
 use roc_test_utils::assert_multiline_str_eq;
 
-use roc_fmt::spaces::RemoveSpaces;
 use roc_fmt::Buf;
 
 /// Source code to parse. Usually in the form of a test case.
@@ -28,6 +28,25 @@ pub enum Input<'a> {
     Full(&'a str),
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum InputKind {
+    Header,
+    ModuleDefs,
+    Expr,
+    Full,
+}
+
+impl InputKind {
+    pub fn with_text(self, text: &str) -> Input {
+        match self {
+            InputKind::Header => Input::Header(text),
+            InputKind::ModuleDefs => Input::ModuleDefs(text),
+            InputKind::Expr => Input::Expr(text),
+            InputKind::Full => Input::Full(text),
+        }
+    }
+}
+
 // Owned version of `Input`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputOwned {
@@ -38,7 +57,7 @@ pub enum InputOwned {
 }
 
 impl InputOwned {
-    fn as_ref(&self) -> Input {
+    pub fn as_ref(&self) -> Input {
         match self {
             InputOwned::Header(s) => Input::Header(s),
             InputOwned::ModuleDefs(s) => Input::ModuleDefs(s),
@@ -64,7 +83,7 @@ pub enum Output<'a> {
 }
 
 impl<'a> Output<'a> {
-    fn format(&self) -> InputOwned {
+    pub fn format(&self) -> InputOwned {
         let arena = Bump::new();
         let mut buf = Buf::new_in(&arena);
         match self {
@@ -172,7 +191,7 @@ impl<'a> Input<'a> {
 
                 let (header, defs) = header.upgrade_header_imports(arena);
 
-                let module_defs = parse_module_defs(arena, state, defs).unwrap();
+                let module_defs = parse_module_defs(arena, state, defs)?;
 
                 Ok(Output::Full {
                     header,

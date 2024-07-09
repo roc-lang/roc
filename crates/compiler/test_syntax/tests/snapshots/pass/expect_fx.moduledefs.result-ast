@@ -9,12 +9,13 @@ Defs {
         Slice(start = 0, length = 1),
     ],
     space_after: [
-        Slice(start = 1, length = 0),
+        Slice(start = 1, length = 1),
     ],
     spaces: [
         LineComment(
             " expecting some effects",
         ),
+        Newline,
     ],
     type_defs: [],
     value_defs: [
@@ -32,7 +33,7 @@ Defs {
                     "2",
                 ),
             ),
-            preceding_comment: @25-25,
+            preceding_comment: @0-24,
         },
     ],
 }

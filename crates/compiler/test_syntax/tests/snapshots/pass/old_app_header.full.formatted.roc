@@ -6,3 +6,4 @@ import cli.Stdout
 
 main =
     Stdout.line "hello"
+
