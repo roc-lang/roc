@@ -675,8 +675,6 @@ fn modify_refcount<'a>(
     let zig_call_result = root.create_symbol(ident_ids, "zig_call_result");
     match ctx.op {
         HelperOp::Inc => {
-            let layout_isize = root.layout_isize;
-
             let (op, ptr) = match ptr {
                 Pointer::ToData(s) => (LowLevel::RefCountIncDataPtr, s),
                 Pointer::ToRefcount(s) => (LowLevel::RefCountIncRcPtr, s),
@@ -684,7 +682,7 @@ fn modify_refcount<'a>(
 
             let amount_sym = root.create_symbol(ident_ids, "amount");
             let amount_expr = Expr::Literal(Literal::Int(1_i128.to_ne_bytes()));
-            let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
+            let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, root.layout_isize, next);
 
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
@@ -729,7 +727,7 @@ fn modify_refcount<'a>(
             let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
 
-            // This function is not used for lits, so this is always false.
+            // This function is not used for lists, so this is always false.
             let elements_refcounted_sym = root.create_symbol(ident_ids, "elements_refcounted");
             let elements_refcounted_expr = Expr::Literal(Literal::Bool(false));
             let elements_refcounted_stmt = |next| {
@@ -750,10 +748,13 @@ fn modify_refcount<'a>(
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
-            alignment_stmt(root.arena.alloc(elements_refcounted_stmt(root.arena.alloc(
+            alignment_stmt(root.arena.alloc(
                 //
-                zig_call_stmt,
-            ))))
+                elements_refcounted_stmt(root.arena.alloc(
+                    //
+                    zig_call_stmt,
+                )),
+            ))
         }
 
         _ => unreachable!(),
