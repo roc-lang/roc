@@ -317,6 +317,8 @@ impl ObligationCache {
                 var,
             )),
 
+            Symbol::LIST_SORT => Some(DeriveSort::is_derivable(self, abilities_store, subs, var)),
+
             _ => None,
         };
 
@@ -399,6 +401,8 @@ impl ObligationCache {
             DeriveEq::ABILITY => DeriveEq::is_derivable_builtin_opaque(opaque),
             DeriveHash::ABILITY => DeriveHash::is_derivable_builtin_opaque(opaque),
             DeriveInspect::ABILITY => DeriveInspect::is_derivable_builtin_opaque(opaque),
+            DeriveSort::ABILITY => DeriveSort::is_derivable_builtin_opaque(opaque),
+            DeriveCompare::ABILITY => DeriveCompare::is_derivable_builtin_opaque(opaque),
             _ => false,
         };
 
@@ -855,6 +859,26 @@ trait DerivableVisitor {
         }
 
         Ok(())
+    }
+}
+
+struct DeriveSort;
+impl DerivableVisitor for DeriveSort {
+    const ABILITY: Symbol = Symbol::LIST_SORT;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_SORT;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
     }
 }
 
@@ -1482,33 +1506,13 @@ impl DerivableVisitor for DeriveCompare {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_floating_point_content(
-        var: Variable,
-        subs: &mut Subs,
-        content_var: Variable,
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
     ) -> Result<Descend, NotDerivable> {
-        use roc_unify::unify::unify;
-
-        // Of the floating-point types,
-        // only Dec implements Eq.
-        // TODO(checkmate): pass checkmate through
-        let unified = unify(
-            &mut with_checkmate!({
-                on => UEnv::new(subs, None),
-                off => UEnv::new(subs),
-            }),
-            content_var,
-            Variable::DECIMAL,
-            UnificationMode::EQ,
-            Polarity::Pos,
-        );
-        match unified {
-            roc_unify::unify::Unified::Success { .. } => Ok(Descend(false)),
-            roc_unify::unify::Unified::Failure(..) => Err(NotDerivable {
-                var,
-                context: NotDerivableContext::Eq(NotDerivableEq::FloatingPoint),
-            }),
-        }
+        Ok(Descend(true))
     }
 
     #[inline(always)]

@@ -1703,6 +1703,8 @@ impl Subs {
     pub const AB_INSPECT: SubsSlice<Symbol>         = SubsSlice::new(5, 1);
     #[rustfmt::skip]
     pub const AB_COMPARE: SubsSlice<Symbol>         = SubsSlice::new(6, 1);
+    #[rustfmt::skip]
+    pub const AB_SORT: SubsSlice<Symbol>            = SubsSlice::new(7, 1);
     // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
