@@ -55,7 +55,7 @@ size_t *alloc_ptr_to_rc_ptr(void *ptr, unsigned int alignment)
 
 void *roc_alloc(size_t size, unsigned int alignment)
 {
-    void *allocated = malloc(size);
+    void *allocated = calloc(size, 1);
 
     if (rc_pointers)
     {
