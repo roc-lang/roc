@@ -96,8 +96,29 @@ fn list_str_inc() {
         ),
         RocList<RocList<RocStr>>,
         &[
-            Live(6), // s
+            Live(3), // s
             Live(2), // list
+            Live(1)  // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_str_slice() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                list = [s, s, s]
+                List.dropFirst list 1
+            "#
+        ),
+        RocList<RocList<RocStr>>,
+        &[
+            // Still has 3 refcounts cause the slice holds onto the list.
+            // So nothing in the list is freed yet.
+            Live(3), // s
             Live(1)  // result
         ]
     );

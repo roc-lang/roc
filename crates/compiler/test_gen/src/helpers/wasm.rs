@@ -310,7 +310,14 @@ where
             RefCount::Deallocated
         } else {
             // Dereference the RC pointer and decode its value from the negative number format
-            let rc_encoded = read_i32(&inst.memory, rc_ptr);
+            let mut rc_encoded = read_i32(&inst.memory, rc_ptr);
+            if rc_encoded > 0 {
+                // We happen to be reading a list that is refcounted.
+                // This is the size on heap.
+                // Shift over 4 to and load the real RC.
+                rc_encoded = read_i32(&inst.memory, rc_ptr + 4);
+            }
+
             if rc_encoded == 0 {
                 RefCount::Constant
             } else {

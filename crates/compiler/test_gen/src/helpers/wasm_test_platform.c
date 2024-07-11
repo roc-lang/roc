@@ -53,9 +53,11 @@ size_t *alloc_ptr_to_rc_ptr(void *ptr, unsigned int alignment)
 
 //--------------------------
 
+size_t RC_LIST_INDICATOR = 1;
+
 void *roc_alloc(size_t size, unsigned int alignment)
 {
-    void *allocated = calloc(size, 1);
+    void *allocated = malloc(size);
 
     if (rc_pointers)
     {
@@ -64,6 +66,7 @@ void *roc_alloc(size_t size, unsigned int alignment)
         ASSERT(num_alloc <= rc_pointers_capacity, "Too many allocations %zd > %zd", num_alloc, rc_pointers_capacity);
 
         size_t *rc_ptr = alloc_ptr_to_rc_ptr(allocated, alignment);
+        *rc_ptr = RC_LIST_INDICATOR;
         rc_pointers->elements[rc_pointers->length] = rc_ptr;
         rc_pointers->length++;
     }
