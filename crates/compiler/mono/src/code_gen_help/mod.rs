@@ -53,6 +53,13 @@ impl HelperOp {
     fn is_dec(&self) -> bool {
         matches!(self, Self::Dec)
     }
+
+    pub fn is_indirect(&self) -> bool {
+        matches!(
+            self,
+            Self::IndirectInc | Self::IndirectIncN | Self::IndirectDec
+        )
+    }
 }
 
 #[derive(Debug)]

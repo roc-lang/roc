@@ -2102,7 +2102,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
-        let layout_repr = self.layout_interner.runtime_representation(layout);
+        let layout_repr = if op.is_indirect() {
+            LayoutRepr::Ptr(layout)
+        } else {
+            self.layout_interner.runtime_representation(layout)
+        };
         let same_layout =
             |layout| self.layout_interner.runtime_representation(layout) == layout_repr;
         let proc_index = self

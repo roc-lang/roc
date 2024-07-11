@@ -281,8 +281,10 @@ impl<'a> LowLevelCall<'a> {
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -348,7 +350,8 @@ impl<'a> LowLevelCall<'a> {
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  input_list: &RocList       i32
@@ -410,9 +413,8 @@ impl<'a> LowLevelCall<'a> {
 
                 // Increment refcount
                 if self.ret_layout_raw.is_refcounted(backend.layout_interner) {
-                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::IncN);
+                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
                     backend.code_builder.get_local(elem_local);
-                    backend.code_builder.i32_const(1);
                     backend.code_builder.call(inc_fn);
                 }
             }
@@ -471,8 +473,10 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Load all the arguments for Zig
                 //    (List return pointer)      i32
@@ -527,7 +531,8 @@ impl<'a> LowLevelCall<'a> {
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -564,8 +569,10 @@ impl<'a> LowLevelCall<'a> {
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments          Wasm types
                 //  (return pointer)           i32
@@ -598,7 +605,8 @@ impl<'a> LowLevelCall<'a> {
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -643,8 +651,10 @@ impl<'a> LowLevelCall<'a> {
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -723,7 +733,8 @@ impl<'a> LowLevelCall<'a> {
                     ensure_symbol_is_in_memory(backend, elem, elem_in_layout, backend.env.arena);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -769,7 +780,8 @@ impl<'a> LowLevelCall<'a> {
                     .stack_size_and_alignment(elem_in_layout);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -808,8 +820,10 @@ impl<'a> LowLevelCall<'a> {
                     .layout_interner
                     .stack_size_and_alignment(elem_layout);
 
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_layout, HelperOp::Inc);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_layout, HelperOp::Dec);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -850,8 +864,10 @@ impl<'a> LowLevelCall<'a> {
                     .stack_size_and_alignment(elem_in_layout);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
-                let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -2830,8 +2846,10 @@ pub fn call_higher_order_lowlevel<'a>(
                 elem_layout.stack_size_and_alignment(backend.layout_interner);
 
             let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-            let inc_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Inc);
-            let dec_fn_ptr = build_refcount_element_fn(backend, elem_in_layout, HelperOp::Dec);
+            let inc_fn_ptr =
+                build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+            let dec_fn_ptr =
+                build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
             let cb = &mut backend.code_builder;
 
@@ -2933,7 +2951,7 @@ fn list_map_n<'a>(
 
     // We need to be able to increment the refcount of elements loaded.
     for el in arg_elem_layouts.iter() {
-        let ptr = build_refcount_element_fn(backend, *el, HelperOp::Inc);
+        let ptr = build_refcount_element_fn(backend, *el, HelperOp::IndirectInc);
         backend.code_builder.i32_const(ptr);
     }
 
