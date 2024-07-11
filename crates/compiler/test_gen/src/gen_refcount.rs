@@ -1,5 +1,5 @@
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::{wasm::assert_refcounts, RefCount::*};
+use crate::helpers::{wasm::assert_refcounts, RefCount::*, RefCountLoc::*};
 
 #[allow(unused_imports)]
 use indoc::indoc;
@@ -25,8 +25,8 @@ fn str_inc() {
         ),
         RocList<RocStr>,
         &[
-            Live(3), // s
-            Live(1)  // result
+            (StandardRC, Live(3)), // s
+            (AfterSize, Live(1))   // result
         ]
     );
 }
@@ -43,7 +43,7 @@ fn str_dealloc() {
             "#
         ),
         bool,
-        &[Deallocated]
+        &[(StandardRC, Deallocated)]
     );
 }
 
@@ -59,8 +59,8 @@ fn list_int_inc() {
         ),
         RocList<RocList<i64>>,
         &[
-            Live(3), // list
-            Live(1)  // result
+            (StandardRC, Live(3)), // list
+            (AfterSize, Live(1))   // result
         ]
     );
 }
@@ -77,8 +77,8 @@ fn list_int_dealloc() {
         ),
         u64,
         &[
-            Deallocated, // list
-            Deallocated  // result
+            (StandardRC, Deallocated), // list
+            (StandardRC, Deallocated)  // result
         ]
     );
 }
@@ -96,9 +96,9 @@ fn list_str_inc() {
         ),
         RocList<RocList<RocStr>>,
         &[
-            Live(3), // s
-            Live(2), // list
-            Live(1)  // result
+            (StandardRC, Live(3)), // s
+            (AfterSize, Live(2)),  // list
+            (AfterSize, Live(1))   // result
         ]
     );
 }
@@ -118,8 +118,30 @@ fn list_str_slice() {
         &[
             // Still has 3 refcounts cause the slice holds onto the list.
             // So nothing in the list is freed yet.
-            Live(3), // s
-            Live(1)  // result
+            (StandardRC, Live(3)), // s
+            (AfterSize, Live(1))   // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_map2_dealloc_tail() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                i1 = [s, s, s]
+                i2 = [1, 2]
+                List.map2 i1 i2 \a, b -> (a, b)
+            "#
+        ),
+        RocList<(RocStr, i64)>,
+        &[
+            (StandardRC, Live(2)),     // s
+            (AfterSize, Deallocated),  // i1
+            (StandardRC, Deallocated), // i2
+            (AfterSize, Live(1)),      // Result
         ]
     );
 }
@@ -137,9 +159,9 @@ fn list_str_dealloc() {
         ),
         u64,
         &[
-            Deallocated, // s
-            Deallocated, // list
-            Deallocated  // result
+            (StandardRC, Deallocated), // s
+            (AfterSize, Deallocated),  // list
+            (AfterSize, Deallocated)   // result
         ]
     );
 }
@@ -157,7 +179,7 @@ fn struct_inc() {
             "#
         ),
         [(i64, RocStr, RocStr); 2],
-        &[Live(4)] // s
+        &[(StandardRC, Live(4))] // s
     );
 }
 
@@ -175,7 +197,7 @@ fn struct_dealloc() {
     "#
         ),
         i64,
-        &[Deallocated] // s
+        &[(StandardRC, Deallocated)] // s
     );
 }
 
@@ -201,7 +223,7 @@ fn union_nonrecursive_inc() {
             "#
         ),
         (TwoStr, TwoStr, i64),
-        &[Live(4)]
+        &[(StandardRC, Live(4))]
     );
 }
 
@@ -224,7 +246,7 @@ fn union_nonrecursive_dec() {
             "#
         ),
         RocStr,
-        &[Live(1)] // s
+        &[(StandardRC, Live(1))] // s
     );
 }
 
@@ -249,9 +271,9 @@ fn union_recursive_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(1), // s
-            Live(2), // x
-            Live(2), // e
+            (StandardRC, Live(1)), // s
+            (StandardRC, Live(2)), // x
+            (StandardRC, Live(2)), // e
         ]
     );
 }
@@ -279,9 +301,9 @@ fn union_recursive_dec() {
         ),
         Pointer,
         &[
-            Live(1),     // s
-            Live(1),     // sym
-            Deallocated  // e
+            (StandardRC, Live(1)),     // s
+            (StandardRC, Live(1)),     // sym
+            (StandardRC, Deallocated)  // e
         ]
     );
 }
@@ -315,13 +337,13 @@ fn refcount_different_rosetrees_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(1), // s
-            Live(3), // i1
-            Live(2), // s1
-            Live(1), // [i1, i1]
-            Live(1), // i2
-            Live(1), // [s1, s1]
-            Live(1)  // s2
+            (StandardRC, Live(1)), // s
+            (StandardRC, Live(3)), // i1
+            (StandardRC, Live(2)), // s1
+            (AfterSize, Live(1)),  // [i1, i1]
+            (StandardRC, Live(1)), // i2
+            (AfterSize, Live(1)),  // [s1, s1]
+            (StandardRC, Live(1))  // s2
         ]
     );
 }
@@ -356,13 +378,13 @@ fn refcount_different_rosetrees_dec() {
         ),
         i64,
         &[
-            Deallocated, // s
-            Deallocated, // i1
-            Deallocated, // s1
-            Deallocated, // [i1, i1]
-            Deallocated, // i2
-            Deallocated, // [s1, s1]
-            Deallocated, // s2
+            (StandardRC, Deallocated), // s
+            (StandardRC, Deallocated), // i1
+            (StandardRC, Deallocated), // s1
+            (StandardRC, Deallocated), // [i1, i1]
+            (StandardRC, Deallocated), // i2
+            (StandardRC, Deallocated), // [s1, s1]
+            (StandardRC, Deallocated), // s2
         ]
     );
 }
@@ -385,10 +407,10 @@ fn union_linked_list_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(3), // s
-            Live(1), // inner-most Cons
-            Live(1), // middle Cons
-            Live(2), // linked
+            (StandardRC, Live(3)), // s
+            (StandardRC, Live(1)), // inner-most Cons
+            (StandardRC, Live(1)), // middle Cons
+            (StandardRC, Live(2)), // linked
         ]
     );
 }
@@ -413,10 +435,10 @@ fn union_linked_list_dec() {
         ),
         RocStr,
         &[
-            Live(1),     // s
-            Deallocated, // Cons
-            Deallocated, // Cons
-            Deallocated, // Cons
+            (StandardRC, Live(1)),     // s
+            (StandardRC, Deallocated), // Cons
+            (StandardRC, Deallocated), // Cons
+            (StandardRC, Deallocated), // Cons
         ]
     );
 }
@@ -424,7 +446,7 @@ fn union_linked_list_dec() {
 #[test]
 #[cfg(feature = "gen-wasm")]
 fn union_linked_list_nil_dec() {
-    let no_refcounts: &[crate::helpers::RefCount] = &[];
+    let no_refcounts: &[(crate::helpers::RefCountLoc, crate::helpers::RefCount)] = &[];
     assert_refcounts!(
         indoc!(
             r#"
@@ -471,7 +493,7 @@ fn union_linked_list_long_dec() {
                 "#
         ),
         i64,
-        &[Deallocated; 1_000]
+        &[(StandardRC, Deallocated); 1_000]
     );
 }
 
@@ -489,8 +511,8 @@ fn boxed_str_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(1), // s
-            Live(2), // b
+            (StandardRC, Live(1)), // s
+            (StandardRC, Live(2)), // b
         ]
     );
 }
@@ -512,8 +534,8 @@ fn boxed_str_dec() {
         ),
         (i32, i32),
         &[
-            Deallocated, // s
-            Deallocated, // b
+            (StandardRC, Deallocated), // s
+            (StandardRC, Deallocated), // b
         ]
     );
 }
@@ -541,9 +563,9 @@ fn non_nullable_unwrapped_alignment_8() {
         ),
         i64,
         &[
-            Deallocated, // Val 4
-            Deallocated, // Val 5
-            Deallocated, // ZAdd _ _
+            (StandardRC, Deallocated), // Val 4
+            (StandardRC, Deallocated), // Val 5
+            (StandardRC, Deallocated), // ZAdd _ _
         ]
     );
 }
@@ -586,9 +608,9 @@ fn reset_reuse_alignment_8() {
         ),
         i64,
         &[
-            Deallocated, // Val 4
-            Deallocated, // Val 5
-            Deallocated, // ZAdd _ _
+            (StandardRC, Deallocated), // Val 4
+            (StandardRC, Deallocated), // Val 5
+            (StandardRC, Deallocated), // ZAdd _ _
         ]
     );
 }
