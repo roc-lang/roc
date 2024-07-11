@@ -562,7 +562,7 @@ fn rc_return_stmt<'a>(
 }
 
 fn refcount_args<'a>(root: &CodeGenHelp<'a>, ctx: &Context<'a>, structure: Symbol) -> &'a [Symbol] {
-    if ctx.op == HelperOp::IncN {
+    if matches!(ctx.op, HelperOp::IncN | HelperOp::IndirectIncN) {
         // second argument is always `amount`, passed down through the call stack
         root.arena.alloc([structure, Symbol::ARG_2])
     } else {
