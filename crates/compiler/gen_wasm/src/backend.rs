@@ -2113,13 +2113,19 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         layout: InLayout<'a>,
         op: HelperOp,
     ) -> u32 {
-        let layout_repr = if op.is_indirect() {
-            LayoutRepr::Ptr(layout)
-        } else {
-            self.layout_interner.runtime_representation(layout)
+        let layout_repr = self.layout_interner.runtime_representation(layout);
+        let same_layout = |layout| {
+            if op.is_indirect() {
+                if let LayoutRepr::Ptr(inner) = self.layout_interner.runtime_representation(layout)
+                {
+                    self.layout_interner.runtime_representation(inner) == layout_repr
+                } else {
+                    false
+                }
+            } else {
+                self.layout_interner.runtime_representation(layout) == layout_repr
+            }
         };
-        let same_layout =
-            |layout| self.layout_interner.runtime_representation(layout) == layout_repr;
         let proc_index = self
             .proc_lookup
             .iter()
