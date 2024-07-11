@@ -751,7 +751,9 @@ fn modify_refcount<'a>(
                     op,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([ptr, alignment_sym]),
+                arguments: root
+                    .arena
+                    .alloc([ptr, alignment_sym, elements_refcounted_sym]),
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
