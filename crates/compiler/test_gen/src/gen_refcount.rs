@@ -132,7 +132,7 @@ fn list_map2_dealloc_tail() {
             r#"
                 s = Str.concat "A long enough string " "to be heap-allocated"
                 i1 = [s, s, s]
-                i2 = [1, 2]
+                i2 = [1i32, 2]
                 List.map2 i1 i2 \a, b -> (a, b)
             "#
         ),

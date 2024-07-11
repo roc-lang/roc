@@ -195,7 +195,7 @@ pub fn refcount_generic<'a>(
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
         }
-        LayoutRepr::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
+        LayoutRepr::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx, structure),
         LayoutRepr::Builtin(Builtin::List(element_layout)) => refcount_list(
             root,
             ident_ids,
@@ -775,9 +775,9 @@ fn refcount_str<'a>(
     root: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    string: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;
-    let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
     let field_layouts = arena.alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
 
@@ -956,13 +956,12 @@ fn refcount_list<'a>(
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
     element_layout: InLayout<'a>,
-    _structure: Symbol,
+    list: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;
 
     let ret_stmt = arena.alloc(rc_return_stmt(root, ident_ids, ctx));
 
-    let list = Symbol::ARG_1;
     let rc_list_expr = match ctx.op {
         HelperOp::IncN | HelperOp::Inc => {
             let rc_list_args = refcount_args(root, ctx, list);
