@@ -341,6 +341,8 @@ impl<'a> LowLevelCall<'a> {
 
             ListDecref => {
                 let input_list: Symbol = self.arguments[0];
+                let dec_fn_sym = self.arguments[1];
+
                 let list_layout = backend
                     .layout_interner
                     .get_repr(backend.storage.symbol_layouts[&input_list]);
@@ -350,8 +352,12 @@ impl<'a> LowLevelCall<'a> {
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
-                let dec_fn_ptr =
-                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+                let dec_fn = backend.get_existing_refcount_fn_index(
+                    dec_fn_sym,
+                    elem_in_layout,
+                    HelperOp::IndirectDec,
+                );
+                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
 
                 // Zig arguments              Wasm types
                 //  input_list: &RocList       i32
@@ -2998,11 +3004,6 @@ fn build_refcount_element_fn<'a>(
     elem_layout: InLayout<'a>,
     rc_op: HelperOp,
 ) -> i32 {
-    // The refcount function receives a pointer to an element in the list
-    // This is the same as a Struct containing the element
-    let in_memory_layout = backend
-        .layout_interner
-        .insert_direct_no_semantic(LayoutRepr::Struct(backend.env.arena.alloc([elem_layout])));
-    let rc_fn = backend.get_refcount_fn_index(in_memory_layout, rc_op);
+    let rc_fn = backend.get_refcount_fn_index(elem_layout, rc_op);
     backend.get_fn_ptr(rc_fn)
 }

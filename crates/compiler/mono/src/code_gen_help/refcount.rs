@@ -196,7 +196,14 @@ pub fn refcount_generic<'a>(
             rc_return_stmt(root, ident_ids, ctx)
         }
         LayoutRepr::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
-        LayoutRepr::Builtin(Builtin::List(_)) => refcount_list(root, ident_ids, ctx, structure),
+        LayoutRepr::Builtin(Builtin::List(element_layout)) => refcount_list(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            element_layout,
+            structure,
+        ),
         LayoutRepr::Struct(field_layouts) => refcount_struct(
             root,
             ident_ids,
@@ -945,6 +952,8 @@ fn refcount_list<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    element_layout: InLayout<'a>,
     _structure: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;
@@ -964,13 +973,19 @@ fn refcount_list<'a>(
             })
         }
         HelperOp::DecRef(_) | HelperOp::Dec => {
-            let rc_list_args = refcount_args(root, ctx, list);
+            let (rc_sym, linker_data) = root.gen_refcount_proc(
+                ident_ids,
+                layout_interner,
+                element_layout,
+                HelperOp::IndirectDec,
+            );
+            ctx.new_linker_data.extend_from_slice(&linker_data);
             Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::ListDecref,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: rc_list_args,
+                arguments: root.arena.alloc([list, rc_sym]),
             })
         }
         _ => unreachable!(),

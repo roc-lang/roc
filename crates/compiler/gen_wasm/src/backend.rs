@@ -2102,6 +2102,17 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
+        self.get_existing_refcount_fn_index(proc_symbol, layout, op)
+    }
+
+    /// return a pointer (table index) to a refcount helper procedure.
+    /// This allows it to be indirectly called from Zig code
+    pub fn get_existing_refcount_fn_index(
+        &mut self,
+        proc_symbol: Symbol,
+        layout: InLayout<'a>,
+        op: HelperOp,
+    ) -> u32 {
         let layout_repr = if op.is_indirect() {
             LayoutRepr::Ptr(layout)
         } else {
