@@ -815,21 +815,23 @@ impl<'a> LowLevelCall<'a> {
                 let list: Symbol = self.arguments[0];
                 let drop_index: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
 
                 let inc_fn_ptr =
-                    build_refcount_element_fn(backend, elem_layout, HelperOp::IndirectInc);
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
                 let dec_fn_ptr =
-                    build_refcount_element_fn(backend, elem_layout, HelperOp::IndirectDec);
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
                 //  list: RocList,             i32
-                //  element_width: usize,      i32
                 //  alignment: u32,            i32
+                //  element_width: usize,      i32
+                //  elements_refcounted: bool, i32
                 //  drop_index: u64,           i64
                 //  inc: Inc,                  i32
                 //  dec: Dec,                  i32
@@ -842,8 +844,9 @@ impl<'a> LowLevelCall<'a> {
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
                 );
 
-                backend.code_builder.i32_const(elem_width as i32);
                 backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[drop_index]);
