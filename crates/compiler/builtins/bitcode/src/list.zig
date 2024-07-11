@@ -1223,13 +1223,13 @@ pub fn listConcatUtf8(
 }
 
 test "listConcatUtf8" {
-    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 });
-    defer list.decref(1);
+    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 }, false);
+    defer list.decref(1, 1, false, &rcNone);
     const string_bytes = "🐦";
     const string = str.RocStr.init(string_bytes, string_bytes.len);
     defer string.decref();
     const ret = listConcatUtf8(list, string);
-    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 });
-    defer expected.decref(1);
+    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 }, false);
+    defer expected.decref(1, 1, false, &rcNone);
     try expect(ret.eql(expected));
 }
