@@ -225,7 +225,7 @@ impl Target {
     }
 
     // file name for a stubbed app dynamic library file
-    pub fn stub_app_lib_file_name() -> String {
+    pub fn stub_app_lib_file_name(&self) -> String {
         format!("libapp.{}", self.dynamic_library_file_ext())
     }
 

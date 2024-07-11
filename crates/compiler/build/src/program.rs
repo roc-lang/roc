@@ -1,5 +1,5 @@
 use crate::link::{
-    find_legacy_host, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
+    link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
@@ -97,7 +97,7 @@ pub fn gen_from_mono_module<'a>(
     roc_file_path: &Path,
     target: Target,
     code_gen_options: CodeGenOptions,
-    preprocessed_host_path: Option<&Path>,
+    preprocessed_host_path: &PrebuiltHost,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
     let path = roc_file_path;
@@ -429,23 +429,27 @@ fn gen_from_mono_module_dev<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
     target: Target,
-    preprocessed_host_path: Option<&Path>,
+    preprocessed_host_path: &PrebuiltHost,
     wasm_dev_stack_bytes: Option<u32>,
     backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     match (preprocessed_host_path, target.architecture()) {
-        (None, Architecture::Wasm32) => todo!("Cannot compile wasm32 without a host on the dev backend"),
-        (Some(host_path), Architecture::Wasm32) => gen_from_mono_module_dev_wasm32(
+        (PrebuiltHost::Additive(host_path), Architecture::Wasm32) => gen_from_mono_module_dev_wasm32(
             arena,
             loaded,
             host_path,
             wasm_dev_stack_bytes,
         ),
-        (_, Architecture::X86_64 | Architecture::Aarch64) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
-        }
-        (_, Architecture::Aarch32) => todo!(),
-        (_, Architecture::X86_32) => todo!(),
+        (PrebuiltHost::None, Architecture::Wasm32) =>
+            todo!("Cannot compile wasm32 without a host on the dev compiler backend"),
+        (PrebuiltHost::Legacy(host_path), Architecture::Wasm32) => 
+            todo!("Unsupported host files found for use with wasm32 dev compiler backend\n    {}", host_path.display()),
+        (PrebuiltHost::Surgical(SurgicalHostArtifacts {preprocessed_host, ..}), Architecture::Wasm32) =>
+            todo!("Unsupported host files found for use with wasm32 dev compiler backend\n    {}", preprocessed_host.display()),
+        (_, Architecture::X86_64 | Architecture::Aarch64) =>
+            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode),
+        (_, Architecture::Aarch32) => todo!("Dev compiler backend does not support 32 bit ARM architectures"),
+        (_, Architecture::X86_32) => todo!("Dev compiler backend does not support 32 bit x86 architectures"),
     }
 }
 
@@ -732,6 +736,7 @@ pub fn build_file<'a>(
     )
 }
 
+#[derive(Debug)]
 enum PrebuiltHost {
     Additive(PathBuf),
     Legacy(PathBuf),
@@ -859,20 +864,6 @@ fn build_loaded_file<'a>(
 
     };
 
-    //if build_host_requested {
-    //    let rebuild_duration = rebuild_thread.join().expect("Failed to build host.");
-
-    //    rebuild_duration.1
-    //} else {
-    //    match find_legacy_host(target, platform_main_roc) {
-    //        Ok(prebuilt_host) => prebuilt_host,
-    //        Err(msg) => {
-    //            report_missing_prebuilt_host(msg.as_str());
-    //            std::process::exit(1);
-    //        }
-    //    }
-    //}
-
     let buf = &mut String::with_capacity(1024);
 
     let mut it = loaded.timings.iter().peekable();
@@ -910,7 +901,7 @@ fn build_loaded_file<'a>(
         &app_module_path,
         target,
         code_gen_options,
-        built_host_path.map(|x| x.as_path()),
+        &built_host_path,
         wasm_dev_stack_bytes,
     );
 
@@ -981,8 +972,12 @@ fn build_loaded_file<'a>(
 
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
-            if let Some(host_path) = built_host_path {
-                inputs.push(&host_path.display().to_string())
+            let mut host_path = String::new();
+            if let PrebuiltHost::Legacy(p) = built_host_path {
+                host_path.push_str(&p.to_string_lossy());
+                inputs.push(&host_path);
+            } else {
+                panic!("incompatible host path: {:?}", built_host_path);
             }
 
             let builtins_host_tempfile = roc_bitcode::host_tempfile()
