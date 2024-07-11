@@ -821,6 +821,9 @@ trait Backend<'a> {
                         for arg in *arguments {
                             if let Some(layout) = layout_map.get(arg) {
                                 arg_layouts.push(*layout);
+                            } else if matches!(lowlevel, LowLevel::ListDecref) {
+                                // The last arg of ListDecref has no layout. It is a proc symbol.
+                                continue;
                             } else {
                                 internal_error!("the argument, {:?}, has no know layout", arg);
                             }

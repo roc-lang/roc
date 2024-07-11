@@ -1101,7 +1101,6 @@ fn link_macos(
             "-w",
             "-macos_version_min",
             &get_macos_version(),
-            "-ld_classic",
         ])
         .args(input_paths)
         .args(extra_link_flags());
