@@ -362,7 +362,6 @@ pub fn listMap(
     alignment: u32,
     old_element_width: usize,
     new_element_width: usize,
-    inc_old_element: Inc,
     new_elements_refcount: bool,
 ) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
@@ -377,7 +376,6 @@ pub fn listMap(
 
         while (i < size) : (i += 1) {
             const element = source_ptr + (i * old_element_width);
-            inc_old_element(element);
             caller(data, element, target_ptr + (i * new_element_width));
         }
 
@@ -398,8 +396,6 @@ pub fn listMap2(
     a_width: usize,
     b_width: usize,
     c_width: usize,
-    inc_a: Inc,
-    inc_b: Inc,
     c_elements_refcounted: bool,
 ) callconv(.C) RocList {
     const output_length = @min(list1.len(), list2.len());
@@ -418,9 +414,6 @@ pub fn listMap2(
                 const element_a = source_a + i * a_width;
                 const element_b = source_b + i * b_width;
                 const target = target_ptr + i * c_width;
-
-                inc_a(element_a);
-                inc_b(element_b);
 
                 caller(data, element_a, element_b, target);
             }
@@ -447,9 +440,6 @@ pub fn listMap3(
     b_width: usize,
     c_width: usize,
     d_width: usize,
-    inc_a: Inc,
-    inc_b: Inc,
-    inc_c: Inc,
     d_elements_refcounted: bool,
 ) callconv(.C) RocList {
     const smaller_length = @min(list1.len(), list2.len());
@@ -471,10 +461,6 @@ pub fn listMap3(
                     const element_b = source_b + i * b_width;
                     const element_c = source_c + i * c_width;
                     const target = target_ptr + i * d_width;
-
-                    inc_a(element_a);
-                    inc_b(element_b);
-                    inc_c(element_c);
 
                     caller(data, element_a, element_b, element_c, target);
                 }
@@ -506,10 +492,6 @@ pub fn listMap4(
     c_width: usize,
     d_width: usize,
     e_width: usize,
-    inc_a: Inc,
-    inc_b: Inc,
-    inc_c: Inc,
-    inc_d: Inc,
     e_elements_refcounted: bool,
 ) callconv(.C) RocList {
     const output_length = @min(@min(list1.len(), list2.len()), @min(list3.len(), list4.len()));
@@ -533,11 +515,6 @@ pub fn listMap4(
                         const element_d = source_d + i * d_width;
 
                         const target = target_ptr + i * e_width;
-
-                        inc_a(element_a);
-                        inc_b(element_b);
-                        inc_c(element_c);
-                        inc_d(element_d);
 
                         caller(data, element_a, element_b, element_c, element_d, target);
                     }

@@ -2842,7 +2842,6 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                     list_map(
                         env,
                         layout_interner,
-                        layout_ids,
                         roc_function_call,
                         list,
                         element_layout,
@@ -2885,7 +2884,6 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                     list_map2(
                         env,
                         layout_interner,
-                        layout_ids,
                         roc_function_call,
                         list1,
                         list2,
@@ -2933,7 +2931,6 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                     list_map3(
                         env,
                         layout_interner,
-                        layout_ids,
                         roc_function_call,
                         list1,
                         list2,
@@ -2991,7 +2988,6 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                     list_map4(
                         env,
                         layout_interner,
-                        layout_ids,
                         roc_function_call,
                         list1,
                         list2,

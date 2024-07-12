@@ -2958,12 +2958,6 @@ fn list_map_n<'a>(
     }
     cb.i32_const(elem_ret_size as i32);
 
-    // We need to be able to increment the refcount of elements loaded.
-    for el in arg_elem_layouts.iter() {
-        let ptr = build_refcount_element_fn(backend, *el, HelperOp::IndirectInc);
-        backend.code_builder.i32_const(ptr);
-    }
-
     backend.code_builder.i32_const(elem_ret_refcounted as i32);
     backend.call_host_fn_after_loading_args(zig_fn_name);
 }
