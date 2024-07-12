@@ -77,7 +77,9 @@ pub fn refcount_stmt<'a>(
         ModifyRc::DecRef(structure) => {
             match layout_interner.get_repr(layout) {
                 // Str has no children, so Dec is the same as DecRef.
-                LayoutRepr::Builtin(Builtin::Str) => {
+                // List has children, but it is dealt with by LowLevel::ListDecRef.
+                // It correctly handles both Dec and DecRef
+                LayoutRepr::Builtin(Builtin::Str | Builtin::List(_)) => {
                     ctx.op = HelperOp::Dec;
                     refcount_stmt(
                         root,
