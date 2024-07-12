@@ -901,12 +901,6 @@ pub fn apply_task_await<'a>(
             arena.alloc(Loc::at(region, Defs(arena.alloc(defs), new_var)))
         }
         _ => {
-            // If the pattern and the new are matching answers then we don't need to unwrap anything
-            // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
-            if is_matching_intermediate_answer(loc_pat, loc_cont) {
-                return loc_expr;
-            }
-
             // loc_pat = loc_expr!
             // loc_cont
 
@@ -915,6 +909,12 @@ pub fn apply_task_await<'a>(
             loc_expr
         }
     };
+
+    // If the pattern and the new are matching answers then we don't need to unwrap anything
+    // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
+    if is_matching_intermediate_answer(loc_pat, loc_cont) {
+        return task_await_first_arg;
+    }
 
     // \loc_pat -> loc_cont
     let closure = arena.alloc(Loc::at(region, Closure(arena.alloc([*loc_pat]), loc_cont)));
