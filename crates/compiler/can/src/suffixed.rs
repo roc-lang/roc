@@ -936,18 +936,6 @@ pub fn apply_task_await<'a>(
     ))
 }
 
-fn extract_wrapped_task_ok_value<'a>(loc_expr: &'a Loc<Expr<'a>>) -> Option<&'a Loc<Expr<'a>>> {
-    match loc_expr.value {
-        Expr::Apply(function, arguments, _) => match function.value {
-            Var {
-                module_name, ident, ..
-            } if module_name == ModuleName::TASK && ident == "ok" => arguments.first().copied(),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 pub fn is_matching_intermediate_answer<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
     loc_new: &'a Loc<Expr<'a>>,
@@ -956,24 +944,18 @@ pub fn is_matching_intermediate_answer<'a>(
         Pattern::Identifier { ident, .. } => Some(ident),
         _ => None,
     };
+
     let exp_ident = match loc_new.value {
         Expr::Var {
-            module_name, ident, ..
-        } if module_name.is_empty() && ident.starts_with('#') => Some(ident),
+            module_name: "",
+            ident,
+            ..
+        } => Some(ident),
         _ => None,
     };
-    let exp_ident_in_task = match extract_wrapped_task_ok_value(loc_new) {
-        Some(task_expr) => match task_expr.value {
-            Expr::Var {
-                module_name, ident, ..
-            } if module_name.is_empty() && ident.starts_with('#') => Some(ident),
-            _ => None,
-        },
-        None => None,
-    };
-    match (pat_ident, exp_ident, exp_ident_in_task) {
-        (Some(a), Some(b), None) => a == b,
-        (Some(a), None, Some(b)) => a == b,
+
+    match (pat_ident, exp_ident) {
+        (Some(a), Some(b)) => a == b,
         _ => false,
     }
 }
