@@ -2428,8 +2428,6 @@ impl<
                 // Load element_refcounted argument (bool).
                 self.load_layout_refcounted(new_element_layout, Symbol::DEV_TMP3);
 
-                let inc = self.increment_fn_pointer(old_element_layout);
-
                 //    list: RocList,
                 //    caller: Caller1,
                 //    data: Opaque,
@@ -2438,7 +2436,6 @@ impl<
                 //    alignment: u32,
                 //    old_element_width: usize,
                 //    new_element_width: usize,
-                //    inc_old_element: Inc,
                 //    new_element_refcounted: bool,
 
                 let arguments = [
@@ -2450,7 +2447,6 @@ impl<
                     alignment,
                     old_element_width,
                     new_element_width,
-                    inc,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2463,7 +2459,6 @@ impl<
                     Layout::U32,
                     usize_,
                     usize_,
-                    ptr,
                     Layout::BOOL,
                 ];
 
@@ -2506,9 +2501,6 @@ impl<
 
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let inc1 = self.increment_fn_pointer(old_element_layout1);
-                let inc2 = self.increment_fn_pointer(old_element_layout2);
-
                 self.build_fn_pointer(&caller, caller_string);
 
                 // we pass a null pointer when the data is not owned. the zig code must not call this!
@@ -2549,8 +2541,6 @@ impl<
                     old_element_width1,
                     old_element_width2,
                     new_element_width,
-                    inc1,
-                    inc2,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2565,8 +2555,6 @@ impl<
                     usize_,
                     usize_,
                     usize_,
-                    ptr,          // inc1
-                    ptr,          // inc2
                     Layout::BOOL, // new_element_refcounted
                 ];
 
@@ -2617,10 +2605,6 @@ impl<
 
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let inc1 = self.increment_fn_pointer(old_element_layout1);
-                let inc2 = self.increment_fn_pointer(old_element_layout2);
-                let inc3 = self.increment_fn_pointer(old_element_layout3);
-
                 self.build_fn_pointer(&caller, caller_string);
 
                 // we pass a null pointer when the data is not owned. the zig code must not call this!
@@ -2664,9 +2648,6 @@ impl<
                     old_element_width2,
                     old_element_width3,
                     new_element_width,
-                    inc1,
-                    inc2,
-                    inc3,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2683,9 +2664,6 @@ impl<
                     usize_,       // old_element_width_2
                     usize_,       // old_element_width_3
                     usize_,       // new_element_width
-                    ptr,          // inc1
-                    ptr,          // inc2
-                    ptr,          // inc3
                     Layout::BOOL, // new_element_refcounted
                 ];
 
@@ -2744,11 +2722,6 @@ impl<
 
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let inc1 = self.increment_fn_pointer(old_element_layout1);
-                let inc2 = self.increment_fn_pointer(old_element_layout2);
-                let inc3 = self.increment_fn_pointer(old_element_layout3);
-                let inc4 = self.increment_fn_pointer(old_element_layout4);
-
                 self.build_fn_pointer(&caller, caller_string);
 
                 // we pass a null pointer when the data is not owned. the zig code must not call this!
@@ -2779,10 +2752,6 @@ impl<
                     old_element_width3,
                     old_element_width4,
                     new_element_width,
-                    inc1,
-                    inc2,
-                    inc3,
-                    inc4,
                     Symbol::DEV_TMP3,
                 ];
 
@@ -2801,10 +2770,6 @@ impl<
                     usize_,       // old_element_width_3
                     usize_,       // old_element_width_4
                     usize_,       // new_element_width
-                    ptr,          // inc1
-                    ptr,          // inc2
-                    ptr,          // inc3
-                    ptr,          // inc4
                     Layout::BOOL, // new_element_refcounted
                 ];
 
