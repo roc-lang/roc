@@ -135,11 +135,32 @@ fn list_map() {
                 List.map i1 Str.toUtf8
             "#
         ),
-        RocList<(RocStr, i64)>,
+        RocList<RocStr>,
         &[
             (StandardRC, Live(3)),    // s
             (AfterSize, Deallocated), // i1
             (AfterSize, Live(1)),     // Result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_map_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                i1 = [s, s, s]
+                List.map i1 Str.toUtf8
+                |> List.len
+            "#
+        ),
+        i64,
+        &[
+            (StandardRC, Deallocated), // s
+            (AfterSize, Deallocated),  // i1
+            (AfterSize, Deallocated),  // Result
         ]
     );
 }
@@ -162,6 +183,27 @@ fn list_map2_dealloc_tail() {
             (AfterSize, Deallocated),  // i1
             (StandardRC, Deallocated), // i2
             (AfterSize, Live(1)),      // Result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_map2_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                i1 = [s, s, s]
+                List.map2 i1 i1 \a, b -> (a, b)
+                |> List.len
+            "#
+        ),
+        i64,
+        &[
+            (StandardRC, Deallocated), // s
+            (AfterSize, Deallocated),  // i1
+            (AfterSize, Deallocated),  // Result
         ]
     );
 }
