@@ -65,10 +65,6 @@ comptime {
 const list = @import("list.zig");
 
 comptime {
-    exportListFn(list.listMap, "map");
-    exportListFn(list.listMap2, "map2");
-    exportListFn(list.listMap3, "map3");
-    exportListFn(list.listMap4, "map4");
     exportListFn(list.listAppendUnsafe, "append_unsafe");
     exportListFn(list.listReserve, "reserve");
     exportListFn(list.listPrepend, "prepend");

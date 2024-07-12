@@ -36,10 +36,6 @@ pub enum LowLevel {
     ListReplaceUnsafe,
     ListConcat,
     ListPrepend,
-    ListMap,
-    ListMap2,
-    ListMap3,
-    ListMap4,
     ListSortWith,
     ListSublist,
     ListDropAt,
@@ -137,7 +133,7 @@ pub enum LowLevel {
 
 macro_rules! higher_order {
     () => {
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith
+        ListSortWith
     };
 }
 
@@ -154,10 +150,6 @@ impl LowLevel {
         use LowLevel::*;
 
         match self {
-            ListMap => 1,
-            ListMap2 => 2,
-            ListMap3 => 3,
-            ListMap4 => 4,
             ListSortWith => 1,
             _ => unreachable!(),
         }
@@ -213,10 +205,6 @@ macro_rules! map_symbol_to_lowlevel {
 
                 // these are higher-order lowlevels. these need the surrounding
                 // function to provide enough type information for code generation
-                LowLevel::ListMap => unreachable!(),
-                LowLevel::ListMap2 => unreachable!(),
-                LowLevel::ListMap3 => unreachable!(),
-                LowLevel::ListMap4 => unreachable!(),
                 LowLevel::ListSortWith => unreachable!(),
 
                 // (un)boxing is handled in a custom way

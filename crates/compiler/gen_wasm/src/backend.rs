@@ -39,7 +39,6 @@ pub enum ProcSource {
     Roc,
     Helper,
     /// Wrapper function for higher-order calls from Zig to Roc
-    HigherOrderMapper(usize),
     HigherOrderCompare(usize),
 }
 
@@ -489,126 +488,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         let name = String::from_str_in(sym.as_str(self.interns), self.env.arena).into_bump_str();
         self.module.names.append_function(wasm_fn_index, name);
-    }
-
-    /// Build a wrapper around a Roc procedure so that it can be called from Zig builtins List.map*
-    ///
-    /// The generic Zig code passes *pointers* to all of the argument values (e.g. on the heap in a List).
-    /// Numbers up to 64 bits are passed by value, so we need to load them from the provided pointer.
-    /// Everything else is passed by reference, so we can just pass the pointer through.
-    ///
-    /// NOTE: If the builtins expected the return pointer first and closure data last, we could eliminate the wrapper
-    /// when all args are pass-by-reference and non-zero size. But currently we need it to swap those around.
-    pub fn build_higher_order_mapper(
-        &mut self,
-        wrapper_lookup_idx: usize,
-        inner_lookup_idx: usize,
-    ) {
-        use Align::*;
-        use ValueType::*;
-
-        let ProcLookupData {
-            name: wrapper_name,
-            layout: wrapper_proc_layout,
-            ..
-        } = self.proc_lookup[wrapper_lookup_idx];
-        let wrapper_arg_layouts = wrapper_proc_layout.arguments;
-
-        // Our convention is that the last arg of the wrapper is the heap return pointer
-        let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
-        let inner_ret_layout = match wrapper_arg_layouts
-            .last()
-            .map(|l| self.layout_interner.get_repr(*l))
-        {
-            Some(LayoutRepr::Ptr(inner)) => WasmLayout::new(self.layout_interner, inner),
-            x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
-        };
-
-        let ret_type_and_size = match inner_ret_layout.return_method() {
-            ReturnMethod::NoReturnValue => None,
-            ReturnMethod::Primitive(ty, size) => {
-                // If the inner function returns a primitive, load the address to store it at
-                // After the call, it will be under the call result in the value stack
-                self.code_builder.get_local(heap_return_ptr_id);
-                Some((ty, size))
-            }
-            ReturnMethod::WriteToPointerArg => {
-                // If the inner function writes to a return pointer, load its address
-                self.code_builder.get_local(heap_return_ptr_id);
-                None
-            }
-        };
-
-        // Load all the arguments for the inner function
-        for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
-            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner). We'll handle it below.
-            let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
-            if is_closure_data || is_return_pointer {
-                continue;
-            }
-
-            let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
-                LayoutRepr::Ptr(inner) => inner,
-                x => internal_error!("Expected a Ptr layout, got {:?}", x),
-            };
-            if self.layout_interner.stack_size(inner_layout) == 0 {
-                continue;
-            }
-
-            // Load the argument pointer. If it's a primitive value, dereference it too.
-            self.code_builder.get_local(LocalId(i as u32));
-            self.dereference_boxed_value(inner_layout);
-        }
-
-        // If the inner function has closure data, it's the last arg of the inner fn
-        let closure_data_layout = wrapper_arg_layouts[0];
-        if self.layout_interner.stack_size(closure_data_layout) > 0 {
-            // The closure data exists, and will have been passed in to the wrapper as a
-            // one-element struct.
-            let inner_closure_data_layout = match self.layout_interner.get_repr(closure_data_layout)
-            {
-                LayoutRepr::Struct([inner]) => inner,
-                other => internal_error!(
-                    "Expected a boxed layout for wrapped closure data, got {:?}",
-                    other
-                ),
-            };
-            self.code_builder.get_local(LocalId(0));
-            // Since the closure data is wrapped in a one-element struct, we've been passed in the
-            // pointer to that struct in the stack memory. To get the closure data we just need to
-            // dereference the pointer.
-            self.dereference_boxed_value(*inner_closure_data_layout);
-        }
-
-        // Call the wrapped inner function
-        let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        self.code_builder.call(inner_wasm_fn_index);
-
-        // If the inner function returns a primitive, store it to the address we loaded at the very beginning
-        if let Some((ty, size)) = ret_type_and_size {
-            match (ty, size) {
-                (I64, 8) => self.code_builder.i64_store(Bytes8, 0),
-                (I32, 4) => self.code_builder.i32_store(Bytes4, 0),
-                (I32, 2) => self.code_builder.i32_store16(Bytes2, 0),
-                (I32, 1) => self.code_builder.i32_store8(Bytes1, 0),
-                (F32, 4) => self.code_builder.f32_store(Bytes4, 0),
-                (F64, 8) => self.code_builder.f64_store(Bytes8, 0),
-                _ => {
-                    internal_error!("Cannot store {:?} with alignment of {:?}", ty, size);
-                }
-            }
-        }
-
-        // Write empty function header (local variables array with zero length)
-        self.code_builder.build_fn_header_and_footer(&[], 0, None);
-
-        self.module.add_function_signature(Signature {
-            param_types: bumpalo::vec![in self.env.arena; I32; wrapper_arg_layouts.len()],
-            ret_type: None,
-        });
-
-        self.append_proc_debug_name(wrapper_name);
-        self.reset();
     }
 
     /// Build a wrapper around a Roc comparison proc so that it can be called from higher-order Zig builtins.

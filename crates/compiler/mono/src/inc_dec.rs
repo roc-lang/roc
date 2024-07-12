@@ -1103,72 +1103,7 @@ fn insert_refcount_operations_binding<'a>(
                     // This should always be true, not sure where this could be set to false.
                     debug_assert!(passed_function.owns_captured_environment);
 
-                    // define macro that inserts a decref statement for a symbol amount of symbols
-                    macro_rules! decref_lists {
-                            ($stmt:expr, $symbol:expr) => {
-                                arena.alloc(Stmt::Refcounting(ModifyRc::DecRef($symbol), $stmt))
-                            };
-
-                            ($stmt:expr, $symbol:expr, $($symbols:expr),+) => {{
-                                decref_lists!(decref_lists!($stmt, $symbol), $($symbols),+)
-                            }};
-                        }
-
                     match operator {
-                        HigherOrder::ListMap { xs } => {
-                            if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                                let new_stmt = decref_lists!(new_stmt, *xs);
-
-                                let new_let = new_let!(new_stmt);
-
-                                inc_owned!([*xs].into_iter(), new_let)
-                            } else {
-                                panic!("ListMap should have 3 arguments");
-                            }
-                        }
-                        HigherOrder::ListMap2 { xs, ys } => {
-                            if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
-                                &arguments
-                            {
-                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                                let new_stmt = decref_lists!(new_stmt, *xs, *ys);
-
-                                let new_let = new_let!(new_stmt);
-
-                                inc_owned!([*xs, *ys].into_iter(), new_let)
-                            } else {
-                                panic!("ListMap2 should have 4 arguments");
-                            }
-                        }
-                        HigherOrder::ListMap3 { xs, ys, zs } => {
-                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
-                                &arguments
-                            {
-                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                                let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs);
-
-                                let new_let = new_let!(new_stmt);
-
-                                inc_owned!([*xs, *ys, *zs].into_iter(), new_let)
-                            } else {
-                                panic!("ListMap3 should have 5 arguments");
-                            }
-                        }
-                        HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
-                                &arguments
-                            {
-                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                                let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs, *ws);
-
-                                let new_let = new_let!(new_stmt);
-
-                                inc_owned!([*xs, *ys, *zs, *ws].into_iter(), new_let)
-                            } else {
-                                panic!("ListMap4 should have 6 arguments");
-                            }
-                        }
                         HigherOrder::ListSortWith { xs } => {
                             // TODO if non-unique, elements have been consumed, must still consume the list itself
                             if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
@@ -1343,10 +1278,6 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         StrToNum => &[BORROWED],
         ListPrepend => &[OWNED, OWNED],
         StrJoinWith => &[BORROWED, BORROWED],
-        ListMap => &[OWNED, FUNCTION, CLOSURE_DATA],
-        ListMap2 => &[OWNED, OWNED, FUNCTION, CLOSURE_DATA],
-        ListMap3 => &[OWNED, OWNED, OWNED, FUNCTION, CLOSURE_DATA],
-        ListMap4 => &[OWNED, OWNED, OWNED, OWNED, FUNCTION, CLOSURE_DATA],
         ListSortWith => &[OWNED, FUNCTION, CLOSURE_DATA],
         ListAppendUnsafe => &[OWNED, OWNED],
         ListReserve => &[OWNED, IRRELEVANT],

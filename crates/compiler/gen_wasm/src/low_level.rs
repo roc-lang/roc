@@ -377,7 +377,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_DECREF);
             }
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
+            ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -2614,7 +2614,7 @@ fn num_is_finite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
 pub fn call_higher_order_lowlevel<'a>(
     backend: &mut WasmBackend<'a, '_>,
     return_sym: Symbol,
-    return_layout: &InLayout<'a>,
+    _return_layout: &InLayout<'a>,
     higher_order: &'a HigherOrderLowLevel<'a>,
 ) {
     use HigherOrder::*;
@@ -2726,9 +2726,6 @@ pub fn call_higher_order_lowlevel<'a>(
             .unwrap();
         match op {
             ListSortWith { .. } => ProcSource::HigherOrderCompare(passed_proc_index),
-            ListMap { .. } | ListMap2 { .. } | ListMap3 { .. } | ListMap4 { .. } => {
-                ProcSource::HigherOrderMapper(passed_proc_index)
-            }
         }
     };
     let wrapper_sym = backend.create_symbol(&format!("#wrap#{fn_name:?}"));
@@ -2753,19 +2750,6 @@ pub fn call_higher_order_lowlevel<'a>(
         wrapper_arg_layouts.extend(boxed_closure_arg_layouts);
 
         match helper_proc_source {
-            ProcSource::HigherOrderMapper(_) => {
-                // Our convention for mappers is that they write to the heap via the last argument
-                wrapper_arg_layouts.push(
-                    backend
-                        .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Ptr(*result_layout)),
-                );
-                ProcLayout {
-                    arguments: wrapper_arg_layouts.into_bump_slice(),
-                    result: Layout::UNIT,
-                    niche: fn_name.niche(),
-                }
-            }
             ProcSource::HigherOrderCompare(_) => ProcLayout {
                 arguments: wrapper_arg_layouts.into_bump_slice(),
                 result: *result_layout,
@@ -2792,58 +2776,6 @@ pub fn call_higher_order_lowlevel<'a>(
     };
 
     match op {
-        ListMap { xs } => list_map_n(
-            bitcode::LIST_MAP,
-            backend,
-            &[*xs],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_n_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
-        ListMap2 { xs, ys } => list_map_n(
-            bitcode::LIST_MAP2,
-            backend,
-            &[*xs, *ys],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_n_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
-        ListMap3 { xs, ys, zs } => list_map_n(
-            bitcode::LIST_MAP3,
-            backend,
-            &[*xs, *ys, *zs],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_n_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
-        ListMap4 { xs, ys, zs, ws } => list_map_n(
-            bitcode::LIST_MAP4,
-            backend,
-            &[*xs, *ys, *zs, *ws],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_n_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
         ListSortWith { xs } => {
             let elem_in_layout = unwrap_list_elem_layout(
                 backend
@@ -2903,63 +2835,6 @@ fn unwrap_list_elem_layout(list_layout: LayoutRepr) -> InLayout {
         LayoutRepr::Builtin(Builtin::List(x)) => x,
         e => internal_error!("expected List layout, got {:?}", e),
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn list_map_n<'a>(
-    zig_fn_name: &'static str,
-    backend: &mut WasmBackend<'a, '_>,
-    arg_symbols: &[Symbol],
-    return_sym: Symbol,
-    return_layout: InLayout<'a>,
-    wrapper_fn_ptr: i32,
-    inc_fn_ptr: i32,
-    closure_data_exists: bool,
-    captured_environment: Symbol,
-    owns_captured_environment: bool,
-) {
-    let arg_elem_layouts = Vec::from_iter_in(
-        arg_symbols.iter().map(|sym| {
-            unwrap_list_elem_layout(
-                backend
-                    .layout_interner
-                    .get_repr(backend.storage.symbol_layouts[sym]),
-            )
-        }),
-        backend.env.arena,
-    );
-
-    let elem_in_ret = unwrap_list_elem_layout(backend.layout_interner.get_repr(return_layout));
-    let elem_ret = backend.layout_interner.get_repr(elem_in_ret);
-    let (elem_ret_size, elem_ret_align) =
-        elem_ret.stack_size_and_alignment(backend.layout_interner);
-    let elem_ret_refcounted = backend.layout_interner.contains_refcounted(elem_in_ret);
-
-    let cb = &mut backend.code_builder;
-
-    let mut args_vec = Vec::with_capacity_in(arg_symbols.len() + 1, backend.env.arena);
-    args_vec.push(return_sym);
-    args_vec.extend_from_slice(arg_symbols);
-    backend.storage.load_symbols(cb, &args_vec);
-
-    cb.i32_const(wrapper_fn_ptr);
-    if closure_data_exists {
-        backend.storage.load_symbols(cb, &[captured_environment]);
-    } else {
-        // load_symbols assumes that a zero-size arg should be eliminated in code gen,
-        // but that's a specialization that our Zig code doesn't have! Pass a null pointer.
-        cb.i32_const(0);
-    }
-    cb.i32_const(inc_fn_ptr);
-    cb.i32_const(owns_captured_environment as i32);
-    cb.i32_const(elem_ret_align as i32);
-    for el in arg_elem_layouts.iter() {
-        cb.i32_const(backend.layout_interner.stack_size(*el) as i32);
-    }
-    cb.i32_const(elem_ret_size as i32);
-
-    backend.code_builder.i32_const(elem_ret_refcounted as i32);
-    backend.call_host_fn_after_loading_args(zig_fn_name);
 }
 
 fn ensure_symbol_is_in_memory<'a>(
