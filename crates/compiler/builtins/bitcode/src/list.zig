@@ -107,7 +107,7 @@ pub const RocList = extern struct {
     // The pointer is to just after the refcount.
     // For big lists, it just returns their bytes pointer.
     // For seamless slices, it returns the pointer stored in capacity_or_alloc_ptr.
-    pub fn getAllocationPtr(self: RocList) ?[*]u8 {
+    pub fn getAllocationDataPtr(self: RocList) ?[*]u8 {
         const list_alloc_ptr = @intFromPtr(self.bytes);
         const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
@@ -119,7 +119,7 @@ pub const RocList = extern struct {
     fn getAllocationElementCount(self: RocList) usize {
         if (self.isSeamlessSlice()) {
             // Seamless slices always refer to an underlying allocation.
-            const alloc_ptr = self.getAllocationPtr() orelse unreachable;
+            const alloc_ptr = self.getAllocationDataPtr() orelse unreachable;
             // - 1 is refcount.
             // - 2 is size on heap.
             const ptr = @as([*]usize, @ptrCast(@alignCast(alloc_ptr))) - 2;
@@ -135,7 +135,7 @@ pub const RocList = extern struct {
         if (elements_refcounted) {
             // - 1 is refcount.
             // - 2 is size on heap.
-            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationPtr()))) - 2;
+            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationDataPtr()))) - 2;
             ptr[0] = self.length;
         }
     }
@@ -143,20 +143,20 @@ pub const RocList = extern struct {
     pub fn incref(self: RocList, amount: isize, elements_refcounted: bool) void {
         // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
         if (elements_refcounted and self.isUnique() and !self.isSeamlessSlice()) {
-            if (self.getAllocationPtr()) |source| {
+            if (self.getAllocationDataPtr()) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
                 const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
                 ptr[0] = self.length;
             }
         }
-        utils.increfDataPtrC(self.getAllocationPtr(), amount);
+        utils.increfDataPtrC(self.getAllocationDataPtr(), amount);
     }
 
     pub fn decref(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec) void {
         // If unique, decref will free the list. Before that happens, all elements must be decremented.
         if (elements_refcounted and self.isUnique()) {
-            if (self.getAllocationPtr()) |source| {
+            if (self.getAllocationDataPtr()) |source| {
                 const count = self.getAllocationElementCount();
 
                 var i: usize = 0;
@@ -168,7 +168,7 @@ pub const RocList = extern struct {
         }
 
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted);
+        utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -333,7 +333,7 @@ pub const RocList = extern struct {
         }
 
         // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted);
+        utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted);
 
         return result;
     }
@@ -970,7 +970,7 @@ pub fn listCapacity(
 pub fn listAllocationPtr(
     list: RocList,
 ) callconv(.C) ?[*]u8 {
-    return list.getAllocationPtr();
+    return list.getAllocationDataPtr();
 }
 
 fn rcNone(_: ?[*]u8) callconv(.C) void {}
