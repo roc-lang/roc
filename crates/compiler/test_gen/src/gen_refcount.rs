@@ -49,6 +49,43 @@ fn str_dealloc() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
+fn str_to_utf8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                Str.toUtf8 s
+            "#
+        ),
+        RocStr,
+        &[
+            (StandardRC, Live(1)), // s
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn str_to_utf8_dealloc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                Str.toUtf8 s
+                |> List.len
+            "#
+        ),
+        i64,
+        &[
+            (StandardRC, Deallocated), // s
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
 fn list_int_inc() {
     assert_refcounts!(
         indoc!(
@@ -79,6 +116,24 @@ fn list_int_dealloc() {
         &[
             (StandardRC, Deallocated), // list
             (StandardRC, Deallocated)  // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_str() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                [s, s, s]
+            "#
+        ),
+        RocList<RocStr>,
+        &[
+            (StandardRC, Live(3)), // s
+            (AfterSize, Live(1)),  // Result
         ]
     );
 }
