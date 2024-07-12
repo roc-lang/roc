@@ -1,0 +1,55 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+main =
+expect Bool.isEq 1 2
+
+x
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-31,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-31 Expect(
+                @18-24 Apply(
+                    @20-22 Var {
+                        module_name: "Bool",
+                        ident: "isEq",
+                    },
+                    [
+                        @18-19 Num(
+                            "1",
+                        ),
+                        @23-24 Num(
+                            "2",
+                        ),
+                    ],
+                    BinOp(
+                        Equals,
+                    ),
+                ),
+                @29-31 Var {
+                    module_name: "",
+                    ident: "x",
+                },
+            ),
+        ),
+    ],
+}

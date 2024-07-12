@@ -1,0 +1,86 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+list = Task.await getList \#!a0 ->
+    when #!a0 is
+        [] -> "empty"
+        _ -> "non-empty"
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-74,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "list",
+            },
+            @11-74 Apply(
+                @11-74 Var {
+                    module_name: "Task",
+                    ident: "await",
+                },
+                [
+                    @16-24 Var {
+                        module_name: "",
+                        ident: "getList",
+                    },
+                    @11-74 Closure(
+                        [
+                            @16-24 Identifier {
+                                ident: "#!a0",
+                            },
+                        ],
+                        @11-74 When(
+                            @16-24 Var {
+                                module_name: "",
+                                ident: "#!a0",
+                            },
+                            [
+                                WhenBranch {
+                                    patterns: [
+                                        @36-38 List(
+                                            [],
+                                        ),
+                                    ],
+                                    value: @42-49 Str(
+                                        PlainLine(
+                                            "empty",
+                                        ),
+                                    ),
+                                    guard: None,
+                                },
+                                WhenBranch {
+                                    patterns: [
+                                        @58-59 Underscore(
+                                            "",
+                                        ),
+                                    ],
+                                    value: @63-74 Str(
+                                        PlainLine(
+                                            "non-empty",
+                                        ),
+                                    ),
+                                    guard: None,
+                                },
+                            ],
+                        ),
+                    ),
+                ],
+                BangSuffix,
+            ),
+        ),
+    ],
+}
