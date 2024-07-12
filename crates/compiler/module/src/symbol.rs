@@ -1655,35 +1655,34 @@ define_builtins! {
         26 ENCODE_TO_BYTES: "toBytes"
     }
     12 DECODE: "Decode" => {
-        0 DECODE_DECODE_ERROR: "DecodeError" exposed_type=true
-        1 DECODE_DECODE_RESULT: "DecodeResult" exposed_type=true
-        2 DECODE_DECODER_OPAQUE: "Decoder" exposed_type=true
-        3 DECODE_DECODING: "Decoding" exposed_type=true
-        4 DECODE_DECODER: "decoder"
-        5 DECODE_DECODERFORMATTING: "DecoderFormatting" exposed_type=true
-        6 DECODE_U8: "u8"
-        7 DECODE_U16: "u16"
-        8 DECODE_U32: "u32"
-        9 DECODE_U64: "u64"
-        10 DECODE_U128: "u128"
-        11 DECODE_I8: "i8"
-        12 DECODE_I16: "i16"
-        13 DECODE_I32: "i32"
-        14 DECODE_I64: "i64"
-        15 DECODE_I128: "i128"
-        16 DECODE_F32: "f32"
-        17 DECODE_F64: "f64"
-        18 DECODE_DEC: "dec"
-        19 DECODE_BOOL: "bool"
-        20 DECODE_STRING: "string"
-        21 DECODE_LIST: "list"
-        22 DECODE_RECORD: "record"
-        23 DECODE_TUPLE: "tuple"
-        24 DECODE_CUSTOM: "custom"
-        25 DECODE_DECODE_WITH: "decodeWith"
-        26 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
-        27 DECODE_FROM_BYTES: "fromBytes"
-        28 DECODE_MAP_RESULT: "mapResult"
+        0 DECODE_DECODE_RESULT: "DecodeResult" exposed_type=true
+        1 DECODE_DECODER_OPAQUE: "Decoder" exposed_type=true
+        2 DECODE_DECODING: "Decoding" exposed_type=true
+        3 DECODE_DECODER: "decoder"
+        4 DECODE_DECODERFORMATTING: "DecoderFormatting" exposed_type=true
+        5 DECODE_U8: "u8"
+        6 DECODE_U16: "u16"
+        7 DECODE_U32: "u32"
+        8 DECODE_U64: "u64"
+        9 DECODE_U128: "u128"
+        10 DECODE_I8: "i8"
+        11 DECODE_I16: "i16"
+        12 DECODE_I32: "i32"
+        13 DECODE_I64: "i64"
+        14 DECODE_I128: "i128"
+        15 DECODE_F32: "f32"
+        16 DECODE_F64: "f64"
+        17 DECODE_DEC: "dec"
+        18 DECODE_BOOL: "bool"
+        19 DECODE_STRING: "string"
+        20 DECODE_LIST: "list"
+        21 DECODE_RECORD: "record"
+        22 DECODE_TUPLE: "tuple"
+        23 DECODE_CUSTOM: "custom"
+        24 DECODE_DECODE_WITH: "decodeWith"
+        25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        26 DECODE_FROM_BYTES: "fromBytes"
+        27 DECODE_MAP_RESULT: "mapResult"
     }
     13 HASH: "Hash" => {
         0 HASH_HASH_ABILITY: "Hash" exposed_type=true

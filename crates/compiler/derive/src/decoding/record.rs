@@ -66,7 +66,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///                    Ok f1 -> Ok { f1, f0 }
 ///                    Err _ -> Err TooShort
 ///            Err _ -> Err TooShort
-///       
+///
 ///            Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
 ///```
 pub(crate) fn decoder(
@@ -888,7 +888,7 @@ pub(super) fn finalizer(
         .zip(field_vars.iter().rev())
         .zip(result_field_vars.iter().rev())
     {
-        // [Ok field_var, Err DecodeError]
+        // [Ok field_var, Err err]
         //   when rec.f0 is
         //       Err _ ->
         //           when Decode.decodeWith [] Decode.decoder fmt is
@@ -1020,7 +1020,7 @@ pub(super) fn finalizer(
 ///             decRec-> decRec.result
 ///     Ok a -> Ok a
 /// ```
-/// Tries to decode the field with a zero byte input if it missing,  
+/// Tries to decode the field with a zero byte input if it missing,
 /// this allows the decoder to decode types that have a state for "missing", such as
 /// an "Option" type.
 ///

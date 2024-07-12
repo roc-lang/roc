@@ -68,11 +68,11 @@ decodeF64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest 
 decodeDec = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
 decodeBool = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
 decodeString = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeList : Decoder elem ErrDecoder -> Decoder (List elem) ErrDecoder
+decodeList : Decoder elem err ErrDecoder -> Decoder (List elem) err ErrDecoder
 decodeList = \_ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeRecord : state, (state, Str -> [Keep (Decoder state ErrDecoder), Skip]), (state, ErrDecoder -> Result val DecodeError) -> Decoder val ErrDecoder
+decodeRecord : state, (state, Str -> [Keep (Decoder state err ErrDecoder), Skip]), (state, ErrDecoder -> Result val err) -> Decoder val err ErrDecoder
 decodeRecord = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeTuple : state, (state, U64 -> [Next (Decoder state ErrDecoder), TooLong]), (state -> Result val DecodeError) -> Decoder val ErrDecoder
+decodeTuple : state, (state, U64 -> [Next (Decoder state err ErrDecoder), TooLong]), (state -> Result val err) -> Decoder val err ErrDecoder
 decodeTuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
 "#;
 

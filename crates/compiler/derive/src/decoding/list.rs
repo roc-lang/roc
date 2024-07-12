@@ -36,7 +36,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
             // set val ~ elem
             let val_var = match env.subs.get_content_without_compacting(elem_decoder_var) {
                 Content::Alias(Symbol::DECODE_DECODER_OPAQUE, vars, _, AliasKind::Opaque)
-                    if vars.type_variables_len == 2 =>
+                    if vars.type_variables_len == 3 =>
                 {
                     env.subs.get_subs_slice(vars.type_variables())[0]
                 }
