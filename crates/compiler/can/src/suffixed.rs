@@ -23,7 +23,7 @@ fn next_unique_suffixed_ident() -> String {
 
         // # is used as prefix because it's impossible for code authors to define names like this.
         // This makes it easy to see this identifier was created by the compiler.
-        format!("#!a{}", count)
+        format!("#!{}", count)
     })
 }
 
@@ -70,19 +70,17 @@ fn init_unwrapped_err<'a>(
             // Provide an intermediate answer expression and pattern when unwrapping a
             // (sub) expression.
             // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
-            let answer_ident = arena.alloc(next_unique_suffixed_ident());
+            let ident = arena.alloc(format!("{}_arg", next_unique_suffixed_ident()));
             let sub_new = arena.alloc(Loc::at(
                 unwrapped_expr.region,
                 Expr::Var {
                     module_name: "",
-                    ident: answer_ident,
+                    ident,
                 },
             ));
             let sub_pat = arena.alloc(Loc::at(
                 unwrapped_expr.region,
-                Pattern::Identifier {
-                    ident: answer_ident,
-                },
+                Pattern::Identifier { ident },
             ));
 
             Err(EUnwrapped::UnwrappedSubExpr {
@@ -619,8 +617,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
 
                 let maybe_suffixed_value_def = match current_value_def {
                     Annotation(..) | Dbg{..} | Expect{..} | ExpectFx{..} | Stmt(..) | ModuleImport{..} | IngestedFileImport(_) => None,
-                    AnnotatedBody { body_pattern, body_expr, ann_type, ann_pattern, .. } if body_pattern.value == ann_pattern.value => Some((body_pattern, body_expr, Some(ann_type))),
-                    AnnotatedBody { body_pattern, body_expr, .. } => Some((body_pattern, body_expr, None)),
+                    AnnotatedBody { body_pattern, body_expr, ann_type, ann_pattern, .. } => Some((body_pattern, body_expr, Some((ann_pattern, ann_type)))),
                     Body (def_pattern, def_expr) => Some((def_pattern, def_expr, None)),
                 };
 
@@ -846,47 +843,72 @@ pub fn apply_task_await<'a>(
     loc_expr: &'a Loc<Expr<'a>>,
     loc_pat: &'a Loc<Pattern<'a>>,
     loc_cont: &'a Loc<Expr<'a>>,
-    maybe_loc_type: Option<&'a Loc<TypeAnnotation<'a>>>,
+    maybe_loc_ann: Option<(&'a Loc<Pattern>, &'a Loc<TypeAnnotation<'a>>)>,
 ) -> &'a Loc<Expr<'a>> {
-    let task_await_first_arg = match maybe_loc_type {
-        Some(loc_type) => {
-            // loc_pat : loc_type
+    let task_await_first_arg = match maybe_loc_ann {
+        Some((loc_ann_pat, loc_type)) => {
+            // loc_ann_pat : loc_type
             // loc_pat = loc_expr!
             // loc_cont
 
             // desugar to
             // Task.await
             //     (
-            //         #!a0 : Task loc_type _
-            //         #!a0 = loc_expr
-            //         #!a0
+            //         #!0_expr : Task loc_type _
+            //         #!0_expr = loc_expr
+            //         #!0_expr
             //     )
             //     \loc_pat -> loc_cont
             use roc_parse::ast::*;
 
             // #!a0
-            let new_ident = arena.alloc(next_unique_suffixed_ident());
-            // #!a0 (pattern)
-            let new_pat = arena.alloc(Loc::at(region, Pattern::Identifier { ident: new_ident }));
+            let new_ident = next_unique_suffixed_ident();
+            let new_ident = match loc_pat.value {
+                Pattern::Underscore("#!stmt") => format!("{}_stmt", new_ident),
+                Pattern::Identifier { ident }
+                    if ident.starts_with('#') && ident.ends_with("_stmt") =>
+                {
+                    format!("{}_stmt", new_ident)
+                }
+                _ => format!("{}_expr", new_ident),
+            };
+            let new_ident = arena.alloc(new_ident);
 
-            // #!a0 : Task loc_type _
-            // #!a0 = loc_expr
+            // #!0_expr (pattern)
+            // #!0_expr : Task loc_type _
+            // #!0_expr = loc_expr
             let value_def = ValueDef::AnnotatedBody {
-                ann_pattern: new_pat,
+                ann_pattern: arena.alloc(Loc::at(
+                    loc_ann_pat.region,
+                    Pattern::Identifier {
+                        ident: if loc_ann_pat.value.equivalent(&loc_pat.value) {
+                            new_ident
+                        } else {
+                            // create another pattern to preserve inconsistency
+                            arena.alloc(next_unique_suffixed_ident())
+                        },
+                    },
+                )),
                 ann_type: arena.alloc(Loc::at(
-                    region,
+                    loc_type.region,
                     TypeAnnotation::Apply(
                         arena.alloc(""),
                         arena.alloc("Task"),
-                        arena.alloc([*loc_type, Loc::at(region, TypeAnnotation::Inferred)]),
+                        arena.alloc([
+                            *loc_type,
+                            Loc::at(loc_type.region, TypeAnnotation::Inferred),
+                        ]),
                     ),
                 )),
                 comment: None,
-                body_pattern: new_pat,
+                body_pattern: arena.alloc(Loc::at(
+                    loc_pat.region,
+                    Pattern::Identifier { ident: new_ident },
+                )),
                 body_expr: loc_expr,
             };
 
-            // #!a0 (variable)
+            // #!0_expr (variable)
             let new_var = arena.alloc(Loc::at(
                 region,
                 Expr::Var {
@@ -895,10 +917,18 @@ pub fn apply_task_await<'a>(
                 },
             ));
 
+            // (
+            //     #!0_expr : Task loc_type _
+            //     #!0_expr = loc_expr
+            //     #!0_expr
+            // )
             let mut defs = roc_parse::ast::Defs::default();
             defs.push_value_def(value_def, region, &[], &[]);
 
-            arena.alloc(Loc::at(region, Defs(arena.alloc(defs), new_var)))
+            arena.alloc(Loc::at(
+                Region::span_across(&loc_ann_pat.region, &loc_expr.region),
+                Defs(arena.alloc(defs), new_var),
+            ))
         }
         _ => {
             // loc_pat = loc_expr!

@@ -159,7 +159,7 @@ fn desugar_value_def<'a>(
             // _ = stmt_expr!
 
             let region = stmt_expr.region;
-            let new_pat = arena.alloc(Loc::at(region, Pattern::Underscore("")));
+            let new_pat = arena.alloc(Loc::at(region, Pattern::Underscore("#!stmt")));
 
             ValueDef::AnnotatedBody {
                 ann_pattern: new_pat,
@@ -265,7 +265,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                             sub_arg,
                             sub_pat,
                             sub_new,
-                            Some(ann_type),
+                            Some((ann_pattern, ann_type)),
                         ),
                     },
                 ),
