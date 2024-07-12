@@ -126,6 +126,26 @@ fn list_str_slice() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
+fn list_map() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                i1 = [s, s, s]
+                List.map i1 Str.toUtf8
+            "#
+        ),
+        RocList<(RocStr, i64)>,
+        &[
+            (StandardRC, Live(3)),    // s
+            (AfterSize, Deallocated), // i1
+            (AfterSize, Live(1)),     // Result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
 fn list_map2_dealloc_tail() {
     assert_refcounts!(
         indoc!(
