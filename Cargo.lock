@@ -2835,6 +2835,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "hashbrown",
+ "indoc",
  "parking_lot",
  "roc_builtins",
  "roc_can",
