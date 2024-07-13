@@ -2121,47 +2121,25 @@ generateRocRefcounted = \buf, types, type, escapedName ->
         Str.concat buf "roc_refcounted_noop_impl!($(escapedName));\n\n"
 
 generateRocRefcountedNamedFields = \types, fields, mode, wrapper ->
+    fieldName = \name ->
+        escapedName = escapeKW name
+        when wrapper is
+            Struct -> escapedName
+            Tag -> "f$(escapedName)"
+
+    methodName =
+        when mode is
+            Inc -> "inc"
+            Dec -> "dec"
+
     walker =
-        when (wrapper, mode) is
-            (Struct, Inc) ->
-                \accum, { name: fieldName, id } ->
-                    escapedFieldName = escapeKW fieldName
-                    if containsRefcounted types (Types.shape types id) then
-                        Str.concat
-                            accum
-                            "$(indent) self.$(escapedFieldName).inc();\n"
-                    else
-                        accum
-
-            (Struct, Dec) ->
-                \accum, { name: fieldName, id } ->
-                    escapedFieldName = escapeKW fieldName
-                    if containsRefcounted types (Types.shape types id) then
-                        Str.concat
-                            accum
-                            "$(indent) self.$(escapedFieldName).dec();\n"
-                    else
-                        accum
-
-            (Tag, Inc) ->
-                \accum, { name: fieldName, id } ->
-                    escapedFieldName = escapeKW fieldName
-                    if containsRefcounted types (Types.shape types id) then
-                        Str.concat
-                            accum
-                            "$(indent) self.f$(escapedFieldName).inc();\n"
-                    else
-                        accum
-
-            (Tag, Dec) ->
-                \accum, { name: fieldName, id } ->
-                    escapedFieldName = escapeKW fieldName
-                    if containsRefcounted types (Types.shape types id) then
-                        Str.concat
-                            accum
-                            "$(indent) self.f$(escapedFieldName).dec();\n"
-                    else
-                        accum
+        \accum, { name, id } ->
+            if containsRefcounted types (Types.shape types id) then
+                Str.concat
+                    accum
+                    "$(indent) self.$(fieldName name).$(methodName)();\n"
+            else
+                accum
 
     List.walk fields "" walker
 
