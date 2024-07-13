@@ -106,7 +106,10 @@ where
     }
 }
 
-impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocBox<T> {
+impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn decode(memory: &[u8], offset: u32) -> Self {
         let ptr = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_PTR);
         debug_assert_ne!(ptr, 0);
