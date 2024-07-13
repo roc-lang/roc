@@ -1201,8 +1201,7 @@ fn get_xcode_version() -> f32 {
         .and_then(|out| String::from_utf8(out.stdout).map_err(|_| ()))
         .and_then(|str| {
             str.split_whitespace()
-                .skip(1)
-                .next()
+                .nth(1)
                 .map(|s| s.to_string())
                 .ok_or(())
         })
