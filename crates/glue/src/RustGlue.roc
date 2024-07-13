@@ -2008,7 +2008,7 @@ generateRocRefcounted = \buf, types, type, escapedName ->
                 fn is_refcounted() -> bool {
                     true
                 }
-            }\n
+            }\n\n
             """
     else
         Str.concat buf "roc_refcounted_noop_impl!($(escapedName));\n\n"
