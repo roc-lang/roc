@@ -1,8 +1,9 @@
 use super::build::BuilderExt;
 use crate::llvm::build::Env;
+use crate::llvm::bitcode::call_bitcode_fn;
 use inkwell::values::{BasicValueEnum, IntValue};
 use inkwell::{IntPredicate, FloatPredicate};
-use roc_builtins::bitcode::{IntWidth, FloatWidth};
+use roc_builtins::bitcode::{IntWidth, FloatWidth, NUM_LESS_THAN, NUM_GREATER_THAN};
 use roc_mono::layout::{
     Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
 };
@@ -27,7 +28,9 @@ pub fn generic_compare<'a, 'ctx>(
         LayoutRepr::Builtin(Builtin::Bool) => {
             bool_compare(env, lhs_val, rhs_val)
         }
-        LayoutRepr::Builtin(Builtin::Decimal) => todo!(),
+        LayoutRepr::Builtin(Builtin::Decimal) => {
+            dec_compare(env, lhs_val, rhs_val)
+        }
         LayoutRepr::Builtin(Builtin::Str) => todo!(),
         LayoutRepr::Builtin(Builtin::List(_)) => todo!(),
         LayoutRepr::Struct(_) => todo!(),
@@ -237,7 +240,7 @@ fn float_cmp<'ctx>(
     let two = env.context.i8_type().const_int(2, false);
     let three = env.context.i8_type().const_int(3, false);
 
-    let lt_test = make_cmp(FloatPredicate::OLT,  lhs_val, rhs_val, "rhs_lt_lhs");
+    let lt_test = make_cmp(FloatPredicate::OLT,  lhs_val, rhs_val, "lhs_lt_rhs");
     let gt_test = make_cmp(FloatPredicate::OGT, lhs_val, rhs_val, "lhs_gt_rhs");
     let eq_test = make_cmp(FloatPredicate::OEQ, lhs_val, rhs_val, "lhs_eq_rhs");
     let lhs_not_nan_test = make_cmp(FloatPredicate::OEQ, lhs_val, lhs_val, "lhs_not_NaN");
@@ -263,18 +266,45 @@ fn bool_compare<'ctx>(
     rhs_val: BasicValueEnum<'ctx>,
 ) -> IntValue<'ctx> {
 
+    // Cast the input bools to ints because int comparison of bools does the opposite of what one would expect.
+    // I could just swap the arguments, but I do not want to rely on behavior which seems wrong
+    let lhs_byte = env.builder.new_build_int_cast_sign_flag(lhs_val.into_int_value(), env.context.i8_type(), false, "lhs_byte");
+    let rhs_byte = env.builder.new_build_int_cast_sign_flag(rhs_val.into_int_value(), env.context.i8_type(), false, "rhs_byte");
+
     // (a < b)
-    let lhs_lt_rhs = env.builder.new_build_int_compare(IntPredicate::SLT, lhs_val.into_int_value(), rhs_val.into_int_value(), "lhs_lt_rhs_bool");
+    let lhs_lt_rhs = env.builder.new_build_int_compare(IntPredicate::SLT, lhs_byte, rhs_byte, "lhs_lt_rhs_bool");
     let lhs_lt_rhs_byte = env.builder.new_build_int_cast_sign_flag(lhs_lt_rhs, env.context.i8_type(), false, "lhs_lt_rhs_byte");
     
     // (a > b)
-    let lhs_gt_rhs = env.builder.new_build_int_compare(IntPredicate::SGT, lhs_val.into_int_value(), rhs_val.into_int_value(), "lhs_gt_rhs_bool");
+    let lhs_gt_rhs = env.builder.new_build_int_compare(IntPredicate::SGT, lhs_byte, rhs_byte, "lhs_gt_rhs_bool");
     let lhs_gt_rhs_byte = env.builder.new_build_int_cast_sign_flag(lhs_gt_rhs, env.context.i8_type(), false, "lhs_gt_rhs_byte");
 
-    // (a > b) * 2
+    // (a < b) * 2
     let two = env.context.i8_type().const_int(2, false);
-    let lhs_gt_rhs_times_two = env.builder.new_build_int_mul(lhs_gt_rhs_byte, two, "lhs_gt_rhs_times_two");
+    let lhs_lt_rhs_times_two = env.builder.new_build_int_mul(lhs_lt_rhs_byte, two, "lhs_lt_rhs_times_two");
 
-    // (a < b) + (a > b) * 2
-    env.builder.new_build_int_add(lhs_lt_rhs_byte, lhs_gt_rhs_times_two, "bool_compare")
+    // (a > b) + (a < b) * 2
+    env.builder.new_build_int_add(lhs_gt_rhs_byte, lhs_lt_rhs_times_two, "bool_compare")
+}
+
+fn dec_compare<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    lhs_val: BasicValueEnum<'ctx>,
+    rhs_val: BasicValueEnum<'ctx>,
+) -> IntValue<'ctx> {
+
+    // (a > b)
+    let lhs_gt_rhs = call_bitcode_fn(env, &[lhs_val, rhs_val], &NUM_GREATER_THAN[IntWidth::I128]).into_int_value();
+    let lhs_gt_rhs_byte = env.builder.new_build_int_cast_sign_flag(lhs_gt_rhs, env.context.i8_type(), false, "lhs_gt_rhs_byte");
+    
+    // (a < b)
+    let lhs_lt_rhs = call_bitcode_fn(env, &[lhs_val, rhs_val], &NUM_LESS_THAN[IntWidth::I128]).into_int_value();
+    let lhs_lt_rhs_byte = env.builder.new_build_int_cast_sign_flag(lhs_lt_rhs, env.context.i8_type(), false, "lhs_lt_rhs_byte");
+
+    // (a < b) * 2
+    let two = env.context.i8_type().const_int(2, false);
+    let lhs_lt_rhs_times_two = env.builder.new_build_int_mul(lhs_lt_rhs_byte, two, "lhs_gt_rhs_times_two");
+
+    // (a > b) + (a < b) * 2
+    env.builder.new_build_int_add(lhs_gt_rhs_byte, lhs_lt_rhs_times_two, "bool_compare")
 }
