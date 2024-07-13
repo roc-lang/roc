@@ -455,7 +455,7 @@ trait Backend<'a> {
 
         let element_increment_string = self.lambda_name_to_string(
             LambdaName::no_niche(element_increment_symbol),
-            [box_layout].into_iter(),
+            [box_layout, Layout::I64].into_iter(),
             None,
             Layout::UNIT,
         );

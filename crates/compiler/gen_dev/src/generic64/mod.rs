@@ -3604,8 +3604,9 @@ impl<
 
         match reuse {
             None => {
+                // element_refcounted only applies to lists.
                 let element_refcounted = self.debug_symbol("element_refcounted");
-                self.load_layout_refcounted(element_layout, element_refcounted);
+                self.load_literal(&element_refcounted, &Layout::BOOL, &Literal::Bool(false));
 
                 self.allocate_with_refcount(
                     allocation,
@@ -4966,8 +4967,9 @@ impl<
         let element_alignment = self.debug_symbol("element_alignment");
         self.load_layout_alignment(layout, element_alignment);
 
+        // element_refcounted only applies to lists.
         let element_refcounted = self.debug_symbol("element_refcounted");
-        self.load_layout_refcounted(layout, element_refcounted);
+        self.load_literal(&element_refcounted, &Layout::BOOL, &Literal::Bool(false));
 
         self.allocate_with_refcount(dst, data_bytes, element_alignment, element_refcounted);
 
