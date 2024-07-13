@@ -1105,6 +1105,10 @@ fn link_macos(
         .args(input_paths)
         .args(extra_link_flags());
 
+    if get_xcode_version() >= 15.0 {
+        ld_command.arg("-ld_classic");
+    }
+
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
         ld_command.arg(format!("-L{sdk_path}"));
@@ -1185,6 +1189,25 @@ fn get_macos_version() -> String {
         .take(3)
         .collect::<Vec<&str>>()
         .join(".")
+}
+
+fn get_xcode_version() -> f32 {
+    let mut cmd = Command::new("xcodebuild");
+    cmd.arg("-version");
+    debug_print_command(&cmd);
+
+    cmd.output()
+        .map_err(|_| ())
+        .and_then(|out| String::from_utf8(out.stdout).map_err(|_| ()))
+        .and_then(|str| {
+            str.split_whitespace()
+                .skip(1)
+                .next()
+                .map(|s| s.to_string())
+                .ok_or(())
+        })
+        .and_then(|version| version.parse::<f32>().map_err(|_| ()))
+        .unwrap_or(0.0)
 }
 
 fn link_wasm32(
