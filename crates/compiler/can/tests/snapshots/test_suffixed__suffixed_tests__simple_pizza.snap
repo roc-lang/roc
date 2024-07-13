@@ -1,0 +1,89 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+main = Task.await (line (Str.concat "hello" "world")) \{} -> Task.ok {}
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-73,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-56 Apply(
+                @11-56 Var {
+                    module_name: "Task",
+                    ident: "await",
+                },
+                [
+                    @11-56 Apply(
+                        @11-56 Var {
+                            module_name: "",
+                            ident: "line",
+                        },
+                        [
+                            @11-44 Apply(
+                                @26-36 Var {
+                                    module_name: "Str",
+                                    ident: "concat",
+                                },
+                                [
+                                    @11-18 Str(
+                                        PlainLine(
+                                            "hello",
+                                        ),
+                                    ),
+                                    @37-44 Str(
+                                        PlainLine(
+                                            "world",
+                                        ),
+                                    ),
+                                ],
+                                BinOp(
+                                    Pizza,
+                                ),
+                            ),
+                        ],
+                        BinOp(
+                            Pizza,
+                        ),
+                    ),
+                    @11-56 Closure(
+                        [
+                            @26-56 RecordDestructure(
+                                [],
+                            ),
+                        ],
+                        @63-73 Apply(
+                            @63-70 Var {
+                                module_name: "Task",
+                                ident: "ok",
+                            },
+                            [
+                                @71-73 Record(
+                                    [],
+                                ),
+                            ],
+                            Space,
+                        ),
+                    ),
+                ],
+                BangSuffix,
+            ),
+        ),
+    ],
+}

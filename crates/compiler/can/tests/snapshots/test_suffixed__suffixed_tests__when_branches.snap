@@ -1,0 +1,132 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+list = Task.await getList \#!a1 ->
+    when #!a1 is
+        [] -> Task.await (line "foo") \{} -> line "bar"
+        _ -> ok {}
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-120,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "list",
+            },
+            @11-120 Apply(
+                @11-120 Var {
+                    module_name: "Task",
+                    ident: "await",
+                },
+                [
+                    @16-24 Var {
+                        module_name: "",
+                        ident: "getList",
+                    },
+                    @11-120 Closure(
+                        [
+                            @16-24 Identifier {
+                                ident: "#!a1",
+                            },
+                        ],
+                        @11-120 When(
+                            @16-24 Var {
+                                module_name: "",
+                                ident: "#!a1",
+                            },
+                            [
+                                WhenBranch {
+                                    patterns: [
+                                        @36-38 List(
+                                            [],
+                                        ),
+                                    ],
+                                    value: @54-65 Apply(
+                                        @54-65 Var {
+                                            module_name: "Task",
+                                            ident: "await",
+                                        },
+                                        [
+                                            @54-65 Apply(
+                                                @54-65 Var {
+                                                    module_name: "",
+                                                    ident: "line",
+                                                },
+                                                [
+                                                    @60-65 Str(
+                                                        PlainLine(
+                                                            "foo",
+                                                        ),
+                                                    ),
+                                                ],
+                                                Space,
+                                            ),
+                                            @54-65 Closure(
+                                                [
+                                                    @54-65 RecordDestructure(
+                                                        [],
+                                                    ),
+                                                ],
+                                                @78-89 Apply(
+                                                    @78-89 Var {
+                                                        module_name: "",
+                                                        ident: "line",
+                                                    },
+                                                    [
+                                                        @84-89 Str(
+                                                            PlainLine(
+                                                                "bar",
+                                                            ),
+                                                        ),
+                                                    ],
+                                                    Space,
+                                                ),
+                                            ),
+                                        ],
+                                        BangSuffix,
+                                    ),
+                                    guard: None,
+                                },
+                                WhenBranch {
+                                    patterns: [
+                                        @98-99 Underscore(
+                                            "",
+                                        ),
+                                    ],
+                                    value: @115-120 Apply(
+                                        @115-117 Var {
+                                            module_name: "",
+                                            ident: "ok",
+                                        },
+                                        [
+                                            @118-120 Record(
+                                                [],
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                    guard: None,
+                                },
+                            ],
+                        ),
+                    ),
+                ],
+                BangSuffix,
+            ),
+        ),
+    ],
+}
