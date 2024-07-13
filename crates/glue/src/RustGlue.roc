@@ -2066,18 +2066,40 @@ generateRocRefcounted = \buf, types, type, escapedName ->
                     }\n\n
                     """
 
-                # Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-                #     List.walk fields \{ id } ->
-                #         crash "call inc on all the things"
-                # Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-                #     List.walk fields \{ id } ->
-                #         crash "call inc on all the things"
-                # TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-                #     List.walk fields \{ id } ->
-                #         crash "call inc on all the things"
-                # TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-                #     List.walk fields \{ id } ->
-                #         crash "call inc on all the things"
+                Struct { fields: HasNoClosure fields } ->
+                    incFields = generateRocRefcountedNamedFields types fields Inc Struct
+                    decFields = generateRocRefcountedNamedFields types fields Dec Struct
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                        $(incFields)
+                        }
+                        fn dec(&mut self) {
+                        $(decFields)
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                TagUnionPayload { fields: HasNoClosure fields } ->
+                    incFields = generateRocRefcountedNamedFields types fields Inc Tag
+                    decFields = generateRocRefcountedNamedFields types fields Dec Tag
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                        $(incFields)
+                        }
+                        fn dec(&mut self) {
+                        $(decFields)
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
                 _ ->
                     """
                     impl roc_std::RocRefcounted for $(escapedName) {
@@ -2097,6 +2119,51 @@ generateRocRefcounted = \buf, types, type, escapedName ->
             impl
     else
         Str.concat buf "roc_refcounted_noop_impl!($(escapedName));\n\n"
+
+generateRocRefcountedNamedFields = \types, fields, mode, wrapper ->
+    walker =
+        when (wrapper, mode) is
+            (Struct, Inc) ->
+                \accum, { name: fieldName, id } ->
+                    escapedFieldName = escapeKW fieldName
+                    if containsRefcounted types (Types.shape types id) then
+                        Str.concat
+                            accum
+                            "$(indent) self.$(escapedFieldName).inc();\n"
+                    else
+                        accum
+
+            (Struct, Dec) ->
+                \accum, { name: fieldName, id } ->
+                    escapedFieldName = escapeKW fieldName
+                    if containsRefcounted types (Types.shape types id) then
+                        Str.concat
+                            accum
+                            "$(indent) self.$(escapedFieldName).dec();\n"
+                    else
+                        accum
+
+            (Tag, Inc) ->
+                \accum, { name: fieldName, id } ->
+                    escapedFieldName = escapeKW fieldName
+                    if containsRefcounted types (Types.shape types id) then
+                        Str.concat
+                            accum
+                            "$(indent) self.f$(escapedFieldName).inc();\n"
+                    else
+                        accum
+
+            (Tag, Dec) ->
+                \accum, { name: fieldName, id } ->
+                    escapedFieldName = escapeKW fieldName
+                    if containsRefcounted types (Types.shape types id) then
+                        Str.concat
+                            accum
+                            "$(indent) self.f$(escapedFieldName).dec();\n"
+                    else
+                        accum
+
+    List.walk fields "" walker
 
 # If a value or any data in it must be refcounted.
 containsRefcounted = \types, type ->
