@@ -535,16 +535,17 @@ pub fn listSublist(
     dec: Dec,
 ) callconv(.C) RocList {
     const size = list.len();
-    if (size == 0 or start_u64 >= @as(u64, @intCast(size))) {
-        // Decrement the reference counts of all elements.
-        if (list.bytes) |source_ptr| {
-            var i: usize = 0;
-            while (i < size) : (i += 1) {
-                const element = source_ptr + i * element_width;
-                dec(element);
-            }
-        }
+    if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
         if (list.isUnique()) {
+            // Decrement the reference counts of all elements.
+            if (list.bytes) |source_ptr| {
+                var i: usize = 0;
+                while (i < size) : (i += 1) {
+                    const element = source_ptr + i * element_width;
+                    dec(element);
+                }
+            }
+
             var output = list;
             output.length = 0;
             return output;

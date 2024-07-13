@@ -67,6 +67,25 @@ fn str_to_utf8() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
+fn str_from_utf8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+
+                Str.toUtf8 s
+                |> Str.fromUtf8
+            "#
+        ),
+        RocStr,
+        &[
+            (StandardRC, Live(1)), // s
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
 fn str_to_utf8_dealloc() {
     assert_refcounts!(
         indoc!(
@@ -160,7 +179,7 @@ fn list_str_inc() {
 
 #[test]
 #[cfg(feature = "gen-wasm")]
-fn list_str_slice() {
+fn list_str_drop_first() {
     assert_refcounts!(
         indoc!(
             r#"
@@ -175,6 +194,64 @@ fn list_str_slice() {
             // So nothing in the list is freed yet.
             (StandardRC, Live(3)), // s
             (AfterSize, Live(1))   // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_str_take_first() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                list = [s, s, s]
+                List.takeFirst list 1
+            "#
+        ),
+        RocList<RocList<RocStr>>,
+        &[
+            // Take will free tail of a unique list.
+            (StandardRC, Live(1)), // s
+            (AfterSize, Live(1))   // result
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_str_split() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                list = [s, s, s]
+                List.split list 1
+            "#
+        ),
+        (RocList<RocStr>, RocList<RocStr>),
+        &[
+            (StandardRC, Live(3)), // s
+            (AfterSize, Live(2)),  // list
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn list_str_split_zero() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                list = [s, s, s]
+                List.split list 0
+            "#
+        ),
+        (RocList<RocStr>, RocList<RocStr>),
+        &[
+            (StandardRC, Live(3)), // s
+            (AfterSize, Live(1)),  // list
         ]
     );
 }
