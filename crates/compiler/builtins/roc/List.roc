@@ -748,7 +748,7 @@ keepErrs = \list, toResult ->
 map : List a, (a -> b) -> List b
 map = \list, mapper ->
     # TODO: allow checking the refcounting and running the map inplace.
-    # Perferably allow it even if the types are different (must be same size with padding though).
+    # Preferably allow it even if the types are different (must be same size with padding though).
     length = List.len list
     List.walk
         list
