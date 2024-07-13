@@ -408,10 +408,12 @@ pub fn listReleaseExcessCapacity(
             const dest_ptr = output.bytes orelse unreachable;
 
             @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
-            var i: usize = 0;
-            while (i < old_length) : (i += 1) {
-                const element = source_ptr + i * element_width;
-                inc(element);
+            if (elements_refcounted) {
+                var i: usize = 0;
+                while (i < old_length) : (i += 1) {
+                    const element = source_ptr + i * element_width;
+                    inc(element);
+                }
             }
         }
         list.decref(alignment, element_width, elements_refcounted, dec);
@@ -539,10 +541,12 @@ pub fn listSublist(
         if (list.isUnique()) {
             // Decrement the reference counts of all elements.
             if (list.bytes) |source_ptr| {
-                var i: usize = 0;
-                while (i < size) : (i += 1) {
-                    const element = source_ptr + i * element_width;
-                    dec(element);
+                if (elements_refcounted) {
+                    var i: usize = 0;
+                    while (i < size) : (i += 1) {
+                        const element = source_ptr + i * element_width;
+                        dec(element);
+                    }
                 }
             }
 
@@ -571,11 +575,13 @@ pub fn listSublist(
         if (start == 0 and list.isUnique()) {
             // The list is unique, we actually have to decrement refcounts to elements we aren't keeping around.
             // Decrement the reference counts of elements after `start + keep_len`.
-            const drop_end_len = size_minus_start - keep_len;
-            var i: usize = 0;
-            while (i < drop_end_len) : (i += 1) {
-                const element = source_ptr + (start + keep_len + i) * element_width;
-                dec(element);
+            if (elements_refcounted) {
+                const drop_end_len = size_minus_start - keep_len;
+                var i: usize = 0;
+                while (i < drop_end_len) : (i += 1) {
+                    const element = source_ptr + (start + keep_len + i) * element_width;
+                    dec(element);
+                }
             }
 
             var output = list;
@@ -631,8 +637,10 @@ pub fn listDropAt(
         // were >= than `size`, and we know `size` fits in usize.
         const drop_index: usize = @intCast(drop_index_u64);
 
-        const element = source_ptr + drop_index * element_width;
-        dec(element);
+        if (elements_refcounted) {
+            const element = source_ptr + drop_index * element_width;
+            dec(element);
+        }
 
         // NOTE
         // we need to return an empty list explicitly,
@@ -669,10 +677,12 @@ pub fn listDropAt(
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target[0..tail_size], tail_source[0..tail_size]);
 
-        var i: usize = 0;
-        while (i < output.len()) : (i += 1) {
-            const cloned_elem = target_ptr + i * element_width;
-            inc(cloned_elem);
+        if (elements_refcounted) {
+            var i: usize = 0;
+            while (i < output.len()) : (i += 1) {
+                const cloned_elem = target_ptr + i * element_width;
+                inc(cloned_elem);
+            }
         }
 
         list.decref(alignment, element_width, elements_refcounted, dec);
@@ -817,10 +827,12 @@ pub fn listConcat(
         @memcpy(source_a[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
 
         // Increment refcount of all cloned elements.
-        var i: usize = 0;
-        while (i < list_b.len()) : (i += 1) {
-            const cloned_elem = source_b + i * element_width;
-            inc(cloned_elem);
+        if (elements_refcounted) {
+            var i: usize = 0;
+            while (i < list_b.len()) : (i += 1) {
+                const cloned_elem = source_b + i * element_width;
+                inc(cloned_elem);
+            }
         }
 
         // decrement list b.
@@ -845,10 +857,12 @@ pub fn listConcat(
         @memcpy(source_b[0..byte_count_a], source_a[0..byte_count_a]);
 
         // Increment refcount of all cloned elements.
-        var i: usize = 0;
-        while (i < list_a.len()) : (i += 1) {
-            const cloned_elem = source_a + i * element_width;
-            inc(cloned_elem);
+        if (elements_refcounted) {
+            var i: usize = 0;
+            while (i < list_a.len()) : (i += 1) {
+                const cloned_elem = source_a + i * element_width;
+                inc(cloned_elem);
+            }
         }
 
         // decrement list a.
@@ -869,15 +883,17 @@ pub fn listConcat(
     @memcpy(target[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
 
     // Increment refcount of all cloned elements.
-    var i: usize = 0;
-    while (i < list_a.len()) : (i += 1) {
-        const cloned_elem = source_a + i * element_width;
-        inc(cloned_elem);
-    }
-    i = 0;
-    while (i < list_b.len()) : (i += 1) {
-        const cloned_elem = source_b + i * element_width;
-        inc(cloned_elem);
+    if (elements_refcounted) {
+        var i: usize = 0;
+        while (i < list_a.len()) : (i += 1) {
+            const cloned_elem = source_a + i * element_width;
+            inc(cloned_elem);
+        }
+        i = 0;
+        while (i < list_b.len()) : (i += 1) {
+            const cloned_elem = source_b + i * element_width;
+            inc(cloned_elem);
+        }
     }
 
     // decrement list a and b.
