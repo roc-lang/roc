@@ -2,11 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-list = Task.await getList \#!a0 ->
-    when #!a0 is
-        [] -> "empty"
-        _ -> "non-empty"
----
 Defs {
     tags: [
         Index(2147483648),
