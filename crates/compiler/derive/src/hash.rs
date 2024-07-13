@@ -3,7 +3,10 @@
 use std::iter::once;
 
 use roc_can::{
-    expr::{AnnotatedMark, ClosureData, Expr, IntValue, Recursive, WhenBranch, WhenBranchPattern},
+    expr::{
+        AnnotatedMark, ClosureData, Expr, IntValue, Recursive, Refinements, WhenBranch,
+        WhenBranchPattern,
+    },
     num::{IntBound, IntLitWidth},
     pattern::Pattern,
 };
@@ -324,6 +327,7 @@ fn hash_tag_union(
                 value: Loc::at_zero(body_expr),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
             }
         })
         .collect();

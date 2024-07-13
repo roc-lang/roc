@@ -1,0 +1,2 @@
+procedure Test.0 (Test.1):
+    ret Test.1;

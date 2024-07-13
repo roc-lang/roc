@@ -1,0 +1,6 @@
+procedure Test.0 (Test.1):
+    joinpoint Test.6 Test.2:
+        ret Test.2;
+    in
+    let Test.7 : [C [], C []] = TagId(0) Test.1;
+    jump Test.6 Test.7;
