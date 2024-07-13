@@ -206,7 +206,10 @@ where
     }
 }
 
-impl<T: Wasm32Result> Wasm32Result for RocBox<T> {
+impl<T: Wasm32Result> Wasm32Result for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         // treat box as if it's just a isize value
         <i32 as Wasm32Result>::build_wrapper_body(code_builder, main_function_index)

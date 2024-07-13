@@ -1443,6 +1443,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             ".field(&node.f$(n))"
         |> Str.joinWith ""
 
+    unionType = TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull })
     discriminant =
         when whichTagIsNull is
             FirstTagIsNull ->
@@ -1566,6 +1567,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
         }
     }
     """
+    |> generateRocRefcounted types unionType name
 
 generateSingleTagStruct = \buf, types, name, tagName, payload ->
     # Store single-tag unions as structs rather than enums,
@@ -1995,21 +1997,104 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
 generateRocRefcounted = \buf, types, type, escapedName ->
     if containsRefcounted types type then
+        impl =
+            when type is
+                TagUnion (NonNullableUnwrapped _) ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            self.0.inc();
+                        }
+                        fn dec(&mut self) {
+                            self.0.dec();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                TagUnion (Recursive _) ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    impl roc_std::RocRefcounted for union_$(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                TagUnion (NullableWrapped _) ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    impl roc_std::RocRefcounted for union_$(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            unimplemented!();
+                        }
+                    }\n\n
+                    """
+
+                # Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+                #     List.walk fields \{ id } ->
+                #         crash "call inc on all the things"
+                # Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+                #     List.walk fields \{ id } ->
+                #         crash "call inc on all the things"
+                # TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+                #     List.walk fields \{ id } ->
+                #         crash "call inc on all the things"
+                # TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+                #     List.walk fields \{ id } ->
+                #         crash "call inc on all the things"
+                _ ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
         Str.concat
             buf
-            """
-            impl roc_std::RocRefcounted for $(escapedName) {
-                fn inc(&mut self) {
-                    unimplemented!();
-                }
-                fn dec(&mut self) {
-                    unimplemented!();
-                }
-                fn is_refcounted() -> bool {
-                    true
-                }
-            }\n\n
-            """
+            impl
     else
         Str.concat buf "roc_refcounted_noop_impl!($(escapedName));\n\n"
 

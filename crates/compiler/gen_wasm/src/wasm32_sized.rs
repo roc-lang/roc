@@ -61,7 +61,10 @@ where
     const ALIGN_OF_WASM: usize = 4;
 }
 
-impl<T: Wasm32Sized> Wasm32Sized for RocBox<T> {
+impl<T: Wasm32Sized> Wasm32Sized for RocBox<T>
+where
+    T: RocRefcounted,
+{
     const SIZE_OF_WASM: usize = 4;
     const ALIGN_OF_WASM: usize = 4;
 }
