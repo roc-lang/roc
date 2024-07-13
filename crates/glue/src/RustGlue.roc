@@ -293,6 +293,7 @@ generateFunction = \buf, types, rocFn ->
         }
     }
     """
+    |> generateRocRefcounted types (Function rocFn) name
 
 generateStruct : Str, Types, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
@@ -319,6 +320,7 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
     |> Str.concat "#[repr($(repr))]\n$(pub)struct $(escapedName) {\n"
     |> generateStructFields types Public structFields
     |> Str.concat "}\n\n"
+    |> generateRocRefcounted types structType escapedName
 
 generateStructFields = \buf, types, visibility, structFields ->
     when structFields is
@@ -374,6 +376,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
         """
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "$(indent)$(indent)}\n$(indent)}\n}\n\n"
+    |> generateRocRefcounted types enumType escapedName
 
 generateEnumTags = \accum, name, index ->
     indexStr = Num.toStr index
@@ -726,6 +729,8 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 None -> accum
         |> Num.toStr
 
+    unionType = Types.shape types id
+
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
     |> Str.concat "#[repr(C, align($(align)))]\npub union $(unionName) {\n"
@@ -780,8 +785,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     |> generateDestructorFunctions types escapedName tags
     |> generateConstructorFunctions types escapedName tags
     |> \b ->
-        type = Types.shape types id
-        if cannotSupportCopy types type then
+        if cannotSupportCopy types unionType then
             # A custom drop impl is only needed when we can't derive copy.
             b
             |> Str.concat
@@ -801,6 +805,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 """
         else
             b
+    |> generateRocRefcounted types unionType escapedName
 
 generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
@@ -836,6 +841,8 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
 
     buf1 = buf |> generateDiscriminant types discriminantName [tagName] discriminantSize
 
+    unionType = TagUnion (NonNullableUnwrapped { name, tagName, payload })
+
     """
     $(buf1)
 
@@ -858,6 +865,7 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
         }
     }
     """
+    |> generateRocRefcounted types unionType escapedName
 
 generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
     escapedName = escapeKW tagUnionName
@@ -1122,8 +1130,9 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> List.mapWithIndex hashCase
         |> Str.joinWith "\n"
 
+    unionType = Types.shape types id
     hashImpl =
-        if canSupportPartialEqOrd types (Types.shape types id) then
+        if canSupportPartialEqOrd types unionType then
             """
             impl core::hash::Hash for $(escapedName) {
                 fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
@@ -1281,6 +1290,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
+    |> generateRocRefcounted types unionType escapedName
 
 generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, discriminantSize, indents ->
     if discriminantSize == 0 then
@@ -1594,6 +1604,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payload ->
                     generateZeroElementSingleTagStruct b escapedName tagName
                 else
                     generateMultiElementSingleTagStruct b types escapedName tagName fields asStructFields
+            |> generateRocRefcounted types (TagUnion (SingleTagStruct { name, tagName, payload })) escapedName
 
         HasClosure _ ->
             Str.concat buf "\\TODO: SingleTagStruct with closures"
@@ -1982,6 +1993,70 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
+generateRocRefcounted = \buf, types, type, escapedName ->
+    if containsRefcounted types type then
+        Str.concat
+            buf
+            """
+            impl roc_std::RocRefcounted for $(escapedName) {
+                fn inc(&mut self) {
+                    unimplemented!();
+                }
+                fn dec(&mut self) {
+                    unimplemented!();
+                }
+                fn is_refcounted() -> bool {
+                    true
+                }
+            }\n
+            """
+    else
+        Str.concat buf "roc_refcounted_noop_impl!($(escapedName));\n\n"
+
+# If a value or any data in it must be refcounted.
+containsRefcounted = \types, type ->
+    containsRefcountedHelp types type (Set.empty {})
+
+containsRefcountedHelp = \types, type, doNotRecurse ->
+    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # I think there is a change it really only matters for RecursivePointer, so it may be fine.
+    # Otherwise we need to deal with threading through updates to doNotRecurse
+    when type is
+        RocStr | RocList _ | RocSet _ | RocDict _ _ | RocBox _ | RecursivePointer _ ->
+            Bool.true
+
+        Unit | Unsized | EmptyTagUnion | Num _ | Bool | TagUnion (Enumeration _) ->
+            Bool.false
+
+        Function { lambdaSet: id } ->
+            containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        RocResult id0 id1 ->
+            containsRefcountedHelp types (Types.shape types id0) doNotRecurse
+            || containsRefcountedHelp types (Types.shape types id1) doNotRecurse
+
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        TagUnion (Recursive _) -> Bool.true
+        TagUnion (NullableWrapped _) -> Bool.true
+        TagUnion (NonNullableUnwrapped _) -> Bool.true
+        TagUnion (NullableUnwrapped _) -> Bool.true
+        TagUnion (NonRecursive { tags }) ->
+            List.any tags \{ payload } ->
+                when payload is
+                    Some id -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+                    None -> Bool.false
+
 typeName = \types, id ->
     when Types.shape types id is
         Unit -> "()"
@@ -2096,6 +2171,9 @@ fileHeader =
     #![allow(clippy::clone_on_copy)]
     #![allow(clippy::non_canonical_partial_ord_impl)]
 
+
+    use roc_std::RocRefcounted;
+    use roc_std::roc_refcounted_noop_impl;
 
 
     """

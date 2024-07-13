@@ -130,11 +130,10 @@ mod glue_cli_run {
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
-        // TODO: re-enable before submit
-        // nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
-        //     tag_union was: StrRoseTree::Tree("root", [StrRoseTree::Tree("leaf1", []), StrRoseTree::Tree("leaf2", [])])
-        //     Tree "foo" [] is: StrRoseTree::Tree("foo", [])
-        // "#),
+        nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
+            tag_union was: StrRoseTree::Tree("root", [StrRoseTree::Tree("leaf1", []), StrRoseTree::Tree("leaf2", [])])
+            Tree "foo" [] is: StrRoseTree::Tree("foo", [])
+        "#),
         basic_recursive_union:"basic-recursive-union" => indoc!(r#"
             tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
@@ -143,10 +142,9 @@ mod glue_cli_run {
         advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
-        // TODO: re-enable before submit
-        // list_recursive_union:"list-recursive-union" => indoc!(r#"
-        //     rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
-        // "#),
+        list_recursive_union:"list-recursive-union" => indoc!(r#"
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
+        "#),
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
         "#),
