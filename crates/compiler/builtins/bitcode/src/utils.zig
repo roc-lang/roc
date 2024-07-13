@@ -337,7 +337,7 @@ inline fn free_ptr_to_refcount(
 
 inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
-    alignment: u32,
+    element_alignment: u32,
     elements_refcounted: bool,
 ) void {
     if (RC_TYPE == Refcount.none) return;
@@ -345,6 +345,10 @@ inline fn decref_ptr_to_refcount(
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| decrement {*}: ", .{refcount_ptr});
     }
+
+    // Due to RC alignmen tmust take into acount pointer size.
+    const ptr_width = @sizeOf(usize);
+    const alignment = @max(ptr_width, element_alignment);
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
