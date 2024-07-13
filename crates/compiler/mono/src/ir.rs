@@ -2749,7 +2749,18 @@ fn from_can_let<'a>(
     let (mono_pattern, assignments) =
         match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
             Ok(v) => v,
-            Err(_) => todo!(),
+            Err(_) => {
+                eprintln!(indoc::indoc! {"
+                    Error:
+                        This can happen if you redefine a variable in the repl, for example:
+
+                            x = 1
+                            x = 2
+
+                        Roc does not allow this yet.
+                "});
+                std::process::exit(1);
+            }
         };
 
     // convert the continuation
