@@ -1549,7 +1549,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         StrToNum => RC::NoRc,
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => RC::Rc,
+        ListSortWith => RC::Rc,
 
         ListAppendUnsafe
         | ListReserve
@@ -1557,7 +1557,9 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | ListDropAt
         | ListSwap
         | ListReleaseExcessCapacity
-        | StrReleaseExcessCapacity => RC::Rc,
+        | StrReleaseExcessCapacity
+        | ListIncref
+        | ListDecref => RC::Rc,
 
         Eq | NotEq => RC::NoRc,
 

@@ -391,6 +391,8 @@ pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
 pub const LIST_ALLOCATION_PTR: &str = "roc_builtins.list.allocation_ptr";
 pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
 pub const LIST_CONCAT_UTF8: &str = "roc_builtins.list.concat_utf8";
+pub const LIST_INCREF: &str = "roc_builtins.list.incref";
+pub const LIST_DECREF: &str = "roc_builtins.list.decref";
 
 pub const DEC_ABS: &str = "roc_builtins.dec.abs";
 pub const DEC_ACOS: &str = "roc_builtins.dec.acos";

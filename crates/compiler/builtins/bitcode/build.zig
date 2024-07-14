@@ -98,7 +98,7 @@ fn generateObjectFile(
 
     const obj_file = obj.getEmittedBin();
 
-    var suffix =
+    const suffix =
         if (target.os_tag == .windows)
         "obj"
     else

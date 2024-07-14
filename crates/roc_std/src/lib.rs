@@ -10,18 +10,15 @@ use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
+use std::convert::Infallible;
 
 mod roc_box;
-mod roc_dict;
 mod roc_list;
-mod roc_set;
 mod roc_str;
 mod storage;
 
 pub use roc_box::RocBox;
-pub use roc_dict::RocDict;
 pub use roc_list::{RocList, SendSafeRocList};
-pub use roc_set::RocSet;
 pub use roc_str::{InteriorNulError, RocStr, SendSafeRocStr};
 pub use storage::Storage;
 
@@ -557,3 +554,98 @@ impl Hash for U128 {
         u128::from(*self).hash(state);
     }
 }
+
+/// All Roc types that are refcounted must implement this trait.
+///
+/// For aggregate types, this must recurse down the structure.
+pub trait RocRefcounted {
+    /// Increments the refcount.
+    fn inc(&mut self);
+
+    /// Decrements the refcount potentially freeing the underlying allocation.
+    fn dec(&mut self);
+
+    /// Returns true if the type is actually refcounted by roc.
+    fn is_refcounted() -> bool;
+}
+
+#[macro_export]
+macro_rules! roc_refcounted_noop_impl {
+    ( $( $T:tt),+ ) => {
+        $(
+            impl RocRefcounted for $T {
+                fn inc(&mut self) {}
+                fn dec(&mut self) {}
+                fn is_refcounted() -> bool {
+                    false
+                }
+            }
+        )+
+    };
+}
+roc_refcounted_noop_impl!(bool);
+roc_refcounted_noop_impl!(u8, u16, u32, u64, u128, U128);
+roc_refcounted_noop_impl!(i8, i16, i32, i64, i128, I128);
+roc_refcounted_noop_impl!(f32, f64);
+roc_refcounted_noop_impl!(RocDec);
+roc_refcounted_noop_impl!(Infallible, ());
+
+macro_rules! roc_refcounted_arr_impl {
+    ( $n:tt ) => {
+        impl<T> RocRefcounted for [T; $n]
+        where
+            T: RocRefcounted,
+        {
+            fn inc(&mut self) {
+                self.iter_mut().for_each(|x| x.inc());
+            }
+            fn dec(&mut self) {
+                self.iter_mut().for_each(|x| x.dec());
+            }
+            fn is_refcounted() -> bool {
+                T::is_refcounted()
+            }
+        }
+    };
+}
+
+roc_refcounted_arr_impl!(0);
+roc_refcounted_arr_impl!(1);
+roc_refcounted_arr_impl!(2);
+roc_refcounted_arr_impl!(3);
+roc_refcounted_arr_impl!(4);
+roc_refcounted_arr_impl!(5);
+roc_refcounted_arr_impl!(6);
+roc_refcounted_arr_impl!(7);
+roc_refcounted_arr_impl!(8);
+
+macro_rules! roc_refcounted_tuple_impl {
+    ( $( $idx:tt $T:ident),* ) => {
+        impl<$($T, )+> RocRefcounted for ($($T, )*)
+        where
+            $($T : RocRefcounted, )*
+        {
+            fn inc(&mut self) {
+                $(
+                self.$idx.inc();
+                )*
+            }
+            fn dec(&mut self) {
+                $(
+                self.$idx.dec();
+                )*
+            }
+            fn is_refcounted() -> bool {
+                $($T::is_refcounted() || )* false
+            }
+        }
+    };
+}
+
+roc_refcounted_tuple_impl!(0 A, 1 B);
+roc_refcounted_tuple_impl!(0 A, 1 B, 2 C);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F, 6 G);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F, 6 G, 7 H);

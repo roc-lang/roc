@@ -65,10 +65,6 @@ comptime {
 const list = @import("list.zig");
 
 comptime {
-    exportListFn(list.listMap, "map");
-    exportListFn(list.listMap2, "map2");
-    exportListFn(list.listMap3, "map3");
-    exportListFn(list.listMap4, "map4");
     exportListFn(list.listAppendUnsafe, "append_unsafe");
     exportListFn(list.listReserve, "reserve");
     exportListFn(list.listPrepend, "prepend");
@@ -86,6 +82,8 @@ comptime {
     exportListFn(list.listAllocationPtr, "allocation_ptr");
     exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
     exportListFn(list.listConcatUtf8, "concat_utf8");
+    exportListFn(list.listIncref, "incref");
+    exportListFn(list.listDecref, "decref");
 }
 
 // Num Module
