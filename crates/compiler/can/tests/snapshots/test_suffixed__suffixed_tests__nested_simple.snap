@@ -2,8 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-run = Task.await nextMsg \#!a0 -> line (#!a0)
----
 Defs {
     tags: [
         Index(2147483648),

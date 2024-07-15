@@ -2,14 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-main =
-    when x is
-        A ->
-            y = 42
-            if a then b else c
-
-        B -> d
----
 Defs {
     tags: [
         Index(2147483648),

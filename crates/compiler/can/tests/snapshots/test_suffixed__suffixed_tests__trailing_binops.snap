@@ -2,8 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-copy = \a, b -> Task.await (line "FOO") \{} -> mapErr (CMD.new "cp") ERR
----
 Defs {
     tags: [
         Index(2147483648),

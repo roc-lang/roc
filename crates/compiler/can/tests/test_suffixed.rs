@@ -14,24 +14,6 @@ mod suffixed_tests {
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
             desugar_defs_node_values(arena, &mut defs, $src, &mut None, "test.roc", true);
 
-            let mut fmt_buf = roc_fmt::Buf::new_in(arena);
-            roc_fmt::def::fmt_defs(&mut fmt_buf, &defs, 0);
-            fmt_buf.fmt_end_of_file();
-            let fmt_str = fmt_buf.as_str().trim();
-
-            // Collect fmt desugared output for easier review process
-            let snapshot = format!("{}\n---\n{:#?}", fmt_str, &defs);
-            println!("{}", snapshot);
-            assert_snapshot!(snapshot);
-        }};
-    }
-
-    macro_rules! run_test_skip_fmt {
-        ($src:expr) => {{
-            let arena = &Bump::new();
-            let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
-            desugar_defs_node_values(arena, &mut defs, $src, &mut None, "test.roc", true);
-
             let snapshot = format!("{:#?}", &defs);
             println!("{}", snapshot);
             assert_snapshot!(snapshot);
@@ -441,7 +423,7 @@ mod suffixed_tests {
 
     #[test]
     fn dbg_simple() {
-        run_test_skip_fmt!(
+        run_test!(
             r#"
             main =
                 foo = getFoo!
@@ -530,7 +512,7 @@ mod suffixed_tests {
 
     #[test]
     fn dbg_stmt_arg() {
-        run_test_skip_fmt!(
+        run_test!(
             r#"
             main =
                 dbg a!

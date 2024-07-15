@@ -2,11 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-list = Task.await getList \#!a1 ->
-    when #!a1 is
-        [] -> Task.await (line "foo") \{} -> line "bar"
-        _ -> ok {}
----
 Defs {
     tags: [
         Index(2147483648),
