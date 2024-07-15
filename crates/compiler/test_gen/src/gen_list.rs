@@ -3912,7 +3912,7 @@ fn list_range_length_overflow() {
     );
 }
 
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 mod pattern_match {
     #[allow(unused_imports)]
     use crate::helpers::with_larger_debug_stack;
@@ -3926,7 +3926,7 @@ mod pattern_match {
     #[cfg(feature = "gen-dev")]
     use crate::helpers::dev::assert_evals_to;
 
-    use super::RocList;
+    use super::{RocList, RocStr};
 
     #[test]
     fn unary_exact_size_match() {
@@ -4120,6 +4120,19 @@ mod pattern_match {
             ",
             RocList::from_slice(&[0, 4, 6, 11]),
             RocList<u8>
+        )
+    }
+
+    #[test]
+    fn list_str() {
+        assert_evals_to!(
+            r#"
+            when ["d"] is
+                [alone] -> [alone]
+                other -> other
+            "#,
+            RocList::from_slice(&[RocStr::from("d")]),
+            RocList<RocStr>
         )
     }
 }

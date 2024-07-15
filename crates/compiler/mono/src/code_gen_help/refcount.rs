@@ -87,7 +87,7 @@ pub fn refcount_stmt<'a>(
                         ctx,
                         layout_interner,
                         layout,
-                        modify,
+                        &ModifyRc::Dec(*structure),
                         following,
                     )
                 }
