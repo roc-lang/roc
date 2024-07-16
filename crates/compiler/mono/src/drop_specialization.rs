@@ -17,8 +17,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, Literal,
-    ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, ModifyRc, Proc,
+    ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -1075,13 +1075,11 @@ fn specialize_list<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
     environment: &mut DropSpecializationEnvironment<'a>,
-    incremented_children: &mut CountingMap<Child>,
+    _incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
-    item_layout: InLayout<'a>,
+    _item_layout: InLayout<'a>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    let current_length = environment.list_length.get(symbol).copied();
-
     macro_rules! keep_original_decrement {
         () => {{
             let new_continuation =
@@ -1090,114 +1088,134 @@ fn specialize_list<'a, 'i>(
         }};
     }
 
-    match (
-        layout_interner.contains_refcounted(item_layout),
-        current_length,
-    ) {
-        // Only specialize lists if the amount of children is known.
-        // Otherwise we might have to insert an unbouned number of decrements.
-        (true, Some(length)) => {
-            match environment.list_children.get(symbol) {
-                Some(children) => {
-                    // TODO perhaps this allocation can be avoided.
-                    let children_clone = children.clone();
+    // TODO: Maybe re-enable drop specialization for lists.
+    // It won't be as useful now, but it can still apply to lists that we know aren't seamless slices.
+    // It also could technically apply to seamless slices if we know everything about their underlying allocation.
+    // To fix this would require adding the restrictions on application above and properly implementing DecRef for the new list.
+    // DecRef would be easy to implement, but currently the new list has Dec/DecRef both as the same.
+    // Extra context starts here: https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/Implement.20RocRefcounted.20for.20RocResult/near/451651633
+    // With most important message here: https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/Implement.20RocRefcounted.20for.20RocResult/near/451692266
+    //
+    // If we don't re-enable this, we should fully remove the list wiring and trackind at some point.
+    //
+    // Fundamentally, an allocation for a list holds onto exactly one reference to all elements in the allocation.
+    // So even if there are 100 references to the list, the list will hold only 1 reference to each element.
+    // On top of that, the list now holds onto a reference to dead elements.
+    // A single slice to 10 elements of a 100 element list will hold 1 reference to each to the 100 elements.
+    // The whole allocation will get freed in a unit.
+    // This makes it much closer to the lifetime of the underlying vector for a reference slice in rust.
+    // If this specialization does not make sense anymore delete it as a whole.
+    keep_original_decrement!()
 
-                    // Map tracking which index of the struct is contained in which symbol.
-                    // And whether the child no longer has to be decremented.
-                    let mut index_symbols = MutMap::default();
+    // let current_length = environment.list_length.get(symbol).copied();
+    // match (
+    //     layout_interner.contains_refcounted(item_layout),
+    //     current_length,
+    // ) {
+    //     // Only specialize lists if the amount of children is known.
+    //     // Otherwise we might have to insert an unbouned number of decrements.
+    //     (true, Some(length)) => {
+    //         match environment.list_children.get(symbol) {
+    //             Some(children) => {
+    //                 // TODO perhaps this allocation can be avoided.
+    //                 let children_clone = children.clone();
 
-                    for index in 0..length {
-                        for (child, i) in children_clone
-                            .iter()
-                            .rev()
-                            .filter(|(_child, i)| *i == index)
-                        {
-                            debug_assert!(length > *i);
+    //                 // Map tracking which index of the struct is contained in which symbol.
+    //                 // And whether the child no longer has to be decremented.
+    //                 let mut index_symbols = MutMap::default();
 
-                            let removed = incremented_children.pop(child);
-                            index_symbols.insert(index, (*child, removed));
+    //                 for index in 0..length {
+    //                     for (child, i) in children_clone
+    //                         .iter()
+    //                         .rev()
+    //                         .filter(|(_child, i)| *i == index)
+    //                     {
+    //                         debug_assert!(length > *i);
 
-                            if removed {
-                                break;
-                            }
-                        }
-                    }
+    //                         let removed = incremented_children.pop(child);
+    //                         index_symbols.insert(index, (*child, removed));
 
-                    let new_continuation = specialize_drops_stmt(
-                        arena,
-                        layout_interner,
-                        ident_ids,
-                        environment,
-                        continuation,
-                    );
+    //                         if removed {
+    //                             break;
+    //                         }
+    //                     }
+    //                 }
 
-                    let mut newer_continuation = arena.alloc(Stmt::Refcounting(
-                        ModifyRc::DecRef(*symbol),
-                        new_continuation,
-                    ));
+    //                 let new_continuation = specialize_drops_stmt(
+    //                     arena,
+    //                     layout_interner,
+    //                     ident_ids,
+    //                     environment,
+    //                     continuation,
+    //                 );
 
-                    // Reversed to ensure that the generated code decrements the items in the correct order.
-                    for i in (0..length).rev() {
-                        match index_symbols.get(&i) {
-                            // If the symbol is known, we can decrement it (if incremented before).
-                            Some((s, popped)) => {
-                                if !*popped {
-                                    // Decrement the children that were not incremented before. And thus don't cancel out.
-                                    newer_continuation = arena.alloc(Stmt::Refcounting(
-                                        ModifyRc::Dec(*s),
-                                        newer_continuation,
-                                    ));
-                                }
+    //                 let mut newer_continuation = arena.alloc(Stmt::Refcounting(
+    //                     ModifyRc::DecRef(*symbol),
+    //                     new_continuation,
+    //                 ));
 
-                                // Do nothing for the children that were incremented before, as the decrement will cancel out.
-                            }
-                            // If the symbol is unknown, we have to get the value from the list.
-                            // Should only happen when list elements are discarded.
-                            None => {
-                                let field_symbol =
-                                    environment.create_symbol(ident_ids, &format!("field_val_{i}"));
+    //                 // Reversed to ensure that the generated code decrements the items in the correct order.
+    //                 for i in (0..length).rev() {
+    //                     match index_symbols.get(&i) {
+    //                         // If the symbol is known, we can decrement it (if incremented before).
+    //                         Some((s, popped)) => {
+    //                             if !*popped {
+    //                                 // Decrement the children that were not incremented before. And thus don't cancel out.
+    //                                 newer_continuation = arena.alloc(Stmt::Refcounting(
+    //                                     ModifyRc::Dec(*s),
+    //                                     newer_continuation,
+    //                                 ));
+    //                             }
 
-                                let index_symbol =
-                                    environment.create_symbol(ident_ids, &format!("index_val_{i}"));
+    //                             // Do nothing for the children that were incremented before, as the decrement will cancel out.
+    //                         }
+    //                         // If the symbol is unknown, we have to get the value from the list.
+    //                         // Should only happen when list elements are discarded.
+    //                         None => {
+    //                             let field_symbol =
+    //                                 environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
-                                let dec = arena.alloc(Stmt::Refcounting(
-                                    ModifyRc::Dec(field_symbol),
-                                    newer_continuation,
-                                ));
+    //                             let index_symbol =
+    //                                 environment.create_symbol(ident_ids, &format!("index_val_{i}"));
 
-                                let index = arena.alloc(Stmt::Let(
-                                    field_symbol,
-                                    Expr::Call(Call {
-                                        call_type: CallType::LowLevel {
-                                            op: LowLevel::ListGetUnsafe,
-                                            update_mode: UpdateModeId::BACKEND_DUMMY,
-                                        },
-                                        arguments: arena.alloc([*symbol, index_symbol]),
-                                    }),
-                                    item_layout,
-                                    dec,
-                                ));
+    //                             let dec = arena.alloc(Stmt::Refcounting(
+    //                                 ModifyRc::Dec(field_symbol),
+    //                                 newer_continuation,
+    //                             ));
 
-                                newer_continuation = arena.alloc(Stmt::Let(
-                                    index_symbol,
-                                    Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
-                                    Layout::isize(layout_interner.target()),
-                                    index,
-                                ));
-                            }
-                        };
-                    }
+    //                             let index = arena.alloc(Stmt::Let(
+    //                                 field_symbol,
+    //                                 Expr::Call(Call {
+    //                                     call_type: CallType::LowLevel {
+    //                                         op: LowLevel::ListGetUnsafe,
+    //                                         update_mode: UpdateModeId::BACKEND_DUMMY,
+    //                                     },
+    //                                     arguments: arena.alloc([*symbol, index_symbol]),
+    //                                 }),
+    //                                 item_layout,
+    //                                 dec,
+    //                             ));
 
-                    newer_continuation
-                }
-                _ => keep_original_decrement!(),
-            }
-        }
-        _ => {
-            // List length is unknown or the children are not reference counted, so we can't specialize.
-            keep_original_decrement!()
-        }
-    }
+    //                             newer_continuation = arena.alloc(Stmt::Let(
+    //                                 index_symbol,
+    //                                 Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
+    //                                 Layout::isize(layout_interner.target()),
+    //                                 index,
+    //                             ));
+    //                         }
+    //                     };
+    //                 }
+
+    //                 newer_continuation
+    //             }
+    //             _ => keep_original_decrement!(),
+    //         }
+    //     }
+    //     _ => {
+    //         // List length is unknown or the children are not reference counted, so we can't specialize.
+    //         keep_original_decrement!()
+    //     }
+    // }
 }
 
 /**
