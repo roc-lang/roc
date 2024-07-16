@@ -828,3 +828,32 @@ fn reset_reuse_alignment_8() {
         ]
     );
 }
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn basic_cli_parser() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            in =
+                "d"
+                |> Str.toUtf8
+                |> List.keepOks \c -> Str.fromUtf8 [c]
+
+            out =
+                when in is
+                    [alone] -> [alone]
+                    other -> other
+
+            List.len out
+            "#
+        ),
+        i64,
+        &[
+            (StandardRC, Deallocated), // str
+            (StandardRC, Deallocated), // [c]
+            (AfterSize, Deallocated),  // in
+            (AfterSize, Deallocated),  // out
+        ]
+    );
+}

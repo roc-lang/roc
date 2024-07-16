@@ -89,13 +89,10 @@ pub fn helper(
     // while you're working on the dev backend!
     {
         // println!("=========== Procedures ==========");
-        // if pretty_print_ir_symbols() {
-        //     println!("");
-        //     for proc in procedures.values() {
-        //         println!("{}", proc.to_pretty(200));
-        //     }
-        // } else {
-        //     println!("{:?}", procedures.values());
+        // let pretty = pretty_print_ir_symbols();
+        // println!("");
+        // for proc in procedures.values() {
+        //     println!("{}", proc.to_pretty(&layout_interner, 200, pretty));
         // }
         // println!("=================================\n");
 

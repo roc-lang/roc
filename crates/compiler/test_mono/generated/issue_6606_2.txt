@@ -32,7 +32,8 @@ procedure Test.0 ():
         if Test.43 then
             let Test.24 : U64 = 0i64;
             let Test.19 : List [] = lowlevel ListGetUnsafe Test.6 Test.24;
-            decref Test.6;
+            inc Test.19;
+            dec Test.6;
             let Test.20 : U64 = 0i64;
             let Test.21 : U64 = lowlevel ListLenU64 Test.19;
             let Test.22 : U64 = lowlevel NumSub Test.21 Test.20;
@@ -57,7 +58,8 @@ procedure Test.0 ():
             if Test.38 then
                 let Test.33 : U64 = 0i64;
                 let Test.28 : List [] = lowlevel ListGetUnsafe Test.6 Test.33;
-                decref Test.6;
+                inc Test.28;
+                dec Test.6;
                 let Test.29 : U64 = 0i64;
                 let Test.30 : U64 = lowlevel ListLenU64 Test.28;
                 let Test.31 : U64 = lowlevel NumSub Test.30 Test.29;
@@ -73,8 +75,7 @@ procedure Test.0 ():
                 let Test.27 : Int1 = CallByName Bool.1;
                 jump Test.26 Test.27;
             else
-                dec Test.40;
-                decref Test.6;
+                dec Test.6;
                 jump Test.15;
     else
         dec Test.6;
