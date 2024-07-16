@@ -2,11 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-main =
-    isTrue = Task.ok Bool.true
-    isFalse = Task.ok Bool.false
-    Task.await isFalse \#!a0 -> if #!a0 then line "fail" else Task.await isTrue \#!a1 -> if #!a1 then line "success" else line "fail"
----
 Defs {
     tags: [
         Index(2147483648),

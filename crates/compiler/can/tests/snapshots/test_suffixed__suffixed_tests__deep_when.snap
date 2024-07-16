@@ -2,12 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-main =
-    when a is
-        0 ->
-            when b is
-                1 -> c
----
 Defs {
     tags: [
         Index(2147483648),

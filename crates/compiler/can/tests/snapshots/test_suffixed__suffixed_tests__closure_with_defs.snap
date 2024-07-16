@@ -2,11 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-main =
-    foo : Str, {}, Str -> Task {} I32
-    foo = \a, _, b -> Task.await (line a) \{} -> Task.await (line b) \{} -> Task.ok {}
-    foo "bar" {} "baz"
----
 Defs {
     tags: [
         Index(2147483648),

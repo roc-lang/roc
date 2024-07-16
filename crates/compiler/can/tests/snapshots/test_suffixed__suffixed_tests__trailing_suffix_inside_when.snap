@@ -2,11 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-main = Task.await Stdin.line \result ->
-    when result is
-        End -> Task.ok {}
-        Input name -> Stdout.line "Hello, $(name)"
----
 Defs {
     tags: [
         Index(2147483648),

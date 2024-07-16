@@ -2,9 +2,6 @@
 source: crates/compiler/can/tests/test_suffixed.rs
 expression: snapshot
 ---
-main = Task.await sayMultiple \#!a0 -> do = (#!a0) "hi"
-    do
----
 Defs {
     tags: [
         Index(2147483648),
