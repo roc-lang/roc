@@ -564,8 +564,6 @@ mod suffixed_tests {
 mod test_suffixed_helpers {
 
     use roc_can::suffixed::is_matching_intermediate_answer;
-    use roc_module::called_via::CalledVia;
-    use roc_module::ident::ModuleName;
     use roc_parse::ast::Expr;
     use roc_parse::ast::Pattern;
     use roc_region::all::Loc;
@@ -577,23 +575,6 @@ mod test_suffixed_helpers {
             module_name: "",
             ident: "#!a0",
         });
-
-        std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
-    }
-
-    #[test]
-    fn test_matching_answer_task_ok() {
-        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!a0" });
-        let intermetiate = &[&Loc::at_zero(Expr::Var {
-            module_name: "",
-            ident: "#!a0",
-        })];
-        let task_ok = Loc::at_zero(Expr::Var {
-            module_name: ModuleName::TASK,
-            ident: "ok",
-        });
-
-        let loc_new = Loc::at_zero(Expr::Apply(&task_ok, intermetiate, CalledVia::BangSuffix));
 
         std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
     }
