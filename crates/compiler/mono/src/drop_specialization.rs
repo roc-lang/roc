@@ -17,8 +17,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, Literal,
-    ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, ModifyRc, Proc,
+    ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -1080,8 +1080,6 @@ fn specialize_list<'a, 'i>(
     _item_layout: InLayout<'a>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    // let current_length = environment.list_length.get(symbol).copied();
-
     macro_rules! keep_original_decrement {
         () => {{
             let new_continuation =
@@ -1090,6 +1088,17 @@ fn specialize_list<'a, 'i>(
         }};
     }
 
+    // TODO: Investigate if there is still any utility in List drop specialization.
+    // Fundamentally, an allocation for a list holds onto exactly one reference to all elements in the allocation.
+    // So even if there are 100 references to the list, the list will hold only 1 reference to each element.
+    // On top of that, the list now holds onto a reference to dead elements.
+    // A single slice to 10 elements of a 100 element list will hold 1 reference to each to the 100 elements.
+    // The whole allocation will get freed in a unit.
+    // This makes it much closer to the lifetime of the underlying vector for a reference slice in rust.
+    // If this specialization does not make sense anymore delete it as a whole.
+    keep_original_decrement!()
+
+    // let current_length = environment.list_length.get(symbol).copied();
     // match (
     //     layout_interner.contains_refcounted(item_layout),
     //     current_length,
@@ -1198,7 +1207,6 @@ fn specialize_list<'a, 'i>(
     //         keep_original_decrement!()
     //     }
     // }
-    keep_original_decrement!()
 }
 
 /**
