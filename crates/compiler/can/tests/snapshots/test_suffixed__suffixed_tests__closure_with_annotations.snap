@@ -70,38 +70,69 @@ Defs {
                                         ident: "msg",
                                     },
                                 ],
-                                @78-91 Apply(
-                                    @78-91 Var {
-                                        module_name: "Task",
-                                        ident: "await",
+                                @56-91 Defs(
+                                    Defs {
+                                        tags: [
+                                            Index(2147483648),
+                                        ],
+                                        regions: [
+                                            @78-91,
+                                        ],
+                                        space_before: [
+                                            Slice(start = 0, length = 0),
+                                        ],
+                                        space_after: [
+                                            Slice(start = 0, length = 0),
+                                        ],
+                                        spaces: [],
+                                        type_defs: [],
+                                        value_defs: [
+                                            AnnotatedBody {
+                                                ann_pattern: @56-57 Identifier {
+                                                    ident: "#!0_expr",
+                                                },
+                                                ann_type: @60-69 Apply(
+                                                    "",
+                                                    "Task",
+                                                    [
+                                                        @60-69 Apply(
+                                                            "",
+                                                            "Task",
+                                                            [
+                                                                @65-67 Record {
+                                                                    fields: [],
+                                                                    ext: None,
+                                                                },
+                                                                @68-69 Inferred,
+                                                            ],
+                                                        ),
+                                                        @60-69 Inferred,
+                                                    ],
+                                                ),
+                                                comment: None,
+                                                body_pattern: @78-79 Identifier {
+                                                    ident: "#!0_expr",
+                                                },
+                                                body_expr: @78-91 Apply(
+                                                    @78-91 Var {
+                                                        module_name: "",
+                                                        ident: "line",
+                                                    },
+                                                    [
+                                                        @88-91 Var {
+                                                            module_name: "",
+                                                            ident: "msg",
+                                                        },
+                                                    ],
+                                                    Space,
+                                                ),
+                                            },
+                                        ],
                                     },
-                                    [
-                                        @78-91 Apply(
-                                            @78-91 Var {
-                                                module_name: "",
-                                                ident: "line",
-                                            },
-                                            [
-                                                @88-91 Var {
-                                                    module_name: "",
-                                                    ident: "msg",
-                                                },
-                                            ],
-                                            Space,
-                                        ),
-                                        @78-91 Closure(
-                                            [
-                                                @78-79 Identifier {
-                                                    ident: "y",
-                                                },
-                                            ],
-                                            @100-101 Var {
-                                                module_name: "",
-                                                ident: "y",
-                                            },
-                                        ),
-                                    ],
-                                    BangSuffix,
+                                    @78-91 Var {
+                                        module_name: "",
+                                        ident: "#!0_expr",
+                                    },
                                 ),
                             ),
                         },

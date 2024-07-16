@@ -35,7 +35,7 @@ Defs {
                     @11-24 Closure(
                         [
                             @15-17 Identifier {
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                         ],
                         @11-24 LowLevelDbg(
@@ -51,7 +51,7 @@ Defs {
                                 [
                                     @15-17 Var {
                                         module_name: "",
-                                        ident: "#!a0",
+                                        ident: "#!0_arg",
                                     },
                                 ],
                                 Space,

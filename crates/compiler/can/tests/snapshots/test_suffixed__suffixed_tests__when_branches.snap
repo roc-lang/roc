@@ -35,13 +35,13 @@ Defs {
                     @11-120 Closure(
                         [
                             @16-24 Identifier {
-                                ident: "#!a1",
+                                ident: "#!2_arg",
                             },
                         ],
                         @11-120 When(
                             @16-24 Var {
                                 module_name: "",
-                                ident: "#!a1",
+                                ident: "#!2_arg",
                             },
                             [
                                 WhenBranch {
@@ -56,24 +56,68 @@ Defs {
                                             ident: "await",
                                         },
                                         [
-                                            @54-65 Apply(
+                                            @54-65 Defs(
+                                                Defs {
+                                                    tags: [
+                                                        Index(2147483648),
+                                                    ],
+                                                    regions: [
+                                                        @54-65,
+                                                    ],
+                                                    space_before: [
+                                                        Slice(start = 0, length = 0),
+                                                    ],
+                                                    space_after: [
+                                                        Slice(start = 0, length = 0),
+                                                    ],
+                                                    spaces: [],
+                                                    type_defs: [],
+                                                    value_defs: [
+                                                        AnnotatedBody {
+                                                            ann_pattern: @54-65 Identifier {
+                                                                ident: "#!1_stmt",
+                                                            },
+                                                            ann_type: @54-65 Apply(
+                                                                "",
+                                                                "Task",
+                                                                [
+                                                                    @54-65 Record {
+                                                                        fields: [],
+                                                                        ext: None,
+                                                                    },
+                                                                    @54-65 Inferred,
+                                                                ],
+                                                            ),
+                                                            comment: None,
+                                                            body_pattern: @54-65 Identifier {
+                                                                ident: "#!1_stmt",
+                                                            },
+                                                            body_expr: @54-65 Apply(
+                                                                @54-65 Var {
+                                                                    module_name: "",
+                                                                    ident: "line",
+                                                                },
+                                                                [
+                                                                    @60-65 Str(
+                                                                        PlainLine(
+                                                                            "foo",
+                                                                        ),
+                                                                    ),
+                                                                ],
+                                                                Space,
+                                                            ),
+                                                        },
+                                                    ],
+                                                },
                                                 @54-65 Var {
                                                     module_name: "",
-                                                    ident: "line",
+                                                    ident: "#!1_stmt",
                                                 },
-                                                [
-                                                    @60-65 Str(
-                                                        PlainLine(
-                                                            "foo",
-                                                        ),
-                                                    ),
-                                                ],
-                                                Space,
                                             ),
                                             @54-65 Closure(
                                                 [
-                                                    @54-65 RecordDestructure(
-                                                        [],
+                                                    @54-65 Underscore(
+                                                        "#!stmt",
                                                     ),
                                                 ],
                                                 @78-89 Apply(
