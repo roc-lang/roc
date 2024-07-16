@@ -1088,7 +1088,16 @@ fn specialize_list<'a, 'i>(
         }};
     }
 
-    // TODO: Investigate if there is still any utility in List drop specialization.
+    // TODO: Maybe re-enable drop specialization for lists.
+    // It won't be as useful now, but it can still apply to lists that we know aren't seamless slices.
+    // It also could technically apply to seamless slices if we know everything about their underlying allocation.
+    // To fix this would require adding the restrictions on application above and properly implementing DecRef for the new list.
+    // DecRef would be easy to implement, but currently the new list has Dec/DecRef both as the same.
+    // Extra context starts here: https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/Implement.20RocRefcounted.20for.20RocResult/near/451651633
+    // With most important message here: https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/Implement.20RocRefcounted.20for.20RocResult/near/451692266
+    //
+    // If we don't re-enable this, we should fully remove the list wiring and trackind at some point.
+    //
     // Fundamentally, an allocation for a list holds onto exactly one reference to all elements in the allocation.
     // So even if there are 100 references to the list, the list will hold only 1 reference to each element.
     // On top of that, the list now holds onto a reference to dead elements.
