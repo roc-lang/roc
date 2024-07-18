@@ -17,6 +17,11 @@ pub struct File {
     handle: isize,
 }
 
+// User and group can read and write (but not execute), but
+// world cannot do anything. (This is a cache in your home dir!)
+#[cfg(unix)]
+const CACHE_DIR_MODE: u32 = 0o660;
+
 #[cfg(unix)]
 extern "C" {
     fn open(pathname: *const c_char, flags: c_int, ...) -> c_int;
@@ -176,7 +181,7 @@ impl File {
     const O_EXCL: c_int = 128;
 
     pub fn open(path: &NativePath) -> Result<Self, FileIoErr> {
-        let fd = unsafe { open(path.inner.as_ptr(), Self::O_RDWR) };
+        let fd = unsafe { open(path.as_ptr().cast(), Self::O_RDWR) };
 
         if fd != -1 {
             Ok(File { fd })
@@ -188,7 +193,7 @@ impl File {
     pub fn create(path: &NativePath) -> Result<Self, FileIoErr> {
         let fd = unsafe {
             open(
-                path.inner.as_ptr(),
+                path.as_ptr().cast(),
                 Self::O_CREAT | Self::O_WRONLY | Self::O_EXCL, // O_EXCL means fail if it already exists
                 // read/write mode
                 0o644,
@@ -199,6 +204,79 @@ impl File {
             Ok(File { fd })
         } else {
             Err(FileIoErr::most_recent())
+        }
+    }
+
+    /// Open the given file. If it doesn't exist, create it and populate it
+    /// using the given function. (If its parent directory didn't exist, create that too.)
+    /// If it existed, write its contents into the given buffer and return it.
+    ///
+    /// If the returned buffer is empty, it means the cache file is currently empty;
+    /// either becuase we just created it, or because it already existed but was empty.
+    /// Since this function also returns the already-opened File, the caller can now write
+    /// into it directly if the buffer is empty.
+    ///
+    /// This is designed to minimize the number of syscalls involved in this common operation.
+    pub fn read_cache_file_into<'buf>(
+        // The full path to the file we want to read.
+        path: &NativePath,
+        // The null-terminated path to the file's parent directory.
+        // (We ask for this rather than inferring it because the caller likely
+        // already has it in memory due to having used it to construct the file's path.)
+        // Needs to be a mut reference because we use create_dir_all on it, which
+        // uses mutable references to nul-terminate intermediate dirs in-place.
+        parent_dir: &mut NativePath,
+        buf: &'buf mut [MaybeUninit<u8>],
+    ) -> Result<(Self, &'buf [u8]), FileIoErr> {
+        // We may run this operation again if it fails the first time
+        // due to the parent directory not existing yet.
+        let get_file = || {
+            let fd = unsafe {
+                open(
+                    path.as_ptr().cast(),
+                    // Do *not* specify O_EXCL, as that would cause this to fail if it already existed!
+                    Self::O_RDWR | Self::O_CREAT,
+                    // read/write mode
+                    0o644,
+                )
+            };
+
+            if fd != -1 {
+                Ok(File { fd })
+            } else {
+                Err(FileIoErr::most_recent())
+            }
+        };
+
+        match get_file() {
+            Ok(mut file) => {
+                // The file already existed; read its contents and return them.
+                let answer_buf = file.read_into(buf)?;
+
+                Ok((file, answer_buf))
+            }
+            Err(io_err) => {
+                match io_err {
+                    FileIoErr::NotFound => {
+                        // The parent directory didn't exist, so we need to create it.
+                        // If creating the parent dir fails, we won't be able to write to it.
+                        Self::create_dir_all(parent_dir)?;
+
+                        // If trying to open the file again still fails after creating
+                        // the parent directory, give up and return Err.
+                        let file = get_file()?;
+
+                        // Return an empty buffer because we just created the file;
+                        // we don't need to read it to know that it's empty!
+                        Ok((file, &[]))
+                    }
+                    other => {
+                        // We got an access denied error or something; assume we won't
+                        // be able to write the file.
+                        Err(other)
+                    }
+                }
+            }
         }
     }
 }
@@ -216,7 +294,7 @@ impl File {
     pub fn open(path: &NativePath) -> Result<Self, FileIoErr> {
         let handle = unsafe {
             CreateFileW(
-                path.inner.as_ptr(),
+                path.as_ptr(),
                 Self::GENERIC_READ | Self::GENERIC_WRITE,
                 Self::FILE_SHARE_READ | Self::FILE_SHARE_WRITE,
                 core::ptr::null_mut(),
@@ -236,7 +314,7 @@ impl File {
     pub fn create(path: &NativePath) -> Result<Self, FileIoErr> {
         let handle = unsafe {
             CreateFileW(
-                path.inner.as_ptr(),
+                path.as_ptr(),
                 Self::GENERIC_READ | Self::GENERIC_WRITE,
                 Self::FILE_SHARE_READ | Self::FILE_SHARE_WRITE,
                 core::ptr::null_mut(),
@@ -260,7 +338,7 @@ impl File {
 impl File {
     /// Returns whether it succeeded.
     pub fn remove(path: &NativePath) -> bool {
-        unsafe { unlink(path.inner.as_ptr()) == 0 }
+        unsafe { unlink(path.as_ptr().cast()) == 0 }
     }
 }
 
@@ -271,7 +349,7 @@ impl File {
 
     /// Returns whether it succeeded.
     pub fn remove(path: &NativePath) -> bool {
-        unsafe { DeleteFileW(path.inner.as_ptr()) != 0 }
+        unsafe { DeleteFileW(path.as_ptr()) != 0 }
     }
 }
 
@@ -429,6 +507,106 @@ impl File {
     }
 }
 
+// CREATE_DIR_ALL //
+
+impl File {
+    /// This minimizes syscalls and performs no allocations. The way it avoids performing allocations
+    /// is to take a mut reference to the path, so that it can swap in and out nul terminator bytes
+    /// to create a nul-terminated "slice" in-place for the current directory it needs to mkdir.
+    ///
+    /// When it returns, the given path will reference the same bytes it originally did; the only
+    /// reason the reference needs to be mutable is for thread safety, as it will be modified
+    /// in the middle of the function (even though it will have been restored by the end).
+    fn create_dir_all(dir: &mut NativePath) -> Result<(), FileIoErr> {
+        #[cfg(unix)]
+        {
+            Self::create_dir_all_unix::<RealUnixFs>(dir)
+        }
+
+        #[cfg(windows)]
+        {
+            Self::create_dir_windows::<RealWindowsFs>(dir)
+        }
+    }
+}
+
+/// The actual filesystem implementations that we use when exposing functions.
+/// Internally, tests can use fake trait implementations instead of this.
+struct RealUnixFs;
+
+trait UnixMkdir {
+    unsafe fn mkdir(pathname: *const c_char, mode: u32) -> c_int;
+}
+
+impl UnixMkdir for RealUnixFs {
+    unsafe fn mkdir(pathname: *const c_char, mode: u32) -> c_int {
+        extern "C" {
+            fn mkdir(pathname: *const c_char, mode: u32) -> c_int;
+        }
+
+        mkdir(pathname, mode)
+    }
+}
+
+#[cfg(unix)]
+impl File {
+    fn create_dir_all_unix<Unix: UnixMkdir>(dir: &mut NativePath) -> Result<(), FileIoErr> {
+        let original_ptr = dir.as_ptr() as *mut u8;
+        let mut ch_ptr = original_ptr;
+        let mut index: usize = 0;
+
+        loop {
+            let ch = unsafe { *ch_ptr };
+
+            if (ch == 0 || ch == b'/')
+                // Don't try to mkdir if the preceding char was '/', because
+                // we just did a mkdir on that! So either we're in a "//" situation,
+                // or else the string ended in '/'. In either case, we shouldn't mkdir.
+                //
+                // Use saturating_sub so we don't try to mkdir the root ('/') dir.
+                && (unsafe { *original_ptr.add(index.saturating_sub(1)) } != b'/')
+            {
+                let outcome;
+
+                // Temporarily swap out this slash for a nul terminator, then call mkdir.
+                unsafe {
+                    *ch_ptr = 0;
+
+                    outcome = Unix::mkdir(
+                        // The original path, except now nul-terminated at the current dir.
+                        original_ptr.cast(),
+                        CACHE_DIR_MODE,
+                    );
+
+                    // Swap the nul-terminator back to a slash before doing anything else.
+                    *ch_ptr = b'/';
+                }
+
+                if outcome != 0 {
+                    match FileIoErr::most_recent() {
+                        FileIoErr::AlreadyExists => {
+                            // The directory already exists. Great!
+                            // Nothing more to do here; continue as normal.
+                        }
+                        other => {
+                            // We faied to create this directory; error out.
+                            return Err(other);
+                        }
+                    }
+                }
+            }
+
+            if ch == 0 {
+                // We've just processed the last component of the path. We're done!
+                return Ok(());
+            }
+
+            index += 1;
+            ch_ptr = unsafe { original_ptr.add(index) };
+        }
+    }
+}
+
 // WRITE FILE //
 
 impl File {
@@ -465,42 +643,125 @@ impl File {
     }
 }
 
+// TESTS //
+
 #[cfg(test)]
 mod tests {
     use super::{File, FileIoErr};
-    use crate::native_path::NativePath;
     use core::mem::MaybeUninit;
+    use std::cell::RefCell;
 
     #[cfg(unix)]
-    use core::ffi::CStr;
-
-    #[cfg(windows)]
-    use widestring::U16CStr;
+    use super::CACHE_DIR_MODE;
 
     #[cfg(unix)]
-    fn str_to_cstr(s: &str) -> &CStr {
-        CStr::from_bytes_with_nul(s.as_bytes()).expect("CStr conversion failed")
-    }
+    struct FakeUnixFs;
 
-    #[cfg(windows)]
-    fn str_to_u16cstr(s: &str) -> &widestring::U16CStr {
-        let wide_str: Vec<u16> = s.encode_utf16().collect::<Vec<_>>();
-        unsafe { U16CStr::from_ptr_str(wide_str.as_ptr()) }
+    #[cfg(unix)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct UnixMkdirCall {
+        path: String,
+        mode: u32,
+        ret: c_int,
     }
 
     #[cfg(unix)]
-    fn mock_path(path: &str) -> &NativePath {
-        str_to_cstr(path).into()
+    use core::ffi::{c_char, c_int, CStr};
+
+    #[cfg(unix)]
+    thread_local! {
+        static MKDIR_CALLS: RefCell<Vec<UnixMkdirCall>> = RefCell::new(Vec::new());
+    }
+
+    #[cfg(unix)]
+    impl super::UnixMkdir for FakeUnixFs {
+        unsafe fn mkdir(pathname: *const c_char, mode: u32) -> c_int {
+            const ANSWER: c_int = 0; // Note: if we want to return errors, we must mock errno() too
+
+            MKDIR_CALLS.with(|calls| {
+                calls.borrow_mut().push(UnixMkdirCall {
+                    path: CStr::from_ptr(pathname).to_str().unwrap().to_string(),
+                    mode,
+                    ret: ANSWER,
+                });
+            });
+
+            ANSWER
+        }
+    }
+
+    impl FakeUnixFs {
+        #[cfg(unix)]
+        fn get_mkdir_calls() -> Vec<UnixMkdirCall> {
+            MKDIR_CALLS.with(|calls| calls.borrow().clone())
+        }
+    }
+
+    #[cfg(unix)]
+    macro_rules! path {
+        ($path:literal) => {
+            unsafe {
+                $crate::native_path::NativePath::from_slice_unchecked(
+                    concat!($path, "\0").as_bytes(),
+                )
+            }
+        };
+    }
+
+    #[cfg(unix)]
+    macro_rules! with_path_mut {
+        ($path:literal, $closure:expr) => {{
+            const NUL_TERMINATED: &str = concat!($path, "\0");
+
+            let mut array: core::mem::MaybeUninit<[u8; NUL_TERMINATED.len()]> =
+                core::mem::MaybeUninit::uninit();
+
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    NUL_TERMINATED.as_ptr(),
+                    array.as_mut_ptr().cast(),
+                    NUL_TERMINATED.len(),
+                );
+            };
+
+            $closure(unsafe {
+                $crate::native_path::NativePath::from_slice_unchecked_mut(&mut array.assume_init())
+            })
+        }};
     }
 
     #[cfg(windows)]
-    fn mock_path(path: &str) -> &NativePath {
-        str_to_u16cstr(path).into()
+    macro_rules! path {
+        ($path:literal) => {
+            $crate::native_path::NativePath::from(widestring::u16_str($path))
+        };
+    }
+
+    #[cfg(windows)]
+    macro_rules! with_path_mut {
+        ($path:literal, $closure:expr) => {{
+            const NUL_TERMINATED: &widestring::U16str = widestring::u16_str($path)
+
+            let mut array: core::mem::MaybeUninit<[u16; NUL_TERMINATED.len()]> =
+                core::mem::MaybeUninit::uninit();
+
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    NUL_TERMINATED.as_ptr(),
+                    array.as_mut_ptr().cast(),
+                    NUL_TERMINATED.len(),
+                );
+            };
+
+            $closure(unsafe {
+                $crate::native_path::NativePath::from_slice_unchecked_mut(&mut array.assume_init())
+            })
+        }};
     }
 
     #[test]
     fn file_not_found() {
-        let file_result = File::open(mock_path("test_file_that_should_not_exist\0"));
+        let file_result = File::open(path!("test_file_that_should_not_exist"));
 
         assert_eq!(
             file_result.map(|_| ()),
@@ -511,7 +772,7 @@ mod tests {
 
     #[test]
     fn create_write_read_delete() {
-        let path = mock_path("roc_test_read_file\0");
+        let path = path!("roc_test_read_file");
         let mut file = File::create(path).unwrap();
 
         // Write some data to the file
@@ -582,7 +843,7 @@ mod tests {
 
     #[test]
     fn create_file_that_already_exists() {
-        let path = mock_path("roc_test_already_exists\0");
+        let path = path!("roc_test_already_exists");
 
         let first = File::create(path); // Create the file for the first time
         let second = File::create(path); // Attempt to create the same file again
@@ -603,5 +864,91 @@ mod tests {
             removed,
             "Failed to remove the file: roc_test_already_exists"
         );
+    }
+
+    #[test]
+    fn create_single_slash() {
+        with_path_mut!("/", |path| {
+            let result = File::create_dir_all(path);
+            assert!(
+                result.is_ok(),
+                "Single slash should be treated as root and succeed"
+            );
+        });
+    }
+
+    #[test]
+    fn create_double_slash() {
+        with_path_mut!("//", |path| {
+            let result = File::create_dir_all(path);
+            assert!(result.is_ok(), "Double slash should succeed");
+        });
+    }
+
+    #[test]
+    fn create_triple_slash() {
+        with_path_mut!("///", |path| {
+            let result = File::create_dir_all(path);
+            assert!(result.is_ok(), "Triple slash should succeed");
+        });
+    }
+
+    #[test]
+    fn create_quadruple_slash() {
+        with_path_mut!("////", |path| {
+            let result = File::create_dir_all(path);
+            assert!(result.is_ok(), "Quadruple slash should succeed");
+        });
+    }
+
+    #[test]
+    fn create_multiple_components() {
+        with_path_mut!("/tmp/roc/test_dir", |path| {
+            let result = File::create_dir_all(path);
+            assert!(result.is_ok(), "Multiple components should succeed");
+        });
+    }
+
+    #[test]
+    fn create_multiple_components_with_trailing_slash() {
+        with_path_mut!("/tmp/roc/test_dir/", |path| {
+            let result;
+
+            #[cfg(unix)]
+            {
+                result = File::create_dir_all_unix::<FakeUnixFs>(path);
+            }
+
+            #[cfg(windows)]
+            {
+                result = File::create_dir_windows::<FakeWindowsFs>(path);
+            }
+
+            assert!(
+                result.is_ok(),
+                "Multiple components with trailing slash should succeed"
+            );
+
+            assert_eq!(
+                &FakeUnixFs::get_mkdir_calls(),
+                &[
+                    UnixMkdirCall {
+                        path: "/tmp".to_string(),
+                        mode: CACHE_DIR_MODE,
+                        ret: 0
+                    },
+                    UnixMkdirCall {
+                        path: "/tmp/roc".to_string(),
+                        mode: CACHE_DIR_MODE,
+                        ret: 0
+                    },
+                    UnixMkdirCall {
+                        path: "/tmp/roc/test_dir".to_string(),
+                        mode: CACHE_DIR_MODE,
+                        ret: 0
+                    }
+                ]
+            );
+        });
     }
 }
