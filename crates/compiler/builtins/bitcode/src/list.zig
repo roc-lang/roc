@@ -132,7 +132,7 @@ pub const RocList = extern struct {
     // This needs to be called when creating seamless slices from unique list.
     // It will put the allocation size on the heap to enable the seamless slice to free the underlying allocation.
     fn setAllocationElementCount(self: RocList, elements_refcounted: bool) void {
-        if (elements_refcounted) {
+        if (elements_refcounted and !self.isSeamlessSlice()) {
             // - 1 is refcount.
             // - 2 is size on heap.
             const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationDataPtr()))) - 2;
@@ -185,7 +185,7 @@ pub const RocList = extern struct {
             return utils.REFCOUNT_ONE;
         }
 
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.bytes)));
+        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr())));
         return (ptr - 1)[0];
     }
 
