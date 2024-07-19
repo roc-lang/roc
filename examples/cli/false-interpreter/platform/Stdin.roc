@@ -1,4 +1,7 @@
-module [char]
+module [
+    line,
+    char,
+]
 
 import pf.PlatformTask
 
