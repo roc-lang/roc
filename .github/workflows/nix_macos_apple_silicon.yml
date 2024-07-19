@@ -40,7 +40,7 @@ jobs:
         run: nix develop -c ./ci/roc_test_builtins.sh
 
       - name: make a libapp.so for the next step
-        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
+        run: nix develop -c cargo run -- build --lib examples/platform-switching/rust-platform/libapp.roc
 
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked

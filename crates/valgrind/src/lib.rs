@@ -7,18 +7,11 @@ static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(target_os = "linux")]
 fn build_host() {
-    use roc_build::program::build_and_preprocess_host;
-    use roc_linker::preprocessed_host_filename;
-
     let platform_main_roc =
         roc_command_utils::root_dir().join("crates/valgrind/zig-platform/main.roc");
 
     // tests always run on the host
     let target = target_lexicon::Triple::host().into();
-
-    // the preprocessed host is stored beside the platform's main.roc
-    let preprocessed_host_path =
-        platform_main_roc.with_file_name(preprocessed_host_filename(target));
 
     // valgrind does not support avx512 yet: https://bugs.kde.org/show_bug.cgi?id=383010
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -26,16 +19,41 @@ fn build_host() {
         std::env::set_var("NO_AVX512", "1");
     }
 
-    build_and_preprocess_host(
-        roc_mono::ir::OptLevel::Normal,
+    let stub_dll_symbols = roc_linker::ExposedSymbols {
+        top_level_values: vec![String::from("mainForHost")],
+        exported_closure_types: vec![],
+    }
+    .stub_dll_symbols();
+
+    let opt_level = roc_mono::ir::OptLevel::Normal;
+
+    let stub_lib = roc_linker::generate_stub_lib_from_loaded(
         target,
-        &platform_main_roc,
-        &preprocessed_host_path,
-        roc_linker::ExposedSymbols {
-            top_level_values: vec![String::from("mainForHost")],
-            exported_closure_types: vec![],
-        },
+        platform_main_roc.as_path(),
+        stub_dll_symbols.as_slice(),
     );
+
+    debug_assert!(stub_lib.exists());
+
+    let host_dest = roc_build::link::rebuild_host(
+        opt_level,
+        target,
+        platform_main_roc.as_path(),
+        Some(&stub_lib),
+    );
+
+    let preprocessed_path = platform_main_roc.with_file_name(target.prebuilt_surgical_host());
+    let metadata_path = platform_main_roc.with_file_name(target.metadata_file_name());
+
+    roc_linker::preprocess_host(
+        target,
+        host_dest.as_path(),
+        metadata_path.as_path(),
+        preprocessed_path.as_path(),
+        &stub_lib,
+        false,
+        false,
+    )
 }
 
 fn valgrind_test(source: &str) {

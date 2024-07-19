@@ -1706,8 +1706,6 @@ fn surgery_elf_help(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::preprocessed_host_filename;
     use indoc::indoc;
     use roc_target::Target;
 
@@ -1848,7 +1846,7 @@ mod tests {
             panic!("zig build-exe failed");
         }
 
-        let preprocessed_host_filename = dir.join(preprocessed_host_filename(target));
+        let preprocessed_host_filename = dir.join(target.prebuilt_surgical_host());
 
         preprocess_elf_le(
             &dir.join("host"),
