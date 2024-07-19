@@ -1,7 +1,7 @@
 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            Index(2147483648),
         ],
         regions: [
             @0-49,
@@ -15,23 +15,6 @@ Defs(
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-8 RecordDestructure(
-                    [
-                        @2-3 Identifier {
-                            ident: "x",
-                        },
-                        @5-7 Identifier {
-                            ident: "y",
-                        },
-                    ],
-                ),
-                @11-14 Apply(
-                    "",
-                    "Foo",
-                    [],
-                ),
-            ),
             AnnotatedBody {
                 ann_pattern: @0-8 RecordDestructure(
                     [

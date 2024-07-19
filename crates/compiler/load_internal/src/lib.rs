@@ -8,7 +8,6 @@ pub mod docs;
 pub mod file;
 pub mod module;
 mod module_cache;
-mod work;
 
 #[cfg(target_family = "wasm")]
 mod wasm_instant;
@@ -26,5 +25,4 @@ pub const BUILTIN_MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::DECODE, "Decode"),
     (ModuleId::HASH, "Hash"),
     (ModuleId::INSPECT, "Inspect"),
-    (ModuleId::JSON, "TotallyNotJson"),
 ];

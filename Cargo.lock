@@ -942,6 +942,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs"
+version = "0.0.1"
+dependencies = [
+ "widestring",
+]
+
+[[package]]
 name = "fs_at"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2335,6 +2342,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "indoc",
+ "insta",
  "pretty_assertions",
  "roc_collections",
  "roc_error_macros",
@@ -2344,7 +2352,6 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_serialize",
- "roc_test_utils",
  "roc_types",
  "static_assertions",
  "ven_pretty",
@@ -2849,6 +2856,8 @@ dependencies = [
  "roc_tracing",
  "roc_types",
  "roc_unify",
+ "roc_work",
+ "roc_worker",
  "tempfile",
  "ven_pretty",
 ]
@@ -2874,6 +2883,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "hashbrown",
+ "indoc",
  "parking_lot",
  "roc_builtins",
  "roc_can",
@@ -3262,6 +3272,26 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "roc_error_macros",
+]
+
+[[package]]
+name = "roc_work"
+version = "0.0.1"
+dependencies = [
+ "roc_collections",
+ "roc_error_macros",
+ "roc_module",
+]
+
+[[package]]
+name = "roc_worker"
+version = "0.0.1"
+dependencies = [
+ "crossbeam",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_module",
+ "roc_work",
 ]
 
 [[package]]
@@ -3872,6 +3902,7 @@ dependencies = [
  "roc_solve",
  "roc_std",
  "roc_target",
+ "roc_test_utils",
  "roc_types",
  "roc_unify",
  "roc_wasm_interp",
@@ -3896,6 +3927,7 @@ dependencies = [
  "roc_packaging",
  "roc_reporting",
  "roc_target",
+ "roc_test_utils",
  "roc_tracing",
  "test_mono_macros",
 ]
@@ -4574,6 +4606,12 @@ name = "webpki-roots"
 version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14247bb57be4f377dfb94c72830b8ce8fc6beac03cf4bf7b9732eadd414123fc"
+
+[[package]]
+name = "widestring"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7219d36b6eac893fa81e84ebe06485e7dcbb616177469b142df14f1f4deb1311"
 
 [[package]]
 name = "winapi"

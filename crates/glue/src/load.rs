@@ -399,8 +399,7 @@ pub fn load_types(
     ignore_errors: IgnoreErrors,
     target: Target,
 ) -> Result<Vec<Types>, io::Error> {
-    // TODO the function kind may need to be parameterizable.
-    let function_kind = FunctionKind::LambdaSet;
+    let function_kind = FunctionKind::from_env();
     let arena = &Bump::new();
     let loaded_module = roc_load::load_and_typecheck(
         arena,

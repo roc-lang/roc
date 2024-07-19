@@ -2,6 +2,7 @@
 members = [
     "crates/compiler/*",
     "crates/vendor/*",
+    "crates/fs",
     "crates/glue",
     "crates/cli",
     "crates/cli_utils",
@@ -24,6 +25,7 @@ members = [
     "crates/docs_types",
     "crates/docs_render",
     "crates/docs_io",
+    "crates/docs",
     "crates/docs_cli",
     "crates/linker",
     "crates/wasi-libc-sys",

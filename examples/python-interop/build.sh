@@ -5,12 +5,7 @@ set -euxo pipefail
 
 # Could assume roc binary on path but this may be preferable
 cargo build --release
-../../target/release/roc build --lib
-
-# Neither the application nor python needs a .0, so we can just rename it
-mv libhello.so.1.0 libhello.so.1
-# but one of which does expect plain libhello.so, so we symlink it
-ln -sf libhello.so.1 libhello.so
+../../target/release/roc build --lib libhello.roc
 
 # For Python to find libhello, it needs it to be in a known library path, so we export
 export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
@@ -24,6 +19,7 @@ export cc=clang
 python -m venv .interop_env
 source .interop_env/bin/activate
 python setup.py install
+set +x
 echo "You may now enter your virtual environment.
 In bash/zsh, run: source .interop_env/bin/activate
 In fish, run: source .interop_env/bin/activate.fish

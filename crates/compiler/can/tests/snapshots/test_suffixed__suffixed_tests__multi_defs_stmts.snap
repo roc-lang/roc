@@ -1,0 +1,101 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-72,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-23 Apply(
+                @11-23 Var {
+                    module_name: "Task",
+                    ident: "await",
+                },
+                [
+                    @11-23 Apply(
+                        @11-23 Var {
+                            module_name: "",
+                            ident: "line",
+                        },
+                        [
+                            @17-23 Str(
+                                PlainLine(
+                                    "Ahoy",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                    @11-23 Closure(
+                        [
+                            @11-23 RecordDestructure(
+                                [],
+                            ),
+                        ],
+                        @33-55 Apply(
+                            @33-55 Var {
+                                module_name: "Task",
+                                ident: "await",
+                            },
+                            [
+                                @33-55 Apply(
+                                    @33-55 Var {
+                                        module_name: "Stdout",
+                                        ident: "line",
+                                    },
+                                    [
+                                        @33-40 Str(
+                                            PlainLine(
+                                                "There",
+                                            ),
+                                        ),
+                                    ],
+                                    BinOp(
+                                        Pizza,
+                                    ),
+                                ),
+                                @33-55 Closure(
+                                    [
+                                        @28-30 RecordDestructure(
+                                            [],
+                                        ),
+                                    ],
+                                    @62-72 Apply(
+                                        @62-69 Var {
+                                            module_name: "Task",
+                                            ident: "ok",
+                                        },
+                                        [
+                                            @70-72 Record(
+                                                [],
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                ),
+                            ],
+                            BangSuffix,
+                        ),
+                    ),
+                ],
+                BangSuffix,
+            ),
+        ),
+    ],
+}

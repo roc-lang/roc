@@ -45,6 +45,7 @@ roc_reporting = { path = "../../reporting" }
 roc_solve = { path = "../solve" }
 roc_std = { path = "../../roc_std" }
 roc_target = { path = "../roc_target" }
+roc_test_utils = { path = "../../test_utils"}
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
 roc_wasm_interp = { path = "../../wasm_interp" }

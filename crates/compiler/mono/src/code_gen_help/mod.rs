@@ -34,8 +34,10 @@ pub const REFCOUNT_MAX: usize = 0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HelperOp {
     Inc,
+    IncN,
     Dec,
     IndirectInc,
+    IndirectIncN,
     IndirectDec,
     DecRef(JoinPointId),
     Reset,
@@ -52,8 +54,11 @@ impl HelperOp {
         matches!(self, Self::Dec)
     }
 
-    fn is_inc(&self) -> bool {
-        matches!(self, Self::Inc)
+    pub fn is_indirect(&self) -> bool {
+        matches!(
+            self,
+            Self::IndirectInc | Self::IndirectIncN | Self::IndirectDec
+        )
     }
 }
 
@@ -138,7 +143,7 @@ impl<'a> CodeGenHelp<'a> {
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         let op = match modify {
-            ModifyRc::Inc(..) => HelperOp::Inc,
+            ModifyRc::Inc(..) => HelperOp::IncN,
             ModifyRc::Dec(_) => HelperOp::Dec,
             ModifyRc::DecRef(_) => {
                 let jp_decref = JoinPointId(self.create_symbol(ident_ids, "jp_decref"));
@@ -310,9 +315,11 @@ impl<'a> CodeGenHelp<'a> {
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
                     Reset | ResetRef => (layout, self.arena.alloc([layout])),
-                    Inc => (LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
+                    Inc => (LAYOUT_UNIT, self.arena.alloc([arg])),
+                    IncN => (LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
                     IndirectDec => (LAYOUT_UNIT, arena.alloc([ptr_arg])),
-                    IndirectInc => (LAYOUT_UNIT, arena.alloc([ptr_arg, self.layout_isize])),
+                    IndirectIncN => (LAYOUT_UNIT, arena.alloc([ptr_arg, self.layout_isize])),
+                    IndirectInc => (LAYOUT_UNIT, arena.alloc([ptr_arg])),
                     Eq => (LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
             };
@@ -375,7 +382,7 @@ impl<'a> CodeGenHelp<'a> {
 
         // Recursively generate the body of the Proc and sub-procs
         let (ret_layout, body) = match ctx.op {
-            Inc | Dec | DecRef(_) => (
+            Inc | IncN | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
                 refcount::refcount_generic(
                     self,
@@ -386,7 +393,7 @@ impl<'a> CodeGenHelp<'a> {
                     Symbol::ARG_1,
                 ),
             ),
-            IndirectInc | IndirectDec => (
+            IndirectInc | IndirectIncN | IndirectDec => (
                 LAYOUT_UNIT,
                 refcount::refcount_indirect(
                     self,
@@ -428,18 +435,18 @@ impl<'a> CodeGenHelp<'a> {
         let args: &'a [(InLayout<'a>, Symbol)] = {
             let roc_value = (layout, ARG_1);
             match ctx.op {
-                Inc => {
+                IncN => {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
-                IndirectInc => {
+                Inc | Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
+                IndirectIncN => {
                     let ptr_layout =
                         layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([(ptr_layout, ARG_1), inc_amount])
                 }
-                IndirectDec => {
+                IndirectInc | IndirectDec => {
                     let ptr_layout =
                         layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
                     self.arena.alloc([(ptr_layout, ARG_1)])
@@ -478,17 +485,17 @@ impl<'a> CodeGenHelp<'a> {
         let proc_symbol: Symbol = self.create_symbol(ident_ids, &debug_name);
 
         let proc_layout = match ctx.op {
-            HelperOp::Inc => ProcLayout {
+            HelperOp::IncN => ProcLayout {
                 arguments: self.arena.alloc([layout, self.layout_isize]),
                 result: LAYOUT_UNIT,
                 niche: Niche::NONE,
             },
-            HelperOp::Dec => ProcLayout {
+            HelperOp::Dec | HelperOp::Inc => ProcLayout {
                 arguments: self.arena.alloc([layout]),
                 result: LAYOUT_UNIT,
                 niche: Niche::NONE,
             },
-            HelperOp::IndirectInc => {
+            HelperOp::IndirectIncN => {
                 let ptr_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
                 ProcLayout {
@@ -497,7 +504,7 @@ impl<'a> CodeGenHelp<'a> {
                     niche: Niche::NONE,
                 }
             }
-            HelperOp::IndirectDec => {
+            HelperOp::IndirectDec | HelperOp::IndirectInc => {
                 let ptr_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
                 ProcLayout {
@@ -1021,7 +1028,10 @@ fn layout_needs_helper_proc<'a>(
             // Str type can use either Zig functions or generated IR, since it's not generic.
             // Eq uses a Zig function, refcount uses generated IR.
             // Both are fine, they were just developed at different times.
-            matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
+            matches!(
+                op,
+                HelperOp::Inc | HelperOp::IncN | HelperOp::Dec | HelperOp::DecRef(_)
+            )
         }
         LayoutRepr::Builtin(Builtin::List(_)) => true,
         LayoutRepr::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret

@@ -5,7 +5,7 @@ use crate::{
 };
 use roc_parse::ast::{
     AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, ImplementsAbilities,
-    ImplementsAbility, ImplementsClause, RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
+    ImplementsAbility, ImplementsClause, OldRecordBuilderField, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -505,7 +505,7 @@ fn format_assigned_field_help<T>(
     }
 }
 
-impl<'a> Formattable for RecordBuilderField<'a> {
+impl<'a> Formattable for OldRecordBuilderField<'a> {
     fn is_multiline(&self) -> bool {
         is_multiline_record_builder_field_help(self)
     }
@@ -516,8 +516,8 @@ impl<'a> Formattable for RecordBuilderField<'a> {
     }
 }
 
-fn is_multiline_record_builder_field_help(afield: &RecordBuilderField<'_>) -> bool {
-    use self::RecordBuilderField::*;
+fn is_multiline_record_builder_field_help(afield: &OldRecordBuilderField<'_>) -> bool {
+    use self::OldRecordBuilderField::*;
 
     match afield {
         Value(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
@@ -531,12 +531,12 @@ fn is_multiline_record_builder_field_help(afield: &RecordBuilderField<'_>) -> bo
 }
 
 fn format_record_builder_field_help(
-    zelf: &RecordBuilderField,
+    zelf: &OldRecordBuilderField,
     buf: &mut Buf,
     indent: u16,
     is_multiline: bool,
 ) {
-    use self::RecordBuilderField::*;
+    use self::OldRecordBuilderField::*;
 
     match zelf {
         Value(name, spaces, ann) => {

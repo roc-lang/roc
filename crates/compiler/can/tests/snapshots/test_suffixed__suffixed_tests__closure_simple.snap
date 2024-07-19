@@ -1,0 +1,116 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-69,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-69 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @15-57,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @11-12 Identifier {
+                                ident: "x",
+                            },
+                            @15-57 Closure(
+                                [
+                                    @16-19 Identifier {
+                                        ident: "msg",
+                                    },
+                                ],
+                                @31-42 Apply(
+                                    @31-42 Var {
+                                        module_name: "Task",
+                                        ident: "await",
+                                    },
+                                    [
+                                        @31-42 Apply(
+                                            @31-42 Var {
+                                                module_name: "",
+                                                ident: "line",
+                                            },
+                                            [
+                                                @31-34 Var {
+                                                    module_name: "",
+                                                    ident: "msg",
+                                                },
+                                            ],
+                                            BinOp(
+                                                Pizza,
+                                            ),
+                                        ),
+                                        @31-42 Closure(
+                                            [
+                                                @31-42 RecordDestructure(
+                                                    [],
+                                                ),
+                                            ],
+                                            @52-57 Apply(
+                                                @52-54 Var {
+                                                    module_name: "",
+                                                    ident: "ok",
+                                                },
+                                                [
+                                                    @55-57 Record(
+                                                        [],
+                                                    ),
+                                                ],
+                                                Space,
+                                            ),
+                                        ),
+                                    ],
+                                    BangSuffix,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                @63-69 Apply(
+                    @63-64 Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                    [
+                        @65-69 Str(
+                            PlainLine(
+                                "hi",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ),
+    ],
+}

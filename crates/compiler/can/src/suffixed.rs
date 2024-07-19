@@ -12,30 +12,18 @@ use std::cell::Cell;
 
 thread_local! {
     // we use a thread_local here so that tests consistently give the same pattern
-    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = Cell::new(0);
+    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Provide an intermediate answer expression and pattern when unwrapping a
-/// (sub) expression
-///
-/// e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
-fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
-    // Use the thread-local counter
+/// Generates a unique identifier, useful for intermediate items during desugaring.
+fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
         let count = counter.get();
         counter.set(count + 1);
 
-        let answer_ident = arena.alloc(format!("#!a{}", count));
-
-        (
-            Expr::Var {
-                module_name: "",
-                ident: answer_ident,
-            },
-            Pattern::Identifier {
-                ident: answer_ident.as_str(),
-            },
-        )
+        // # is used as prefix because it's impossible for code authors to define names like this.
+        // This makes it easy to see this identifier was created by the compiler.
+        format!("#!a{}", count)
     })
 }
 
@@ -69,9 +57,23 @@ fn init_unwrapped_err<'a>(
             Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr))
         }
         None => {
-            let (answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
-            let sub_new = arena.alloc(Loc::at(unwrapped_expr.region, answer_var));
-            let sub_pat = arena.alloc(Loc::at(unwrapped_expr.region, answer_pat));
+            // Provide an intermediate answer expression and pattern when unwrapping a
+            // (sub) expression.
+            // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
+            let answer_ident = arena.alloc(next_unique_suffixed_ident());
+            let sub_new = arena.alloc(Loc::at(
+                unwrapped_expr.region,
+                Expr::Var {
+                    module_name: "",
+                    ident: answer_ident,
+                },
+            ));
+            let sub_pat = arena.alloc(Loc::at(
+                unwrapped_expr.region,
+                Pattern::Identifier {
+                    ident: answer_ident,
+                },
+            ));
 
             Err(EUnwrapped::UnwrappedSubExpr {
                 sub_arg: unwrapped_expr,
@@ -129,46 +131,7 @@ pub fn unwrap_suffixed_expression<'a>(
                 internal_error!("BinOps should have been desugared in desugar_expr");
             }
 
-            Expr::LowLevelDbg(dbg_src, arg, rest) => {
-                if is_expr_suffixed(&arg.value) {
-                    // we cannot unwrap a suffixed expression within dbg
-                    // e.g. dbg (foo! "bar")
-                    return Err(EUnwrapped::Malformed);
-                }
-
-                match unwrap_suffixed_expression(arena, rest, maybe_def_pat) {
-                    Ok(unwrapped_expr) => {
-                        let new_dbg = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
-                        ));
-                        return Ok(new_dbg);
-                    }
-                    Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
-                        let new_dbg = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
-                        ));
-                        Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
-                    }
-                    Err(EUnwrapped::UnwrappedSubExpr {
-                        sub_arg: unwrapped_expr,
-                        sub_pat,
-                        sub_new,
-                    }) => {
-                        let new_dbg = arena.alloc(Loc::at(
-                            loc_expr.region,
-                            LowLevelDbg(dbg_src, arg, unwrapped_expr),
-                        ));
-                        Err(EUnwrapped::UnwrappedSubExpr {
-                            sub_arg: new_dbg,
-                            sub_pat,
-                            sub_new,
-                        })
-                    }
-                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
-                }
-            }
+            Expr::LowLevelDbg(..) => unwrap_low_level_dbg(arena, loc_expr, maybe_def_pat),
 
             Expr::Expect(condition, continuation) => {
                 if is_expr_suffixed(&condition.value) {
@@ -658,7 +621,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                 let after_empty = split_defs.after.is_empty();
                                 if before_empty && after_empty {
                                     // NIL before, NIL after -> SINGLE DEF
-                                    let next_expr = match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat) {
+                                    // We pass None as a def pattern here because it's desugaring of the ret expression
+                                    let next_expr = match unwrap_suffixed_expression(arena,loc_ret, None) {
                                         Ok(next_expr) => next_expr,
                                         Err(EUnwrapped::UnwrappedSubExpr { sub_arg, sub_pat, sub_new }) => {
                                             // We need to apply Task.ok here as the defs final expression was unwrapped
@@ -688,7 +652,8 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                     return unwrap_suffixed_expression(arena, apply_task_await(arena,def_expr.region,unwrapped_expr,def_pattern,next_expr), maybe_def_pat);
                                 } else if after_empty {
                                     // SOME before, NIL after -> LAST DEF
-                                    match unwrap_suffixed_expression(arena,loc_ret,maybe_def_pat){
+                                    // We pass None as a def pattern here because it's desugaring of the ret expression
+                                    match unwrap_suffixed_expression(arena,loc_ret,None){
                                         Ok(new_loc_ret) => {
                                             let applied_task_await = apply_task_await(arena, loc_expr.region, unwrapped_expr, def_pattern, new_loc_ret);
                                             let new_defs = arena.alloc(Loc::at(loc_expr.region,Defs(arena.alloc(split_defs.before), applied_task_await)));
@@ -767,6 +732,87 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
     }
 }
 
+fn unwrap_low_level_dbg<'a>(
+    arena: &'a Bump,
+    loc_expr: &'a Loc<Expr<'a>>,
+    maybe_def_pat: Option<&'a Loc<Pattern<'a>>>,
+) -> Result<&'a Loc<Expr<'a>>, EUnwrapped<'a>> {
+    match loc_expr.value {
+        LowLevelDbg(dbg_src, arg, rest) => {
+            if is_expr_suffixed(&arg.value) {
+                return match unwrap_suffixed_expression(arena, arg, maybe_def_pat) {
+                    Ok(unwrapped_expr) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, unwrapped_expr, rest),
+                        ));
+
+                        unwrap_low_level_dbg(arena, new_dbg, maybe_def_pat)
+                    }
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg,
+                        sub_pat,
+                        sub_new,
+                    }) => {
+                        let new_dbg = arena.alloc(Loc::at(
+                            loc_expr.region,
+                            LowLevelDbg(dbg_src, sub_new, rest),
+                        ));
+
+                        unwrap_suffixed_expression(
+                            arena,
+                            apply_task_await(arena, new_dbg.region, sub_arg, sub_pat, new_dbg),
+                            maybe_def_pat,
+                        )
+                    }
+                    Err(EUnwrapped::UnwrappedDefExpr(..)) => {
+                        internal_error!(
+                            "unreachable, arg of LowLevelDbg should generate UnwrappedSubExpr instead"
+                        );
+                    }
+                    Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+                };
+            }
+
+            match unwrap_suffixed_expression(arena, rest, maybe_def_pat) {
+                Ok(unwrapped_expr) => {
+                    let new_dbg = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                    ));
+                    Ok(&*new_dbg)
+                }
+                Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr)) => {
+                    let new_dbg = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                    ));
+                    Err(EUnwrapped::UnwrappedDefExpr(new_dbg))
+                }
+                Err(EUnwrapped::UnwrappedSubExpr {
+                    sub_arg: unwrapped_expr,
+                    sub_pat,
+                    sub_new,
+                }) => {
+                    let new_dbg = arena.alloc(Loc::at(
+                        loc_expr.region,
+                        LowLevelDbg(dbg_src, arg, unwrapped_expr),
+                    ));
+                    Err(EUnwrapped::UnwrappedSubExpr {
+                        sub_arg: new_dbg,
+                        sub_pat,
+                        sub_new,
+                    })
+                }
+                Err(EUnwrapped::Malformed) => Err(EUnwrapped::Malformed),
+            }
+        }
+        _ => internal_error!(
+            "unreachable, expected a LowLevelDbg node to be passed into unwrap_low_level_dbg"
+        ),
+    }
+}
+
 /// Helper for `Task.await (loc_arg) \loc_pat -> loc_new`
 pub fn apply_task_await<'a>(
     arena: &'a Bump,
@@ -775,12 +821,6 @@ pub fn apply_task_await<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
     loc_new: &'a Loc<Expr<'a>>,
 ) -> &'a Loc<Expr<'a>> {
-    // If the pattern and the new are the same then we don't need to unwrap anything
-    // e.g. `Task.await foo \{} -> Task.ok {}` is the same as `foo`
-    if is_matching_empty_record(loc_pat, loc_new) {
-        return loc_arg;
-    }
-
     // If the pattern and the new are matching answers then we don't need to unwrap anything
     // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
     if is_matching_intermediate_answer(loc_pat, loc_new) {
@@ -826,26 +866,6 @@ fn extract_wrapped_task_ok_value<'a>(loc_expr: &'a Loc<Expr<'a>>) -> Option<&'a 
         },
         _ => None,
     }
-}
-
-fn is_matching_empty_record<'a>(
-    loc_pat: &'a Loc<Pattern<'a>>,
-    loc_expr: &'a Loc<Expr<'a>>,
-) -> bool {
-    let is_empty_record = match extract_wrapped_task_ok_value(loc_expr) {
-        Some(task_expr) => match task_expr.value {
-            Expr::Record(collection) => collection.is_empty(),
-            _ => false,
-        },
-        None => false,
-    };
-
-    let is_pattern_empty_record = match loc_pat.value {
-        Pattern::RecordDestructure(collection) => collection.is_empty(),
-        _ => false,
-    };
-
-    is_empty_record && is_pattern_empty_record
 }
 
 pub fn is_matching_intermediate_answer<'a>(

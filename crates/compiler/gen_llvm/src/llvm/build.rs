@@ -1,5 +1,7 @@
-use crate::llvm::bitcode::call_bitcode_fn;
-use crate::llvm::build_list::{self, allocate_list, empty_polymorphic_list};
+use crate::llvm::bitcode::{build_dec_wrapper, call_bitcode_fn, call_void_list_bitcode_fn};
+use crate::llvm::build_list::{
+    allocate_list, empty_polymorphic_list, layout_refcounted, layout_width,
+};
 use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
@@ -2860,19 +2862,6 @@ fn union_field_ptr_at_index<'a, 'ctx>(
         .into_pointer_value()
 }
 
-pub fn reserve_with_refcount<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-) -> PointerValue<'ctx> {
-    let stack_size = layout_interner.stack_size(layout);
-    let alignment_bytes = layout_interner.alignment_bytes(layout);
-
-    let basic_type = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-
-    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
-}
-
 fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -2887,7 +2876,7 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
         RocUnion::untagged_from_slices(layout_interner, env.context, fields)
     };
 
-    reserve_with_refcount_help(
+    reserve_union_with_refcount_help(
         env,
         roc_union.struct_type(),
         roc_union.tag_width(),
@@ -2895,7 +2884,7 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
     )
 }
 
-fn reserve_with_refcount_help<'a, 'ctx, 'env>(
+fn reserve_union_with_refcount_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     basic_type: impl BasicType<'ctx>,
     stack_size: u32,
@@ -2905,21 +2894,15 @@ fn reserve_with_refcount_help<'a, 'ctx, 'env>(
 
     let value_bytes_intvalue = len_type.const_int(stack_size as u64, false);
 
-    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue)
-}
-
-pub fn allocate_with_refcount<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    value: BasicValueEnum<'ctx>,
-) -> PointerValue<'ctx> {
-    let data_ptr = reserve_with_refcount(env, layout_interner, layout);
-
-    // store the value in the pointer
-    env.builder.new_build_store(data_ptr, value);
-
-    data_ptr
+    // elem_refcounted does not apply to unions, only lists.
+    let elem_refcounted = env.context.bool_type().const_zero().into();
+    allocate_with_refcount_help(
+        env,
+        basic_type,
+        alignment_bytes,
+        value_bytes_intvalue,
+        elem_refcounted,
+    )
 }
 
 pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
@@ -2927,12 +2910,14 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     value_type: impl BasicType<'ctx>,
     alignment_bytes: u32,
     number_of_data_bytes: IntValue<'ctx>,
+    elem_refcounted: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
     let ptr = call_bitcode_fn(
         env,
         &[
             number_of_data_bytes.into(),
             env.alignment_const(alignment_bytes).into(),
+            elem_refcounted,
         ],
         roc_builtins::bitcode::UTILS_ALLOCATE_WITH_REFCOUNT,
     )
@@ -3473,10 +3458,19 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         LayoutRepr::Builtin(Builtin::Str) => todo!(),
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
-                            let element_layout = layout_interner.get_repr(element_layout);
-                            let alignment = element_layout.alignment_bytes(layout_interner);
-
-                            build_list::decref(env, value.into_struct_value(), alignment);
+                            let dec_element_fn =
+                                build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
+                            call_void_list_bitcode_fn(
+                                env,
+                                &[value.into_struct_value()],
+                                &[
+                                    env.alignment_intvalue(layout_interner, element_layout),
+                                    layout_width(env, layout_interner, element_layout),
+                                    layout_refcounted(env, layout_interner, element_layout),
+                                    dec_element_fn.as_global_value().as_pointer_value().into(),
+                                ],
+                                bitcode::LIST_DECREF,
+                            )
                         }
 
                         other_layout if other_layout.is_refcounted(layout_interner) => {
@@ -3546,7 +3540,8 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     debug_assert!(value.is_pointer_value());
                     let value = value.into_pointer_value();
 
-                    let clear_tag_id = match layout_interner.runtime_representation(layout) {
+                    let runtime_layout = layout_interner.runtime_representation(layout);
+                    let clear_tag_id = match runtime_layout {
                         LayoutRepr::Union(union) => union.stores_tag_id_in_pointer(env.target),
                         _ => false,
                     };
@@ -3558,7 +3553,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     };
 
                     let rc_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
-                    rc_ptr.deallocate(env, alignment);
+                    rc_ptr.deallocate(env, alignment, runtime_layout);
 
                     build_exp_stmt(
                         env,

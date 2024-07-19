@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 roc_builtins = { path = "../builtins" }
 roc_can = { path = "../can" }
+roc_work = { path = "../work" }
 roc_checkmate = { path = "../checkmate" }
 roc_collections = { path = "../collections" }
 roc_constrain = { path = "../constrain" }
@@ -31,6 +32,7 @@ roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
+roc_worker = { path = "../worker" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 

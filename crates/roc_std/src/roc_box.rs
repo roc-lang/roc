@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::{roc_alloc, roc_dealloc, storage::Storage};
+use crate::{roc_alloc, roc_dealloc, storage::Storage, RocRefcounted};
 use core::{
     cell::Cell,
     cmp::{self, Ordering},
@@ -11,11 +11,17 @@ use core::{
 };
 
 #[repr(C)]
-pub struct RocBox<T> {
+pub struct RocBox<T>
+where
+    T: RocRefcounted,
+{
     contents: NonNull<T>,
 }
 
-impl<T> RocBox<T> {
+impl<T> RocBox<T>
+where
+    T: RocRefcounted,
+{
     pub fn new(contents: T) -> Self {
         let alignment = Self::alloc_alignment();
         let bytes = mem::size_of::<T>() + alignment;
@@ -76,7 +82,10 @@ impl<T> RocBox<T> {
     }
 }
 
-impl<T> Deref for RocBox<T> {
+impl<T> Deref for RocBox<T>
+where
+    T: RocRefcounted,
+{
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -86,18 +95,20 @@ impl<T> Deref for RocBox<T> {
 
 impl<T, U> PartialEq<RocBox<U>> for RocBox<T>
 where
-    T: PartialEq<U>,
+    T: PartialEq<U> + RocRefcounted,
+    U: RocRefcounted,
 {
     fn eq(&self, other: &RocBox<U>) -> bool {
         self.deref() == other.deref()
     }
 }
 
-impl<T> Eq for RocBox<T> where T: Eq {}
+impl<T> Eq for RocBox<T> where T: Eq + RocRefcounted {}
 
 impl<T, U> PartialOrd<RocBox<U>> for RocBox<T>
 where
-    T: PartialOrd<U>,
+    T: PartialOrd<U> + RocRefcounted,
+    U: RocRefcounted,
 {
     fn partial_cmp(&self, other: &RocBox<U>) -> Option<cmp::Ordering> {
         let self_contents = unsafe { self.contents.as_ref() };
@@ -109,7 +120,7 @@ where
 
 impl<T> Ord for RocBox<T>
 where
-    T: Ord,
+    T: Ord + RocRefcounted,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let self_contents = unsafe { self.contents.as_ref() };
@@ -119,7 +130,10 @@ where
     }
 }
 
-impl<T: core::hash::Hash> core::hash::Hash for RocBox<T> {
+impl<T: core::hash::Hash> core::hash::Hash for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.contents.hash(state)
     }
@@ -127,14 +141,17 @@ impl<T: core::hash::Hash> core::hash::Hash for RocBox<T> {
 
 impl<T> Debug for RocBox<T>
 where
-    T: Debug,
+    T: Debug + RocRefcounted,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.deref().fmt(f)
     }
 }
 
-impl<T> Clone for RocBox<T> {
+impl<T> Clone for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn clone(&self) -> Self {
         let storage = self.storage();
         let mut new_storage = storage.get();
@@ -151,8 +168,30 @@ impl<T> Clone for RocBox<T> {
     }
 }
 
-impl<T> Drop for RocBox<T> {
+impl<T> Drop for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn drop(&mut self) {
+        self.dec()
+    }
+}
+
+impl<T> RocRefcounted for RocBox<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {
+        let storage = self.storage();
+        let mut new_storage = storage.get();
+
+        if !new_storage.is_readonly() {
+            new_storage.increment_reference_count();
+            storage.set(new_storage);
+        }
+    }
+
+    fn dec(&mut self) {
         let storage = self.storage();
         let contents = self.contents;
 
@@ -165,7 +204,9 @@ impl<T> Drop for RocBox<T> {
                 // Drop the stored contents.
                 let contents_ptr = contents.as_ptr();
 
-                mem::drop::<T>(ptr::read(contents_ptr));
+                if T::is_refcounted() {
+                    ptr::read(contents_ptr).dec();
+                }
 
                 let alignment = Self::alloc_alignment();
 
@@ -179,5 +220,9 @@ impl<T> Drop for RocBox<T> {
             // Write the storage back.
             storage.set(new_storage);
         }
+    }
+
+    fn is_refcounted() -> bool {
+        true
     }
 }

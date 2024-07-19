@@ -5,9 +5,11 @@ procedure Bool.2 ():
 procedure Inspect.246 (Inspect.247, Inspect.245):
     let Inspect.319 : Str = "\"";
     let Inspect.318 : Str = CallByName Inspect.59 Inspect.247 Inspect.319;
+    dec Inspect.319;
     let Inspect.314 : Str = CallByName Inspect.59 Inspect.318 Inspect.245;
     let Inspect.315 : Str = "\"";
     let Inspect.313 : Str = CallByName Inspect.59 Inspect.314 Inspect.315;
+    dec Inspect.315;
     ret Inspect.313;
 
 procedure Inspect.30 (Inspect.143):
@@ -31,11 +33,11 @@ procedure Inspect.5 (Inspect.146):
     let Inspect.305 : {} = Struct {};
     let Inspect.304 : Str = CallByName Inspect.35 Inspect.305;
     let Inspect.303 : Str = CallByName Inspect.246 Inspect.304 Inspect.308;
+    dec Inspect.308;
     ret Inspect.303;
 
 procedure Inspect.59 (Inspect.296, Inspect.292):
     let Inspect.317 : Str = CallByName Str.3 Inspect.296 Inspect.292;
-    dec Inspect.292;
     ret Inspect.317;
 
 procedure Inspect.60 (Inspect.298):

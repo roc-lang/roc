@@ -2533,6 +2533,8 @@ enum Rec {
     None,
     Left(Variable),
     Right(Variable),
+    #[allow(dead_code)]
+    // dead_code because of https://github.com/roc-lang/roc/pull/6819/files#r1655317562
     Both(Variable, Variable),
 }
 

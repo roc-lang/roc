@@ -96,3 +96,10 @@ pub enum RefCount {
     Deallocated,
     Constant,
 }
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefCountLoc {
+    StandardRC,
+    AfterSize,
+}

@@ -1113,6 +1113,57 @@ pub(crate) fn call_str_bitcode_fn<'ctx>(
     }
 }
 
+pub(crate) fn call_void_list_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    lists: &[StructValue<'ctx>],
+    other_arguments: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) {
+    use bumpalo::collections::Vec;
+    use roc_target::Architecture::*;
+
+    match env.target.architecture() {
+        Aarch32 | X86_32 => {
+            let mut arguments: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(other_arguments.len() + 2 * lists.len(), env.arena);
+
+            for list in lists {
+                let (a, b) = pass_list_or_string_to_zig_32bit(env, *list);
+                arguments.push(a.into());
+                arguments.push(b.into());
+            }
+
+            arguments.extend(other_arguments);
+
+            call_void_bitcode_fn(env, &arguments, fn_name);
+        }
+        X86_64 | Aarch64 => {
+            let capacity = other_arguments.len() + lists.len();
+            let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
+
+            for list in lists {
+                arguments.push(pass_list_to_zig_64bit(env, (*list).into()).into());
+            }
+
+            arguments.extend(other_arguments);
+
+            call_void_bitcode_fn(env, &arguments, fn_name);
+        }
+        Wasm32 => {
+            let capacity = other_arguments.len() + lists.len();
+            let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
+
+            for list in lists {
+                arguments.push(pass_list_to_zig_wasm(env, (*list).into()).into());
+            }
+
+            arguments.extend(other_arguments);
+
+            call_void_bitcode_fn(env, &arguments, fn_name);
+        }
+    }
+}
+
 pub(crate) fn call_list_bitcode_fn<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     lists: &[StructValue<'ctx>],
