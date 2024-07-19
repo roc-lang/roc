@@ -1021,8 +1021,11 @@ pub fn canonicalize_expr<'a>(
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
-        ast::Expr::RecordBuilder(_) => {
-            internal_error!("RecordBuilder should have been desugared by now")
+        ast::Expr::OldRecordBuilder(_) => {
+            internal_error!("Old record builder should have been desugared by now")
+        }
+        ast::Expr::RecordBuilder { .. } => {
+            internal_error!("New record builder should have been desugared by now")
         }
         ast::Expr::Backpassing(_, _, _) => {
             internal_error!("Backpassing should have been desugared by now")
@@ -1340,18 +1343,43 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
             (RuntimeError(MalformedSuffixed(region)), Output::default())
         }
-        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+        ast::Expr::MultipleOldRecordBuilders(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = MultipleRecordBuilders(sub_expr.region);
+            let problem = MultipleOldRecordBuilders(sub_expr.region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::UnappliedRecordBuilder(sub_expr) => {
+        ast::Expr::UnappliedOldRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = UnappliedRecordBuilder(sub_expr.region);
+            let problem = UnappliedOldRecordBuilder(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::EmptyRecordBuilder(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = EmptyRecordBuilder(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::SingleFieldRecordBuilder(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = SingleFieldRecordBuilder(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::OptionalFieldInRecordBuilder(loc_name, loc_value) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
+            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -2414,9 +2442,12 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::Tuple(fields) => fields
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
-        ast::Expr::MultipleRecordBuilders(loc_expr)
-        | ast::Expr::MalformedSuffixed(loc_expr)
-        | ast::Expr::UnappliedRecordBuilder(loc_expr)
+        ast::Expr::MalformedSuffixed(loc_expr)
+        | ast::Expr::MultipleOldRecordBuilders(loc_expr)
+        | ast::Expr::UnappliedOldRecordBuilder(loc_expr)
+        | ast::Expr::EmptyRecordBuilder(loc_expr)
+        | ast::Expr::SingleFieldRecordBuilder(loc_expr)
+        | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)
         | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
@@ -2458,24 +2489,39 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
         }
-        ast::Expr::RecordBuilder(fields) => fields.iter().all(|loc_field| match loc_field.value {
-            ast::RecordBuilderField::Value(_label, comments, loc_expr) => {
-                comments.is_empty() && is_valid_interpolation(&loc_expr.value)
-            }
-            ast::RecordBuilderField::ApplyValue(
-                _label,
-                comments_before,
-                comments_after,
-                loc_expr,
-            ) => {
-                comments_before.is_empty()
-                    && comments_after.is_empty()
-                    && is_valid_interpolation(&loc_expr.value)
-            }
-            ast::RecordBuilderField::Malformed(_) | ast::RecordBuilderField::LabelOnly(_) => true,
-            ast::RecordBuilderField::SpaceBefore(_, _)
-            | ast::RecordBuilderField::SpaceAfter(_, _) => false,
-        }),
+        ast::Expr::OldRecordBuilder(fields) => {
+            fields.iter().all(|loc_field| match loc_field.value {
+                ast::OldRecordBuilderField::Value(_label, comments, loc_expr) => {
+                    comments.is_empty() && is_valid_interpolation(&loc_expr.value)
+                }
+                ast::OldRecordBuilderField::ApplyValue(
+                    _label,
+                    comments_before,
+                    comments_after,
+                    loc_expr,
+                ) => {
+                    comments_before.is_empty()
+                        && comments_after.is_empty()
+                        && is_valid_interpolation(&loc_expr.value)
+                }
+                ast::OldRecordBuilderField::Malformed(_)
+                | ast::OldRecordBuilderField::LabelOnly(_) => true,
+                ast::OldRecordBuilderField::SpaceBefore(_, _)
+                | ast::OldRecordBuilderField::SpaceAfter(_, _) => false,
+            })
+        }
+        ast::Expr::RecordBuilder { mapper, fields } => {
+            is_valid_interpolation(&mapper.value)
+                && fields.iter().all(|loc_field| match loc_field.value {
+                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+                    }
+                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::SpaceBefore(_, _)
+                    | ast::AssignedField::SpaceAfter(_, _) => false,
+                })
+        }
     }
 }
 

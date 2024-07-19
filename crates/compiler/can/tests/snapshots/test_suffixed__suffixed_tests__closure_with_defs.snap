@@ -1,0 +1,194 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-143,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @12-143 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @56-119,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        AnnotatedBody {
+                            ann_pattern: @12-15 Identifier {
+                                ident: "foo",
+                            },
+                            ann_type: @18-45 Function(
+                                [
+                                    @18-21 Apply(
+                                        "",
+                                        "Str",
+                                        [],
+                                    ),
+                                    @23-25 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                    @27-30 Apply(
+                                        "",
+                                        "Str",
+                                        [],
+                                    ),
+                                ],
+                                @34-45 Apply(
+                                    "",
+                                    "Task",
+                                    [
+                                        @39-41 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                        @42-45 Apply(
+                                            "",
+                                            "I32",
+                                            [],
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            comment: None,
+                            body_pattern: @50-53 Identifier {
+                                ident: "foo",
+                            },
+                            body_expr: @56-119 Closure(
+                                [
+                                    @57-58 Identifier {
+                                        ident: "a",
+                                    },
+                                    @60-61 Underscore(
+                                        "",
+                                    ),
+                                    @63-64 Identifier {
+                                        ident: "b",
+                                    },
+                                ],
+                                @76-83 Apply(
+                                    @76-83 Var {
+                                        module_name: "Task",
+                                        ident: "await",
+                                    },
+                                    [
+                                        @76-83 Apply(
+                                            @76-83 Var {
+                                                module_name: "",
+                                                ident: "line",
+                                            },
+                                            [
+                                                @82-83 Var {
+                                                    module_name: "",
+                                                    ident: "a",
+                                                },
+                                            ],
+                                            Space,
+                                        ),
+                                        @76-83 Closure(
+                                            [
+                                                @76-83 RecordDestructure(
+                                                    [],
+                                                ),
+                                            ],
+                                            @92-99 Apply(
+                                                @92-99 Var {
+                                                    module_name: "Task",
+                                                    ident: "await",
+                                                },
+                                                [
+                                                    @92-99 Apply(
+                                                        @92-99 Var {
+                                                            module_name: "",
+                                                            ident: "line",
+                                                        },
+                                                        [
+                                                            @98-99 Var {
+                                                                module_name: "",
+                                                                ident: "b",
+                                                            },
+                                                        ],
+                                                        Space,
+                                                    ),
+                                                    @92-99 Closure(
+                                                        [
+                                                            @92-99 RecordDestructure(
+                                                                [],
+                                                            ),
+                                                        ],
+                                                        @109-119 Apply(
+                                                            @109-116 Var {
+                                                                module_name: "Task",
+                                                                ident: "ok",
+                                                            },
+                                                            [
+                                                                @117-119 Record(
+                                                                    [],
+                                                                ),
+                                                            ],
+                                                            Space,
+                                                        ),
+                                                    ),
+                                                ],
+                                                BangSuffix,
+                                            ),
+                                        ),
+                                    ],
+                                    BangSuffix,
+                                ),
+                            ),
+                        },
+                    ],
+                },
+                @125-143 Apply(
+                    @125-128 Var {
+                        module_name: "",
+                        ident: "foo",
+                    },
+                    [
+                        @129-134 Str(
+                            PlainLine(
+                                "bar",
+                            ),
+                        ),
+                        @135-137 Record(
+                            [],
+                        ),
+                        @138-143 Str(
+                            PlainLine(
+                                "baz",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ),
+    ],
+}

@@ -35,10 +35,10 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe,
-        list_len_usize, list_map, list_map2, list_map3, list_map4, list_prepend,
-        list_release_excess_capacity, list_replace_unsafe, list_reserve, list_sort_with,
-        list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
+        list_append_unsafe, list_clone, list_concat, list_drop_at, list_get_unsafe, list_len_usize,
+        list_prepend, list_release_excess_capacity, list_replace_unsafe, list_reserve,
+        list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
+        pass_update_mode,
     },
     compare::{generic_eq, generic_neq},
     convert::{
@@ -645,6 +645,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_with_capacity(
                 env,
                 layout_interner,
+                layout_ids,
                 list_len.into_int_value(),
                 list_element_layout!(layout_interner, result_layout),
             )
@@ -661,6 +662,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_concat(
                 env,
                 layout_interner,
+                layout_ids,
                 first_list,
                 second_list,
                 element_layout,
@@ -682,7 +684,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
             let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
-            list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
+            list_prepend(
+                env,
+                layout_interner,
+                layout_ids,
+                original_wrapper,
+                elem,
+                elem_layout,
+            )
         }
         ListReserve => {
             // List.reserve : List elem, U64 -> List elem
@@ -695,6 +704,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_reserve(
                 env,
                 layout_interner,
+                layout_ids,
                 list,
                 spare,
                 element_layout,
@@ -708,7 +718,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
-            list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
+            list_release_excess_capacity(
+                env,
+                layout_interner,
+                layout_ids,
+                list,
+                element_layout,
+                update_mode,
+            )
         }
         ListSwap => {
             // List.swap : List elem, U64, U64 -> List elem
@@ -724,6 +741,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_swap(
                 env,
                 layout_interner,
+                layout_ids,
                 original_wrapper,
                 index_1.into_int_value(),
                 index_2.into_int_value(),
@@ -826,19 +844,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
             match update_mode {
-                UpdateMode::Immutable => {
-                    //
-                    call_list_bitcode_fn(
-                        env,
-                        &[list.into_struct_value()],
-                        &[
-                            env.alignment_intvalue(layout_interner, element_layout),
-                            layout_width(env, layout_interner, element_layout),
-                        ],
-                        BitcodeReturns::List,
-                        bitcode::LIST_CLONE,
-                    )
-                }
+                UpdateMode::Immutable => list_clone(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    list.into_struct_value(),
+                    element_layout,
+                ),
                 UpdateMode::InPlace => {
                     // we statically know the list is unique
                     list
@@ -1294,7 +1306,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             unimplemented!()
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
+        ListSortWith => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
@@ -1399,7 +1411,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
         }
 
-        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
+        ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
+            unreachable!("only inserted in dev backend codegen")
+        }
     }
 }
 
@@ -2758,7 +2772,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
-    return_layout: InLayout<'a>,
+    _return_layout: InLayout<'a>,
     func_spec: FuncSpec,
     higher_order: &HigherOrderLowLevel<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -2797,201 +2811,6 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     }
 
     match op {
-        ListMap { xs } => {
-            // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = scope.load_symbol_and_layout(xs);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match (
-                layout_interner.get_repr(list_layout),
-                layout_interner.get_repr(return_layout),
-            ) {
-                (
-                    LayoutRepr::Builtin(Builtin::List(element_layout)),
-                    LayoutRepr::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[element_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    list_map(
-                        env,
-                        layout_interner,
-                        roc_function_call,
-                        list,
-                        element_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
-            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match (
-                layout_interner.get_repr(list1_layout),
-                layout_interner.get_repr(list2_layout),
-                layout_interner.get_repr(return_layout),
-            ) {
-                (
-                    LayoutRepr::Builtin(Builtin::List(element1_layout)),
-                    LayoutRepr::Builtin(Builtin::List(element2_layout)),
-                    LayoutRepr::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[element1_layout, element2_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    list_map2(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        roc_function_call,
-                        list1,
-                        list2,
-                        element1_layout,
-                        element2_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
-            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
-            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match (
-                layout_interner.get_repr(list1_layout),
-                layout_interner.get_repr(list2_layout),
-                layout_interner.get_repr(list3_layout),
-                layout_interner.get_repr(return_layout),
-            ) {
-                (
-                    LayoutRepr::Builtin(Builtin::List(element1_layout)),
-                    LayoutRepr::Builtin(Builtin::List(element2_layout)),
-                    LayoutRepr::Builtin(Builtin::List(element3_layout)),
-                    LayoutRepr::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[element1_layout, element2_layout, element3_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    list_map3(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        roc_function_call,
-                        list1,
-                        list2,
-                        list3,
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
-            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
-            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
-            let (list4, list4_layout) = scope.load_symbol_and_layout(ws);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match (
-                layout_interner.get_repr(list1_layout),
-                layout_interner.get_repr(list2_layout),
-                layout_interner.get_repr(list3_layout),
-                layout_interner.get_repr(list4_layout),
-                layout_interner.get_repr(return_layout),
-            ) {
-                (
-                    LayoutRepr::Builtin(Builtin::List(element1_layout)),
-                    LayoutRepr::Builtin(Builtin::List(element2_layout)),
-                    LayoutRepr::Builtin(Builtin::List(element3_layout)),
-                    LayoutRepr::Builtin(Builtin::List(element4_layout)),
-                    LayoutRepr::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        element4_layout,
-                    ];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    list_map4(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        roc_function_call,
-                        list1,
-                        list2,
-                        list3,
-                        list4,
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        element4_layout,
-                        result_layout,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
             let (list, list_layout) = scope.load_symbol_and_layout(xs);
@@ -3030,6 +2849,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                     list_sort_with(
                         env,
                         layout_interner,
+                        layout_ids,
                         roc_function_call,
                         compare_wrapper,
                         list,

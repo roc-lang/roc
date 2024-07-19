@@ -150,11 +150,7 @@ impl ExpectsOrDbgs {
 #[derive(Debug, Clone)]
 enum PendingValueDef<'a> {
     /// A standalone annotation with no body
-    AnnotationOnly(
-        &'a Loc<ast::Pattern<'a>>,
-        Loc<Pattern>,
-        &'a Loc<ast::TypeAnnotation<'a>>,
-    ),
+    AnnotationOnly(Loc<Pattern>, &'a Loc<ast::TypeAnnotation<'a>>),
     /// A body with no type annotation
     Body(Loc<Pattern>, &'a Loc<ast::Expr<'a>>),
     /// A body with a type annotation
@@ -175,7 +171,7 @@ enum PendingValueDef<'a> {
 impl PendingValueDef<'_> {
     fn loc_pattern(&self) -> &Loc<Pattern> {
         match self {
-            PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::AnnotationOnly(loc_pattern, _) => loc_pattern,
             PendingValueDef::Body(loc_pattern, _) => loc_pattern,
             PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
             PendingValueDef::IngestedFile(loc_pattern, _, _) => loc_pattern,
@@ -2208,7 +2204,7 @@ fn canonicalize_pending_value_def<'a>(
     let pending_abilities_in_scope = &Default::default();
 
     let output = match pending_def {
-        AnnotationOnly(_, loc_can_pattern, loc_ann) => {
+        AnnotationOnly(loc_can_pattern, loc_ann) => {
             // Make types for the body expr, even if we won't end up having a body.
             let expr_var = var_store.fresh();
             let mut vars_by_symbol = SendMap::default();
@@ -2939,7 +2935,6 @@ fn to_pending_value_def<'a>(
             );
 
             PendingValue::Def(PendingValueDef::AnnotationOnly(
-                loc_pattern,
                 loc_can_pattern,
                 loc_ann,
             ))

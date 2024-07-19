@@ -12,30 +12,18 @@ use std::cell::Cell;
 
 thread_local! {
     // we use a thread_local here so that tests consistently give the same pattern
-    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = Cell::new(0);
+    static SUFFIXED_ANSWER_COUNTER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Provide an intermediate answer expression and pattern when unwrapping a
-/// (sub) expression
-///
-/// e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
-fn next_suffixed_answer_pattern(arena: &Bump) -> (Expr, Pattern) {
-    // Use the thread-local counter
+/// Generates a unique identifier, useful for intermediate items during desugaring.
+fn next_unique_suffixed_ident() -> String {
     SUFFIXED_ANSWER_COUNTER.with(|counter| {
         let count = counter.get();
         counter.set(count + 1);
 
-        let answer_ident = arena.alloc(format!("#!a{}", count));
-
-        (
-            Expr::Var {
-                module_name: "",
-                ident: answer_ident,
-            },
-            Pattern::Identifier {
-                ident: answer_ident.as_str(),
-            },
-        )
+        // # is used as prefix because it's impossible for code authors to define names like this.
+        // This makes it easy to see this identifier was created by the compiler.
+        format!("#!a{}", count)
     })
 }
 
@@ -69,9 +57,23 @@ fn init_unwrapped_err<'a>(
             Err(EUnwrapped::UnwrappedDefExpr(unwrapped_expr))
         }
         None => {
-            let (answer_var, answer_pat) = next_suffixed_answer_pattern(arena);
-            let sub_new = arena.alloc(Loc::at(unwrapped_expr.region, answer_var));
-            let sub_pat = arena.alloc(Loc::at(unwrapped_expr.region, answer_pat));
+            // Provide an intermediate answer expression and pattern when unwrapping a
+            // (sub) expression.
+            // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
+            let answer_ident = arena.alloc(next_unique_suffixed_ident());
+            let sub_new = arena.alloc(Loc::at(
+                unwrapped_expr.region,
+                Expr::Var {
+                    module_name: "",
+                    ident: answer_ident,
+                },
+            ));
+            let sub_pat = arena.alloc(Loc::at(
+                unwrapped_expr.region,
+                Pattern::Identifier {
+                    ident: answer_ident,
+                },
+            ));
 
             Err(EUnwrapped::UnwrappedSubExpr {
                 sub_arg: unwrapped_expr,
@@ -819,12 +821,6 @@ pub fn apply_task_await<'a>(
     loc_pat: &'a Loc<Pattern<'a>>,
     loc_new: &'a Loc<Expr<'a>>,
 ) -> &'a Loc<Expr<'a>> {
-    // If the pattern and the new are the same then we don't need to unwrap anything
-    // e.g. `Task.await foo \{} -> Task.ok {}` is the same as `foo`
-    if is_matching_empty_record(loc_pat, loc_new) {
-        return loc_arg;
-    }
-
     // If the pattern and the new are matching answers then we don't need to unwrap anything
     // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
     if is_matching_intermediate_answer(loc_pat, loc_new) {
@@ -870,26 +866,6 @@ fn extract_wrapped_task_ok_value<'a>(loc_expr: &'a Loc<Expr<'a>>) -> Option<&'a 
         },
         _ => None,
     }
-}
-
-fn is_matching_empty_record<'a>(
-    loc_pat: &'a Loc<Pattern<'a>>,
-    loc_expr: &'a Loc<Expr<'a>>,
-) -> bool {
-    let is_empty_record = match extract_wrapped_task_ok_value(loc_expr) {
-        Some(task_expr) => match task_expr.value {
-            Expr::Record(collection) => collection.is_empty(),
-            _ => false,
-        },
-        None => false,
-    };
-
-    let is_pattern_empty_record = match loc_pat.value {
-        Pattern::RecordDestructure(collection) => collection.is_empty(),
-        _ => false,
-    };
-
-    is_empty_record && is_pattern_empty_record
 }
 
 pub fn is_matching_intermediate_answer<'a>(

@@ -4972,7 +4972,7 @@ mod test_reporting {
             }
             "
         ),@r###"
-    ── RECORD BUILDER IN MODULE PARAMS in ...ord_builder_in_module_params/Test.roc ─
+    ── OLD-STYLE RECORD BUILDER IN MODULE PARAMS in ...r_in_module_params/Test.roc ─
 
     I was partway through parsing module params, but I got stuck here:
 
@@ -4981,8 +4981,8 @@ mod test_reporting {
     6│          name: <- applyName
                 ^^^^^^^^^^^^^^^^^^
 
-    This looks like a record builder field, but those are not allowed in
-    module params.
+    This looks like an old-style record builder field, but those are not
+    allowed in module params.
     "###
     );
 
@@ -10700,7 +10700,7 @@ In roc, functions are always written as a lambda, like{}
     // Record Builders
 
     test_report!(
-        optional_field_in_record_builder,
+        optional_field_in_old_record_builder,
         indoc!(
             r#"
             {
@@ -10711,7 +10711,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD BUILDER in tmp/optional_field_in_record_builder/Test.roc ─────────
+    ── BAD OLD-STYLE RECORD BUILDER in ...nal_field_in_old_record_builder/Test.roc ─
 
     I am partway through parsing a record builder, and I found an optional
     field:
@@ -10730,7 +10730,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        record_update_builder,
+        record_update_old_builder,
         indoc!(
             r#"
             { rec &
@@ -10740,10 +10740,10 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD UPDATE in tmp/record_update_builder/Test.roc ─────────────────────
+    ── BAD RECORD UPDATE in tmp/record_update_old_builder/Test.roc ─────────────────
 
-    I am partway through parsing a record update, and I found a record
-    builder field:
+    I am partway through parsing a record update, and I found an old-style
+    record builder field:
 
     1│  app "test" provides [main] to "./platform"
     2│
@@ -10752,12 +10752,12 @@ In roc, functions are always written as a lambda, like{}
     5│          a: <- apply "a",
                 ^^^^^^^^^^^^^^^
 
-    Record builders cannot be updated like records.
+    Old-style record builders cannot be updated like records.
     "#
     );
 
     test_report!(
-        multiple_record_builders,
+        multiple_old_record_builders,
         indoc!(
             r#"
             succeed
@@ -10766,32 +10766,31 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── MULTIPLE RECORD BUILDERS in /code/proj/Main.roc ─────────────────────────────
+    ── MULTIPLE OLD-STYLE RECORD BUILDERS in /code/proj/Main.roc ───────────────────
 
-    This function is applied to multiple record builders:
+    This function is applied to multiple old-style record builders:
 
     4│>      succeed
     5│>          { a: <- apply "a" }
     6│>          { b: <- apply "b" }
 
-    Note: Functions can only take at most one record builder!
+    Note: Functions can only take at most one old-style record builder!
 
     Tip: You can combine them or apply them separately.
-
     "#
     );
 
     test_report!(
-        unapplied_record_builder,
+        unapplied_old_record_builder,
         indoc!(
             r#"
             { a: <- apply "a" }
             "#
         ),
         @r#"
-    ── UNAPPLIED RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────
+    ── UNAPPLIED OLD-STYLE RECORD BUILDER in /code/proj/Main.roc ───────────────────
 
-    This record builder was not applied to a function:
+    This old-style record builder was not applied to a function:
 
     4│      { a: <- apply "a" }
             ^^^^^^^^^^^^^^^^^^^
@@ -10803,7 +10802,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        record_builder_apply_non_function,
+        old_record_builder_apply_non_function,
         indoc!(
             r#"
             succeed = \_ -> crash ""
@@ -10856,6 +10855,107 @@ In roc, functions are always written as a lambda, like{}
     // Hint: Did you mean to apply it to a function first?
     //     "#
     // );
+
+    test_report!(
+        empty_record_builder,
+        indoc!(
+            r#"
+            { a <- }
+            "#
+        ),
+        @r#"
+    ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
+    
+    This record builder has no fields:
+    
+    4│      { a <- }
+            ^^^^^^^^
+    
+    I need at least two fields to combine their values into a record.
+    "#
+    );
+
+    test_report!(
+        single_field_record_builder,
+        indoc!(
+            r#"
+            { a <-
+                b: 123
+            }
+            "#
+        ),
+        @r#"
+    ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
+
+    This record builder only has one field:
+    
+    4│>      { a <-
+    5│>          b: 123
+    6│>      }
+    
+    I need at least two fields to combine their values into a record.
+    "#
+    );
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { a <-
+                b: 123,
+                c? 456
+            }
+            "#
+        ),
+        @r#"
+    ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
+    
+    Optional fields are not allowed to be used in record builders.
+    
+    4│       { a <-
+    5│           b: 123,
+    6│>          c? 456
+    7│       }
+    
+    Record builders can only have required values for their fields.
+    "#
+    );
+
+    // CalledVia::RecordBuilder => {
+    //     alloc.concat([
+    //         alloc.note(""),
+    //         alloc.reflow("Record builders need a mapper function before the "),
+    //         alloc.keyword("<-"),
+    //         alloc.reflow(" to combine fields together with.")
+    //     ])
+    // }
+    // _ => {
+    //     alloc.reflow("Are there any missing commas? Or missing parentheses?")
+
+    test_report!(
+        record_builder_with_non_function_mapper,
+        indoc!(
+            r#"
+            xyz = "abc"
+
+            { xyz <-
+                b: 123,
+                c: 456
+            }
+            "#
+        ),
+        @r#"
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+
+    The `xyz` value is not a function, but it was given 3 arguments:
+
+    6│      { xyz <-
+              ^^^
+
+    Note: Record builders need a mapper function before the `<-` to combine
+    fields together with.
+    "#
+    );
 
     test_report!(
         destructure_assignment_introduces_no_variables_nested,

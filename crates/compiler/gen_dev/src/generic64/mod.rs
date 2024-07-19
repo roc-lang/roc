@@ -1082,6 +1082,8 @@ impl<
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
+        debug_assert_eq!(args.len(), arg_layouts.len());
+
         // Save used caller saved regs.
         self.storage_manager
             .push_used_caller_saved_regs_to_stack(&mut self.buf);
@@ -2278,6 +2280,25 @@ impl<
         refcount_proc_name
     }
 
+    fn build_indirect_inc_n(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::IndirectIncN,
+        );
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol {
         let ident_ids = self
             .interns
@@ -2310,17 +2331,6 @@ impl<
             .unwrap();
 
         let caller_proc = match higher_order.op {
-            HigherOrder::ListMap { .. }
-            | HigherOrder::ListMap2 { .. }
-            | HigherOrder::ListMap3 { .. }
-            | HigherOrder::ListMap4 { .. } => CallerProc::new_list_map(
-                self.env.arena,
-                self.env.module_id,
-                ident_ids,
-                self.layout_interner,
-                &higher_order.passed_function,
-                higher_order.closure_env_layout,
-            ),
             HigherOrder::ListSortWith { .. } => CallerProc::new_compare(
                 self.env.arena,
                 self.env.module_id,
@@ -2348,7 +2358,7 @@ impl<
 
         // function pointer to a function that takes a pointer, and increments
         let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
-            self.increment_fn_pointer(closure_env_layout)
+            self.increment_n_fn_pointer(closure_env_layout)
         } else {
             // null pointer
             self.load_literal_i64(&Symbol::DEV_TMP, 0);
@@ -2374,394 +2384,6 @@ impl<
         let usize_ = Layout::U64;
 
         match higher_order.op {
-            HigherOrder::ListMap { xs } => {
-                let old_element_layout = argument_layouts[0];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout = LayoutRepr::Builtin(Builtin::List(old_element_layout));
-                let input_list_in_layout = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width = self.debug_symbol("old_element_width");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout, old_element_width);
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                //    list: RocList,
-                //    caller: Caller1,
-                //    data: Opaque,
-                //    inc_n_data: IncN,
-                //    data_is_owned: bool,
-                //    alignment: u32,
-                //    old_element_width: usize,
-                //    new_element_width: usize,
-
-                let arguments = [
-                    xs,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width,
-                    new_element_width,
-                ];
-
-                let layouts = [
-                    input_list_in_layout,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_,
-                    usize_,
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            HigherOrder::ListMap2 { xs, ys } => {
-                let old_element_layout1 = argument_layouts[0];
-                let old_element_layout2 = argument_layouts[1];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
-                let input_list_in_layout1 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout1);
-
-                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
-                let input_list_in_layout2 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout2);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width1 = self.debug_symbol("old_element_width1");
-                let old_element_width2 = self.debug_symbol("old_element_width2");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout1, old_element_width1);
-                self.load_layout_stack_size(old_element_layout2, old_element_width2);
-
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                //    list1: RocList,
-                //    list2: RocList,
-                //    caller: Caller1,
-                //    data: Opaque,
-                //    inc_n_data: IncN,
-                //    data_is_owned: bool,
-                //    alignment: u32,
-                //    old_element_width1: usize,
-                //    old_element_width2: usize,
-                //    new_element_width: usize,
-
-                let arguments = [
-                    xs,
-                    ys,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width1,
-                    old_element_width2,
-                    new_element_width,
-                    dec1,
-                    dec2,
-                ];
-
-                let layouts = [
-                    input_list_in_layout1,
-                    input_list_in_layout2,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_,
-                    usize_,
-                    usize_,
-                    ptr, // dec1
-                    ptr, // dec2
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP2.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            HigherOrder::ListMap3 { xs, ys, zs } => {
-                let old_element_layout1 = argument_layouts[0];
-                let old_element_layout2 = argument_layouts[1];
-                let old_element_layout3 = argument_layouts[2];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
-                let input_list_in_layout1 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout1);
-
-                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
-                let input_list_in_layout2 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout2);
-
-                let input_list_layout3 = LayoutRepr::Builtin(Builtin::List(old_element_layout3));
-                let input_list_in_layout3 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout3);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width1 = self.debug_symbol("old_element_width1");
-                let old_element_width2 = self.debug_symbol("old_element_width2");
-                let old_element_width3 = self.debug_symbol("old_element_width3");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout1, old_element_width1);
-                self.load_layout_stack_size(old_element_layout2, old_element_width2);
-                self.load_layout_stack_size(old_element_layout3, old_element_width3);
-
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-                let dec3 = self.decrement_fn_pointer(old_element_layout3);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                //    list1: RocList,
-                //    list2: RocList,
-                //    caller: Caller1,
-                //    data: Opaque,
-                //    inc_n_data: IncN,
-                //    data_is_owned: bool,
-                //    alignment: u32,
-                //    old_element_width1: usize,
-                //    old_element_width2: usize,
-                //    new_element_width: usize,
-
-                let arguments = [
-                    xs,
-                    ys,
-                    zs,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width1,
-                    old_element_width2,
-                    old_element_width3,
-                    new_element_width,
-                    dec1,
-                    dec2,
-                    dec3,
-                ];
-
-                let layouts = [
-                    input_list_in_layout1,
-                    input_list_in_layout2,
-                    input_list_in_layout3,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_, // old_element_width_1
-                    usize_, // old_element_width_2
-                    usize_, // old_element_width_3
-                    usize_, // new_element_width
-                    ptr,    // dec1
-                    ptr,    // dec2
-                    ptr,    // dec3
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP3.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                let old_element_layout1 = argument_layouts[0];
-                let old_element_layout2 = argument_layouts[1];
-                let old_element_layout3 = argument_layouts[2];
-                let old_element_layout4 = argument_layouts[3];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
-                let input_list_in_layout1 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout1);
-
-                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
-                let input_list_in_layout2 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout2);
-
-                let input_list_layout3 = LayoutRepr::Builtin(Builtin::List(old_element_layout3));
-                let input_list_in_layout3 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout3);
-
-                let input_list_layout4 = LayoutRepr::Builtin(Builtin::List(old_element_layout4));
-                let input_list_in_layout4 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout4);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width1 = self.debug_symbol("old_element_width1");
-                let old_element_width2 = self.debug_symbol("old_element_width2");
-                let old_element_width3 = self.debug_symbol("old_element_width3");
-                let old_element_width4 = self.debug_symbol("old_element_width4");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout1, old_element_width1);
-                self.load_layout_stack_size(old_element_layout2, old_element_width2);
-                self.load_layout_stack_size(old_element_layout3, old_element_width3);
-                self.load_layout_stack_size(old_element_layout4, old_element_width4);
-
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-                let dec3 = self.decrement_fn_pointer(old_element_layout3);
-                let dec4 = self.decrement_fn_pointer(old_element_layout4);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                let arguments = [
-                    xs,
-                    ys,
-                    zs,
-                    ws,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width1,
-                    old_element_width2,
-                    old_element_width3,
-                    old_element_width4,
-                    new_element_width,
-                    dec1,
-                    dec2,
-                    dec3,
-                    dec4,
-                ];
-
-                let layouts = [
-                    input_list_in_layout1,
-                    input_list_in_layout2,
-                    input_list_in_layout3,
-                    input_list_in_layout4,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_, // old_element_width_1
-                    usize_, // old_element_width_2
-                    usize_, // old_element_width_3
-                    usize_, // old_element_width_4
-                    usize_, // new_element_width
-                    ptr,    // dec1
-                    ptr,    // dec2
-                    ptr,    // dec3
-                    ptr,    // dec4
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP4.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
             HigherOrder::ListSortWith { xs } => {
                 let element_layout = argument_layouts[0];
 
@@ -2788,6 +2410,12 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
+
+                let inc_elem_fn = self.increment_fn_pointer(element_layout);
+                let dec_elem_fn = self.decrement_fn_pointer(element_layout);
+
                 //    input: RocList,
                 //    caller: CompareFn,
                 //    data: Opaque,
@@ -2795,6 +2423,9 @@ impl<
                 //    data_is_owned: bool,
                 //    alignment: u32,
                 //    element_width: usize,
+                //    element_refcounted: bool,
+                //    inc: Inc,
+                //    dec: Dec,
 
                 let arguments = [
                     xs,
@@ -2804,6 +2435,9 @@ impl<
                     Symbol::DEV_TMP2,
                     alignment,
                     element_width,
+                    Symbol::DEV_TMP3,
+                    inc_elem_fn,
+                    dec_elem_fn,
                 ];
 
                 let layouts = [
@@ -2813,6 +2447,9 @@ impl<
                     ptr,
                     Layout::BOOL,
                     Layout::U32,
+                    usize_,
+                    Layout::BOOL,
+                    usize_,
                     usize_,
                 ];
 
@@ -2826,6 +2463,7 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
         }
     }
@@ -2852,6 +2490,12 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -2863,11 +2507,25 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            // inc
+            inc_elem_fn,
+            // dec
+            dec_elem_fn,
         ];
-        let lowlevel_arg_layouts = [ret_layout, Layout::U32, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [
+            ret_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            usize_layout,
+            usize_layout,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_CLONE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2875,17 +2533,18 @@ impl<
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             &ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_with_capacity(
@@ -2902,6 +2561,11 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -2913,11 +2577,22 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            // Inc element fn
+            inc_elem_fn,
         ];
-        let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
+        let layout_usize = Layout::U64;
+        let lowlevel_arg_layouts = [
+            capacity_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            layout_usize,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_WITH_CAPACITY.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2925,17 +2600,18 @@ impl<
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_reserve(
@@ -2959,12 +2635,15 @@ impl<
             _ => unreachable!(),
         };
         self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
+        self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(element_layout);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
         let update_mode = 0u8;
         self.load_literal(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             &u8_layout,
             &Literal::Int((update_mode as i128).to_ne_bytes()),
         );
@@ -2982,20 +2661,26 @@ impl<
             spare,
             // element_width
             Symbol::DEV_TMP2,
-            // update_mode
+            // element_refcounted
             Symbol::DEV_TMP3,
-
+            // Inc element fn
+            inc_elem_fn,
+            // update_mode
+            Symbol::DEV_TMP4,
          ];
+        let usize_layout = Layout::U64;
         let lowlevel_arg_layouts = [
             list_layout,
             Layout::U32,
             spare_layout,
             Layout::U64,
+            Layout::BOOL,
+            usize_layout,
             u8_layout,
         ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             bitcode::LIST_RESERVE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3004,17 +2689,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_list_append_unsafe(
@@ -3155,6 +2841,12 @@ impl<
         // Load the elements size.
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3188,7 +2880,7 @@ impl<
         // Load address of output element into register.
         let reg = self
             .storage_manager
-            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP5);
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
 
         let lowlevel_args = bumpalo::vec![
@@ -3199,6 +2891,9 @@ impl<
             Symbol::DEV_TMP2,
             Symbol::DEV_TMP3,
             Symbol::DEV_TMP4,
+            inc_elem_fn,
+            dec_elem_fn,
+            Symbol::DEV_TMP5,
          ];
         let lowlevel_arg_layouts = [
             list_layout,
@@ -3206,11 +2901,15 @@ impl<
             index_layout,
             u64_layout,
             u64_layout,
+            Layout::BOOL,
+            u64_layout,
+            u64_layout,
             u64_layout,
         ];
 
+        let out = self.debug_symbol("out");
         self.build_fn_call(
-            &Symbol::DEV_TMP5,
+            &out,
             bitcode::LIST_REPLACE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3220,17 +2919,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
         self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             out_list_offset,
-            &Symbol::DEV_TMP5,
+            &out,
             &list_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP5);
+        self.free_symbol(&out);
     }
 
     fn build_list_concat(
@@ -3252,6 +2952,12 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3265,11 +2971,23 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            inc_elem_fn,
+            dec_elem_fn,
          ];
-        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, Layout::U32, Layout::U64];
+        let lowlevel_arg_layouts = [
+            list_a_layout,
+            list_b_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            Layout::U64,
+            Layout::U64,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_CONCAT.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3278,17 +2996,18 @@ impl<
 
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_prepend(
@@ -3320,6 +3039,11 @@ impl<
         // Load element_witdh argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
+
+        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3333,11 +3057,23 @@ impl<
             Symbol::DEV_TMP2,
             // element_width
             Symbol::DEV_TMP3,
+            // element_refcounted
+            Symbol::DEV_TMP4,
+            // inc
+            inc_elem_fn,
         ];
-        let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [
+            list_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::U64,
+            Layout::BOOL,
+            usize_layout,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             bitcode::LIST_PREPEND.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3346,17 +3082,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
@@ -3403,15 +3140,20 @@ impl<
         let element_alignment_symbol = self.debug_symbol("element_alignment");
         self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        self.load_layout_refcounted(*element_in_layout, element_refcounted);
+
         let allocation_symbol = self.debug_symbol("list_allocation");
         self.allocate_with_refcount(
             allocation_symbol,
             data_bytes_symbol,
             element_alignment_symbol,
+            element_refcounted,
         );
 
         self.free_symbol(&data_bytes_symbol);
         self.free_symbol(&element_alignment_symbol);
+        self.free_symbol(&element_refcounted);
 
         enum Origin {
             S(Symbol),
@@ -3862,11 +3604,18 @@ impl<
 
         match reuse {
             None => {
+                // element_refcounted only applies to lists.
+                let element_refcounted = self.debug_symbol("element_refcounted");
+                self.load_literal(&element_refcounted, &Layout::BOOL, &Literal::Bool(false));
+
                 self.allocate_with_refcount(
                     allocation,
                     element_width_symbol,
                     element_alignment_symbol,
+                    element_refcounted,
                 );
+
+                self.free_symbol(&element_refcounted);
             }
             Some(reuse) => {
                 self.allocate_with_refcount_if_null(allocation, reuse, element_layout);
@@ -5180,12 +4929,13 @@ impl<
         dst: Symbol,
         data_bytes: Symbol,
         element_alignment: Symbol,
+        element_refcounted: Symbol,
     ) {
         self.build_fn_call(
             &dst,
             bitcode::UTILS_ALLOCATE_WITH_REFCOUNT.to_string(),
-            &[data_bytes, element_alignment],
-            &[Layout::U64, Layout::U32],
+            &[data_bytes, element_alignment, element_refcounted],
+            &[Layout::U64, Layout::U32, Layout::BOOL],
             &Layout::U64,
         );
     }
@@ -5217,10 +4967,15 @@ impl<
         let element_alignment = self.debug_symbol("element_alignment");
         self.load_layout_alignment(layout, element_alignment);
 
-        self.allocate_with_refcount(dst, data_bytes, element_alignment);
+        // element_refcounted only applies to lists.
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        self.load_literal(&element_refcounted, &Layout::BOOL, &Literal::Bool(false));
+
+        self.allocate_with_refcount(dst, data_bytes, element_alignment, element_refcounted);
 
         self.free_symbol(&data_bytes);
         self.free_symbol(&element_alignment);
+        self.free_symbol(&element_refcounted);
 
         let mut tmp = bumpalo::vec![in self.env.arena];
 
@@ -5607,6 +5362,15 @@ impl<
         let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
 
         self.load_literal(&symbol, &u32_layout, &alignment_literal);
+    }
+
+    /// Loads if the layout is refcounted (recursively checking) of `layout` into the given `symbol`
+    fn load_layout_refcounted(&mut self, layout: InLayout<'_>, symbol: Symbol) {
+        let u64_layout = Layout::BOOL;
+        let refcounted = self.layout_interner.contains_refcounted(layout);
+        let refcounted_literal = Literal::Bool(refcounted);
+
+        self.load_literal(&symbol, &u64_layout, &refcounted_literal);
     }
 
     /// Loads the stack size of `layout` into the given `symbol`

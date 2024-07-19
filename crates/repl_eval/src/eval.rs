@@ -76,7 +76,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
 
             // Put in an underscore for each of the args, just to get the arity right.
             for _ in 0..arguments.len() {
-                arg_patterns.push(Loc::at_zero(Pattern::Underscore("_")));
+                arg_patterns.push(Loc::at_zero(Pattern::Underscore("")));
             }
 
             let body_expr = Loc::at_zero(Expr::Record(Collection::empty()));

@@ -1979,7 +1979,99 @@ mod test_fmt {
     }
 
     #[test]
-    fn record_builder() {
+    fn new_record_builder() {
+        expr_formats_same(indoc!(
+            r"
+            { shoes <- leftShoe: nothing }
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                {   shoes  <-  rightShoe : nothing }
+                "
+            ),
+            indoc!(
+                r"
+                { shoes <- rightShoe: nothing }
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                {   shoes  <-  rightShoe : nothing }
+                "
+            ),
+            indoc!(
+                r"
+                { shoes <- rightShoe: nothing }
+                "
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r"
+            { shoes <-
+                rightShoe,
+                leftShoe: newLeftShoe,
+            }
+            "
+        ));
+
+        expr_formats_same(indoc!(
+            r"
+            { shoes <-
+                # some comment
+                rightShoe,
+                # some other comment
+                leftShoe: newLeftShoe,
+            }
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                { shoes
+                    <- rightShoe: bareFoot
+                    , leftShoe: bareFoot }
+                "
+            ),
+            indoc!(
+                r"
+                { shoes <-
+                    rightShoe: bareFoot,
+                    leftShoe: bareFoot,
+                }
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                { shoes
+                    <- rightShoe: bareFoot, # some comment
+                    leftShoe: bareFoot }
+                "
+            ),
+            indoc!(
+                r"
+                { shoes <-
+                    rightShoe: bareFoot,
+                    # some comment
+                    leftShoe: bareFoot,
+                }
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn old_record_builder() {
         expr_formats_same(indoc!(
             r#"
             { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch, d }
@@ -6103,6 +6195,31 @@ mod test_fmt {
                 when l1 is
                     [.. as rest] as l2 ->
                         f rest
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn issue_6215() {
+        expr_formats_to(
+            indoc!(
+                r"
+                when list is
+                    [first as last]
+                    | [first, last]   ->
+                        first
+                    _->Not
+                "
+            ),
+            indoc!(
+                r"
+                when list is
+                    [first as last]
+                    | [first, last] ->
+                        first
+                
+                    _ -> Not
                 "
             ),
         );

@@ -13,33 +13,7 @@ Defs(
             Slice(start = 0, length = 0),
         ],
         spaces: [],
-        type_defs: [
-            Alias {
-                header: TypeHeader {
-                    name: @0-6 "UserId",
-                    vars: [
-                        @7-8 Identifier {
-                            ident: "x",
-                        },
-                    ],
-                },
-                ann: @11-25 TagUnion {
-                    ext: None,
-                    tags: [
-                        @13-23 Apply {
-                            name: @13-19 "UserId",
-                            args: [
-                                @20-23 Apply(
-                                    "",
-                                    "I64",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
-                },
-            },
-        ],
+        type_defs: [],
         value_defs: [
             AnnotatedBody {
                 ann_pattern: @0-8 Apply(

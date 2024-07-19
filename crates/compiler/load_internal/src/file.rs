@@ -2987,8 +2987,10 @@ fn update<'a>(
 fn register_package_shorthands<'a>(
     shorthands: &mut MutMap<&'a str, ShorthandPath>,
     package_entries: &MutMap<&'a str, header::PackageName<'a>>,
+    #[allow(unused_variables)] // for wasm
     module_path: &Path,
     src_dir: &Path,
+    #[allow(unused_variables)] // for wasm
     cache_dir: &Path,
 ) -> Result<(), LoadingProblem<'a>> {
     for (shorthand, package_name) in package_entries.iter() {
@@ -3651,6 +3653,8 @@ fn load_module<'a>(
 #[derive(Debug)]
 enum ShorthandPath {
     /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
+    #[allow(dead_code)]
+    // wasm warns FromHttpsUrl is unused, but errors if it is removed ¯\_(ツ)_/¯
     FromHttpsUrl {
         /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
         root_module_dir: PathBuf,
@@ -4059,6 +4063,7 @@ fn load_packages<'a>(
     app_module_id: Option<ModuleId>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    #[allow(unused_variables)] // for wasm
     filename: PathBuf,
 ) {
     // Load all the packages

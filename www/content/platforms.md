@@ -7,10 +7,10 @@ Something that sets Roc apart from other programming languages is its <span clas
 Here is a Roc application that prints `"Hello, World!"` to the command line:
 
 ```roc
-app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
-    imports [pf.Stdout, pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
+
+import pf.Stdout
+import pf.Task
 
 main =
     Stdout.line "Hello, World!"
