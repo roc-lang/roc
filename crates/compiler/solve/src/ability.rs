@@ -873,6 +873,18 @@ impl DerivableVisitor for DeriveSort {
     }
 
     #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(symbol, Symbol::LIST_LIST,) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
     fn visit_floating_point_content(
         _var: Variable,
         _subs: &mut Subs,

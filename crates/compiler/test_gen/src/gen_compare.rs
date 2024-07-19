@@ -244,3 +244,170 @@ fn compare_bool() {
         u8
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List Bool
+                i = []
+
+                j : List Bool
+                j = []
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        0,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List Bool
+                i = [Bool.true]
+
+                j : List Bool
+                j = []
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        1,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List Bool
+                i = []
+
+                j : List Bool
+                j = [Bool.true]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        2,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List Bool
+                i = [Bool.true]
+
+                j : List Bool
+                j = [Bool.true]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        0,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List Bool
+                i = [Bool.true]
+
+                j : List Bool
+                j = [Bool.false]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        1,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List Bool
+                i = [Bool.false]
+
+                j : List Bool
+                j = [Bool.true]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        2,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List I64
+                i = [1, 2]
+
+                j : List I64
+                j = [1, 1]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        1,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List I64
+                i = [1]
+
+                j : List I64
+                j = [1, 1]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        2,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+                i : List (List I64)
+                i = [[0], [1, 2]]
+
+                j : List (List I64)
+                j = [[0], [1, 1]]
+
+                when List.compare i j is
+                    Equal -> 0
+                    GreaterThan -> 1
+                    LessThan -> 2
+            "#
+        ),
+        1,
+        u8
+    );
+}

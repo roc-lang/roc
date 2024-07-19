@@ -1,9 +1,13 @@
 use super::build::BuilderExt;
 use crate::llvm::bitcode::call_bitcode_fn;
-use crate::llvm::build::Env;
-use inkwell::values::{BasicValueEnum, IntValue};
-use inkwell::{FloatPredicate, IntPredicate};
+use crate::llvm::build::{load_roc_value, Env, FAST_CALL_CONV};
+use crate::llvm::build_list::{list_len_usize, load_list_ptr};
+use crate::llvm::convert::{basic_type_from_layout, zig_list_type};
+use inkwell::types::BasicType;
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, StructValue};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode::{FloatWidth, IntWidth, NUM_GREATER_THAN, NUM_LESS_THAN};
+use roc_module::symbol::Symbol;
 use roc_mono::layout::{
     Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
 };
@@ -11,7 +15,7 @@ use roc_mono::layout::{
 pub fn generic_compare<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    _layout_ids: &mut LayoutIds<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
     lhs_layout: InLayout<'a>,
@@ -28,7 +32,15 @@ pub fn generic_compare<'a, 'ctx>(
         LayoutRepr::Builtin(Builtin::Bool) => bool_compare(env, lhs_val, rhs_val),
         LayoutRepr::Builtin(Builtin::Decimal) => dec_compare(env, lhs_val, rhs_val),
         LayoutRepr::Builtin(Builtin::Str) => todo!(),
-        LayoutRepr::Builtin(Builtin::List(_)) => todo!(),
+        LayoutRepr::Builtin(Builtin::List(elem)) => list_compare(
+            env,
+            layout_interner,
+            layout_ids,
+            elem,
+            layout_interner.get_repr(elem),
+            lhs_val.into_struct_value(),
+            rhs_val.into_struct_value(),
+        ),
         LayoutRepr::Struct(_) => todo!(),
         LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
         LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
@@ -356,4 +368,240 @@ fn dec_compare<'ctx>(
     // (a > b) + (a < b) * 2
     env.builder
         .new_build_int_add(lhs_gt_rhs_byte, lhs_lt_rhs_times_two, "bool_compare")
+}
+
+fn list_compare<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    elem_in_layout: InLayout<'a>,
+    element_layout: LayoutRepr<'a>,
+    list1: StructValue<'ctx>,
+    list2: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::LIST_COMPARE;
+    let element_layout = if let LayoutRepr::RecursivePointer(rec) = element_layout {
+        layout_interner.get_repr(rec)
+    } else {
+        element_layout
+    };
+    let fn_name = layout_ids
+        .get(symbol, &element_layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arg_type = zig_list_type(env).into();
+
+            let function_value = crate::llvm::refcounting::build_header_help(
+                env,
+                &fn_name,
+                env.context.i8_type().into(),
+                &[arg_type, arg_type],
+            );
+
+            list_compare_help(
+                env,
+                layout_interner,
+                layout_ids,
+                function_value,
+                elem_in_layout,
+                element_layout,
+            );
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+    let call = env
+        .builder
+        .new_build_call(function, &[list1.into(), list2.into()], "list_cmp");
+
+    call.set_call_convention(FAST_CALL_CONV);
+
+    call.try_as_basic_value().left().unwrap().into_int_value()
+}
+
+fn list_compare_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    parent: FunctionValue<'ctx>,
+    elem_in_layout: InLayout<'a>,
+    element_layout: LayoutRepr<'a>,
+) {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    {
+        use inkwell::debug_info::AsDIScope;
+
+        let func_scope = parent.get_subprogram().unwrap();
+        let lexical_block = env.dibuilder.create_lexical_block(
+            /* scope */ func_scope.as_debug_info_scope(),
+            /* file */ env.compile_unit.get_file(),
+            /* line_no */ 0,
+            /* column_no */ 0,
+        );
+
+        let loc = env.dibuilder.create_debug_location(
+            ctx,
+            /* line */ 0,
+            /* column */ 0,
+            /* current_scope */ lexical_block.as_debug_info_scope(),
+            /* inlined_at */ None,
+        );
+        builder.set_current_debug_location(loc);
+    }
+
+    // Add args to scope
+    let mut it = parent.get_param_iter();
+    let list1 = it.next().unwrap().into_struct_value();
+    let list2 = it.next().unwrap().into_struct_value();
+
+    list1.set_name(Symbol::ARG_1.as_str(&env.interns));
+    list2.set_name(Symbol::ARG_2.as_str(&env.interns));
+
+    let entry = ctx.append_basic_block(parent, "entry");
+    let loop_bb = ctx.append_basic_block(parent, "loop_bb");
+    let end_l1_bb = ctx.append_basic_block(parent, "end_l1_bb");
+    let in_l1_bb = ctx.append_basic_block(parent, "in_l1_bb");
+    let elem_compare_bb = ctx.append_basic_block(parent, "increment_bb");
+    let not_eq_elems_bb = ctx.append_basic_block(parent, "not_eq_elems_bb");
+    let increment_bb = ctx.append_basic_block(parent, "increment_bb");
+    let return_eq = ctx.append_basic_block(parent, "return_eq");
+    let return_gt = ctx.append_basic_block(parent, "return_gt");
+    let return_lt = ctx.append_basic_block(parent, "return_lt");
+
+    builder.position_at_end(entry);
+    let len1 = list_len_usize(builder, list1);
+    let len2 = list_len_usize(builder, list2);
+
+    // allocate a stack slot for the current index
+    let index_alloca = builder.new_build_alloca(env.ptr_int(), "index");
+    builder.new_build_store(index_alloca, env.ptr_int().const_zero());
+
+    builder.new_build_unconditional_branch(loop_bb);
+
+    builder.position_at_end(loop_bb);
+
+    // load the current index
+    let index = builder
+        .new_build_load(env.ptr_int(), index_alloca, "index")
+        .into_int_value();
+
+    // true if there are no more elements in list 1
+    let end_l1_cond = builder.new_build_int_compare(IntPredicate::EQ, len1, index, "end_l1_cond");
+
+    builder.new_build_conditional_branch(end_l1_cond, end_l1_bb, in_l1_bb);
+
+    {
+        builder.position_at_end(end_l1_bb);
+
+        // true if there are no more elements in list 2
+        let eq_cond = builder.new_build_int_compare(IntPredicate::EQ, len2, index, "eq_cond");
+
+        // if both list have no more elements, eq
+        // else, list 2 still has more elements, so lt
+        builder.new_build_conditional_branch(eq_cond, return_eq, return_lt);
+    }
+
+    {
+        builder.position_at_end(in_l1_bb);
+
+        // list 2 has no more elements
+        let gt_cond = builder.new_build_int_compare(IntPredicate::EQ, len2, index, "gt_cond");
+
+        // if list 2 has no more elements, since list 1 still has more, gt
+        // else, compare the elements at the current index
+        builder.new_build_conditional_branch(gt_cond, return_gt, elem_compare_bb);
+    }
+
+    {
+        builder.position_at_end(elem_compare_bb);
+
+        let element_type = basic_type_from_layout(env, layout_interner, element_layout);
+        let ptr_type = element_type.ptr_type(AddressSpace::default());
+        let ptr1 = load_list_ptr(builder, list1, ptr_type);
+        let ptr2 = load_list_ptr(builder, list2, ptr_type);
+
+        let elem1 = {
+            let elem_ptr = unsafe {
+                builder.new_build_in_bounds_gep(element_type, ptr1, &[index], "load_index")
+            };
+            load_roc_value(env, layout_interner, element_layout, elem_ptr, "get_elem")
+        };
+
+        let elem2 = {
+            let elem_ptr = unsafe {
+                builder.new_build_in_bounds_gep(element_type, ptr2, &[index], "load_index")
+            };
+            load_roc_value(env, layout_interner, element_layout, elem_ptr, "get_elem")
+        };
+
+        let elem_cmp = generic_compare(
+            env,
+            layout_interner,
+            layout_ids,
+            elem1,
+            elem2,
+            elem_in_layout,
+            elem_in_layout,
+        )
+        .into_int_value();
+
+        // true if elements are equal
+        let increment_cond = builder.new_build_int_compare(
+            IntPredicate::EQ,
+            elem_cmp,
+            ctx.i8_type().const_int(0, false),
+            "increment_cond",
+        );
+
+        // if elements are equal, increment the pointers
+        // else, return gt or lt
+        builder.new_build_conditional_branch(increment_cond, increment_bb, not_eq_elems_bb);
+
+        {
+            builder.position_at_end(not_eq_elems_bb);
+
+            // When elements compare not equal, we return the element comparison
+            builder.new_build_return(Some(&elem_cmp));
+        }
+    }
+
+    {
+        builder.position_at_end(increment_bb);
+
+        let one = env.ptr_int().const_int(1, false);
+
+        // increment the index
+        let next_index = builder.new_build_int_add(index, one, "nextindex");
+
+        builder.new_build_store(index_alloca, next_index);
+
+        // jump back to the top of the loop
+        builder.new_build_unconditional_branch(loop_bb);
+    }
+
+    {
+        builder.position_at_end(return_eq);
+        builder.new_build_return(Some(&ctx.i8_type().const_int(0, false)));
+    }
+
+    {
+        builder.position_at_end(return_gt);
+        builder.new_build_return(Some(&ctx.i8_type().const_int(1, false)));
+    }
+
+    {
+        builder.position_at_end(return_lt);
+        builder.new_build_return(Some(&ctx.i8_type().const_int(2, false)));
+    }
 }
