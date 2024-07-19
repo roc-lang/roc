@@ -1,42 +1,42 @@
 [workspace]
 members = [
-  "crates/compiler/*",
-  "crates/vendor/*",
-  "crates/glue",
-  "crates/cli",
-  "crates/cli_utils",
-  "crates/highlight",
-  "crates/error_macros",
-  "crates/reporting",
-  "crates/packaging",
-  "crates/repl_cli",
-  "crates/repl_eval",
-  "crates/repl_test",
-  "crates/repl_ui",
-  "crates/repl_wasm",
-  "crates/repl_expect",
-  "crates/roc_std",
-  "crates/test_utils",
-  "crates/test_utils_dir",
-  "crates/valgrind",
-  "crates/tracing",
-  "crates/utils/*",
-  "crates/docs_types",
-  "crates/docs_render",
-  "crates/docs_io",
-  "crates/docs_cli",
-  "crates/linker",
-  "crates/wasi-libc-sys",
-  "crates/wasm_module",
-  "crates/wasm_interp",
-  "crates/language_server",
+    "crates/compiler/*",
+    "crates/vendor/*",
+    "crates/glue",
+    "crates/cli",
+    "crates/cli_utils",
+    "crates/highlight",
+    "crates/error_macros",
+    "crates/reporting",
+    "crates/packaging",
+    "crates/repl_cli",
+    "crates/repl_eval",
+    "crates/repl_test",
+    "crates/repl_ui",
+    "crates/repl_wasm",
+    "crates/repl_expect",
+    "crates/roc_std",
+    "crates/test_utils",
+    "crates/test_utils_dir",
+    "crates/valgrind",
+    "crates/tracing",
+    "crates/utils/*",
+    "crates/docs_types",
+    "crates/docs_render",
+    "crates/docs_io",
+    "crates/docs_cli",
+    "crates/linker",
+    "crates/wasi-libc-sys",
+    "crates/wasm_module",
+    "crates/wasm_interp",
+    "crates/language_server",
 ]
 
 exclude = [
-  "ci/benchmarks/bench-runner",
-  "ci/repl_basic_test",
-  # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
-  "examples",
+    "ci/benchmarks/bench-runner",
+    "ci/repl_basic_test",
+    # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
+    "examples",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
@@ -72,7 +72,7 @@ version = "0.0.1"
 # This way, GitHub Actions works and nobody's builds get broken.
 # TODO: Switch this back to roc-lang/inkwell once it is updated
 inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-16", features = [
-  "llvm16-0",
+    "llvm16-0",
 ] }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
@@ -89,19 +89,19 @@ capstone = { version = "0.11.0", default-features = false }
 cgmath = "0.18.0"
 chrono = "0.4.26"
 clap = { version = "4.2.7", default-features = false, features = [
-  "std",
-  "color",
-  "suggestions",
-  "help",
-  "usage",
-  "error-context",
+    "std",
+    "color",
+    "suggestions",
+    "help",
+    "usage",
+    "error-context",
 ] }
 colored = "2.0.0"
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
 copypasta = "0.8.2"
 criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
-  "html_reports",
+    "html_reports",
 ], rev = "30ea0c5" }
 criterion-perf-events = { git = "https://github.com/Anton-4/criterion-perf-events", rev = "0f38c3e" }
 crossbeam = "0.8.2"
@@ -116,10 +116,10 @@ futures = "0.3.26"
 glyph_brush = "0.7.7"
 hashbrown = { version = "0.14.3" }
 iced-x86 = { version = "1.18.0", default-features = false, features = [
-  "std",
-  "decoder",
-  "op_code_info",
-  "instr_info",
+    "std",
+    "decoder",
+    "op_code_info",
+    "instr_info",
 ] }
 im = "15.1.0"
 im-rc = "15.1.0"
@@ -157,15 +157,15 @@ rand = "0.8.5"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
 reqwest = { version = "0.11.23", default-features = false, features = [
-  "blocking",
-  "rustls-tls",
+    "blocking",
+    "rustls-tls",
 ] } # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 schemars = "0.8.12"
 serde = { version = "1.0.153", features = [
-  "derive",
+    "derive",
 ] } # update roc_std/Cargo.toml on change
 serde-xml-rs = "0.6.0"
 serde_json = "1.0.94" # update roc_std/Cargo.toml on change
