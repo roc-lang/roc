@@ -1375,7 +1375,9 @@ pub struct Env<'a, 'i> {
     pub exposed_by_module: &'i ExposedByModule,
     pub derived_module: &'i SharedDerivedModule,
     pub struct_indexing: UsageTrackingMap<(Symbol, u64), Symbol>,
+    // todo(agus) make this ref?
     pub params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    pub imported_module_param_variables: &'i VecMap<ModuleId, Variable>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {

@@ -118,6 +118,8 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         exposed_vars_by_symbol,
         abilities,
         solved_implementations,
+        // todo(agus)
+        imported_module_param_variables: Default::default(),
     };
 
     type_state.serialize(&mut file).unwrap();

@@ -131,7 +131,7 @@ fn run_help(
         derived_module,
         function_kind,
         params_pattern,
-        module_params_vars,
+        imported_module_param_vars: module_params_vars,
         ..
     } = config;
 
@@ -244,7 +244,7 @@ fn solve(
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
     params_pattern: Option<roc_can::pattern::Pattern>,
-    module_params_vars: VecMap<ModuleId, Variable>,
+    module_params_vars: &VecMap<ModuleId, Variable>,
 ) -> State {
     let scope = Scope::new(params_pattern);
 

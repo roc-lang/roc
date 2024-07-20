@@ -373,6 +373,7 @@ fn start_phase<'a>(
                     ident_ids,
                     abilities_store,
                     expectations,
+                    imported_module_param_variables,
                     //
                     #[cfg(debug_assertions)]
                         checkmate: _,
@@ -424,7 +425,9 @@ fn start_phase<'a>(
                     derived_module,
                     expectations,
                     build_expects,
+                    // todo(agus): rename
                     params_pattern,
+                    imported_module_param_variables,
                 }
             }
             Phase::MakeSpecializations => {
@@ -452,6 +455,7 @@ fn start_phase<'a>(
                     mut procs_base,
                     layout_cache,
                     mut module_timing,
+                    imported_module_param_variables,
                 ) = if state.make_specializations_pass.current_pass() == 1
                     && module_id == ModuleId::DERIVED_GEN
                 {
@@ -465,6 +469,7 @@ fn start_phase<'a>(
                         ProcsBase::default(),
                         LayoutCache::new(state.layout_interner.fork(), state.target),
                         ModuleTiming::new(Instant::now()),
+                        VecMap::default(),
                     )
                 } else if state.make_specializations_pass.current_pass() == 1 {
                     let found_specializations = state
@@ -480,6 +485,7 @@ fn start_phase<'a>(
                         layout_cache,
                         module_timing,
                         expectations,
+                        imported_module_param_variables,
                     } = found_specializations;
 
                     (
@@ -489,6 +495,7 @@ fn start_phase<'a>(
                         procs_base,
                         layout_cache,
                         module_timing,
+                        imported_module_param_variables,
                     )
                 } else {
                     let LateSpecializationsModule {
@@ -498,6 +505,7 @@ fn start_phase<'a>(
                         module_timing,
                         layout_cache,
                         procs_base,
+                        imported_module_param_variables,
                     } = state
                         .module_cache
                         .late_specializations
@@ -511,6 +519,7 @@ fn start_phase<'a>(
                         procs_base,
                         layout_cache,
                         module_timing,
+                        imported_module_param_variables,
                     )
                 };
 
@@ -529,6 +538,7 @@ fn start_phase<'a>(
                         &mut procs_base,
                         &mut state.world_abilities,
                         &params_pattern,
+                        &imported_module_param_variables,
                     );
                 }
 
@@ -548,6 +558,7 @@ fn start_phase<'a>(
                     derived_module,
                     expectations,
                     params_pattern,
+                    imported_module_param_variables,
                 }
             }
         }
@@ -585,6 +596,7 @@ enum Msg<'a> {
         abilities_store: AbilitiesStore,
         loc_expects: LocExpects,
         loc_dbgs: LocDbgs,
+        imported_module_param_variables: VecMap<ModuleId, Variable>,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -611,6 +623,7 @@ enum Msg<'a> {
         module_timing: ModuleTiming,
         toplevel_expects: ToplevelExpects,
         expectations: Option<Expectations>,
+        imported_module_param_variables: VecMap<ModuleId, Variable>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -624,6 +637,7 @@ enum Msg<'a> {
         module_timing: ModuleTiming,
         subs: Subs,
         expectations: Option<Expectations>,
+        imported_module_param_variables: VecMap<ModuleId, Variable>,
     },
 
     /// The task is to only typecheck AND monomorphize modules
@@ -931,6 +945,7 @@ enum BuildTask<'a> {
         expectations: Option<Expectations>,
         build_expects: bool,
         params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+        imported_module_param_variables: VecMap<ModuleId, Variable>,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -945,6 +960,7 @@ enum BuildTask<'a> {
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
         params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+        imported_module_param_variables: VecMap<ModuleId, Variable>,
     },
 }
 
@@ -2435,6 +2451,7 @@ fn update<'a>(
             abilities_store,
             loc_expects,
             loc_dbgs,
+            imported_module_param_variables,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -2591,6 +2608,7 @@ fn update<'a>(
                         ident_ids,
                         abilities_store,
                         expectations: opt_expectations,
+                        imported_module_param_variables,
 
                         #[cfg(debug_assertions)]
                         checkmate,
@@ -2641,6 +2659,7 @@ fn update<'a>(
             module_timing,
             toplevel_expects,
             expectations,
+            imported_module_param_variables,
         } => {
             log!("found specializations for {:?}", module_id);
 
@@ -2664,6 +2683,7 @@ fn update<'a>(
                 subs,
                 module_timing,
                 expectations,
+                imported_module_param_variables,
             };
 
             state
@@ -2691,6 +2711,7 @@ fn update<'a>(
             module_timing,
             layout_cache,
             expectations,
+            imported_module_param_variables,
             ..
         } => {
             debug_assert!(
@@ -2716,6 +2737,7 @@ fn update<'a>(
                     layout_cache,
                     procs_base,
                     expectations,
+                    imported_module_param_variables,
                 },
             );
 
@@ -2788,6 +2810,7 @@ fn update<'a>(
                             layout_cache: _layout_cache,
                             procs_base: _,
                             expectations,
+                            imported_module_param_variables: _,
                         },
                     ) in state.module_cache.late_specializations.drain()
                     {
@@ -4627,6 +4650,7 @@ struct SolveResult {
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     problems: Vec<TypeError>,
     abilities_store: AbilitiesStore,
+    imported_module_param_variables: VecMap<ModuleId, Variable>,
 
     #[cfg(debug_assertions)]
     checkmate: Option<roc_checkmate::Collector>,
@@ -4661,6 +4685,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
+    // todo(agus): rename this to `imported_module_param_variables`
     let (import_variables, imported_param_vars, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
@@ -4700,7 +4725,7 @@ fn run_solve_solve(
             #[cfg(debug_assertions)]
             checkmate,
             params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
-            module_params_vars: imported_param_vars,
+            imported_module_param_vars: &imported_param_vars,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4754,6 +4779,7 @@ fn run_solve_solve(
         exposed_vars_by_symbol,
         problems: errors,
         abilities_store: resolved_abilities_store,
+        imported_module_param_variables: imported_param_vars,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4817,12 +4843,14 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     abilities,
                     solved_implementations,
+                    imported_module_param_variables,
                 }) => SolveResult {
                     solved: Solved(subs),
                     solved_implementations,
                     exposed_vars_by_symbol,
                     problems: vec![],
                     abilities_store: abilities,
+                    imported_module_param_variables,
 
                     #[cfg(debug_assertions)]
                     checkmate: None,
@@ -4852,6 +4880,7 @@ fn run_solve<'a>(
         exposed_vars_by_symbol,
         problems,
         abilities_store,
+        imported_module_param_variables,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4890,6 +4919,7 @@ fn run_solve<'a>(
         abilities_store,
         loc_expects,
         loc_dbgs,
+        imported_module_param_variables,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -5510,6 +5540,7 @@ fn make_specializations<'a>(
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
     params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    imported_module_param_variables: VecMap<ModuleId, Variable>,
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -5530,6 +5561,7 @@ fn make_specializations<'a>(
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
         params_pattern,
+        imported_module_param_variables: &imported_module_param_variables,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -5581,6 +5613,7 @@ fn make_specializations<'a>(
         expectations,
         external_specializations_requested,
         module_timing,
+        imported_module_param_variables,
     }
 }
 
@@ -5601,6 +5634,7 @@ fn build_pending_specializations<'a>(
     mut expectations: Option<Expectations>,
     build_expects: bool,
     params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    imported_module_param_variables: VecMap<ModuleId, Variable>,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
 
@@ -5635,6 +5669,7 @@ fn build_pending_specializations<'a>(
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
         params_pattern,
+        imported_module_param_variables: &imported_module_param_variables,
     };
 
     let layout_cache_snapshot = layout_cache.snapshot();
@@ -6053,6 +6088,7 @@ fn build_pending_specializations<'a>(
         module_timing,
         toplevel_expects,
         expectations,
+        imported_module_param_variables,
     }
 }
 
@@ -6099,6 +6135,7 @@ fn load_derived_partial_procs<'a>(
     procs_base: &mut ProcsBase<'a>,
     world_abilities: &mut WorldAbilities,
     params_pattern: &Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    imported_module_param_variables: &VecMap<ModuleId, Variable>,
 ) {
     debug_assert_eq!(home, ModuleId::DERIVED_GEN);
 
@@ -6138,6 +6175,7 @@ fn load_derived_partial_procs<'a>(
             derived_module,
             struct_indexing: UsageTrackingMap::default(),
             params_pattern: params_pattern.clone(),
+            imported_module_param_variables: &imported_module_param_variables,
         };
 
         let partial_proc = match derived_expr {
@@ -6311,6 +6349,7 @@ fn run_task<'a>(
             expectations,
             build_expects,
             params_pattern,
+            imported_module_param_variables,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -6328,6 +6367,7 @@ fn run_task<'a>(
             expectations,
             build_expects,
             params_pattern,
+            imported_module_param_variables,
         )),
         MakeSpecializations {
             module_id,
@@ -6342,6 +6382,7 @@ fn run_task<'a>(
             derived_module,
             expectations,
             params_pattern,
+            imported_module_param_variables,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -6357,6 +6398,7 @@ fn run_task<'a>(
             derived_module,
             expectations,
             params_pattern,
+            imported_module_param_variables,
         )),
     };
 

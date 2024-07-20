@@ -1309,6 +1309,7 @@ pub struct TypeState {
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub abilities: AbilitiesStore,
     pub solved_implementations: ResolvedImplementations,
+    pub imported_module_param_variables: VecMap<ModuleId, Variable>,
 }
 
 impl TypeState {
@@ -1318,12 +1319,15 @@ impl TypeState {
             exposed_vars_by_symbol,
             abilities,
             solved_implementations,
+            imported_module_param_variables,
         } = self;
 
         let written_subs = subs.serialize(exposed_vars_by_symbol, writer)?;
         let written_ab = abilities.serialize(writer)?;
         let written_solved_impls =
             crate::abilities::serialize_solved_implementations(solved_implementations, writer)?;
+
+        // todo(agus): serialize param vars
 
         Ok(written_subs + written_ab + written_solved_impls)
     }
@@ -1346,6 +1350,8 @@ impl TypeState {
                 exposed_vars_by_symbol: exposed_vars_by_symbol.to_vec(),
                 abilities,
                 solved_implementations,
+                // todo(agus): deserialize param vars
+                imported_module_param_variables: VecMap::default(),
             },
             total_offset,
         )

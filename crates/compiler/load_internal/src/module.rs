@@ -132,6 +132,7 @@ pub struct TypeCheckedModule<'a> {
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
     pub expectations: Option<Expectations>,
+    pub imported_module_param_variables: VecMap<ModuleId, Variable>,
 
     #[cfg(debug_assertions)]
     pub checkmate: Option<roc_checkmate::Collector>,
@@ -152,6 +153,7 @@ pub(crate) struct FoundSpecializationsModule<'a> {
     pub(crate) subs: Subs,
     pub(crate) module_timing: ModuleTiming,
     pub(crate) expectations: Option<Expectations>,
+    pub(crate) imported_module_param_variables: VecMap<ModuleId, Variable>,
 }
 
 #[derive(Debug)]
@@ -162,6 +164,7 @@ pub(crate) struct LateSpecializationsModule<'a> {
     pub(crate) layout_cache: LayoutCache<'a>,
     pub(crate) procs_base: ProcsBase<'a>,
     pub(crate) expectations: Option<Expectations>,
+    pub(crate) imported_module_param_variables: VecMap<ModuleId, Variable>,
 }
 
 #[derive(Debug, Default)]
