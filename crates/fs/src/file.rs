@@ -130,7 +130,11 @@ impl fmt::Debug for FileIoErr {
     }
 }
 
-impl FileIoErr {
+trait LastErr {
+    fn most_recent() -> FileIoErr;
+}
+
+impl LastErr for FileIoErr {
     #[cfg(target_os = "macos")]
     fn most_recent() -> FileIoErr {
         extern "C" {
@@ -520,25 +524,147 @@ impl File {
     fn create_dir_all(dir: &mut NativePath) -> Result<(), FileIoErr> {
         #[cfg(unix)]
         {
-            Self::create_dir_all_unix::<RealUnixFs>(dir)
+            Self::create_dir_all_internal::<RealUnixFs, FileIoErr>(dir)
         }
 
         #[cfg(windows)]
         {
-            Self::create_dir_windows::<RealWindowsFs>(dir)
+            Self::create_dir_internal::<RealWindowsFs, FileIoErr>(dir)
+        }
+    }
+
+    fn create_dir_all_internal<MkdirImpl: Mkdir, LastErrImpl: LastErr>(
+        dir: &mut NativePath,
+    ) -> Result<(), FileIoErr> {
+        let original_ptr = {
+            #[cfg(unix)]
+            {
+                dir.as_ptr() as *mut u8
+            }
+
+            #[cfg(windows)]
+            {
+                dir.as_ptr() as *mut u16
+            }
+        };
+
+        #[cfg(unix)]
+        #[inline(always)]
+        fn is_sep(ch: u8) -> bool {
+            ch == b'/'
+        }
+
+        #[cfg(windows)]
+        #[inline(always)]
+        fn is_sep(ch: u16) -> bool {
+            ch == b'/' as u16 || ch == b'\\' as u16
+        }
+
+        let mut ch_ptr = original_ptr;
+        let mut index: usize = 0;
+
+        macro_rules! create_dir {
+            () => {
+                unsafe {
+                    #[cfg(unix)]
+                    {
+                        MkdirImpl::mkdir(original_ptr.cast(), CACHE_DIR_MODE) != -1
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        MkdirImpl::mkdir(original_ptr.cast()) != 0
+                    }
+                }
+            };
+        }
+
+        macro_rules! return_if_error {
+            () => {
+                match LastErrImpl::most_recent() {
+                    FileIoErr::AlreadyExists => {
+                        // The directory already exists. Great! We're done.
+                        // Nothing more to do here; continue as normal.
+                    }
+                    other => {
+                        // We failed to create this directory; error out.
+                        return Err(other);
+                    }
+                }
+            };
+        }
+
+        loop {
+            let ch = unsafe { *ch_ptr };
+
+            if ch == 0 {
+                // Don't try to mkdir if the preceding char was a separator char,
+                // because we would have just done a mkdir on that!
+                //
+                // Use saturating_sub so we don't wrap if this is an empty path.
+                // (The syscall will report that it was given an invalid path, which is fine!)
+                if !is_sep(unsafe { *original_ptr.add(index.saturating_sub(1)) }) {
+                    if !create_dir!() {
+                        return_if_error!();
+                    }
+                }
+
+                // We've hit the nul terminator, meaning we must have just processed
+                // the last component of the path. We're done!
+                return Ok(());
+            } else if is_sep(ch)
+                // Don't try to mkdir if the preceding char was a separator char, because
+                // we just did a mkdir on that! So either we're in e.g. a `//` or `\\` situation,
+                // or else the string ended in `/` or `\`. In either case, we shouldn`t mkdir.
+                //
+                // Use saturating_sub so we don't try to mkdir the root (`/`) dir or a path
+                // starting with `\\`.
+                && !is_sep(unsafe { *original_ptr.add(index.saturating_sub(1)) })
+            {
+                let create_dir_succeeded;
+
+                // Temporarily replace this char (probably a separator, although
+                // it could be a nul terminator already) with a nul terminator, then mkdir.
+                {
+                    unsafe {
+                        *ch_ptr = 0;
+                    }
+
+                    // For this call, the path will now nul-terminated at the current dir.
+                    create_dir_succeeded = create_dir!();
+
+                    // Swap the nul-terminator back to what it was originally, before doing anything else.
+                    unsafe {
+                        *ch_ptr = ch;
+                    }
+                }
+
+                if !create_dir_succeeded {
+                    return_if_error!();
+                }
+            }
+
+            index += 1;
+            ch_ptr = unsafe { original_ptr.add(index) };
         }
     }
 }
 
-/// The actual filesystem implementations that we use when exposing functions.
-/// Internally, tests can use fake trait implementations instead of this.
-struct RealUnixFs;
-
-trait UnixMkdir {
+trait Mkdir {
+    #[cfg(unix)]
     unsafe fn mkdir(pathname: *const c_char, mode: u32) -> c_int;
+
+    #[cfg(windows)]
+    unsafe fn mkdir(pathname: *const u16) -> i32;
 }
 
-impl UnixMkdir for RealUnixFs {
+/// The actual filesystem implementations that we use when exposing functions.
+/// Internally, tests can use fake trait implementations instead of this.
+#[cfg(unix)]
+struct RealUnixFs;
+
+#[cfg(unix)]
+impl Mkdir for RealUnixFs {
     unsafe fn mkdir(pathname: *const c_char, mode: u32) -> c_int {
         extern "C" {
             fn mkdir(pathname: *const c_char, mode: u32) -> c_int;
@@ -548,65 +674,22 @@ impl UnixMkdir for RealUnixFs {
     }
 }
 
-#[cfg(unix)]
-impl File {
-    fn create_dir_all_unix<Unix: UnixMkdir>(dir: &mut NativePath) -> Result<(), FileIoErr> {
-        let original_ptr = dir.as_ptr() as *mut u8;
-        let mut ch_ptr = original_ptr;
-        let mut index: usize = 0;
+#[cfg(windows)]
+struct RealWindowsFs;
 
-        loop {
-            let ch = unsafe { *ch_ptr };
-
-            if (ch == 0 || ch == b'/')
-                // Don't try to mkdir if the preceding char was '/', because
-                // we just did a mkdir on that! So either we're in a "//" situation,
-                // or else the string ended in '/'. In either case, we shouldn't mkdir.
-                //
-                // Use saturating_sub so we don't try to mkdir the root ('/') dir.
-                && (unsafe { *original_ptr.add(index.saturating_sub(1)) } != b'/')
-            {
-                let outcome;
-
-                // Temporarily swap out this slash for a nul terminator, then call mkdir.
-                unsafe {
-                    *ch_ptr = 0;
-
-                    outcome = Unix::mkdir(
-                        // The original path, except now nul-terminated at the current dir.
-                        original_ptr.cast(),
-                        CACHE_DIR_MODE,
-                    );
-
-                    // Swap the nul-terminator back to a slash before doing anything else.
-                    *ch_ptr = b'/';
-                }
-
-                if outcome != 0 {
-                    match FileIoErr::most_recent() {
-                        FileIoErr::AlreadyExists => {
-                            // The directory already exists. Great!
-                            // Nothing more to do here; continue as normal.
-                        }
-                        other => {
-                            // We faied to create this directory; error out.
-                            return Err(other);
-                        }
-                    }
-                }
-            }
-
-            if ch == 0 {
-                // We've just processed the last component of the path. We're done!
-                return Ok(());
-            }
-
-            index += 1;
-            ch_ptr = unsafe { original_ptr.add(index) };
+#[cfg(windows)]
+impl Mkdir for RealWindowsFs {
+    unsafe fn mkdir(pathname: *const u16) -> i32 {
+        extern "system" {
+            fn CreateDirectoryW(
+                lpPathName: *const u16,
+                lpSecurityAttributes: *mut core::ffi::c_void,
+            ) -> i32;
         }
+
+        CreateDirectoryW(pathname, core::ptr::null_mut())
     }
 }
-
 // WRITE FILE //
 
 impl File {
@@ -652,48 +735,103 @@ mod tests {
     use std::cell::RefCell;
 
     #[cfg(unix)]
-    use super::CACHE_DIR_MODE;
+    use core::ffi::{c_char, c_int, CStr};
+
+    #[cfg(windows)]
+    use widestring::U16CStr;
 
     #[cfg(unix)]
-    struct FakeUnixFs;
+    struct FakeMkdir<const RET: c_int>;
+
+    #[cfg(windows)]
+    struct FakeMkdir<const RET: i32>;
 
     #[cfg(unix)]
     #[derive(Clone, Debug, PartialEq, Eq)]
-    struct UnixMkdirCall {
+    struct MkdirCall {
         path: String,
-        mode: u32,
+        #[cfg(unix)]
         ret: c_int,
+        #[cfg(windows)]
+        ret: i32,
     }
-
-    #[cfg(unix)]
-    use core::ffi::{c_char, c_int, CStr};
 
     #[cfg(unix)]
     thread_local! {
-        static MKDIR_CALLS: RefCell<Vec<UnixMkdirCall>> = RefCell::new(Vec::new());
+        static MKDIR_CALLS: RefCell<Vec<MkdirCall>> = RefCell::new(Vec::new());
     }
 
     #[cfg(unix)]
-    impl super::UnixMkdir for FakeUnixFs {
-        unsafe fn mkdir(pathname: *const c_char, mode: u32) -> c_int {
-            const ANSWER: c_int = 0; // Note: if we want to return errors, we must mock errno() too
-
+    impl<const RET: c_int> super::Mkdir for FakeMkdir<RET> {
+        unsafe fn mkdir(pathname: *const c_char, _mode: u32) -> c_int {
             MKDIR_CALLS.with(|calls| {
-                calls.borrow_mut().push(UnixMkdirCall {
+                calls.borrow_mut().push(MkdirCall {
                     path: CStr::from_ptr(pathname).to_str().unwrap().to_string(),
-                    mode,
-                    ret: ANSWER,
+                    ret: RET,
                 });
             });
 
-            ANSWER
+            RET
         }
     }
 
-    impl FakeUnixFs {
-        #[cfg(unix)]
-        fn get_mkdir_calls() -> Vec<UnixMkdirCall> {
+    #[cfg(windows)]
+    impl<const Ret: i32> super::Mkdir for FakeMkdir<Ret> {
+        unsafe fn mkdir(pathname: *const u16) -> i32 {
+            MKDIR_CALLS.with(|calls| {
+                calls.borrow_mut().push(MkdirCall {
+                    path: U16CStr::from_ptr(pathname).to_str().unwrap().to_string(),
+                    ret: Ret,
+                });
+            });
+
+            Ret
+        }
+    }
+
+    impl MkdirCall {
+        fn all() -> Vec<MkdirCall> {
             MKDIR_CALLS.with(|calls| calls.borrow().clone())
+        }
+    }
+
+    #[cfg(unix)]
+    struct LastErrNotFound;
+
+    #[cfg(unix)]
+    impl super::LastErr for LastErrNotFound {
+        fn most_recent() -> FileIoErr {
+            FileIoErr::NotFound
+        }
+    }
+
+    #[cfg(unix)]
+    struct LastErrAccessDenied;
+
+    #[cfg(unix)]
+    impl super::LastErr for LastErrAccessDenied {
+        fn most_recent() -> FileIoErr {
+            FileIoErr::AccessDenied
+        }
+    }
+
+    #[cfg(unix)]
+    struct LastErrAlreadyExists;
+
+    #[cfg(unix)]
+    impl super::LastErr for LastErrAlreadyExists {
+        fn most_recent() -> FileIoErr {
+            FileIoErr::AlreadyExists
+        }
+    }
+
+    #[cfg(unix)]
+    struct NoErr;
+
+    #[cfg(unix)]
+    impl super::LastErr for NoErr {
+        fn most_recent() -> FileIoErr {
+            panic!("The most recent error was requested, but no errors should have occurred!");
         }
     }
 
@@ -909,45 +1047,30 @@ mod tests {
         });
     }
 
+    fn mkdir_successes(paths: impl IntoIterator<Item = impl Into<String>>) -> Vec<MkdirCall> {
+        paths
+            .into_iter()
+            .map(|path| MkdirCall {
+                path: path.into(),
+                ret: 0,
+            })
+            .collect()
+    }
+
     #[test]
     fn create_multiple_components_with_trailing_slash() {
         with_path_mut!("/tmp/roc/test_dir/", |path| {
-            let result;
+            let result = File::create_dir_all_internal::<FakeMkdir<0>, NoErr>(path);
 
-            #[cfg(unix)]
-            {
-                result = File::create_dir_all_unix::<FakeUnixFs>(path);
-            }
-
-            #[cfg(windows)]
-            {
-                result = File::create_dir_windows::<FakeWindowsFs>(path);
-            }
-
-            assert!(
-                result.is_ok(),
-                "Multiple components with trailing slash should succeed"
+            assert_eq!(
+                Ok(()),
+                result,
+                "create_dir_all_internal should have returned Ok"
             );
 
             assert_eq!(
-                &FakeUnixFs::get_mkdir_calls(),
-                &[
-                    UnixMkdirCall {
-                        path: "/tmp".to_string(),
-                        mode: CACHE_DIR_MODE,
-                        ret: 0
-                    },
-                    UnixMkdirCall {
-                        path: "/tmp/roc".to_string(),
-                        mode: CACHE_DIR_MODE,
-                        ret: 0
-                    },
-                    UnixMkdirCall {
-                        path: "/tmp/roc/test_dir".to_string(),
-                        mode: CACHE_DIR_MODE,
-                        ret: 0
-                    }
-                ]
+                &MkdirCall::all(),
+                &mkdir_successes(["/tmp", "/tmp/roc", "/tmp/roc/test_dir"])
             );
         });
     }

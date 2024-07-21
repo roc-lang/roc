@@ -96,7 +96,7 @@ impl<'a> From<&'a CStr> for &'a NativePath {
 #[cfg(windows)]
 impl<'a> From<&'a U16CStr> for &'a NativePath {
     fn from(u16_c_str: &'a U16CStr) -> Self {
-        // Safety: Self is repr(transparent)
+        // Safety: Self is repr(transparent); we're just doing this to get the correct lifetime
         unsafe { mem::transmute(u16_c_str.as_ptr()) }
     }
 }
