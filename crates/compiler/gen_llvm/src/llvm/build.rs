@@ -3359,26 +3359,53 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
             let current_block = builder.get_insert_block().unwrap();
 
+            let mut to_resolve = bumpalo::vec![in env.arena];
             for (joinpoint_arg, argument) in joinpoint_args.iter().zip(arguments.iter()) {
                 let (value, layout) = scope.load_symbol_and_layout(argument);
 
                 match joinpoint_arg {
                     crate::llvm::scope::JoinPointArg::Alloca(alloca) => {
                         let (size, alignment) = layout_interner.stack_size_and_alignment(layout);
+                        // I would like to just do a direct memcpy here, but it is not valid.
+                        // Imagine the case where I just swap two referenced args.
+                        // (a, b) -> jump (b, a)
+                        // This would generate `a` overwriting `b` then `b` overwriting `a`.
+                        // That would lead to both values being `b`
+
+                        // Instead we copy to a tmp alloca here.
+                        // After we have all tmp allocas, we copy those to the final output.
+                        let basic_type = basic_type_from_layout(
+                            env,
+                            layout_interner,
+                            layout_interner.get_repr(layout),
+                        );
+                        let tmp = create_entry_block_alloca(env, basic_type, "tmp_output_for_jmp");
                         builder
                             .build_memcpy(
-                                *alloca,
+                                tmp,
                                 alignment,
                                 value.into_pointer_value(),
                                 alignment,
                                 env.ptr_int().const_int(size as _, false),
                             )
                             .unwrap();
+                        to_resolve.push((alloca, tmp, alignment, size));
                     }
                     crate::llvm::scope::JoinPointArg::Phi(phi) => {
                         phi.add_incoming(&[(&value, current_block)]);
                     }
                 }
+            }
+            for (alloca, tmp, alignment, size) in to_resolve {
+                builder
+                    .build_memcpy(
+                        *alloca,
+                        alignment,
+                        tmp,
+                        alignment,
+                        env.ptr_int().const_int(size as _, false),
+                    )
+                    .unwrap();
             }
 
             builder.new_build_unconditional_branch(*cont_block);
