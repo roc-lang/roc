@@ -4667,7 +4667,7 @@ fn multiple_uses_of_bool_true_tag_union() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-fn issue_6139() {
+fn issue_6139_contains() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -4698,6 +4698,33 @@ fn issue_6139() {
             RocStr::from("C"),
             RocStr::from("D"),
         ]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn issue_6139_prefixes() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            prefixes = \str, soFar ->
+                if Str.isEmpty str then
+                    soFar
+
+                else
+                    graphemes =
+                        Str.toUtf8 str
+                        |> List.map \c -> Str.fromUtf8 [c] |> Result.withDefault ""
+                    remaining = List.dropFirst graphemes 1
+                    next = Str.joinWith remaining ""
+
+                    prefixes next (List.append soFar str)
+
+            prefixes "abc" []
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from("abc"), RocStr::from("bc"), RocStr::from("c")]),
         RocList<RocStr>
     );
 }
