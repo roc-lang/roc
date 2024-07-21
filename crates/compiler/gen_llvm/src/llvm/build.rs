@@ -7052,7 +7052,7 @@ fn define_global_str_literal<'ctx>(
     }
 }
 
-pub(crate) fn throw_internal_exception<'ctx>(env: &Env<'_, 'ctx, '_>, message: &str) {
+pub(crate) fn throw_internal_exception(env: &Env<'_, '_, '_>, message: &str) {
     let builder = env.builder;
 
     let str = build_string_literal(env, message);
