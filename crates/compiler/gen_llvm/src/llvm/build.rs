@@ -3369,7 +3369,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         // I would like to just do a direct memcpy here, but it is not valid.
                         // Imagine the case where I just swap two referenced args.
                         // (a, b) -> jump (b, a)
-                        // This would generate `a` overwriting `b` then `b` overwriting `a`.
+                        // This would generate `b` overwriting `a` then `a` overwriting `b`.
                         // That would lead to both values being `b`
 
                         // Instead we copy to a tmp alloca here.
