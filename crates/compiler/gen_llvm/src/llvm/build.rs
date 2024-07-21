@@ -3292,14 +3292,18 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         layout_interner.get_repr(param.layout),
                     );
 
-                    let phi_type = if layout_interner.is_passed_by_reference(param.layout) {
-                        basic_type.ptr_type(AddressSpace::default()).into()
+                    use crate::llvm::scope::JoinPointArg::*;
+                    let joinpoint_arg = if layout_interner.is_passed_by_reference(param.layout) {
+                        Alloca(create_entry_block_alloca(
+                            env,
+                            basic_type,
+                            "joinpoint_arg_alloca",
+                        ))
                     } else {
-                        basic_type
+                        Phi(env.builder.new_build_phi(basic_type, "joinpointarg"))
                     };
 
-                    let phi_node = env.builder.new_build_phi(phi_type, "joinpointarg");
-                    joinpoint_args.push(phi_node);
+                    joinpoint_args.push(joinpoint_arg);
                 }
 
                 builder.position_at_end(current);
@@ -3351,14 +3355,30 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         Jump(join_point, arguments) => {
             let builder = env.builder;
             let context = env.context;
-            let (cont_block, argument_phi_values) = scope.get_join_point(*join_point).unwrap();
+            let (cont_block, joinpoint_args) = scope.get_join_point(*join_point).unwrap();
 
             let current_block = builder.get_insert_block().unwrap();
 
-            for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
-                let (value, _) = scope.load_symbol_and_layout(argument);
+            for (joinpoint_arg, argument) in joinpoint_args.iter().zip(arguments.iter()) {
+                let (value, layout) = scope.load_symbol_and_layout(argument);
 
-                phi_value.add_incoming(&[(&value, current_block)]);
+                match joinpoint_arg {
+                    crate::llvm::scope::JoinPointArg::Alloca(alloca) => {
+                        let (size, alignment) = layout_interner.stack_size_and_alignment(layout);
+                        builder
+                            .build_memcpy(
+                                *alloca,
+                                alignment,
+                                value.into_pointer_value(),
+                                alignment,
+                                env.ptr_int().const_int(size as _, false),
+                            )
+                            .unwrap();
+                    }
+                    crate::llvm::scope::JoinPointArg::Phi(phi) => {
+                        phi.add_incoming(&[(&value, current_block)]);
+                    }
+                }
             }
 
             builder.new_build_unconditional_branch(*cont_block);

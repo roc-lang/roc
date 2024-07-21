@@ -4664,3 +4664,40 @@ fn multiple_uses_of_bool_true_tag_union() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn issue_6139() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            buggy = \node, seen ->
+                if List.contains seen node then
+                    seen
+                else
+                    # node = "B"
+                    nextNode = stepNode node
+
+                    # node = "C"
+                    buggy nextNode (List.append seen node)
+
+            stepNode = \node ->
+                when node is
+                    "A" -> "B"
+                    "B" -> "C"
+                    "C" -> "D"
+                    "D" -> "A"
+                    _ -> crash ""
+
+            buggy "A" []
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from("A"),
+            RocStr::from("B"),
+            RocStr::from("C"),
+            RocStr::from("D"),
+        ]),
+        RocList<RocStr>
+    );
+}
