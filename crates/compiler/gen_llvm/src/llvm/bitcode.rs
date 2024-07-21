@@ -72,18 +72,8 @@ fn call_bitcode_fn_help<'ctx>(
         .map(|x| {
             if env.target.operating_system() == roc_target::OperatingSystem::Windows {
                 if x.get_type() == env.context.i128_type().into() {
-                    let parent = env
-                        .builder
-                        .get_insert_block()
-                        .and_then(|b| b.get_parent())
-                        .unwrap();
-
-                    let alloca = create_entry_block_alloca(
-                        env,
-                        parent,
-                        x.get_type(),
-                        "pass_u128_by_reference",
-                    );
+                    let alloca =
+                        create_entry_block_alloca(env, x.get_type(), "pass_u128_by_reference");
 
                     env.builder.build_store(alloca, *x).unwrap();
 
@@ -163,7 +153,8 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
 
             // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
             // be 16-byte aligned. Not doing so is UB and will immediately fail on CI
-            let cc_return_value_ptr = env.builder.new_build_alloca(cc_return_type, "return_value");
+            let cc_return_value_ptr =
+                create_entry_block_alloca(env, cc_return_type, "return_value");
             cc_return_value_ptr
                 .as_instruction()
                 .unwrap()
@@ -818,14 +809,7 @@ impl BitcodeReturns {
             BitcodeReturns::List => {
                 let list_type = super::convert::zig_list_type(env);
 
-                let parent = env
-                    .builder
-                    .get_insert_block()
-                    .and_then(|b| b.get_parent())
-                    .unwrap();
-
-                let result =
-                    create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+                let result = create_entry_block_alloca(env, list_type, "list_alloca");
 
                 arguments.push(result.into());
 
@@ -834,13 +818,7 @@ impl BitcodeReturns {
             BitcodeReturns::Str => {
                 let str_type = super::convert::zig_str_type(env);
 
-                let parent = env
-                    .builder
-                    .get_insert_block()
-                    .and_then(|b| b.get_parent())
-                    .unwrap();
-
-                let result = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
+                let result = create_entry_block_alloca(env, str_type, "str_alloca");
 
                 arguments.push(result.into());
 
@@ -957,14 +935,8 @@ pub(crate) fn pass_list_to_zig_64bit<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     list: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
     let list_type = super::convert::zig_list_type(env);
-    let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+    let list_alloca = create_entry_block_alloca(env, list_type, "list_alloca");
 
     env.builder.new_build_store(list_alloca, list);
 
@@ -975,14 +947,8 @@ pub(crate) fn pass_list_to_zig_wasm<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     list: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
     let list_type = super::convert::zig_list_type(env);
-    let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+    let list_alloca = create_entry_block_alloca(env, list_type, "list_alloca");
 
     env.builder.new_build_store(list_alloca, list);
 
@@ -993,14 +959,8 @@ pub(crate) fn pass_string_to_zig_wasm<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     string: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
     let string_type = super::convert::zig_str_type(env);
-    let string_alloca = create_entry_block_alloca(env, parent, string_type.into(), "string_alloca");
+    let string_alloca = create_entry_block_alloca(env, string_type, "string_alloca");
 
     env.builder.new_build_store(string_alloca, string);
 
@@ -1225,9 +1185,7 @@ pub(crate) fn call_bitcode_fn_with_record_arg<'ctx>(
     arg: BasicValueEnum<'ctx>,
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    let roc_call_alloca = env
-        .builder
-        .new_build_alloca(arg.get_type(), "roc_call_alloca");
+    let roc_call_alloca = create_entry_block_alloca(env, arg.get_type(), "roc_call_alloca");
     env.builder.new_build_store(roc_call_alloca, arg);
 
     let fn_val = env.module.get_function(fn_name).unwrap();
@@ -1235,9 +1193,7 @@ pub(crate) fn call_bitcode_fn_with_record_arg<'ctx>(
     let mut args: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(fn_val.count_params() as usize);
     if fn_val.get_first_param().unwrap().is_pointer_value() {
         // call by pointer
-        let zig_call_alloca = env
-            .builder
-            .new_build_alloca(arg.get_type(), "zig_return_alloca");
+        let zig_call_alloca = create_entry_block_alloca(env, arg.get_type(), "zig_return_alloca");
         env.builder.new_build_store(zig_call_alloca, arg);
         args.push(zig_call_alloca.into());
     } else if fn_val.count_params() == 1 {
@@ -1283,16 +1239,14 @@ pub(crate) fn call_bitcode_fn_returning_record<'ctx>(
             .module
             .get_struct_type(bitcode_return_type_name)
             .unwrap();
-        zig_return_alloca = env
-            .builder
-            .new_build_alloca(bitcode_return_type, "zig_return_alloca");
+        zig_return_alloca =
+            create_entry_block_alloca(env, bitcode_return_type, "zig_return_alloca");
         call_void_bitcode_fn(env, &[zig_return_alloca.into(), arg], fn_name);
     } else {
         // direct return
         let zig_result = call_bitcode_fn(env, &[arg], fn_name);
-        zig_return_alloca = env
-            .builder
-            .new_build_alloca(zig_result.get_type(), "zig_return_alloca");
+        zig_return_alloca =
+            create_entry_block_alloca(env, zig_result.get_type(), "zig_return_alloca");
         env.builder.new_build_store(zig_return_alloca, zig_result);
     }
 
