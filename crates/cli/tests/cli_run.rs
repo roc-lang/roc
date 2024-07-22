@@ -10,9 +10,9 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
-        ValgrindErrorXWhat,
+        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir,
+        known_bad_file, Out, ValgrindError,
+        ValgrindErrorXWhat, ExpectedString, COMMON_STDERR
     };
     use const_format::concatcp;
     use indoc::indoc;
@@ -26,7 +26,6 @@ mod cli_run {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
-
     // Disallow valgrind on macOS by default, because it reports a ton
     // of false positives. For local development on macOS, feel free to
     // change this to true!
@@ -108,61 +107,17 @@ mod cli_run {
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
 
-    fn run_roc_on_failure_is_panic<'a, I: IntoIterator<Item = &'a str>>(
-        file: &'a Path,
-        args: I,
-        stdin: &[&str],
-        roc_app_args: &[String],
-        env: &[(&str, &str)],
-    ) -> Out {
-        let compile_out = run_roc_on(file, args, stdin, roc_app_args, env);
-
-        assert!(
-            compile_out.status.success(),
-            "\n___________\nRoc command failed with status {:?}:\n\n  {} {}\n___________\n",
-            compile_out.status,
-            compile_out.stdout,
-            compile_out.stderr,
-        );
-
-        compile_out
-    }
-
-    fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
-        file: &'a Path,
-        args: I,
-        stdin: &[&str],
-        roc_app_args: &[String],
-        env: &[(&str, &str)],
-    ) -> Out {
-        let compile_out = run_roc(
-            // converting these all to String avoids lifetime issues
-            args.into_iter()
-                .map(|arg| arg.to_string())
-                .chain([file.to_str().unwrap().to_string(), "--".to_string()])
-                .chain(roc_app_args.iter().cloned()),
-            stdin,
-            env,
-        );
-
-        if has_error(&compile_out.stderr) {
-            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, compile_out.stderr);
-        }
-
-        compile_out
-    }
-
     #[allow(clippy::too_many_arguments)]
-    fn check_output_with_stdin(
+    fn get_output_with_stdin(
         file: &Path,
         stdin: &[&str],
         flags: &[&str],
         roc_app_args: &[String],
         extra_env: &[(&str, &str)],
-        expected_ending: &str,
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
-    ) {
+    ) -> Vec<(CliMode, Out)> {
+        let mut output = Vec::new();
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -187,7 +142,7 @@ mod cli_run {
             }
         };
 
-        for cli_mode in cli_commands.iter() {
+        for cli_mode in cli_commands.into_iter() {
             let flags = {
                 let mut vec = flags.to_vec();
 
@@ -203,13 +158,15 @@ mod cli_run {
 
             let cmd_output = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on_failure_is_panic(
+                    let out = run_roc_on(
                         file,
                         iter::once(CMD_BUILD).chain(flags.clone()),
                         &[],
                         &[],
                         &[],
                     );
+                    out.assert_clean_success();
+                    output.push((cli_mode, out));
 
                     let file_ext = if cfg!(windows) { "exe " } else { "" };
 
@@ -253,91 +210,75 @@ mod cli_run {
                             panic!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, valgrind_out.stdout, valgrind_out.stderr);
                         }
 
-                        valgrind_out
+                        output.push((cli_mode, valgrind_out));
                     } else {
-                        run_cmd(
+                        let out = run_cmd(
                             file.with_extension(file_ext).to_str().unwrap(),
                             stdin.iter().copied(),
                             roc_app_args,
                             extra_env.iter().copied(),
-                        )
+                        );
+                        output.push((cli_mode, out));
                     }
                 }
                 CliMode::Roc => {
-                    run_roc_on_failure_is_panic(file, flags.clone(), stdin, roc_app_args, extra_env)
+                    let out = run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env);
+                    out.assert_clean_success();
+                    output.push((cli_mode, out));
                 }
-                CliMode::RocRun => run_roc_on_failure_is_panic(
-                    file,
-                    iter::once(CMD_RUN).chain(flags.clone()),
-                    stdin,
-                    roc_app_args,
-                    extra_env,
-                ),
+                CliMode::RocRun => {
+                    let out = run_roc_on(
+                        file,
+                        iter::once(CMD_RUN).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    );
+                    out.assert_clean_success();
+                    output.push((cli_mode, out));
+                }
                 CliMode::RocTest => {
                     // here failure is what we expect
-
-                    run_roc_on(
+                    let out = run_roc_on(
                         file,
                         iter::once(CMD_TEST).chain(flags.clone()),
                         stdin,
                         roc_app_args,
                         extra_env,
-                    )
+                    );
+                    out.assert_clean_success();
+                    output.push((cli_mode, out));
                 }
                 CliMode::RocDev => {
                     // here failure is what we expect
-
-                    run_roc_on(
+                    let out = run_roc_on(
                         file,
                         iter::once(CMD_DEV).chain(flags.clone()),
                         stdin,
                         roc_app_args,
                         extra_env,
-                    )
+                    );
+                    out.assert_clean_success();
+                    output.push((cli_mode, out));
                 }
             };
-
-            let self_path = file.display().to_string();
-
-            let actual_cmd_stdout = ignore_test_timings(&strip_colors(&cmd_output.stdout))
-                .replace(&self_path, "<ignored for tests>");
-
-            if !actual_cmd_stdout.ends_with(expected_ending) {
-                panic!(
-                    "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
-                    expected_ending, actual_cmd_stdout, cmd_output.stderr
-                );
-            }
-
-            if !cmd_output.status.success() && !matches!(cli_mode, CliMode::RocTest) {
-                // We don't need stdout, Cargo prints it for us.
-                panic!(
-                    "Example program exited with status {:?}\nstderr was:\n{:#?}",
-                    cmd_output.status, cmd_output.stderr
-                );
-            }
         }
-    }
-
-    fn ignore_test_timings(cmd_output: &str) -> String {
-        let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
-        let replacement = " in <ignored for test> ms.";
-        regex.replace_all(cmd_output, replacement).to_string()
+        output
     }
 
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
     fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
         let path = file_path_from_root(dir_name, roc_filename);
-        check_output_with_stdin(
+        let out = get_output_with_stdin(
             &path,
             &[],
             flags,
             &[],
             &[],
-            expected_ending,
             UseValgrind::Yes,
             TestCliCommands::Test,
         );
+        out.assert_clean_success();
     }
 
     // when you don't need args, stdin or extra_env
@@ -354,6 +295,7 @@ mod cli_run {
             &[],
             &[],
             expected_ending,
+            &[],
             use_valgrind,
             TestCliCommands::Run,
         )
@@ -367,6 +309,7 @@ mod cli_run {
         args: &[Arg],
         extra_env: &[(&str, &str)],
         expected_ending: &str,
+        expected_stderr: &[ExpectedString],
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
@@ -438,6 +381,7 @@ mod cli_run {
             &roc_app_args,
             extra_env,
             expected_ending,
+            expected_stderr,
             use_valgrind,
             test_cli_commands,
         );
@@ -467,6 +411,7 @@ mod cli_run {
                 &roc_app_args,
                 extra_env,
                 expected_ending,
+                expected_stderr,
                 use_valgrind,
                 test_cli_commands,
             );

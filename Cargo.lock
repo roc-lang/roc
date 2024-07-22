@@ -468,6 +468,8 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "criterion",
+ "lazy_static",
+ "regex",
  "rlimit",
  "roc_collections",
  "roc_command_utils",

@@ -4,6 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
+use regex::Regex;
 use roc_command_utils::{cargo, pretty_command_string, root_dir};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
@@ -11,25 +12,19 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::io::Write;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Mutex;
 use tempfile::NamedTempFile;
 
-#[derive(Debug)]
-pub struct Out {
-    pub cmd_str: OsString, // command with all its arguments, for easy debugging
-    pub stdout: String,
-    pub stderr: String,
-    pub status: ExitStatus,
-}
-
-pub fn run_roc<I, S>(args: I, stdin_vals: &[&str], extra_env: &[(&str, &str)]) -> Out
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    run_roc_with_stdin_and_env(args, stdin_vals, extra_env)
+lazy_static::lazy_static! {
+    pub static ref COMMON_STDERR: [ExpectedString; 4] = [
+        "🔨 Building host ...\n".into(),
+        "ld: warning: -undefined dynamic_lookup may not work with chained fixups".into(),
+        "warning: ignoring debug info with an invalid version (0) in app\r\n".into(),
+        ExpectedString::new_fuzzy(r"runtime: .*ms\n"),
+    ];
 }
 
 // Since glue is always compiling the same plugin, it can not be run in parallel.
@@ -38,36 +33,274 @@ where
 // TODO: In the future, look into compiling the shared library once and then caching it.
 static GLUE_LOCK: Mutex<()> = Mutex::new(());
 
-pub fn run_glue<I, S>(args: I) -> Out
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let _guard = GLUE_LOCK.lock().unwrap();
-
-    run_roc_with_stdin(args, &[])
+#[derive(Debug)]
+pub struct Out<'run> {
+    pub cmd_str: OsString, // command with all its arguments, for easy debugging
+    pub stdout: String,
+    pub stderr: String,
+    pub status: ExitStatus,
+    pub run: &'run Run<'run>,
+    pub valgrind_xml: Option<NamedTempFile>,
 }
 
-pub fn has_error(stderr: &str) -> bool {
-    let stderr_stripped = stderr
-        .replacen("🔨 Building host ...\n", "", 1)
-        // for some reason, llvm prints out this warning when targeting windows
-        .replacen(
-            "warning: ignoring debug info with an invalid version (0) in app\r\n",
-            "",
-            1,
+impl std::fmt::Display for Out<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Command: {}\n\nExit Code: {}\nStdout:\n{}\n\nStderr:\n{}",
+            self.cmd_str.to_str().unwrap(),
+            self.status,
+            self.stdout,
+            self.stderr
+        )
+    }
+}
+
+impl Out<'_> {
+    pub fn assert_clean_success(&self) {
+        self.assert_success_with_no_unexpected_errors(COMMON_STDERR.as_slice());
+    }
+
+    pub fn assert_success_with_no_unexpected_errors(&self, expected_errors: &[ExpectedString]) {
+        assert!(self.status.success(), "Command failed\n\n{self}");
+        assert!(
+            !has_unexpected_error(&self.stderr, expected_errors),
+            "Unexpected error:\n{}",
+            self.stderr
         );
+    }
 
-    let is_reporting_runtime =
-        stderr_stripped.starts_with("runtime: ") && stderr_stripped.ends_with("ms\n");
+    pub fn stdout_without_test_timings(&self) -> String {
+        let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
+        let replacement = " in <ignored for test> ms.";
+        regex.replace_all(&self.stdout, replacement).to_string()
+    }
 
-    let is_clean = stderr_stripped.is_empty() ||
-        is_reporting_runtime ||
-        // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
-        // linking stops working properly.
-        stderr_stripped.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups";
+    pub fn assert_stdout_ends_with(&self, expected: &str) {
+        assert!(
+            self.stdout_without_test_timings().ends_with(expected),
+            "Expected stdout to end with:\n{}\n\nActual stdout:\n{}",
+            expected,
+            self.stdout
+        );
+    }
+}
 
-    !is_clean
+/// A builder for running a command.
+///
+/// Unlike `std::process::Command`, this builder is clonable and provides convenience methods for
+/// constructing Commands for the configured run and instrumenting the configured command with valgrind.
+#[derive(Debug, Clone)]
+pub struct Run<'a> {
+    args: Vec<OsString>,
+    env: Vec<(String, String)>,
+    stdin_vals: Vec<&'a str>,
+}
+
+impl<'run> Run<'run> {
+    pub fn new<S>(exe: S) -> Self
+    where
+        S: AsRef<OsStr>,
+    {
+        let exe: OsString = exe.as_ref().into();
+        Self {
+            args: vec![exe],
+            stdin_vals: vec![],
+            env: vec![],
+        }
+    }
+
+    pub fn new_roc() -> Self {
+        Self::new(path_to_roc_binary())
+    }
+
+    pub fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.args[0]);
+        for arg in self.args[1..].iter() {
+            cmd.arg(arg);
+        }
+        for (k, v) in self.env.iter() {
+            cmd.env(k, v);
+        }
+        cmd
+    }
+
+    pub fn valgrind_command(&self) -> (Command, NamedTempFile) {
+        let mut cmd = Command::new("valgrind");
+        let named_tempfile =
+            NamedTempFile::new().expect("Unable to create tempfile for valgrind results");
+
+        cmd.arg("--tool=memcheck");
+        cmd.arg("--xml=yes");
+        cmd.arg(format!("--xml-file={}", named_tempfile.path().display()));
+
+        // If you are having valgrind issues on MacOS, you may need to suppress some
+        // of the errors. Read more here: https://github.com/roc-lang/roc/issues/746
+        if let Some(suppressions_file_os_str) = env::var_os("VALGRIND_SUPPRESSIONS") {
+            match suppressions_file_os_str.to_str() {
+                None => {
+                    panic!("Could not determine suppression file location from OsStr");
+                }
+                Some(suppressions_file) => {
+                    let mut buf = String::new();
+
+                    buf.push_str("--suppressions=");
+                    buf.push_str(suppressions_file);
+
+                    cmd.arg(buf);
+                }
+            }
+        }
+
+        for arg in self.args.iter() {
+            cmd.arg(arg);
+        }
+
+        (cmd, named_tempfile)
+    }
+
+    pub fn arg<S>(&mut self, arg: S) -> &mut Self
+    where
+        S: Into<OsString>,
+    {
+        self.args.push(arg.into());
+        self
+    }
+
+    pub fn add_args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        for arg in args {
+            self.arg(&arg);
+        }
+        self
+    }
+
+    pub fn get_args(&self) -> impl Iterator<Item = &OsStr> {
+        self.args.iter().map(Deref::deref)
+    }
+
+    pub fn get_env(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.env.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    pub fn with_stdin_vals<I>(&mut self, stdin_vals: I) -> &mut Self
+    where
+        I: IntoIterator<Item = &'run str>,
+    {
+        self.stdin_vals.extend(stdin_vals.into_iter());
+        self
+    }
+
+    pub fn with_env<'a, I>(&mut self, env: I) -> &mut Self
+    where I: IntoIterator<Item = (&'a str, &'a str)>
+    {
+        for (k, v) in env {
+            self.env.push((k.into(), v.into()));
+        }
+        self
+    }
+
+    fn do_run(&self, mut cmd: Command, stdin_vals: &[&str]) -> Out {
+        let cmd_str = pretty_command_string(&cmd);
+        let mut roc_cmd_child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|err| {
+                panic!("Failed to execute command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}",)
+            });
+        let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
+
+        for stdin_str in stdin_vals.iter() {
+            stdin
+                .write_all(stdin_str.as_bytes())
+                .unwrap_or_else(|err| {
+                    panic!("Failed to write to stdin for command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}")
+                });
+        }
+        let roc_cmd_output = roc_cmd_child.wait_with_output().unwrap_or_else(|err| {
+            panic!("Failed to get output for command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}")
+        });
+
+        Out {
+            cmd_str,
+            stdout: String::from_utf8(roc_cmd_output.stdout).unwrap(),
+            stderr: String::from_utf8(roc_cmd_output.stderr).unwrap(),
+            status: roc_cmd_output.status,
+            valgrind_xml: None,
+            run: self,
+        }
+    }
+
+    pub fn run(&mut self) -> Out {
+        self.do_run(self.command(), &self.stdin_vals)
+    }
+
+    pub fn run_glue(&mut self) -> Out {
+        let _guard = GLUE_LOCK.lock().unwrap();
+        self.run()
+    }
+
+    pub fn run_with_valgrind(&mut self) -> Out {
+        let (valgrind_cmd, valgrind_xml) = self.valgrind_command();
+        let mut out = self.do_run(valgrind_cmd, &self.stdin_vals);
+        out.valgrind_xml = Some(valgrind_xml);
+        out
+    }
+}
+
+pub fn has_unexpected_error(stderr: &str, expected_errors: &[ExpectedString]) -> bool {
+    let mut stderr_stripped = String::from(stderr);
+    for expected_error in expected_errors {
+        stderr_stripped = expected_error.replacen(&stderr_stripped, "", 1);
+    }
+    !stderr_stripped.trim().is_empty()
+}
+
+pub enum ExpectedString {
+    Exact(String),
+    Fuzzy(regex::Regex),
+}
+
+impl ExpectedString {
+    pub fn new(s: &str) -> ExpectedString {
+        ExpectedString::Exact(s.to_string())
+    }
+
+    pub fn new_fuzzy(s: &str) -> ExpectedString {
+        let r = regex::Regex::new(s).unwrap();
+        ExpectedString::Fuzzy(r)
+    }
+
+    pub fn found_in(&self, haystack: &str) -> bool {
+        match self {
+            ExpectedString::Exact(sub) => haystack.contains(sub),
+            ExpectedString::Fuzzy(regex) => regex.is_match(haystack),
+        }
+    }
+
+    pub fn replacen(&self, haystack: &str, replacement: &str, n: usize) -> String {
+        match self {
+            ExpectedString::Exact(sub) => haystack.replacen(sub, replacement, n),
+            ExpectedString::Fuzzy(regex) => regex.replacen(haystack, n, replacement).to_string(),
+        }
+    }
+}
+
+impl From<&str> for ExpectedString {
+    fn from(s: &str) -> Self {
+        ExpectedString::new(s)
+    }
+}
+
+impl From<regex::Regex> for ExpectedString {
+    fn from(r: regex::Regex) -> Self {
+        Self::Fuzzy(r)
+    }
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
@@ -96,71 +329,6 @@ pub fn path_to_binary(binary_name: &str) -> PathBuf {
     path.push(binary_name);
 
     path
-}
-
-pub fn run_roc_with_stdin<I, S>(args: I, stdin_vals: &[&str]) -> Out
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    run_roc_with_stdin_and_env(args, stdin_vals, &[])
-}
-
-pub fn run_roc_with_stdin_and_env<I, S>(
-    args: I,
-    stdin_vals: &[&str],
-    extra_env: &[(&str, &str)],
-) -> Out
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let roc_path = build_roc_bin_cached();
-    let mut roc_cmd = Command::new(roc_path);
-
-    for arg in args {
-        roc_cmd.arg(arg);
-    }
-
-    for (k, v) in extra_env {
-        roc_cmd.env(k, v);
-    }
-
-    let roc_cmd_str = pretty_command_string(&roc_cmd);
-
-    let mut roc_cmd_child = roc_cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|err| {
-            panic!("Failed to execute command\n\n  {roc_cmd_str:?}\n\nwith error:\n\n  {err}",)
-        });
-
-    {
-        let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
-
-        for stdin_str in stdin_vals.iter() {
-            stdin
-                .write_all(stdin_str.as_bytes())
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to write to stdin for command\n\n  {roc_cmd_str:?}\n\nwith error:\n\n  {err}",
-                    )
-                });
-        }
-    }
-
-    let roc_cmd_output = roc_cmd_child.wait_with_output().unwrap_or_else(|err| {
-        panic!("Failed to get output for command\n\n  {roc_cmd_str:?}\n\nwith error:\n\n  {err}",)
-    });
-
-    Out {
-        cmd_str: roc_cmd_str,
-        stdout: String::from_utf8(roc_cmd_output.stdout).unwrap(),
-        stderr: String::from_utf8(roc_cmd_output.stderr).unwrap(),
-        status: roc_cmd_output.status,
-    }
 }
 
 // If we don't already have a /target/release/roc, build it!
@@ -214,133 +382,6 @@ pub fn build_roc_bin(extra_args: &[&str]) -> PathBuf {
     }
 
     roc_binary_path
-}
-
-pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a str, &'a str)>>(
-    cmd_name: &str,
-    stdin_vals: I,
-    args: &[String],
-    env: E,
-) -> Out {
-    let mut cmd = Command::new(cmd_name);
-
-    for arg in args {
-        cmd.arg(arg);
-    }
-
-    for (env, val) in env.into_iter() {
-        cmd.env(env, val);
-    }
-
-    let cmd_str = pretty_command_string(&cmd);
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|err| {
-            panic!(
-                "Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}",
-                err, cmd_str
-            )
-        });
-
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-
-        for stdin_str in stdin_vals {
-            stdin
-                .write_all(stdin_str.as_bytes())
-                .expect("Failed to write to stdin");
-        }
-    }
-
-    let output = child
-        .wait_with_output()
-        .unwrap_or_else(|_| panic!("Failed to execute cmd:\n\t`{:?}`", cmd_str));
-
-    Out {
-        cmd_str,
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-        status: output.status,
-    }
-}
-
-pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
-    stdin_vals: I,
-    args: &[String],
-) -> (Out, String) {
-    //TODO: figure out if there is a better way to get the valgrind executable.
-    let mut cmd = Command::new("valgrind");
-    let named_tempfile =
-        NamedTempFile::new().expect("Unable to create tempfile for valgrind results");
-
-    cmd.arg("--tool=memcheck");
-    cmd.arg("--xml=yes");
-    cmd.arg(format!("--xml-file={}", named_tempfile.path().display()));
-
-    // If you are having valgrind issues on MacOS, you may need to suppress some
-    // of the errors. Read more here: https://github.com/roc-lang/roc/issues/746
-    if let Some(suppressions_file_os_str) = env::var_os("VALGRIND_SUPPRESSIONS") {
-        match suppressions_file_os_str.to_str() {
-            None => {
-                panic!("Could not determine suppression file location from OsStr");
-            }
-            Some(suppressions_file) => {
-                let mut buf = String::new();
-
-                buf.push_str("--suppressions=");
-                buf.push_str(suppressions_file);
-
-                cmd.arg(buf);
-            }
-        }
-    }
-
-    for arg in args {
-        cmd.arg(arg);
-    }
-
-    let cmd_str = pretty_command_string(&cmd);
-
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .expect("failed to execute compiled `valgrind` binary in CLI test");
-
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-
-        for stdin_str in stdin_vals {
-            stdin
-                .write_all(stdin_str.as_bytes())
-                .expect("Failed to write to stdin");
-        }
-    }
-
-    let output = child
-        .wait_with_output()
-        .expect("failed to execute compiled `valgrind` binary in CLI test");
-
-    let mut file = named_tempfile.into_file();
-    let mut raw_xml = String::new();
-
-    file.read_to_string(&mut raw_xml).unwrap();
-
-    (
-        Out {
-            cmd_str,
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-            status: output.status,
-        },
-        raw_xml,
-    )
 }
 
 #[derive(Debug, Deserialize)]

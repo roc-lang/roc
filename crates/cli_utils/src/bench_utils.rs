@@ -1,4 +1,4 @@
-use crate::helpers::{file_path_from_root, run_cmd, run_roc};
+use crate::helpers::{file_path_from_root, Run};
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
 use std::{path::Path, thread};
 
@@ -14,16 +14,8 @@ fn exec_bench_w_input<T: Measurement>(
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
-    let compile_out = run_roc(
-        [
-            "build",
-            BUILD_HOST_FLAG,
-            OPTIMIZE_FLAG,
-            file.to_str().unwrap(),
-        ],
-        &[stdin_str],
-        &[],
-    );
+    let run = Run::new_roc().add_args(["build", BUILD_HOST_FLAG, OPTIMIZE_FLAG, file.to_str().unwrap()]);
+    let compile_out = run.run();
 
     if !compile_out.stderr.is_empty() && compile_out.stderr != "🔨 Rebuilding platform...\n" {
         panic!("stderr was not empty:\n\t{}", compile_out.stderr);
@@ -51,15 +43,17 @@ fn check_cmd_output(
         .unwrap()
         .to_string();
 
+    let run = Run::new(&cmd_str).with_stdin_vals([stdin_str]);
+
     let out = if cmd_str.contains("cfold") {
         let child = thread::Builder::new()
             .stack_size(CFOLD_STACK_SIZE)
-            .spawn(move || run_cmd(&cmd_str, [stdin_str], &[], []))
+            .spawn(move || run.run())
             .unwrap();
 
         child.join().unwrap()
     } else {
-        run_cmd(&cmd_str, [stdin_str], &[], [])
+        run.run()
     };
 
     if !&out.stdout.ends_with(expected_ending) {
@@ -92,22 +86,19 @@ fn bench_cmd<T: Measurement>(
         .expect("Failed to increase stack limit.");
 
         #[cfg(windows)]
-        println!("Skipping the cfold benchmark on windows, I can't adjust the stack size and use criterion at the same time.");
-        #[cfg(windows)]
-        return;
+        {
+            println!("Skipping the cfold benchmark on windows, I can't adjust the stack size and use criterion at the same time.");
+            return;
+        }
     }
+
 
     if let Some(bench_group) = bench_group_opt {
         bench_group.bench_function(&format!("Benchmarking {executable_filename:?}"), |b| {
-            b.iter(|| run_cmd(black_box(&cmd_str), black_box([stdin_str]), &[], []))
+            b.iter(|| Run::new(black_box(&cmd_str)).with_stdin_vals([stdin_str]).run())
         });
     } else {
-        run_cmd(
-            black_box(file.with_file_name(executable_filename).to_str().unwrap()),
-            black_box([stdin_str]),
-            &[],
-            [],
-        );
+        Run::new(file.with_file_name(executable_filename).to_str().unwrap()).with_stdin_vals([stdin_str]).run();
     }
 }
 

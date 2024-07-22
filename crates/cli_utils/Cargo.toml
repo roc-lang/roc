@@ -20,6 +20,8 @@ criterion.workspace = true
 serde-xml-rs.workspace = true
 serde.workspace = true
 tempfile.workspace = true
+regex.workspace = true
+lazy_static.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rlimit.workspace = true
