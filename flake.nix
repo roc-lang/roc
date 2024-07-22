@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?rev=fd281bd6b7d3e32ddfa399853946f782553163b5";
 
-    # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
+    # rust from nixpkgs has some libc problems, this is patched in the rust-overlay TEST
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
