@@ -1031,40 +1031,23 @@ pub fn listConcatUtf8(
 }
 
 fn copy_element_fn(element_width: usize) CopyFn {
-    switch (element_width) {
-        @sizeOf(u8) => {
-            return memcpy_T(u8);
-        },
-        @sizeOf(u16) => {
-            return memcpy_T(u16);
-        },
-        @sizeOf(u32) => {
-            return memcpy_T(u32);
-        },
-        @sizeOf(u64) => {
-            return memcpy_T(u64);
-        },
-        @sizeOf(u128) => {
-            return memcpy_T(u128);
-        },
-        @sizeOf(u256) => {
-            return memcpy_T(u256);
-        },
-        else => {
-            return &memcpy_opaque;
-        },
-    }
+    const max_inline = @sizeOf(u256);
+    return switch (element_width) {
+        inline 0...max_inline => |i| memcpy_sized(i),
+        else => &memcpy_opaque,
+    };
 }
 
 fn memcpy_opaque(dst: Opaque, src: Opaque, element_width: usize) void {
     @memcpy(@as([*]u8, @ptrCast(dst))[0..element_width], @as([*]u8, @ptrCast(src))[0..element_width]);
 }
 
-fn memcpy_T(comptime T: type) CopyFn {
+fn memcpy_sized(comptime size: usize) CopyFn {
     return &(struct {
-        element_width: usize,
         pub fn memcpy(dst: Opaque, src: Opaque, _: usize) void {
-            @as(*T, @alignCast(@ptrCast(dst))).* = @as(*T, @alignCast(@ptrCast(src))).*;
+            // due to the memcpy size being known at compile time to zig, llvm can optimize it to not actually be an memcpy call.
+            // Instead it can inline to direct memory moves.
+            @memcpy(@as([*]u8, @ptrCast(dst))[0..size], @as([*]u8, @ptrCast(src))[0..size]);
         }
     }.memcpy);
 }
