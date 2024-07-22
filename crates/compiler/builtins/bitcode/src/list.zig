@@ -1032,10 +1032,10 @@ pub fn listConcatUtf8(
 
 fn copy_element_fn(element_width: usize) CopyFn {
     const max_inline = @sizeOf(u256);
-    return switch (element_width) {
-        inline 0...max_inline => |i| memcpy_sized(i),
-        else => &memcpy_opaque,
-    };
+    switch (element_width) {
+        inline 0...max_inline => |i| return memcpy_sized(i),
+        else => return &memcpy_opaque,
+    }
 }
 
 fn memcpy_opaque(dst: Opaque, src: Opaque, element_width: usize) void {
