@@ -5,6 +5,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV,
 };
 use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::memcpy::build_memcpy;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
@@ -725,6 +726,78 @@ pub fn build_compare_wrapper<'a, 'ctx>(
             call.set_call_convention(FAST_CALL_CONV);
 
             env.builder.new_build_return(Some(&result));
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+
+    function_value
+}
+
+pub fn build_copy_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: InLayout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let symbol = Symbol::GENERIC_COPY_REF;
+    let fn_name = layout_ids
+        .get(symbol, &layout_interner.get_repr(layout))
+        .to_symbol_string(symbol, &env.interns);
+
+    let function_value = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::default());
+
+            let function_value = crate::llvm::refcounting::build_header_help(
+                env,
+                &fn_name,
+                env.context.void_type().into(),
+                &[arg_type.into(), arg_type.into()],
+            );
+
+            // called from zig, must use C calling convention
+            function_value.set_call_conventions(C_CALL_CONV);
+
+            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+            debug_assert!(kind_id > 0);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, attr);
+
+            let entry = env.context.append_basic_block(function_value, "entry");
+            env.builder.position_at_end(entry);
+
+            debug_info_init!(env, function_value);
+
+            let mut it = function_value.get_param_iter();
+            let dst_ptr = it.next().unwrap().into_pointer_value();
+            let src_ptr = it.next().unwrap().into_pointer_value();
+
+            dst_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
+            src_ptr.set_name(Symbol::ARG_2.as_str(&env.interns));
+
+            let repr = layout_interner.get_repr(layout);
+            let value_type = basic_type_from_layout(env, layout_interner, repr)
+                .ptr_type(AddressSpace::default());
+
+            let dst_cast = env
+                .builder
+                .new_build_pointer_cast(dst_ptr, value_type, "load_opaque");
+
+            let src_cast = env
+                .builder
+                .new_build_pointer_cast(src_ptr, value_type, "load_opaque");
+
+            build_memcpy(env, layout_interner, repr, dst_cast, src_cast);
+
+            env.builder.new_build_return(None);
 
             function_value
         }

@@ -12,7 +12,7 @@ use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
 };
 
-use super::bitcode::{build_inc_wrapper, call_list_bitcode_fn, BitcodeReturns};
+use super::bitcode::{build_copy_wrapper, build_inc_wrapper, call_list_bitcode_fn, BitcodeReturns};
 use super::build::{
     create_entry_block_alloca, load_roc_value, store_roc_value, use_roc_value, BuilderExt,
 };
@@ -235,16 +235,19 @@ pub(crate) fn list_release_excess_capacity<'a, 'ctx>(
 pub(crate) fn list_append_unsafe<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    let copy_fn = build_copy_wrapper(env, layout_interner, layout_ids, element_layout);
     call_list_bitcode_fn_1(
         env,
         original_wrapper,
         &[
             pass_element_as_opaque(env, layout_interner, element, element_layout),
             layout_width(env, layout_interner, element_layout),
+            copy_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_APPEND_UNSAFE,
     )
@@ -260,6 +263,7 @@ pub(crate) fn list_prepend<'a, 'ctx>(
     element_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let inc_element_fn = build_inc_wrapper(env, layout_interner, layout_ids, element_layout);
+    let copy_fn = build_copy_wrapper(env, layout_interner, layout_ids, element_layout);
     call_list_bitcode_fn_1(
         env,
         original_wrapper,
@@ -269,6 +273,7 @@ pub(crate) fn list_prepend<'a, 'ctx>(
             layout_width(env, layout_interner, element_layout),
             layout_refcounted(env, layout_interner, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
+            copy_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_PREPEND,
     )
@@ -310,6 +315,7 @@ pub(crate) fn list_swap<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let inc_element_fn = build_inc_wrapper(env, layout_interner, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
+    let copy_fn = build_copy_wrapper(env, layout_interner, layout_ids, element_layout);
 
     call_list_bitcode_fn_1(
         env,
@@ -323,6 +329,7 @@ pub(crate) fn list_swap<'a, 'ctx>(
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
             pass_update_mode(env, update_mode),
+            copy_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_SWAP,
     )
@@ -397,6 +404,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
         layout_interner.get_repr(element_layout),
     );
     let element_ptr = create_entry_block_alloca(env, element_type, "output_element_as_opaque");
+    let copy_fn = build_copy_wrapper(env, layout_interner, layout_ids, element_layout);
 
     // Assume the bounds have already been checked earlier
     // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
@@ -409,6 +417,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
                 pass_element_as_opaque(env, layout_interner, element, element_layout),
                 layout_width(env, layout_interner, element_layout),
                 pass_as_opaque(env, element_ptr),
+                copy_fn.as_global_value().as_pointer_value().into(),
             ],
             bitcode::LIST_REPLACE_IN_PLACE,
         ),
@@ -429,6 +438,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
                     inc_element_fn.as_global_value().as_pointer_value().into(),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
                     pass_as_opaque(env, element_ptr),
+                    copy_fn.as_global_value().as_pointer_value().into(),
                 ],
                 bitcode::LIST_REPLACE,
             )
@@ -536,6 +546,7 @@ pub(crate) fn list_sort_with<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let inc_element_fn = build_inc_wrapper(env, layout_interner, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
+    let copy_fn = build_copy_wrapper(env, layout_interner, layout_ids, element_layout);
     call_list_bitcode_fn_1(
         env,
         list.into_struct_value(),
@@ -549,6 +560,7 @@ pub(crate) fn list_sort_with<'a, 'ctx>(
             layout_refcounted(env, layout_interner, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
+            copy_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_SORT_WITH,
     )

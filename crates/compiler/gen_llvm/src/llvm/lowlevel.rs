@@ -670,7 +670,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
             let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
-            list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
+            list_append_unsafe(
+                env,
+                layout_interner,
+                layout_ids,
+                original_wrapper,
+                elem,
+                elem_layout,
+            )
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
