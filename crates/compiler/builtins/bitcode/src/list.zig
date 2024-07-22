@@ -6,10 +6,12 @@ const mem = std.mem;
 const math = std.math;
 
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 
-const EqFn = *const fn (?[*]u8, ?[*]u8) callconv(.C) bool;
-const CompareFn = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;
+const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
+const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
+const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
 
 const Inc = *const fn (?[*]u8) callconv(.C) void;
 const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
@@ -425,6 +427,7 @@ pub fn listAppendUnsafe(
     list: RocList,
     element: Opaque,
     element_width: usize,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     const old_length = list.len();
     var output = list;
@@ -433,7 +436,7 @@ pub fn listAppendUnsafe(
     if (output.bytes) |bytes| {
         if (element) |source| {
             const target = bytes + old_length * element_width;
-            @memcpy(target[0..element_width], source[0..element_width]);
+            copy(target, source);
         }
     }
 
@@ -448,9 +451,10 @@ fn listAppend(
     elements_refcounted: bool,
     inc: Inc,
     update_mode: UpdateMode,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     const with_capacity = listReserve(list, alignment, 1, element_width, elements_refcounted, inc, update_mode);
-    return listAppendUnsafe(with_capacity, element, element_width);
+    return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
 
 pub fn listPrepend(
@@ -460,6 +464,7 @@ pub fn listPrepend(
     element_width: usize,
     elements_refcounted: bool,
     inc: Inc,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     const old_length = list.len();
     // TODO: properly wire in update mode.
@@ -468,20 +473,14 @@ pub fn listPrepend(
 
     // can't use one memcpy here because source and target overlap
     if (with_capacity.bytes) |target| {
-        var i: usize = old_length;
-
-        while (i > 0) {
-            i -= 1;
-
-            // move the ith element to the (i + 1)th position
-            const to = target + (i + 1) * element_width;
-            const from = target + i * element_width;
-            @memcpy(to[0..element_width], from[0..element_width]);
-        }
+        const from = target;
+        const to = target + element_width;
+        const size = element_width * old_length;
+        std.mem.copyBackwards(u8, to[0..size], from[0..size]);
 
         // finally copy in the new first element
         if (element) |source| {
-            @memcpy(target[0..element_width], source[0..element_width]);
+            copy(target, source);
         }
     }
 
@@ -498,6 +497,7 @@ pub fn listSwap(
     inc: Inc,
     dec: Dec,
     update_mode: UpdateMode,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     // Early exit to avoid swapping the same element.
     if (index_1 == index_2)
@@ -522,7 +522,7 @@ pub fn listSwap(
     swapElements(source_ptr, element_width, @as(usize,
     // We already verified that both indices are less than the stored list length,
     // which is usize, so casting them to usize will definitely be lossless.
-    @intCast(index_1)), @as(usize, @intCast(index_2)));
+    @intCast(index_1)), @as(usize, @intCast(index_2)), copy);
 
     return newList;
 }
@@ -653,12 +653,9 @@ pub fn listDropAt(
 
         if (list.isUnique()) {
             var i = drop_index;
-            while (i < size - 1) : (i += 1) {
-                const copy_target = source_ptr + i * element_width;
-                const copy_source = copy_target + element_width;
-
-                @memcpy(copy_target[0..element_width], copy_source[0..element_width]);
-            }
+            const copy_target = source_ptr;
+            const copy_source = copy_target + element_width;
+            std.mem.copyForwards(u8, copy_target[i..size], copy_source[i..size]);
 
             var new_list = list;
 
@@ -693,7 +690,15 @@ pub fn listDropAt(
     }
 }
 
-fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
+fn partition(
+    source_ptr: [*]u8,
+    transform: Opaque,
+    wrapper: CompareFn,
+    element_width: usize,
+    low: isize,
+    high: isize,
+    copy: CopyFn,
+) isize {
     const pivot = source_ptr + (@as(usize, @intCast(high)) * element_width);
     var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
     var j = low;
@@ -708,22 +713,30 @@ fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
             utils.Ordering.LT => {
                 // the current element is smaller than the pivot; swap it
                 i += 1;
-                swapElements(source_ptr, element_width, @as(usize, @intCast(i)), @as(usize, @intCast(j)));
+                swapElements(source_ptr, element_width, @as(usize, @intCast(i)), @as(usize, @intCast(j)), copy);
             },
             utils.Ordering.EQ, utils.Ordering.GT => {},
         }
     }
-    swapElements(source_ptr, element_width, @as(usize, @intCast(i + 1)), @as(usize, @intCast(high)));
+    swapElements(source_ptr, element_width, @as(usize, @intCast(i + 1)), @as(usize, @intCast(high)), copy);
     return (i + 1);
 }
 
-fn quicksort(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) void {
+fn quicksort(
+    source_ptr: [*]u8,
+    transform: Opaque,
+    wrapper: CompareFn,
+    element_width: usize,
+    low: isize,
+    high: isize,
+    copy: CopyFn,
+) void {
     if (low < high) {
         // partition index
-        const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
+        const pi = partition(source_ptr, transform, wrapper, element_width, low, high, copy);
 
-        _ = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1); // before pi
-        _ = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high); // after pi
+        _ = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1, copy); // before pi
+        _ = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high, copy); // after pi
     }
 }
 
@@ -738,6 +751,7 @@ pub fn listSortWith(
     elements_refcounted: bool,
     inc: Inc,
     dec: Dec,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     var list = input.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
 
@@ -748,7 +762,7 @@ pub fn listSortWith(
     if (list.bytes) |source_ptr| {
         const low = 0;
         const high: isize = @as(isize, @intCast(list.len())) - 1;
-        quicksort(source_ptr, data, caller, element_width, low, high);
+        quicksort(source_ptr, data, caller, element_width, low, high, copy);
     }
 
     return list;
@@ -756,29 +770,38 @@ pub fn listSortWith(
 
 // SWAP ELEMENTS
 
-inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
-    @memcpy(temporary[0..width], ptr1[0..width]);
-    @memcpy(ptr1[0..width], ptr2[0..width]);
-    @memcpy(ptr2[0..width], temporary[0..width]);
-}
-
-fn swap(width_initial: usize, p1: [*]u8, p2: [*]u8) void {
+fn swap(
+    element_width: usize,
+    p1: [*]u8,
+    p2: [*]u8,
+    copy: CopyFn,
+) void {
     const threshold: usize = 64;
-
-    var width = width_initial;
-
-    var ptr1 = p1;
-    var ptr2 = p2;
 
     var buffer_actual: [threshold]u8 = undefined;
     const buffer: [*]u8 = buffer_actual[0..];
 
+    if (element_width <= threshold) {
+        copy(buffer, p1);
+        copy(p1, p2);
+        copy(p2, buffer);
+        return;
+    }
+
+    var width = element_width;
+
+    var ptr1 = p1;
+    var ptr2 = p2;
     while (true) {
         if (width < threshold) {
-            swapHelp(width, buffer, ptr1, ptr2);
+            @memcpy(buffer[0..width], ptr1[0..width]);
+            @memcpy(ptr1[0..width], ptr2[0..width]);
+            @memcpy(ptr2[0..width], buffer[0..width]);
             return;
         } else {
-            swapHelp(threshold, buffer, ptr1, ptr2);
+            @memcpy(buffer[0..threshold], ptr1[0..threshold]);
+            @memcpy(ptr1[0..threshold], ptr2[0..threshold]);
+            @memcpy(ptr2[0..threshold], buffer[0..threshold]);
 
             ptr1 += threshold;
             ptr2 += threshold;
@@ -788,11 +811,17 @@ fn swap(width_initial: usize, p1: [*]u8, p2: [*]u8) void {
     }
 }
 
-fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2: usize) void {
+fn swapElements(
+    source_ptr: [*]u8,
+    element_width: usize,
+    index_1: usize,
+    index_2: usize,
+    copy: CopyFn,
+) void {
     const element_at_i = source_ptr + (index_1 * element_width);
     const element_at_j = source_ptr + (index_2 * element_width);
 
-    return swap(element_width, element_at_i, element_at_j);
+    return swap(element_width, element_at_i, element_at_j, copy);
 }
 
 pub fn listConcat(
@@ -909,6 +938,7 @@ pub fn listReplaceInPlace(
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
@@ -917,7 +947,7 @@ pub fn listReplaceInPlace(
     // so we don't do a bounds check here. Hence, the list is also non-empty,
     // because inserting into an empty list is always out of bounds,
     // and it's always safe to cast index to usize.
-    return listReplaceInPlaceHelp(list, @as(usize, @intCast(index)), element, element_width, out_element);
+    return listReplaceInPlaceHelp(list, @as(usize, @intCast(index)), element, element_width, out_element, copy);
 }
 
 pub fn listReplace(
@@ -930,6 +960,7 @@ pub fn listReplace(
     inc: Inc,
     dec: Dec,
     out_element: ?[*]u8,
+    copy: CopyFn,
 ) callconv(.C) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
@@ -939,7 +970,7 @@ pub fn listReplace(
     // because inserting into an empty list is always out of bounds,
     // and it's always safe to cast index to usize.
     // because inserting into an empty list is always out of bounds
-    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width, elements_refcounted, inc, dec), @as(usize, @intCast(index)), element, element_width, out_element);
+    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width, elements_refcounted, inc, dec), @as(usize, @intCast(index)), element, element_width, out_element, copy);
 }
 
 inline fn listReplaceInPlaceHelp(
@@ -948,15 +979,16 @@ inline fn listReplaceInPlaceHelp(
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
+    copy: CopyFn,
 ) RocList {
     // the element we will replace
     var element_at_index = (list.bytes orelse unreachable) + (index * element_width);
 
     // copy out the old element
-    @memcpy((out_element orelse unreachable)[0..element_width], element_at_index[0..element_width]);
+    copy((out_element orelse unreachable), element_at_index);
 
     // copy in the new element
-    @memcpy(element_at_index[0..element_width], (element orelse unreachable)[0..element_width]);
+    copy(element_at_index, (element orelse unreachable));
 
     return list;
 }

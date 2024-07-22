@@ -14,6 +14,7 @@ use crate::layout::{
     STLayoutInterner, UnionLayout,
 };
 
+mod copy;
 mod equality;
 mod refcount;
 
@@ -43,6 +44,7 @@ pub enum HelperOp {
     Reset,
     ResetRef,
     Eq,
+    IndirectCopy,
 }
 
 impl HelperOp {
@@ -57,7 +59,7 @@ impl HelperOp {
     pub fn is_indirect(&self) -> bool {
         matches!(
             self,
-            Self::IndirectInc | Self::IndirectIncN | Self::IndirectDec
+            Self::IndirectInc | Self::IndirectIncN | Self::IndirectDec | Self::IndirectCopy
         )
     }
 }
@@ -275,6 +277,25 @@ impl<'a> CodeGenHelp<'a> {
         (expr, ctx.new_linker_data)
     }
 
+    /// Generate a copy procedure, *without* a Call expression.
+    /// *This method should be rarely used* - only when the proc is to be called from Zig.
+    pub fn gen_copy_proc(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        layout: InLayout<'a>,
+    ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            recursive_union: None,
+            op: HelperOp::IndirectCopy,
+        };
+
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);
+
+        (proc_name, ctx.new_linker_data)
+    }
+
     // ============================================================================
     //
     //              CALL SPECIALIZED OP
@@ -321,6 +342,7 @@ impl<'a> CodeGenHelp<'a> {
                     IndirectIncN => (LAYOUT_UNIT, arena.alloc([ptr_arg, self.layout_isize])),
                     IndirectInc => (LAYOUT_UNIT, arena.alloc([ptr_arg])),
                     Eq => (LAYOUT_BOOL, self.arena.alloc([arg, arg])),
+                    IndirectCopy => (LAYOUT_UNIT, self.arena.alloc([ptr_arg, ptr_arg])),
                 }
             };
 
@@ -430,6 +452,10 @@ impl<'a> CodeGenHelp<'a> {
                 LAYOUT_BOOL,
                 equality::eq_generic(self, ident_ids, ctx, layout_interner, layout),
             ),
+            IndirectCopy => (
+                LAYOUT_UNIT,
+                copy::copy_indirect(self, ident_ids, ctx, layout_interner, layout),
+            ),
         };
 
         let args: &'a [(InLayout<'a>, Symbol)] = {
@@ -452,6 +478,11 @@ impl<'a> CodeGenHelp<'a> {
                     self.arena.alloc([(ptr_layout, ARG_1)])
                 }
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
+                IndirectCopy => {
+                    let ptr_layout =
+                        layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
+                    self.arena.alloc([(ptr_layout, ARG_1), (ptr_layout, ARG_2)])
+                }
             }
         };
 
@@ -524,6 +555,15 @@ impl<'a> CodeGenHelp<'a> {
                 result: LAYOUT_BOOL,
                 niche: Niche::NONE,
             },
+            HelperOp::IndirectCopy => {
+                let ptr_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
+
+                ProcLayout {
+                    arguments: self.arena.alloc([ptr_layout, ptr_layout]),
+                    result: LAYOUT_UNIT,
+                    niche: Niche::NONE,
+                }
+            }
         };
 
         (proc_symbol, proc_layout)

@@ -1175,41 +1175,42 @@ define_builtins! {
 
         16 GENERIC_EQ_REF: "#generic_eq_by_ref" // equality of arbitrary layouts, passed as an opaque pointer
         17 GENERIC_RC_REF: "#generic_rc_by_ref" // refcount of arbitrary layouts, passed as an opaque pointer
+        18 GENERIC_COPY_REF: "#generic_copy_by_ref" // copy of arbitrary layouts, passed as an opaque pointer
 
-        18 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
+        19 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
 
         // a user-defined function that we need to capture in a closure
         // see e.g. Set.walk
-        19 USER_FUNCTION: "#user_function"
+        20 USER_FUNCTION: "#user_function"
 
         // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
-        20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
+        21 ZIG_FUNCTION_CALLER: "#zig_function_caller"
 
         // a caller (wrapper) for comparison
-        21 GENERIC_COMPARE_REF: "#generic_compare_ref"
+        22 GENERIC_COMPARE_REF: "#generic_compare_ref"
 
         // used to initialize parameters in borrow.rs
-        22 EMPTY_PARAM: "#empty_param"
+        23 EMPTY_PARAM: "#empty_param"
 
         // used by the dev backend to store the pointer to where to store large return types
-        23 RET_POINTER: "#ret_pointer"
+        24 RET_POINTER: "#ret_pointer"
 
         // used in wasm dev backend to mark temporary values in the VM stack
-        24 WASM_TMP: "#wasm_tmp"
+        25 WASM_TMP: "#wasm_tmp"
 
         // the _ used in mono when a specialized symbol is deleted
-        25 REMOVED_SPECIALIZATION: "#removed_specialization"
+        26 REMOVED_SPECIALIZATION: "#removed_specialization"
 
         // used in dev backend
-        26 DEV_TMP: "#dev_tmp"
-        27 DEV_TMP2: "#dev_tmp2"
-        28 DEV_TMP3: "#dev_tmp3"
-        29 DEV_TMP4: "#dev_tmp4"
-        30 DEV_TMP5: "#dev_tmp5"
+        27 DEV_TMP: "#dev_tmp"
+        28 DEV_TMP2: "#dev_tmp2"
+        29 DEV_TMP3: "#dev_tmp3"
+        30 DEV_TMP4: "#dev_tmp4"
+        31 DEV_TMP5: "#dev_tmp5"
 
-        31 ATTR_INVALID: "#attr_invalid"
+        32 ATTR_INVALID: "#attr_invalid"
 
-        32 CLONE: "#clone" // internal function that clones a value into a buffer
+        33 CLONE: "#clone" // internal function that clones a value into a buffer
     }
     // Fake module for synthesizing and storing derived implementations
     1 DERIVED_SYNTH: "#Derived" => {
