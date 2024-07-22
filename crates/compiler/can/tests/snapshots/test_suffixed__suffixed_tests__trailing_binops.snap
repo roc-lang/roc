@@ -1,0 +1,95 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-67,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "copy",
+            },
+            @7-67 Closure(
+                [
+                    @8-9 Identifier {
+                        ident: "a",
+                    },
+                    @10-11 Identifier {
+                        ident: "b",
+                    },
+                ],
+                @19-30 Apply(
+                    @19-30 Var {
+                        module_name: "Task",
+                        ident: "await",
+                    },
+                    [
+                        @19-30 Apply(
+                            @19-30 Var {
+                                module_name: "",
+                                ident: "line",
+                            },
+                            [
+                                @25-30 Str(
+                                    PlainLine(
+                                        "FOO",
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
+                        @19-30 Closure(
+                            [
+                                @19-30 RecordDestructure(
+                                    [],
+                                ),
+                            ],
+                            @36-67 Apply(
+                                @36-67 Var {
+                                    module_name: "",
+                                    ident: "mapErr",
+                                },
+                                [
+                                    @36-48 Apply(
+                                        @36-43 Var {
+                                            module_name: "CMD",
+                                            ident: "new",
+                                        },
+                                        [
+                                            @44-48 Str(
+                                                PlainLine(
+                                                    "cp",
+                                                ),
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                    @64-67 Tag(
+                                        "ERR",
+                                    ),
+                                ],
+                                BinOp(
+                                    Pizza,
+                                ),
+                            ),
+                        ),
+                    ],
+                    BangSuffix,
+                ),
+            ),
+        ),
+    ],
+}

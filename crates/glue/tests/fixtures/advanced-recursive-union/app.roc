@@ -1,7 +1,4 @@
-app "app"
-    packages { pf: "platform.roc" }
-    imports []
-    provides [main] to pf
+app [main] { pf: platform "platform.roc" }
 
 main = {
     default: Job {

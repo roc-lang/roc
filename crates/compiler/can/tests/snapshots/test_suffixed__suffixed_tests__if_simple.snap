@@ -1,0 +1,191 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-189,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-189 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                        Index(2147483649),
+                    ],
+                    regions: [
+                        @20-37,
+                        @52-70,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                        Slice(start = 0, length = 1),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                        Slice(start = 1, length = 0),
+                    ],
+                    spaces: [
+                        Newline,
+                    ],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @11-17 Identifier {
+                                ident: "isTrue",
+                            },
+                            @20-37 Apply(
+                                @20-27 Var {
+                                    module_name: "Task",
+                                    ident: "ok",
+                                },
+                                [
+                                    @28-37 Var {
+                                        module_name: "Bool",
+                                        ident: "true",
+                                    },
+                                ],
+                                Space,
+                            ),
+                        ),
+                        Body(
+                            @42-49 Identifier {
+                                ident: "isFalse",
+                            },
+                            @52-70 Apply(
+                                @52-59 Var {
+                                    module_name: "Task",
+                                    ident: "ok",
+                                },
+                                [
+                                    @60-70 Var {
+                                        module_name: "Bool",
+                                        ident: "false",
+                                    },
+                                ],
+                                Space,
+                            ),
+                        ),
+                    ],
+                },
+                @79-87 Apply(
+                    @79-87 Var {
+                        module_name: "Task",
+                        ident: "await",
+                    },
+                    [
+                        @79-87 Var {
+                            module_name: "",
+                            ident: "isFalse",
+                        },
+                        @79-87 Closure(
+                            [
+                                @79-87 Identifier {
+                                    ident: "#!a0",
+                                },
+                            ],
+                            @76-189 If(
+                                [
+                                    (
+                                        @79-87 Var {
+                                            module_name: "",
+                                            ident: "#!a0",
+                                        },
+                                        @101-112 Apply(
+                                            @101-105 Var {
+                                                module_name: "",
+                                                ident: "line",
+                                            },
+                                            [
+                                                @106-112 Str(
+                                                    PlainLine(
+                                                        "fail",
+                                                    ),
+                                                ),
+                                            ],
+                                            Space,
+                                        ),
+                                    ),
+                                ],
+                                @125-132 Apply(
+                                    @125-132 Var {
+                                        module_name: "Task",
+                                        ident: "await",
+                                    },
+                                    [
+                                        @125-132 Var {
+                                            module_name: "",
+                                            ident: "isTrue",
+                                        },
+                                        @125-132 Closure(
+                                            [
+                                                @125-132 Identifier {
+                                                    ident: "#!a1",
+                                                },
+                                            ],
+                                            @76-189 If(
+                                                [
+                                                    (
+                                                        @125-132 Var {
+                                                            module_name: "",
+                                                            ident: "#!a1",
+                                                        },
+                                                        @146-160 Apply(
+                                                            @146-150 Var {
+                                                                module_name: "",
+                                                                ident: "line",
+                                                            },
+                                                            [
+                                                                @151-160 Str(
+                                                                    PlainLine(
+                                                                        "success",
+                                                                    ),
+                                                                ),
+                                                            ],
+                                                            Space,
+                                                        ),
+                                                    ),
+                                                ],
+                                                @178-189 Apply(
+                                                    @178-182 Var {
+                                                        module_name: "",
+                                                        ident: "line",
+                                                    },
+                                                    [
+                                                        @183-189 Str(
+                                                            PlainLine(
+                                                                "fail",
+                                                            ),
+                                                        ),
+                                                    ],
+                                                    Space,
+                                                ),
+                                            ),
+                                        ),
+                                    ],
+                                    BangSuffix,
+                                ),
+                            ),
+                        ),
+                    ],
+                    BangSuffix,
+                ),
+            ),
+        ),
+    ],
+}

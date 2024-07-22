@@ -1,0 +1,145 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+    ],
+    regions: [
+        @0-54,
+        @56-98,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 2),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 2, length = 0),
+    ],
+    spaces: [
+        Newline,
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-54 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @15-20,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @11-12 Identifier {
+                                ident: "a",
+                            },
+                            @15-20 Str(
+                                PlainLine(
+                                    "Foo",
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                @11-54 Apply(
+                    @11-54 Var {
+                        module_name: "Task",
+                        ident: "await",
+                    },
+                    [
+                        @25-39 Apply(
+                            @25-39 Var {
+                                module_name: "Stdout",
+                                ident: "line",
+                            },
+                            [
+                                @38-39 Var {
+                                    module_name: "",
+                                    ident: "a",
+                                },
+                            ],
+                            Space,
+                        ),
+                        @11-54 Closure(
+                            [
+                                @25-39 RecordDestructure(
+                                    [],
+                                ),
+                            ],
+                            @45-54 Var {
+                                module_name: "",
+                                ident: "printBar",
+                            },
+                        ),
+                    ],
+                    BangSuffix,
+                ),
+            ),
+        ),
+        Body(
+            @56-64 Identifier {
+                ident: "printBar",
+            },
+            @71-98 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @75-80,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @71-72 Identifier {
+                                ident: "b",
+                            },
+                            @75-80 Str(
+                                PlainLine(
+                                    "Bar",
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                @85-98 Apply(
+                    @85-96 Var {
+                        module_name: "Stdout",
+                        ident: "line",
+                    },
+                    [
+                        @97-98 Var {
+                            module_name: "",
+                            ident: "b",
+                        },
+                    ],
+                    Space,
+                ),
+            ),
+        ),
+    ],
+}

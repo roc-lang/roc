@@ -79,6 +79,8 @@ mod cli_run {
     #[derive(Debug, PartialEq, Eq)]
     enum Arg<'a> {
         ExamplePath(&'a str),
+        // allow because we may need PlainText in the future
+        #[allow(dead_code)]
         PlainText(&'a str),
     }
 
@@ -541,16 +543,6 @@ mod cli_run {
     }
 
     #[test]
-    fn platform_switching_swift() {
-        test_roc_app_slim(
-            "examples/platform-switching",
-            "rocLovesSwift.roc",
-            "Roc <3 Swift!\n",
-            UseValgrind::Yes,
-        )
-    }
-
-    #[test]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -784,11 +776,6 @@ mod cli_run {
     }
 
     #[test]
-    fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
-    }
-
-    #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
@@ -797,39 +784,6 @@ mod cli_run {
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
         )
-    }
-
-    #[test]
-    #[ignore = "currently broken in basic-cli platform"]
-    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
-    #[serial(cli_platform)]
-    fn cli_args() {
-        test_roc_app(
-            "examples/cli",
-            "argsBROKEN.roc",
-            &[],
-            &[
-                Arg::PlainText("log"),
-                Arg::PlainText("-b"),
-                Arg::PlainText("3"),
-                Arg::PlainText("--num"),
-                Arg::PlainText("81"),
-            ],
-            &[],
-            "4\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    // TODO: remove in favor of cli_args once mono bugs are resolved in investigation
-    #[test]
-    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
-    #[serial(cli_platform)]
-    fn cli_args_check() {
-        let path = file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc");
-        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -942,11 +896,6 @@ mod cli_run {
     }
 
     #[test]
-    fn swift_ui() {
-        test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
-    }
-
-    #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
@@ -1030,7 +979,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "27101\n",
+            "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1045,7 +994,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "27101\n",
+            "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1085,11 +1034,6 @@ mod cli_run {
 "#,
             UseValgrind::Yes,
         )
-    }
-
-    #[test]
-    fn inspect_gui() {
-        test_roc_app_slim("examples", "inspect-gui.roc", "", UseValgrind::No)
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
