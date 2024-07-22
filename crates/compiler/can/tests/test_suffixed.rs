@@ -128,7 +128,7 @@ mod suffixed_tests {
      * Example with a parens suffixed sub-expression
      * in the function part of an Apply.
      *
-     * Note how the parens unwraps into an intermediate answer #!a0 instead of
+     * Note how the parens unwraps into an intermediate answer #!0_arg instead of
      * unwrapping the def `do`.
      *
      */
@@ -162,7 +162,7 @@ mod suffixed_tests {
     /**
      * Example with a multiple suffixed Var
      *
-     * Note it unwraps into an intermediate answer `#!a0`
+     * Note it unwraps into an intermediate answer `#!0_arg`
      *
      */
     #[test]
@@ -570,10 +570,10 @@ mod test_suffixed_helpers {
 
     #[test]
     fn test_matching_answer() {
-        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!a0" });
+        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!0_arg" });
         let loc_new = Loc::at_zero(Expr::Var {
             module_name: "",
-            ident: "#!a0",
+            ident: "#!0_arg",
         });
 
         std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));

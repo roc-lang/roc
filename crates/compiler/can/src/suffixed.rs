@@ -39,7 +39,7 @@ pub enum EUnwrapped<'a> {
     /// Suffixed sub expression
     /// e.g. x = first! (second! 42)
     /// In this example, the second unwrap (after unwrapping the top level `first!`) will produce
-    /// `UnwrappedSubExpr<{ sub_arg: second 42, sub_pat: #!a0, sub_new: #!a0 }>`
+    /// `UnwrappedSubExpr<{ sub_arg: second 42, sub_pat: #!0_arg, sub_new: #!0_arg }>`
     UnwrappedSubExpr {
         /// the unwrapped expression argument for Task.await
         sub_arg: &'a Loc<Expr<'a>>,
@@ -69,7 +69,7 @@ fn init_unwrapped_err<'a>(
         None => {
             // Provide an intermediate answer expression and pattern when unwrapping a
             // (sub) expression.
-            // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!a0 -> foo #!a0`
+            // e.g. `x = foo (bar!)` unwraps to `x = Task.await (bar) \#!0_arg -> foo #!0_arg`
             let ident = arena.alloc(format!("{}_arg", next_unique_suffixed_ident()));
             let sub_new = arena.alloc(Loc::at(
                 unwrapped_expr.region,
@@ -861,7 +861,7 @@ pub fn apply_task_await<'a>(
             //     \loc_pat -> loc_cont
             use roc_parse::ast::*;
 
-            // #!a0
+            // #!0_expr or #!0_stmt
             let new_ident = next_unique_suffixed_ident();
             let new_ident = match loc_pat.value {
                 Pattern::Underscore("#!stmt") => format!("{}_stmt", new_ident),
@@ -930,7 +930,7 @@ pub fn apply_task_await<'a>(
                 Defs(arena.alloc(defs), new_var),
             ))
         }
-        _ => {
+        None => {
             // loc_pat = loc_expr!
             // loc_cont
 
@@ -940,8 +940,10 @@ pub fn apply_task_await<'a>(
         }
     };
 
-    // If the pattern and the new are matching answers then we don't need to unwrap anything
-    // e.g. `Task.await foo \#!a1 -> Task.ok #!a1` is the same as `foo`
+    // If the last expression is suffixed - don't await
+    // e.g.
+    // \x -> x!
+    // \x -> x
     if is_matching_intermediate_answer(loc_pat, loc_cont) {
         return task_await_first_arg;
     }
