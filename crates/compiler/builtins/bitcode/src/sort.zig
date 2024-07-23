@@ -99,7 +99,7 @@ inline fn parity_merge_two(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Compa
 inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
     // Note there is a much simpler version here:
     //    *ptd++ = cmp(ptl, ptr) <= 0 ? *ptl++ : *ptr++;
-    // That said, it is only used with gcc, so I assume it has optimization issues with llvm.
+    // That said, not sure how to write that in zig and guarantee it is branchless.
     // Thus using the longer form.
     const lte = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left.*, right.*))) != utils.Ordering.GT;
     // TODO: double check this is branchless.
@@ -119,8 +119,7 @@ inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
     // Note there is a much simpler version here:
     //    *tpd-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--;
-    // That said, it is only used with gcc, so I assume it has optimization issues with llvm.
-    // Thus using the longer form.
+    // That said, not sure how to write that in zig and guarantee it is branchless.
     const lte = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left.*, right.*))) != utils.Ordering.GT;
     // TODO: double check this is branchless.
     const y = if (lte) element_width else 0;
