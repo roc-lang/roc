@@ -75,6 +75,22 @@ fn quadsort_direct(
 
 // ================ 32 Element Blocks =========================================
 
+/// Merge 4 sorted arrays of length 2 into a sorted array of length 8 using swap space.
+fn quad_swap_merge(
+    array: [*]u8,
+    swap: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    parity_merge_two(array, swap, cmp_data, cmp, element_width, copy);
+    parity_merge_two(array + 4 * element_width, swap + 4 * element_width, cmp_data, cmp, element_width, copy);
+
+    parity_merge_four(swap, array, cmp_data, cmp, element_width, copy);
+}
+
+// Reverse values from start to end.
 fn quad_reversal(
     start: [*]u8,
     end: [*]u8,
@@ -122,6 +138,28 @@ fn quad_reversal(
             break;
         loops -= 1;
     }
+}
+
+test "quad_swap_merge" {
+    var arr: [8]i64 = undefined;
+    var swap: [8]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
+    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    quad_swap_merge(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+
+    arr = [8]i64{ 5, 7, 1, 3, 6, 8, 2, 4 };
+    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    quad_swap_merge(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+
+    arr = [8]i64{ 1, 8, 3, 4, 5, 6, 2, 7 };
+    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    quad_swap_merge(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 }
 
 test "quad_reversal" {
@@ -603,10 +641,10 @@ test "tiny_sort" {
 // They all also are always inline for performance.
 // The are the smallest fundamental unit.
 
-/// Merge two neighboring sorted 4 element arrays into swap.
+/// Merge two neighboring sorted 4 element arrays into dest.
 inline fn parity_merge_four(
     array: [*]u8,
-    swap: [*]u8,
+    dest: [*]u8,
     cmp_data: Opaque,
     cmp: CompareFn,
     element_width: usize,
@@ -614,29 +652,29 @@ inline fn parity_merge_four(
 ) void {
     var left = array;
     var right = array + (4 * element_width);
-    var swap_ptr = swap;
-    head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    var dest_ptr = dest;
+    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
-    copy(swap_ptr, to_copy);
+    copy(dest_ptr, to_copy);
 
     left = array + (3 * element_width);
     right = array + (7 * element_width);
-    swap_ptr = swap + (7 * element_width);
-    tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    dest_ptr = dest + (7 * element_width);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
     to_copy = if (gt) left else right;
-    copy(swap_ptr, to_copy);
+    copy(dest_ptr, to_copy);
 }
 
-/// Merge two neighboring sorted 2 element arrays into swap.
+/// Merge two neighboring sorted 2 element arrays into dest.
 inline fn parity_merge_two(
     array: [*]u8,
-    swap: [*]u8,
+    dest: [*]u8,
     cmp_data: Opaque,
     cmp: CompareFn,
     element_width: usize,
@@ -644,19 +682,19 @@ inline fn parity_merge_two(
 ) void {
     var left = array;
     var right = array + (2 * element_width);
-    var swap_ptr = swap;
-    head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    var dest_ptr = dest;
+    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
-    copy(swap_ptr, to_copy);
+    copy(dest_ptr, to_copy);
 
     left = array + element_width;
     right = array + (3 * element_width);
-    swap_ptr = swap + (3 * element_width);
-    tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    dest_ptr = dest + (3 * element_width);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
     to_copy = if (gt) left else right;
-    copy(swap_ptr, to_copy);
+    copy(dest_ptr, to_copy);
 }
 
 /// Moves the smaller element from left and rigth to dest.
@@ -742,56 +780,56 @@ inline fn compare(cmp: CompareFn, cmp_data: Opaque, lhs: [*]u8, rhs: [*]u8) Orde
 
 test "parity_merge_four" {
     var arr: [8]i64 = undefined;
-    var swap: [8]i64 = undefined;
+    var dest: [8]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
     arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    parity_merge_four(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
-    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    parity_merge_four(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
-    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    parity_merge_four(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 }
 
 test "parity_merge_two" {
     var arr: [4]i64 = undefined;
-    var swap: [4]i64 = undefined;
+    var dest: [4]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
     arr = [4]i64{ 1, 2, 3, 4 };
-    swap = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
+    dest = [4]i64{ 0, 0, 0, 0 };
+    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 3, 2, 4 };
-    swap = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
+    dest = [4]i64{ 0, 0, 0, 0 };
+    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 3, 4, 1, 2 };
-    swap = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
+    dest = [4]i64{ 0, 0, 0, 0 };
+    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 2, 4, 1, 3 };
-    swap = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
+    dest = [4]i64{ 0, 0, 0, 0 };
+    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 4, 2, 3 };
-    swap = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
+    dest = [4]i64{ 0, 0, 0, 0 };
+    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 }
 
 test "head_merge" {
