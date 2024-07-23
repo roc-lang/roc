@@ -4,6 +4,10 @@ const testing = std.testing;
 const utils = @import("utils.zig");
 const roc_panic = @import("panic.zig").panic_help;
 
+const Ordering = utils.Ordering;
+const GT = Ordering.GT;
+const LT = Ordering.LT;
+const EQ = Ordering.EQ;
 const Opaque = ?[*]u8;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
@@ -72,7 +76,7 @@ fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element
             swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
             arr_ptr -= element_width;
 
-            const gt = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, arr_ptr, arr_ptr + element_width))) == utils.Ordering.GT;
+            const gt = @as(Ordering, @enumFromInt(cmp(cmp_data, arr_ptr, arr_ptr + element_width))) == GT;
             if (gt) {
                 copy(swap_ptr, arr_ptr);
                 copy(arr_ptr, arr_ptr + element_width);
@@ -140,7 +144,7 @@ inline fn parity_merge_four(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Comp
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    const lte = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left, right))) != utils.Ordering.GT;
+    const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
     copy(swap_ptr, to_copy);
 
@@ -150,7 +154,7 @@ inline fn parity_merge_four(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Comp
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    const gt = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left, right))) == utils.Ordering.GT;
+    const gt = compare(cmp, cmp_data, left, right) == GT;
     to_copy = if (gt) left else right;
     copy(swap_ptr, to_copy);
 }
@@ -161,7 +165,7 @@ inline fn parity_merge_two(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Compa
     var right = ptr + (2 * element_width);
     var swap_ptr = swap;
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    const lte = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left, right))) != utils.Ordering.GT;
+    const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
     copy(swap_ptr, to_copy);
 
@@ -169,7 +173,7 @@ inline fn parity_merge_two(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Compa
     right = ptr + (3 * element_width);
     swap_ptr = swap + (3 * element_width);
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    const gt = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left, right))) == utils.Ordering.GT;
+    const gt = compare(cmp, cmp_data, left, right) == GT;
     to_copy = if (gt) left else right;
     copy(swap_ptr, to_copy);
 }
@@ -183,7 +187,7 @@ inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
     //    *ptd++ = cmp(ptl, ptr) <= 0 ? *ptl++ : *ptr++;
     // That said, not sure how to write that in zig and guarantee it is branchless.
     // Thus using the longer form.
-    const lte = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left.*, right.*))) != utils.Ordering.GT;
+    const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
     // TODO: double check this is branchless.
     const x = if (lte) element_width else 0;
     const not_x = if (lte) 0 else element_width;
@@ -202,7 +206,7 @@ inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
     // Note there is a much simpler version here:
     //    *tpd-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--;
     // That said, not sure how to write that in zig and guarantee it is branchless.
-    const lte = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, left.*, right.*))) != utils.Ordering.GT;
+    const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
     // TODO: double check this is branchless.
     const y = if (lte) element_width else 0;
     const not_y = if (lte) 0 else element_width;
@@ -215,7 +219,7 @@ inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
 inline fn swap_branchless(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    const gt = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, ptr, ptr + element_width))) == utils.Ordering.GT;
+    const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
     // TODO: double check this is branchless. I would expect llvm to optimize this to be branchless.
     // But based on reading some comments in quadsort, llvm seems to prefer branches very often.
     const x = if (gt) element_width else 0;
@@ -224,6 +228,10 @@ inline fn swap_branchless(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Compar
     copy(swap, ptr + y);
     copy(ptr, ptr + x);
     copy(ptr + element_width, swap);
+}
+
+inline fn compare(cmp: CompareFn, cmp_data: Opaque, lhs: [*]u8, rhs: [*]u8) Ordering {
+    return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs, rhs)));
 }
 
 test "parity_merge_four" {
