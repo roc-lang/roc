@@ -63,6 +63,56 @@ fn quadsort_direct(
 // ================ Small Arrays ==============================================
 // Below are functions for sorting 0 to 31 element arrays.
 
+// Inserts elements from offset to len into the sorted begining chunk of the array before offest.
+// offset must be at least 2.
+fn twice_unguarded_insert(array: [*]u8, offset: usize, len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
+    const key_ptr = @as([*]u8, @ptrCast(&buffer[0]));
+
+    for (offset..len) |i| {
+        var end_ptr = array + i * element_width;
+        var arr_ptr = end_ptr - element_width;
+
+        const lte = compare(cmp, cmp_data, arr_ptr, end_ptr) != GT;
+        if (lte) {
+            continue;
+        }
+
+        copy(key_ptr, end_ptr);
+        var gt = compare(cmp, cmp_data, array + element_width, key_ptr) == GT;
+        if (gt) {
+            var top = i - 1;
+            while (true) {
+                copy(end_ptr, arr_ptr);
+                end_ptr -= element_width;
+                arr_ptr -= element_width;
+
+                top -= 1;
+                if (top == 0) {
+                    break;
+                }
+            }
+            copy(end_ptr, key_ptr);
+            end_ptr -= element_width;
+        } else {
+            while (true) {
+                inline for (0..1) |_| {
+                    copy(end_ptr, arr_ptr);
+                    end_ptr -= element_width;
+                    arr_ptr -= element_width;
+                }
+                gt = compare(cmp, cmp_data, arr_ptr, key_ptr) == GT;
+                if (!gt) {
+                    break;
+                }
+            }
+            copy(end_ptr, end_ptr + element_width);
+            copy(end_ptr + element_width, key_ptr);
+        }
+        swap_branchless(end_ptr, key_ptr, cmp_data, cmp, element_width, copy);
+    }
+}
+
 /// Sort arrays of 0 to 4 elements.
 fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
     var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
@@ -110,6 +160,26 @@ fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element
     }
 }
 
+test "twice_unguarded_insert" {
+    {
+        var arr = [7]i64{ 2, 3, 5, 6, 4, 1, 7 };
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        twice_unguarded_insert(arr_ptr, 4, 7, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
+    }
+    {
+        var arr = [11]i64{ 1, 2, 5, 6, 7, 8, 9, 11, 10, 4, 3 };
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        twice_unguarded_insert(arr_ptr, 8, 11, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [11]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 });
+    }
+    {
+        var arr = [23]i64{ 5, 6, 7, 8, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 10, 4, 3, 2, 16, 1, 9 };
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        twice_unguarded_insert(arr_ptr, 16, 23, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [23]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 });
+    }
+}
 test "tiny_sort" {
     var arr: [4]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
