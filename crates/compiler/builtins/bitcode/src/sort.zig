@@ -107,30 +107,23 @@ fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element
 }
 
 test "tiny_sort" {
-    var arr = [4]i64{ 4, 2, 1, 3 };
-
+    var arr: [4]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
+    arr = [4]i64{ 4, 2, 1, 3 };
     tiny_sort(arr_ptr, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 2, 1, 4, 3 };
-
     tiny_sort(arr_ptr, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 2, 3, 1, -1 };
-
     tiny_sort(arr_ptr, 3, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(arr, [4]i64{ 1, 2, 3, -1 });
 
     arr = [4]i64{ 2, 1, -1, -1 };
-
     tiny_sort(arr_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(arr, [4]i64{ 1, 2, -1, -1 });
 }
 
@@ -234,68 +227,56 @@ inline fn swap_branchless(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Compar
 }
 
 test "parity_merge_four" {
-    var arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-    var swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-
+    var arr: [8]i64 = undefined;
+    var swap: [8]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
+    arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
     parity_merge_four(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
     swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-
     parity_merge_four(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
     swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-
     parity_merge_four(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 }
 
 test "parity_merge_two" {
-    var arr = [4]i64{ 1, 2, 3, 4 };
-    var swap = [4]i64{ 0, 0, 0, 0 };
-
+    var arr: [4]i64 = undefined;
+    var swap: [4]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
+    arr = [4]i64{ 1, 2, 3, 4 };
+    swap = [4]i64{ 0, 0, 0, 0 };
     parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 3, 2, 4 };
     swap = [4]i64{ 0, 0, 0, 0 };
-
     parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 3, 4, 1, 2 };
     swap = [4]i64{ 0, 0, 0, 0 };
-
     parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 2, 4, 1, 3 };
     swap = [4]i64{ 0, 0, 0, 0 };
-
     parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 4, 2, 3 };
     swap = [4]i64{ 0, 0, 0, 0 };
-
     parity_merge_two(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
     try testing.expectEqual(swap, [4]i64{ 1, 2, 3, 4 });
 }
 
@@ -336,31 +317,22 @@ test "tail_merge" {
 }
 
 test "swap" {
-    var arr = [2]i64{ 10, 20 };
+    var arr: [2]i64 = undefined;
+    var swap: i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: i64 = 0;
     var swap_ptr = @as([*]u8, @ptrCast(&swap));
 
+    arr = [2]i64{ 10, 20 };
     swap_branchless(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [2]i64{ 10, 20 });
 
-    try testing.expectEqual(arr[0], 10);
-    try testing.expectEqual(arr[1], 20);
-
-    arr[0] = 77;
-    arr[1] = -12;
-
+    arr = [2]i64{ 77, -12 };
     swap_branchless(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [2]i64{ -12, 77 });
 
-    try testing.expectEqual(arr[0], -12);
-    try testing.expectEqual(arr[1], 77);
-
-    arr[0] = -22;
-    arr[1] = -22;
-
+    arr = [2]i64{ -22, -22 };
     swap_branchless(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-
-    try testing.expectEqual(arr[0], -22);
-    try testing.expectEqual(arr[1], -22);
+    try testing.expectEqual(arr, [2]i64{ -22, -22 });
 }
 
 fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
