@@ -136,12 +136,12 @@ fn parity_swap_five(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: Compare
     arr_ptr += 2 * element_width;
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr -= element_width;
-    const gt1 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    var more_work = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += 2 * element_width;
-    const gt2 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr = array;
 
-    if (gt1 or gt2) {
+    if (more_work != 0) {
         swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
         arr_ptr += 2 * element_width;
         swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
@@ -222,14 +222,14 @@ fn parity_swap_seven(array: [*]u8, tmp_ptr: [*]u8, swap: [*]u8, cmp_data: Opaque
     arr_ptr += 2 * element_width;
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr -= 3 * element_width;
-    const gt1 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    var more_work = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += 2 * element_width;
-    const gt2 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += 2 * element_width;
-    const gt3 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr -= element_width;
 
-    if (!(gt1 or gt2 or gt3))
+    if (more_work == 0)
         return;
 
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
@@ -429,7 +429,7 @@ inline fn swap_branchless(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: Compare
     _ = swap_branchless_return_gt(ptr, tmp, cmp_data, cmp, element_width, copy);
 }
 
-inline fn swap_branchless_return_gt(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) bool {
+inline fn swap_branchless_return_gt(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) u8 {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
     var x = if (gt) element_width else 0;
@@ -437,7 +437,7 @@ inline fn swap_branchless_return_gt(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cm
     copy(tmp, from);
     copy(ptr, ptr + x);
     copy(ptr + element_width, tmp);
-    return gt;
+    return @intFromBool(gt);
 }
 
 inline fn compare(cmp: CompareFn, cmp_data: Opaque, lhs: [*]u8, rhs: [*]u8) Ordering {
