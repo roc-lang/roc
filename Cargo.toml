@@ -70,9 +70,7 @@ version = "0.0.1"
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
 # TODO: Switch this back to roc-lang/inkwell once it is updated
-inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-16", features = [
-    "llvm16-0",
-] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", tag = "0.4.0", features = ["llvm17-0"] }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
 backtrace = "0.3.67"

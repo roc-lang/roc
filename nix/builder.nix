@@ -45,8 +45,7 @@ rustPlatform.buildRustPackage {
     git
     pkg-config
     python3
-    llvmPkgs.clang
-    llvmPkgs.llvm.dev
+    llvmPkgs.clangUseLLVM
     llvmPkgs.bintools-unwrapped # contains lld
     zigPkg
   ]);
