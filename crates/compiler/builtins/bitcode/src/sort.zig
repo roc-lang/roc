@@ -22,6 +22,12 @@ pub fn quadsort(
     element_width: usize,
     copy: CopyFn,
 ) void {
+    // Note, knowing constant versions of element_width and copy could have huge perf gains.
+    // Hopefully llvm will essentially always do it via constant argument propagation and inlining.
+    // If not, we may want to generate `n` different version of this function with comptime.
+    // Then have our builtin dispatch to the correct version.
+    // llvm garbage collection would remove all other variants.
+    // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         quadsort_direct(source_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, copy);
     } else {
