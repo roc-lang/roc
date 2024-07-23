@@ -258,7 +258,7 @@ inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
     // That said, not sure how to write that in zig and guarantee it is branchless.
     // Thus using the longer form.
     const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
-    // TODO: double check this is branchless.
+    // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const x = if (lte) element_width else 0;
     const not_x = if (lte) 0 else element_width;
     copy(dest.*, left.*);
@@ -277,7 +277,7 @@ inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
     //    *tpd-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--;
     // That said, not sure how to write that in zig and guarantee it is branchless.
     const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
-    // TODO: double check this is branchless.
+    // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const y = if (lte) element_width else 0;
     const not_y = if (lte) 0 else element_width;
     copy(dest.*, left.*);
@@ -290,8 +290,7 @@ inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
 inline fn swap_branchless(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
     const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
-    // TODO: double check this is branchless. I would expect llvm to optimize this to be branchless.
-    // But based on reading some comments in quadsort, llvm seems to prefer branches very often.
+    // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const x = if (gt) element_width else 0;
     const y = if (gt) 0 else element_width;
 
