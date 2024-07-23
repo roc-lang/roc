@@ -71,96 +71,37 @@ fn quadsort_direct(
 // ================ Small Arrays ==============================================
 // Below are functions for sorting 0 to 31 element arrays.
 
-// Inserts elements from offset to len into the sorted begining chunk of the array before offest.
-// offset must be at least 2.
-fn twice_unguarded_insert(array: [*]u8, offset: usize, len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+/// Sort arrays of 0 to 7 elements.
+fn tiny_sort(array: [*]u8, len: usize, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
     var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
-    const key_ptr = @as([*]u8, @ptrCast(&buffer[0]));
-
-    for (offset..len) |i| {
-        var end_ptr = array + i * element_width;
-        var arr_ptr = end_ptr - element_width;
-
-        const lte = compare(cmp, cmp_data, arr_ptr, end_ptr) != GT;
-        if (lte) {
-            continue;
-        }
-
-        copy(key_ptr, end_ptr);
-        var gt = compare(cmp, cmp_data, array + element_width, key_ptr) == GT;
-        if (gt) {
-            var top = i - 1;
-            while (true) {
-                copy(end_ptr, arr_ptr);
-                end_ptr -= element_width;
-                arr_ptr -= element_width;
-
-                top -= 1;
-                if (top == 0) {
-                    break;
-                }
-            }
-            copy(end_ptr, key_ptr);
-            end_ptr -= element_width;
-        } else {
-            while (true) {
-                inline for (0..1) |_| {
-                    copy(end_ptr, arr_ptr);
-                    end_ptr -= element_width;
-                    arr_ptr -= element_width;
-                }
-                gt = compare(cmp, cmp_data, arr_ptr, key_ptr) == GT;
-                if (!gt) {
-                    break;
-                }
-            }
-            copy(end_ptr, end_ptr + element_width);
-            copy(end_ptr + element_width, key_ptr);
-        }
-        swap_branchless(end_ptr, key_ptr, cmp_data, cmp, element_width, copy);
-    }
-}
-
-/// Sort arrays of 0 to 4 elements.
-fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&buffer[0]));
+    const tmp_ptr = @as([*]u8, @ptrCast(&buffer[0]));
 
     switch (len) {
-        4 => {
-            var arr_ptr = array;
-            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
-            arr_ptr += 2 * element_width;
-            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
-            arr_ptr -= element_width;
-
-            const gt = @as(Ordering, @enumFromInt(cmp(cmp_data, arr_ptr, arr_ptr + element_width))) == GT;
-            if (gt) {
-                copy(swap_ptr, arr_ptr);
-                copy(arr_ptr, arr_ptr + element_width);
-                copy(arr_ptr + element_width, swap_ptr);
-                arr_ptr -= element_width;
-
-                swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
-                arr_ptr += 2 * element_width;
-                swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
-                arr_ptr -= element_width;
-                swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
-            }
+        1, 0 => {
+            return;
+        },
+        2 => {
+            swap_branchless(array, tmp_ptr, cmp_data, cmp, element_width, copy);
         },
         3 => {
             var arr_ptr = array;
-            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
             arr_ptr += element_width;
-            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
-            arr_ptr = array;
-            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            arr_ptr -= element_width;
+            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
         },
-        2 => {
-            swap_branchless(array, swap_ptr, cmp_data, cmp, element_width, copy);
+        4 => {
+            parity_swap_four(array, tmp_ptr, cmp_data, cmp, element_width, copy);
         },
-        1, 0 => {
-            return;
+        5 => {
+            parity_swap_five(array, tmp_ptr, cmp_data, cmp, element_width, copy);
+        },
+        6 => {
+            parity_swap_six(array, tmp_ptr, swap, cmp_data, cmp, element_width, copy);
+        },
+        7 => {
+            parity_swap_seven(array, tmp_ptr, swap, cmp_data, cmp, element_width, copy);
         },
         else => {
             unreachable;
@@ -168,45 +109,241 @@ fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element
     }
 }
 
-test "twice_unguarded_insert" {
+fn parity_swap_four(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var arr_ptr = array;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr -= element_width;
+
+    const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
+    if (gt) {
+        copy(tmp_ptr, arr_ptr);
+        copy(arr_ptr, arr_ptr + element_width);
+        copy(arr_ptr + element_width, tmp_ptr);
+        arr_ptr -= element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr += 2 * element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr -= element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    }
+}
+
+fn parity_swap_five(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var arr_ptr = array;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr -= element_width;
+    const gt1 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    const gt2 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr = array;
+
+    if (gt1 or gt2) {
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr += 2 * element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr -= element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr += 2 * element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr = array;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        arr_ptr += 2 * element_width;
+        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    }
+}
+
+fn parity_swap_six(array: [*]u8, tmp_ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var arr_ptr = array;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 3 * element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr -= element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr = array;
+
     {
-        var arr = [7]i64{ 2, 3, 5, 6, 4, 1, 7 };
+        const lte = compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT;
+        if (lte) {
+            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            arr_ptr += 4 * element_width;
+            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            return;
+        }
+    }
+
+    {
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
+        var x = if (gt) element_width else 0;
+        var not_x = if (!gt) element_width else 0;
+        copy(swap, arr_ptr + x);
+        copy(swap + element_width, arr_ptr + not_x);
+        copy(swap + 2 * element_width, arr_ptr + 2 * element_width);
+        arr_ptr += 4 * element_width;
+    }
+    {
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
+        var x = if (gt) element_width else 0;
+        var not_x = if (!gt) element_width else 0;
+        copy(swap + 4 * element_width, arr_ptr + x);
+        copy(swap + 5 * element_width, arr_ptr + not_x);
+        copy(swap + 3 * element_width, arr_ptr - element_width);
+    }
+
+    arr_ptr = array;
+    var left = swap;
+    var right = swap + 3 * element_width;
+
+    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+
+    arr_ptr = array + 5 * element_width;
+    left = swap + 2 * element_width;
+    right = swap + 5 * element_width;
+
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    const gt = compare(cmp, cmp_data, left, right) == GT;
+    const from = if (gt) left else right;
+    copy(arr_ptr, from);
+}
+
+fn parity_swap_seven(array: [*]u8, tmp_ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var arr_ptr = array;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr -= 3 * element_width;
+    const gt1 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    const gt2 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr += 2 * element_width;
+    const gt3 = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr -= element_width;
+
+    if (!(gt1 or gt2 or gt3))
+        return;
+
+    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    arr_ptr = array;
+
+    {
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
+        var x = if (gt) element_width else 0;
+        var not_x = if (!gt) element_width else 0;
+        copy(swap, arr_ptr + x);
+        copy(swap + element_width, arr_ptr + not_x);
+        copy(swap + 2 * element_width, arr_ptr + 2 * element_width);
+        arr_ptr += 3 * element_width;
+    }
+    {
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
+        var x = if (gt) element_width else 0;
+        var not_x = if (!gt) element_width else 0;
+        copy(swap + 3 * element_width, arr_ptr + x);
+        copy(swap + 4 * element_width, arr_ptr + not_x);
+        arr_ptr += 2 * element_width;
+    }
+    {
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
+        var x = if (gt) element_width else 0;
+        var not_x = if (!gt) element_width else 0;
+        copy(swap + 5 * element_width, arr_ptr + x);
+        copy(swap + 6 * element_width, arr_ptr + not_x);
+    }
+
+    arr_ptr = array;
+    var left = swap;
+    var right = swap + 3 * element_width;
+
+    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+
+    arr_ptr = array + 6 * element_width;
+    left = swap + 2 * element_width;
+    right = swap + 6 * element_width;
+
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    const gt = compare(cmp, cmp_data, left, right) == GT;
+    const from = if (gt) left else right;
+    copy(arr_ptr, from);
+}
+
+test "tiny_sort" {
+    var swap: [7]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    {
+        var arr: [7]i64 = undefined;
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        twice_unguarded_insert(arr_ptr, 4, 7, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+
+        arr = [7]i64{ 3, 1, 2, 5, 4, 7, 6 };
+        tiny_sort(arr_ptr, 7, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
+
+        arr = [7]i64{ 7, 6, 5, 4, 3, 2, 1 };
+        tiny_sort(arr_ptr, 7, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
     }
     {
-        var arr = [11]i64{ 1, 2, 5, 6, 7, 8, 9, 11, 10, 4, 3 };
+        var arr: [6]i64 = undefined;
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        twice_unguarded_insert(arr_ptr, 8, 11, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [11]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 });
+
+        arr = [6]i64{ 3, 1, 2, 6, 4, 5 };
+        tiny_sort(arr_ptr, 6, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
+
+        arr = [6]i64{ 6, 5, 4, 3, 2, 1 };
+        tiny_sort(arr_ptr, 6, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
     }
     {
-        var arr = [23]i64{ 5, 6, 7, 8, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 10, 4, 3, 2, 16, 1, 9 };
+        var arr: [5]i64 = undefined;
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        twice_unguarded_insert(arr_ptr, 16, 23, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [23]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 });
+
+        arr = [5]i64{ 2, 1, 4, 3, 5 };
+        tiny_sort(arr_ptr, 5, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
+
+        arr = [5]i64{ 5, 4, 3, 2, 1 };
+        tiny_sort(arr_ptr, 5, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
     }
-}
-test "tiny_sort" {
-    var arr: [4]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    {
+        var arr: [4]i64 = undefined;
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
-    arr = [4]i64{ 4, 2, 1, 3 };
-    tiny_sort(arr_ptr, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
+        arr = [4]i64{ 4, 2, 1, 3 };
+        tiny_sort(arr_ptr, 4, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
 
-    arr = [4]i64{ 2, 1, 4, 3 };
-    tiny_sort(arr_ptr, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
-
-    arr = [4]i64{ 2, 3, 1, -1 };
-    tiny_sort(arr_ptr, 3, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, -1 });
-
-    arr = [4]i64{ 2, 1, -1, -1 };
-    tiny_sort(arr_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(arr, [4]i64{ 1, 2, -1, -1 });
+        arr = [4]i64{ 2, 1, 4, 3 };
+        tiny_sort(arr_ptr, 4, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
+    }
+    {
+        var arr = [3]i64{ 2, 3, 1 };
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        tiny_sort(arr_ptr, 3, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [3]i64{ 1, 2, 3 });
+    }
+    {
+        var arr = [2]i64{ 2, 1 };
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        tiny_sort(arr_ptr, 2, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [2]i64{ 1, 2 });
+    }
 }
 
 // ================ Primitives ================================================
@@ -215,9 +352,9 @@ test "tiny_sort" {
 // The are the smallest fundamental unit.
 
 /// Merge two neighboring sorted 4 element arrays into swap.
-inline fn parity_merge_four(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    var left = ptr;
-    var right = ptr + (4 * element_width);
+inline fn parity_merge_four(array: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var left = array;
+    var right = array + (4 * element_width);
     var swap_ptr = swap;
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
@@ -226,8 +363,8 @@ inline fn parity_merge_four(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Comp
     var to_copy = if (lte) left else right;
     copy(swap_ptr, to_copy);
 
-    left = ptr + (3 * element_width);
-    right = ptr + (7 * element_width);
+    left = array + (3 * element_width);
+    right = array + (7 * element_width);
     swap_ptr = swap + (7 * element_width);
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
@@ -238,17 +375,17 @@ inline fn parity_merge_four(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Comp
 }
 
 /// Merge two neighboring sorted 2 element arrays into swap.
-inline fn parity_merge_two(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    var left = ptr;
-    var right = ptr + (2 * element_width);
+inline fn parity_merge_two(array: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var left = array;
+    var right = array + (2 * element_width);
     var swap_ptr = swap;
     head_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
     copy(swap_ptr, to_copy);
 
-    left = ptr + element_width;
-    right = ptr + (3 * element_width);
+    left = array + element_width;
+    right = array + (3 * element_width);
     swap_ptr = swap + (3 * element_width);
     tail_branchless_merge(&swap_ptr, &left, &right, cmp_data, cmp, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
@@ -287,14 +424,20 @@ inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 }
 
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
-inline fn swap_branchless(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+inline fn swap_branchless(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
+    _ = swap_branchless_return_gt(ptr, tmp, cmp_data, cmp, element_width, copy);
+}
+
+inline fn swap_branchless_return_gt(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) bool {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
     var x = if (gt) element_width else 0;
     const from = if (gt) ptr else ptr + element_width;
-    copy(swap, from);
+    copy(tmp, from);
     copy(ptr, ptr + x);
-    copy(ptr + element_width, swap);
+    copy(ptr + element_width, tmp);
+    return gt;
 }
 
 inline fn compare(cmp: CompareFn, cmp_data: Opaque, lhs: [*]u8, rhs: [*]u8) Ordering {
@@ -393,20 +536,20 @@ test "tail_merge" {
 
 test "swap" {
     var arr: [2]i64 = undefined;
-    var swap: i64 = undefined;
+    var tmp: i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap_ptr = @as([*]u8, @ptrCast(&swap));
+    var tmp_ptr = @as([*]u8, @ptrCast(&tmp));
 
     arr = [2]i64{ 10, 20 };
-    swap_branchless(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    swap_branchless(arr_ptr, tmp_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ 10, 20 });
 
     arr = [2]i64{ 77, -12 };
-    swap_branchless(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    swap_branchless(arr_ptr, tmp_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ -12, 77 });
 
     arr = [2]i64{ -22, -22 };
-    swap_branchless(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    swap_branchless(arr_ptr, tmp_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ -22, -22 });
 }
 
