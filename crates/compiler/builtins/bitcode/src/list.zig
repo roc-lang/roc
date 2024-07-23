@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const str = @import("str.zig");
+const sort = @import("sort.zig");
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 const math = std.math;
@@ -690,60 +691,10 @@ pub fn listDropAt(
     }
 }
 
-fn partition(
-    source_ptr: [*]u8,
-    transform: Opaque,
-    wrapper: CompareFn,
-    element_width: usize,
-    low: isize,
-    high: isize,
-    copy: CopyFn,
-) isize {
-    const pivot = source_ptr + (@as(usize, @intCast(high)) * element_width);
-    var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
-    var j = low;
-
-    while (j <= high - 1) : (j += 1) {
-        const current_elem = source_ptr + (@as(usize, @intCast(j)) * element_width);
-
-        const ordering = wrapper(transform, current_elem, pivot);
-        const order = @as(utils.Ordering, @enumFromInt(ordering));
-
-        switch (order) {
-            utils.Ordering.LT => {
-                // the current element is smaller than the pivot; swap it
-                i += 1;
-                swapElements(source_ptr, element_width, @as(usize, @intCast(i)), @as(usize, @intCast(j)), copy);
-            },
-            utils.Ordering.EQ, utils.Ordering.GT => {},
-        }
-    }
-    swapElements(source_ptr, element_width, @as(usize, @intCast(i + 1)), @as(usize, @intCast(high)), copy);
-    return (i + 1);
-}
-
-fn quicksort(
-    source_ptr: [*]u8,
-    transform: Opaque,
-    wrapper: CompareFn,
-    element_width: usize,
-    low: isize,
-    high: isize,
-    copy: CopyFn,
-) void {
-    if (low < high) {
-        // partition index
-        const pi = partition(source_ptr, transform, wrapper, element_width, low, high, copy);
-
-        _ = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1, copy); // before pi
-        _ = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high, copy); // after pi
-    }
-}
-
 pub fn listSortWith(
     input: RocList,
-    caller: CompareFn,
-    data: Opaque,
+    cmp: CompareFn,
+    cmp_data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
     alignment: u32,
@@ -753,16 +704,13 @@ pub fn listSortWith(
     dec: Dec,
     copy: CopyFn,
 ) callconv(.C) RocList {
+    if (input.len() < 2) {
+        return input;
+    }
     var list = input.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
 
-    if (data_is_owned) {
-        inc_n_data(data, list.len());
-    }
-
     if (list.bytes) |source_ptr| {
-        const low = 0;
-        const high: isize = @as(isize, @intCast(list.len())) - 1;
-        quicksort(source_ptr, data, caller, element_width, low, high, copy);
+        sort.quadsort(source_ptr, list.len(), cmp, cmp_data, data_is_owned, inc_n_data, element_width, copy);
     }
 
     return list;
