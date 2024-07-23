@@ -261,18 +261,13 @@ inline fn parity_merge_two(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Compa
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
 inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    // Note there is a much simpler version here:
+    // Note equivalent c code:
     //    *ptd++ = cmp(ptl, ptr) <= 0 ? *ptl++ : *ptr++;
-    // That said, not sure how to write that in zig and guarantee it is branchless.
-    // Thus using the longer form.
-    const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    const x = if (lte) element_width else 0;
-    const not_x = if (lte) 0 else element_width;
-    copy(dest.*, left.*);
-    left.* += x;
-    copy((dest.* + x), right.*);
-    right.* += not_x;
+    const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
+    const from = if (lte) left else right;
+    copy(dest.*, from.*);
+    from.* += element_width;
     dest.* += element_width;
 }
 
@@ -281,28 +276,23 @@ inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
 inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    // Note there is a much simpler version here:
+    // Note equivalent c code:
     //    *tpd-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--;
-    // That said, not sure how to write that in zig and guarantee it is branchless.
-    const lte = compare(cmp, cmp_data, left.*, right.*) != GT;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    const y = if (lte) element_width else 0;
-    const not_y = if (lte) 0 else element_width;
-    copy(dest.*, left.*);
-    left.* -= not_y;
+    const gt = compare(cmp, cmp_data, left.*, right.*) == GT;
+    const from = if (gt) left else right;
+    copy(dest.*, from.*);
+    from.* -= element_width;
     dest.* -= element_width;
-    copy((dest.* + y), right.*);
-    right.* -= y;
 }
 
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
 inline fn swap_branchless(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
-    const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    const x = if (gt) element_width else 0;
-    const y = if (gt) 0 else element_width;
-
-    copy(swap, ptr + y);
+    const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
+    var x = if (gt) element_width else 0;
+    const from = if (gt) ptr else ptr + element_width;
+    copy(swap, from);
     copy(ptr, ptr + x);
     copy(ptr + element_width, swap);
 }
