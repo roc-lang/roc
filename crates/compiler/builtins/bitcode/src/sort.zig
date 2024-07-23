@@ -69,10 +69,77 @@ fn quadsort_direct(
 }
 
 // ================ Small Arrays ==============================================
-// Below are functions for sorting 0 to 31 element arrays.
+// Below are functions for sorting under 31 element arrays.
+
+/// Merges two neighboring sorted arrays into dest.
+/// Left must be equal to or 1 smaller than right.
+fn parity_merge(dest: [*]u8, src: [*]u8, left_len: usize, right_len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    std.debug.assert(left_len == right_len or left_len == right_len - 1);
+
+    var left_head = src;
+    var right_head = src + left_len * element_width;
+    var dest_head = dest;
+
+    var left_tail = right_head - element_width;
+    var right_tail = left_tail + right_len * element_width;
+    var dest_tail = dest + (left_len + right_len - 1) * element_width;
+
+    if (left_len < right_len) {
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+    }
+    head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+
+    var ll = left_len - 1;
+    while (ll != 0) : (ll -= 1) {
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+    }
+    tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+}
+
+test "parity_merge" {
+    {
+        var dest: [8]i64 = undefined;
+        var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+
+        var arr: [8]i64 = undefined;
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+
+        arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
+        dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+        parity_merge(dest_ptr, arr_ptr, 4, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+
+        arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
+        dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
+        parity_merge(dest_ptr, arr_ptr, 4, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    }
+    {
+        var dest: [9]i64 = undefined;
+        var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+
+        var arr: [9]i64 = undefined;
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+
+        arr = [9]i64{ 1, 3, 5, 8, 2, 4, 6, 7, 9 };
+        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        parity_merge(dest_ptr, arr_ptr, 4, 5, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+
+        arr = [9]i64{ 6, 7, 8, 9, 1, 2, 3, 4, 5 };
+        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        parity_merge(dest_ptr, arr_ptr, 4, 5, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+    }
+}
+// ================ Tiny Arrays ==============================================
+// Below are functions for sorting 0 to 7 element arrays.
 
 /// Sort arrays of 0 to 7 elements.
 fn tiny_sort(array: [*]u8, len: usize, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    std.debug.assert(len < 8);
+
     var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
     const tmp_ptr = @as([*]u8, @ptrCast(&buffer[0]));
 
