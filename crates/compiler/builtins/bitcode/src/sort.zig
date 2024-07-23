@@ -23,6 +23,11 @@ const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
 /// In my testing for long arrays, the cutoff seems to be around 96-128 bytes.
 /// For sort arrays, the custoff seems to be around 64-96 bytes.
 const MAX_ELEMENT_BUFFER_SIZE: usize = 96;
+const BufferType = [MAX_ELEMENT_BUFFER_SIZE]u8;
+const BufferAlign = @alignOf(u128);
+comptime {
+    std.debug.assert(MAX_ELEMENT_BUFFER_SIZE % BufferAlign == 0);
+}
 
 pub fn quadsort(
     source_ptr: [*]u8,
@@ -66,6 +71,74 @@ fn quadsort_direct(
     _ = cmp;
     _ = source_ptr;
     roc_panic("todo: quadsort", 0);
+}
+
+// ================ 32 Element Blocks =========================================
+
+fn quad_reversal(
+    start: [*]u8,
+    end: [*]u8,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    var buffer1: BufferType align(BufferAlign) = undefined;
+    var buffer2: BufferType align(BufferAlign) = undefined;
+
+    const tmp1_ptr = @as([*]u8, @ptrCast(&buffer1[0]));
+    const tmp2_ptr = @as([*]u8, @ptrCast(&buffer2[0]));
+
+    var loops = (@intFromPtr(end) - @intFromPtr(start)) / (element_width * 2);
+
+    var h1_start = start;
+    var h1_end = start + loops * element_width;
+    var h2_start = end - loops * element_width;
+    var h2_end = end;
+
+    if (loops % 2 == 0) {
+        copy(tmp2_ptr, h1_end);
+        copy(h1_end, h2_start);
+        h1_end -= element_width;
+        copy(h2_start, tmp2_ptr);
+        h2_start += element_width;
+        loops -= 1;
+    }
+
+    loops /= 2;
+
+    while (true) {
+        copy(tmp1_ptr, h1_start);
+        copy(h1_start, h2_end);
+        h1_start += element_width;
+        copy(h2_end, tmp1_ptr);
+        h2_end -= element_width;
+
+        copy(tmp2_ptr, h1_end);
+        copy(h1_end, h2_start);
+        h1_end -= element_width;
+        copy(h2_start, tmp2_ptr);
+        h2_start += element_width;
+
+        if (loops == 0)
+            break;
+        loops -= 1;
+    }
+}
+
+test "quad_reversal" {
+    {
+        var arr = [8]i64{ 8, 7, 6, 5, 4, 3, 2, 1 };
+        var start_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        var end_ptr = @as([*]u8, @ptrCast(&arr[7]));
+        quad_reversal(start_ptr, end_ptr, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    }
+    {
+        var arr = [9]i64{ 9, 8, 7, 6, 5, 4, 3, 2, 1 };
+        var start_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        var end_ptr = @as([*]u8, @ptrCast(&arr[8]));
+        quad_reversal(start_ptr, end_ptr, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+    }
 }
 
 // ================ Small Arrays ==============================================
@@ -206,7 +279,8 @@ test "parity_merge" {
         try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
     }
 }
-// ================ Tiny Arrays ==============================================
+
+// ================ Tiny Arrays ===============================================
 // Below are functions for sorting 0 to 7 element arrays.
 
 /// Sort arrays of 0 to 7 elements.
@@ -221,7 +295,7 @@ fn tiny_sort(
 ) void {
     std.debug.assert(len < 8);
 
-    var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
+    var buffer: BufferType align(BufferAlign) = undefined;
     const tmp_ptr = @as([*]u8, @ptrCast(&buffer[0]));
 
     switch (len) {
