@@ -84,10 +84,10 @@ fn quad_swap_merge(
     element_width: usize,
     copy: CopyFn,
 ) void {
-    parity_merge_two(array, swap, cmp_data, cmp, element_width, copy);
-    parity_merge_two(array + 4 * element_width, swap + 4 * element_width, cmp_data, cmp, element_width, copy);
+    parity_merge_two(swap, array, cmp_data, cmp, element_width, copy);
+    parity_merge_two(swap + 4 * element_width, array + 4 * element_width, cmp_data, cmp, element_width, copy);
 
-    parity_merge_four(swap, array, cmp_data, cmp, element_width, copy);
+    parity_merge_four(array, swap, cmp_data, cmp, element_width, copy);
 }
 
 // Reverse values from start to end.
@@ -643,8 +643,8 @@ test "tiny_sort" {
 
 /// Merge two neighboring sorted 4 element arrays into dest.
 inline fn parity_merge_four(
-    array: [*]u8,
     dest: [*]u8,
+    array: [*]u8,
     cmp_data: Opaque,
     cmp: CompareFn,
     element_width: usize,
@@ -673,8 +673,8 @@ inline fn parity_merge_four(
 
 /// Merge two neighboring sorted 2 element arrays into dest.
 inline fn parity_merge_two(
-    array: [*]u8,
     dest: [*]u8,
+    array: [*]u8,
     cmp_data: Opaque,
     cmp: CompareFn,
     element_width: usize,
@@ -786,17 +786,17 @@ test "parity_merge_four" {
 
     arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_four(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_four(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_four(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 }
 
@@ -808,27 +808,27 @@ test "parity_merge_two" {
 
     arr = [4]i64{ 1, 2, 3, 4 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 3, 2, 4 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 3, 4, 1, 2 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 2, 4, 1, 3 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 4, 2, 3 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(arr_ptr, dest_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 }
 
