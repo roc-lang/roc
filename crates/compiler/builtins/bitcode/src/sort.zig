@@ -56,6 +56,89 @@ fn quadsort_direct(
     roc_panic("todo: quadsort", 0);
 }
 
+// ================ Small Arrays ==============================================
+// Below are functions for sorting 0 to 31 element arrays.
+
+/// Sort arrays of 0 to 4 elements.
+fn tiny_sort(array: [*]u8, len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+    var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
+    const swap_ptr = @as([*]u8, @ptrCast(&buffer[0]));
+
+    switch (len) {
+        4 => {
+            var arr_ptr = array;
+            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            arr_ptr += 2 * element_width;
+            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            arr_ptr -= element_width;
+
+            const gt = @as(utils.Ordering, @enumFromInt(cmp(cmp_data, arr_ptr, arr_ptr + element_width))) == utils.Ordering.GT;
+            if (gt) {
+                copy(swap_ptr, arr_ptr);
+                copy(arr_ptr, arr_ptr + element_width);
+                copy(arr_ptr + element_width, swap_ptr);
+                arr_ptr -= element_width;
+
+                swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+                arr_ptr += 2 * element_width;
+                swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+                arr_ptr -= element_width;
+                swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            }
+        },
+        3 => {
+            var arr_ptr = array;
+            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            arr_ptr += element_width;
+            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+            arr_ptr = array;
+            swap_branchless(arr_ptr, swap_ptr, cmp_data, cmp, element_width, copy);
+        },
+        2 => {
+            swap_branchless(array, swap_ptr, cmp_data, cmp, element_width, copy);
+        },
+        1, 0 => {
+            return;
+        },
+        else => {
+            unreachable;
+        },
+    }
+}
+
+test "tiny_sort" {
+    var arr = [4]i64{ 4, 2, 1, 3 };
+
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+
+    tiny_sort(arr_ptr, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+
+    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
+
+    arr = [4]i64{ 2, 1, 4, 3 };
+
+    tiny_sort(arr_ptr, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+
+    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
+
+    arr = [4]i64{ 2, 3, 1, -1 };
+
+    tiny_sort(arr_ptr, 3, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+
+    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, -1 });
+
+    arr = [4]i64{ 2, 1, -1, -1 };
+
+    tiny_sort(arr_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+
+    try testing.expectEqual(arr, [4]i64{ 1, 2, -1, -1 });
+}
+
+// ================ Primitives ================================================
+// Below are sorting primitives that attempt to be branchless.
+// They all also are always inline for performance.
+// The are the smallest fundamental unit.
+
 /// Merge two neighboring sorted 4 element arrays into swap.
 inline fn parity_merge_four(ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
     var left = ptr;
