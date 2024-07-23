@@ -968,19 +968,10 @@ fn can_annotation_help(
             );
 
             if tags.is_empty() {
-                match ext {
-                    Some(_) => {
-                        // just `a` does not mean the same as `[]`, so even
-                        // if there are no fields, still make this a `TagUnion`,
-                        // not an EmptyTagUnion
-                        Type::TagUnion(
-                            Default::default(),
-                            TypeExtension::from_type(ext_type, is_implicit_openness),
-                        )
-                    }
-
-                    None => Type::EmptyTagUnion,
-                }
+                Type::TagUnion(
+                    Default::default(),
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             } else {
                 let mut tag_types = can_tags(
                     env,
@@ -1173,6 +1164,7 @@ fn can_extension_type(
                 local_aliases,
                 references,
             );
+
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
                     && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)

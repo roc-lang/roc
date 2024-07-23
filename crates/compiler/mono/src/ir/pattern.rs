@@ -131,6 +131,8 @@ enum PatternBindingIter<'r, 'a> {
 
 enum PatternBindingWork<'r, 'a> {
     Pat(&'r Pattern<'a>),
+    #[allow(dead_code)]
+    // Field will be used once todo is immplemented in next in impl<'r, 'a> Iterator for PatternBindingIter
     RecordDestruct(&'r DestructType<'a>),
 }
 
@@ -1084,7 +1086,9 @@ fn from_can_pattern_help<'a>(
                 list_layout,
                 element_layout,
                 elements: mono_patterns,
-                opt_rest: patterns.opt_rest,
+                opt_rest: patterns
+                    .opt_rest
+                    .map(|(i, name)| (i, name.map(|s| s.value))),
             })
         }
     }

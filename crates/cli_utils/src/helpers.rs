@@ -351,6 +351,7 @@ struct ValgrindOutput {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)] // Some fields are unused but this allows for easy deserialization of the xml.
 enum ValgrindField {
     ProtocolVersion(isize),
     ProtocolTool(String),

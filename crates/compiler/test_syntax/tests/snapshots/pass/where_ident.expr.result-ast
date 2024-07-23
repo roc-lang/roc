@@ -1,7 +1,7 @@
 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            Index(2147483648),
         ],
         regions: [
             @0-39,
@@ -15,25 +15,6 @@ Defs(
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-5 Identifier {
-                    ident: "where",
-                },
-                @8-20 Record {
-                    fields: [
-                        @9-19 RequiredValue(
-                            @9-14 "where",
-                            [],
-                            @16-19 Apply(
-                                "",
-                                "I32",
-                                [],
-                            ),
-                        ),
-                    ],
-                    ext: None,
-                },
-            ),
             AnnotatedBody {
                 ann_pattern: @0-5 Identifier {
                     ident: "where",

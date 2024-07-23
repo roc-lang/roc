@@ -194,32 +194,28 @@ size_t roc_str_len(struct RocStr str)
 
 extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
-// Receive a value from Ruby, JSON serialized it and pass it to Roc as a List U8
+// Receive a value from Ruby, serialize it and pass it to Roc as a List U8
 // (at which point the Roc platform will decode it and crash if it's invalid,
-// which roc_panic will translate into a Ruby exception), then get some JSON back from Roc
-// - also as a List U8 - and have Ruby JSON.parse it into a plain Ruby value to return.
+// which roc_panic will translate into a Ruby exception), then get some utf-8 string back from Roc
+// - also as a List U8 - and have Ruby decode it into a plain Ruby value to return.
 VALUE call_roc(VALUE self, VALUE rb_arg)
 {
-    // This must be required before the to_json method will exist on String.
-    rb_require("json");
+    VALUE str_arg = rb_funcall(rb_arg, rb_intern("to_s"), 0);
+    VALUE str_utf8_arg = rb_funcall(str_arg, rb_intern("force_encoding"), 1, rb_str_new_cstr("utf-8"));
 
-    // Turn the given Ruby value into a JSON string.
-    // TODO should we defensively encode it as UTF-8 first?
-    VALUE json_arg = rb_funcall(rb_arg, rb_intern("to_json"), 0);
-
-    struct RocBytes arg = init_rocbytes((uint8_t *)RSTRING_PTR(json_arg), RSTRING_LEN(json_arg));
+    struct RocBytes arg = init_rocbytes((uint8_t *)RSTRING_PTR(str_utf8_arg), RSTRING_LEN(str_utf8_arg));
     struct RocBytes ret;
 
     // Call the Roc function to populate `ret`'s bytes.
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
-    // Create a rb_utf8_str from the heap-allocated JSON bytes the Roc function returned.
-    VALUE returned_json = rb_utf8_str_new((char *)ret.bytes, ret.len);
+    // Create a rb_utf8_str from the heap-allocated utf-8 bytes the Roc function returned.
+    VALUE returned_str = rb_utf8_str_new((char *)ret.bytes, ret.len);
 
-    // Now that we've created our Ruby JSON string, we're no longer referencing the RocBytes.
+    // Now that we've created our Ruby string, we're no longer referencing the RocBytes.
     decref((void *)&ret, alignof(uint8_t *));
 
-    return rb_funcall(rb_define_module("JSON"), rb_intern("parse"), 1, returned_json);
+    return returned_str;
 }
 
 void Init_demo()

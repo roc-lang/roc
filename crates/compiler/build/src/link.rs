@@ -119,10 +119,17 @@ fn find_zig_glue_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
+    // This path is available when built and run from source
     // Environment variable defined in wasi-libc-sys/build.rs
-    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
-    if std::path::Path::exists(&wasi_libc_pathbuf) {
-        return wasi_libc_pathbuf;
+    let build_path = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&build_path) {
+        return build_path;
+    }
+
+    // This path is available in the release tarball
+    match get_relative_path(Path::new("lib/wasi-libc.a")) {
+        Some(path) if path.exists() => return path,
+        _ => (),
     }
 
     internal_error!("cannot find `wasi-libc.a`")
@@ -533,7 +540,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2023-12-21", "cargo"]);
+            cmd.args(["run", "nightly-2024-02-03", "cargo"]);
 
             cmd
         } else {
@@ -981,20 +988,14 @@ fn link_linux(
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path_str.to_string()],
+            [scrt1_path_str.as_ref()],
             output_path,
         ),
         LinkType::Dylib => {
             let mut output_path = output_path;
             output_path.set_extension("so");
 
-            (
-                // TODO: find a way to avoid using a vec! here - should theoretically be
-                // able to do this somehow using &[] but the borrow checker isn't having it.
-                // Also find a way to have these be string slices instead of Strings.
-                vec!["-shared".to_string()],
-                output_path,
-            )
+            (["-shared"], output_path)
         }
         LinkType::None => internal_error!("link_linux should not be called with link type of none"),
     };
@@ -1025,7 +1026,7 @@ fn link_linux(
             &crti_path_str,
             &crtn_path_str,
         ])
-        .args(&base_args)
+        .args(base_args)
         .args(["-dynamic-linker", ld_linux_path_str])
         .args(input_paths)
         .args(extra_link_flags())
@@ -1103,6 +1104,10 @@ fn link_macos(
         ])
         .args(input_paths)
         .args(extra_link_flags());
+
+    if get_xcode_version() >= 15.0 {
+        ld_command.arg("-ld_classic");
+    }
 
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
@@ -1184,6 +1189,24 @@ fn get_macos_version() -> String {
         .take(3)
         .collect::<Vec<&str>>()
         .join(".")
+}
+
+fn get_xcode_version() -> f32 {
+    let mut cmd = Command::new("xcodebuild");
+    cmd.arg("-version");
+    debug_print_command(&cmd);
+
+    cmd.output()
+        .map_err(|_| ())
+        .and_then(|out| String::from_utf8(out.stdout).map_err(|_| ()))
+        .and_then(|str| {
+            str.split_whitespace()
+                .nth(1)
+                .map(|s| s.to_string())
+                .ok_or(())
+        })
+        .and_then(|version| version.parse::<f32>().map_err(|_| ()))
+        .unwrap_or(0.0)
 }
 
 fn link_wasm32(
@@ -1345,12 +1368,14 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
         .expect("failed to write host builtins object to tempfile");
 
+    let wasi_libc_path = find_wasi_libc_path();
+
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
         builtins_host_tempfile.path().to_str().unwrap(),
         host_input,
-        WASI_LIBC_PATH,
+        wasi_libc_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti
         "-o",
         output_file,

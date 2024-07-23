@@ -960,13 +960,13 @@ fn write_integer<'a>(
     }
 }
 
-enum ExtContent<'a> {
+enum ExtContent {
     Empty,
-    Content(Variable, &'a Content),
+    Content(Variable),
 }
 
-impl<'a> ExtContent<'a> {
-    fn for_tag(subs: &'a Subs, ext: Variable, pol: Polarity, debug_flags: &DebugPrint) -> Self {
+impl ExtContent {
+    fn for_tag(subs: &Subs, ext: Variable, pol: Polarity, debug_flags: &DebugPrint) -> Self {
         let content = subs.get_content_without_compacting(ext);
         match content {
             Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
@@ -983,7 +983,7 @@ impl<'a> ExtContent<'a> {
             Content::FlexVar(_)
             | Content::FlexAbleVar(..)
             | Content::RigidVar(_)
-            | Content::RigidAbleVar(..) => ExtContent::Content(ext, content),
+            | Content::RigidAbleVar(..) => ExtContent::Content(ext),
 
             other => unreachable!("something weird ended up in an ext var: {:?}", other),
         }
@@ -995,11 +995,11 @@ fn write_ext_content<'a>(
     ctx: &mut Context<'a>,
     subs: &'a Subs,
     buf: &mut String,
-    ext_content: ExtContent<'a>,
+    ext_content: ExtContent,
     parens: Parens,
     pol: Polarity,
 ) {
-    if let ExtContent::Content(var, _) = ext_content {
+    if let ExtContent::Content(var) = ext_content {
         // This is an open record or tag union, so print the variable
         // right after the '}' or ']'
         //
@@ -1050,7 +1050,7 @@ fn write_sorted_tags<'a>(
     tags: &MutMap<TagName, Vec<Variable>>,
     ext_var: Variable,
     pol: Polarity,
-) -> ExtContent<'a> {
+) -> ExtContent {
     // Sort the fields so they always end up in the same order.
     let mut sorted_fields = Vec::with_capacity(tags.len());
 

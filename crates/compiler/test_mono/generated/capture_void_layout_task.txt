@@ -1,31 +1,32 @@
-procedure List.18 (List.160, List.161, List.162):
-    let List.575 : U64 = 0i64;
-    let List.576 : U64 = CallByName List.6 List.160;
-    let List.574 : [<r>C {}, C *self {{}, []}] = CallByName List.92 List.160 List.161 List.162 List.575 List.576;
-    ret List.574;
+procedure List.18 (List.163, List.164, List.165):
+    let List.623 : U64 = 0i64;
+    let List.624 : U64 = CallByName List.6 List.163;
+    let List.622 : [<r>C {}, C *self {{}, []}] = CallByName List.92 List.163 List.164 List.165 List.623 List.624;
+    ret List.622;
 
 procedure List.6 (#Attr.2):
-    let List.585 : U64 = lowlevel ListLenU64 #Attr.2;
-    ret List.585;
+    let List.633 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.633;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.584 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.584;
+    let List.632 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.632;
 
-procedure List.92 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17):
-    joinpoint List.577 List.163 List.164 List.165 List.166 List.167:
-        let List.579 : Int1 = CallByName Num.22 List.166 List.167;
-        if List.579 then
-            let List.583 : [] = CallByName List.66 List.163 List.166;
-            let List.168 : [<r>C {}, C *self {{}, []}] = CallByName Test.29 List.164 List.583 List.165;
-            let List.582 : U64 = 1i64;
-            let List.581 : U64 = CallByName Num.51 List.166 List.582;
-            jump List.577 List.163 List.168 List.165 List.581 List.167;
+procedure List.92 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
+    joinpoint List.625 List.166 List.167 List.168 List.169 List.170:
+        let List.627 : Int1 = CallByName Num.22 List.169 List.170;
+        if List.627 then
+            let List.631 : [] = CallByName List.66 List.166 List.169;
+            let List.171 : [<r>C {}, C *self {{}, []}] = CallByName Test.29 List.167 List.631 List.168;
+            let List.630 : U64 = 1i64;
+            let List.629 : U64 = CallByName Num.51 List.169 List.630;
+            jump List.625 List.166 List.171 List.168 List.629 List.170;
         else
-            dec List.163;
-            ret List.164;
+            dec List.166;
+            ret List.167;
     in
-    jump List.577 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
+    inc #Derived_gen.11;
+    jump List.625 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.280 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
@@ -37,8 +38,8 @@ procedure Num.51 (#Attr.2, #Attr.3):
 
 procedure Test.10 (Test.69, #Attr.12):
     let Test.72 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.20 then
+    let #Derived_gen.18 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.18 then
         free #Attr.12;
         ret Test.72;
     else
@@ -52,7 +53,7 @@ procedure Test.10 (Test.69, #Attr.12):
 procedure Test.14 (Test.45, #Attr.12):
     let Test.55 : {{}, []} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.54 : [<r>C {}, C *self {{}, []}] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.18:
+    joinpoint #Derived_gen.19:
         let Test.50 : {} = Struct {};
         let Test.51 : U8 = GetTagId Test.54;
         joinpoint Test.52 Test.15:
@@ -79,14 +80,14 @@ procedure Test.14 (Test.45, #Attr.12):
                 jump Test.52 Test.53;
         
     in
-    let #Derived_gen.19 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.19 then
+    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.20 then
         free #Attr.12;
-        jump #Derived_gen.18;
+        jump #Derived_gen.19;
     else
         inc Test.54;
         decref #Attr.12;
-        jump #Derived_gen.18;
+        jump #Derived_gen.19;
 
 procedure Test.20 (Test.21, Test.18):
     let Test.23 : [C {}, C []] = CallByName Test.32 Test.21 Test.18;
@@ -163,4 +164,5 @@ procedure Test.0 ():
     let Test.35 : List [] = Array [];
     let Test.36 : {} = Struct {};
     let Test.34 : [<r>C {}, C *self {{}, []}] = CallByName Test.6 Test.35 Test.36;
+    dec Test.35;
     ret Test.34;

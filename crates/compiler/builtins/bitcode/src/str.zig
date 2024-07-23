@@ -96,7 +96,7 @@ pub const RocStr = extern struct {
     }
 
     fn allocateBig(length: usize, capacity: usize) RocStr {
-        const first_element = utils.allocateWithRefcount(capacity, @sizeOf(usize));
+        const first_element = utils.allocateWithRefcount(capacity, @sizeOf(usize), false);
 
         return RocStr{
             .bytes = first_element,
@@ -172,7 +172,7 @@ pub const RocStr = extern struct {
 
     pub fn decref(self: RocStr) void {
         if (!self.isSmallStr()) {
-            utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment);
+            utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment, false);
         }
     }
 
@@ -247,6 +247,7 @@ pub const RocStr = extern struct {
                 old_capacity,
                 new_capacity,
                 element_width,
+                false,
             );
 
             return RocStr{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
@@ -600,7 +601,7 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 // Str.split
 pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
-    const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr));
+    const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true);
 
     if (list.bytes) |bytes| {
         const strings = @as([*]RocStr, @ptrCast(@alignCast(bytes)));
@@ -1427,7 +1428,7 @@ inline fn strToBytes(arg: RocStr) RocList {
     if (length == 0) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
-        const ptr = utils.allocateWithRefcount(length, RocStr.alignment);
+        const ptr = utils.allocateWithRefcount(length, RocStr.alignment, false);
 
         @memcpy(ptr[0..length], arg.asU8ptr()[0..length]);
 
@@ -1457,7 +1458,7 @@ pub fn fromUtf8(
     update_mode: UpdateMode,
 ) FromUtf8Result {
     if (list.len() == 0) {
-        list.decref(1); // Alignment 1 for List U8
+        list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
         return FromUtf8Result{
             .is_ok = true,
             .string = RocStr.empty(),
@@ -1479,7 +1480,7 @@ pub fn fromUtf8(
     } else {
         const temp = errorToProblem(bytes);
 
-        list.decref(1); // Alignment 1 for List U8
+        list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
 
         return FromUtf8Result{
             .is_ok = false,
@@ -1603,7 +1604,7 @@ fn expectOk(result: FromUtf8Result) !void {
 }
 
 fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
-    var list = RocList.allocate(RocStr.alignment, length, @sizeOf(u8));
+    var list = RocList.allocate(RocStr.alignment, length, @sizeOf(u8), false);
     var list_bytes = list.bytes orelse unreachable;
     @memcpy(list_bytes[0..length], bytes[0..length]);
     list.length = length;
@@ -1969,6 +1970,13 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     }
 
     return byte_count;
+}
+
+fn rcNone(_: ?[*]u8) callconv(.C) void {}
+
+fn decStr(ptr: ?[*]u8) callconv(.C) void {
+    const str_ptr = @as(*RocStr, @ptrCast(@alignCast(ptr orelse unreachable)));
+    str_ptr.decref();
 }
 
 /// A backwards version of Utf8View from std.unicode

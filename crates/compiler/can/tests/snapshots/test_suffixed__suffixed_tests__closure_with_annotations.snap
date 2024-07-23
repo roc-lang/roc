@@ -1,0 +1,127 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-114,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-114 Defs(
+                Defs {
+                    tags: [
+                        Index(2147483648),
+                    ],
+                    regions: [
+                        @39-101,
+                    ],
+                    space_before: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    space_after: [
+                        Slice(start = 0, length = 0),
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        AnnotatedBody {
+                            ann_pattern: @11-12 Identifier {
+                                ident: "x",
+                            },
+                            ann_type: @15-30 Function(
+                                [
+                                    @15-18 Apply(
+                                        "",
+                                        "Str",
+                                        [],
+                                    ),
+                                ],
+                                @22-30 Apply(
+                                    "",
+                                    "Task",
+                                    [
+                                        @27-28 Inferred,
+                                        @29-30 Inferred,
+                                    ],
+                                ),
+                            ),
+                            comment: None,
+                            body_pattern: @35-36 Identifier {
+                                ident: "x",
+                            },
+                            body_expr: @39-101 Closure(
+                                [
+                                    @40-43 Identifier {
+                                        ident: "msg",
+                                    },
+                                ],
+                                @78-91 Apply(
+                                    @78-91 Var {
+                                        module_name: "Task",
+                                        ident: "await",
+                                    },
+                                    [
+                                        @78-91 Apply(
+                                            @78-91 Var {
+                                                module_name: "",
+                                                ident: "line",
+                                            },
+                                            [
+                                                @88-91 Var {
+                                                    module_name: "",
+                                                    ident: "msg",
+                                                },
+                                            ],
+                                            Space,
+                                        ),
+                                        @78-91 Closure(
+                                            [
+                                                @78-79 Identifier {
+                                                    ident: "y",
+                                                },
+                                            ],
+                                            @100-101 Var {
+                                                module_name: "",
+                                                ident: "y",
+                                            },
+                                        ),
+                                    ],
+                                    BangSuffix,
+                                ),
+                            ),
+                        },
+                    ],
+                },
+                @107-114 Apply(
+                    @107-108 Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                    [
+                        @109-114 Str(
+                            PlainLine(
+                                "foo",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ),
+    ],
+}

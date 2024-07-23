@@ -1,5 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::parser::succeed;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
@@ -70,7 +71,7 @@ where
                 parser,
                 one_of![
                     backtrackable(space0_e(indent_after_problem)),
-                    succeed!(&[] as &[_]),
+                    succeed(&[] as &[_]),
                 ],
             ),
         ),
@@ -89,7 +90,7 @@ where
             spaces(),
             and(
                 parser,
-                one_of![backtrackable(spaces()), succeed!(&[] as &[_]),],
+                one_of![backtrackable(spaces()), succeed(&[] as &[_]),],
             ),
         ),
         spaces_around_help,
@@ -138,7 +139,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(spaces(), parser),
+        and(spaces(), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -161,7 +162,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(space0_e(indent_problem), parser),
+        and(space0_e(indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -184,7 +185,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(parser, space0_e(indent_problem)),
+        and(parser, space0_e(indent_problem)),
         |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
             if space_list.is_empty() {
                 loc_expr

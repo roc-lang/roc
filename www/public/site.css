@@ -1580,3 +1580,18 @@ code .dim {
     color: var(--light-cyan);
     content: "» ";
 }
+
+.banner {
+    background-color: var(--gray-bg);
+    padding: 1rem;
+    text-align: center;
+    font-family: var(--font-sans);
+    border: 1px solid var(--primary-1);
+    margin-bottom: 20px;
+}
+
+.banner a {
+    color: var(--link-color);
+    text-decoration: underline;
+    font-weight: bold;
+}

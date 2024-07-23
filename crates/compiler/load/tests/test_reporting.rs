@@ -4976,7 +4976,7 @@ mod test_reporting {
             }
             "
         ),@r###"
-    ── RECORD BUILDER IN MODULE PARAMS in ...ord_builder_in_module_params/Test.roc ─
+    ── OLD-STYLE RECORD BUILDER IN MODULE PARAMS in ...r_in_module_params/Test.roc ─
 
     I was partway through parsing module params, but I got stuck here:
 
@@ -4985,8 +4985,8 @@ mod test_reporting {
     6│          name: <- applyName
                 ^^^^^^^^^^^^^^^^^^
 
-    This looks like a record builder field, but those are not allowed in
-    module params.
+    This looks like an old-style record builder field, but those are not
+    allowed in module params.
     "###
     );
 
@@ -10506,6 +10506,29 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        issue_6825,
+        indoc!(
+            r#"
+            when [] is
+                [] | [_, .. as rest] if List.isEmpty rest -> []
+                _ -> []
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
+
+        `rest` is not bound in all patterns of this `when` branch
+
+        5│          [] | [_, .. as rest] if List.isEmpty rest -> []
+                                   ^^^^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+        "###
+    );
+
+    test_report!(
         flip_flop_catch_all_branches_not_exhaustive,
         indoc!(
             r#"
@@ -10680,7 +10703,7 @@ In roc, functions are always written as a lambda, like{}
     // Record Builders
 
     test_report!(
-        optional_field_in_record_builder,
+        optional_field_in_old_record_builder,
         indoc!(
             r#"
             {
@@ -10691,7 +10714,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD BUILDER in tmp/optional_field_in_record_builder/Test.roc ─────────
+    ── BAD OLD-STYLE RECORD BUILDER in ...nal_field_in_old_record_builder/Test.roc ─
 
     I am partway through parsing a record builder, and I found an optional
     field:
@@ -10710,7 +10733,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        record_update_builder,
+        record_update_old_builder,
         indoc!(
             r#"
             { rec &
@@ -10720,10 +10743,10 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD UPDATE in tmp/record_update_builder/Test.roc ─────────────────────
+    ── BAD RECORD UPDATE in tmp/record_update_old_builder/Test.roc ─────────────────
 
-    I am partway through parsing a record update, and I found a record
-    builder field:
+    I am partway through parsing a record update, and I found an old-style
+    record builder field:
 
     1│  app "test" provides [main] to "./platform"
     2│
@@ -10732,12 +10755,12 @@ In roc, functions are always written as a lambda, like{}
     5│          a: <- apply "a",
                 ^^^^^^^^^^^^^^^
 
-    Record builders cannot be updated like records.
+    Old-style record builders cannot be updated like records.
     "#
     );
 
     test_report!(
-        multiple_record_builders,
+        multiple_old_record_builders,
         indoc!(
             r#"
             succeed
@@ -10746,32 +10769,31 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── MULTIPLE RECORD BUILDERS in /code/proj/Main.roc ─────────────────────────────
+    ── MULTIPLE OLD-STYLE RECORD BUILDERS in /code/proj/Main.roc ───────────────────
 
-    This function is applied to multiple record builders:
+    This function is applied to multiple old-style record builders:
 
     4│>      succeed
     5│>          { a: <- apply "a" }
     6│>          { b: <- apply "b" }
 
-    Note: Functions can only take at most one record builder!
+    Note: Functions can only take at most one old-style record builder!
 
     Tip: You can combine them or apply them separately.
-
     "#
     );
 
     test_report!(
-        unapplied_record_builder,
+        unapplied_old_record_builder,
         indoc!(
             r#"
             { a: <- apply "a" }
             "#
         ),
         @r#"
-    ── UNAPPLIED RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────
+    ── UNAPPLIED OLD-STYLE RECORD BUILDER in /code/proj/Main.roc ───────────────────
 
-    This record builder was not applied to a function:
+    This old-style record builder was not applied to a function:
 
     4│      { a: <- apply "a" }
             ^^^^^^^^^^^^^^^^^^^
@@ -10783,7 +10805,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        record_builder_apply_non_function,
+        old_record_builder_apply_non_function,
         indoc!(
             r#"
             succeed = \_ -> crash ""
@@ -10836,6 +10858,107 @@ In roc, functions are always written as a lambda, like{}
     // Hint: Did you mean to apply it to a function first?
     //     "#
     // );
+
+    test_report!(
+        empty_record_builder,
+        indoc!(
+            r#"
+            { a <- }
+            "#
+        ),
+        @r#"
+    ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
+    
+    This record builder has no fields:
+    
+    4│      { a <- }
+            ^^^^^^^^
+    
+    I need at least two fields to combine their values into a record.
+    "#
+    );
+
+    test_report!(
+        single_field_record_builder,
+        indoc!(
+            r#"
+            { a <-
+                b: 123
+            }
+            "#
+        ),
+        @r#"
+    ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
+
+    This record builder only has one field:
+    
+    4│>      { a <-
+    5│>          b: 123
+    6│>      }
+    
+    I need at least two fields to combine their values into a record.
+    "#
+    );
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { a <-
+                b: 123,
+                c? 456
+            }
+            "#
+        ),
+        @r#"
+    ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
+    
+    Optional fields are not allowed to be used in record builders.
+    
+    4│       { a <-
+    5│           b: 123,
+    6│>          c? 456
+    7│       }
+    
+    Record builders can only have required values for their fields.
+    "#
+    );
+
+    // CalledVia::RecordBuilder => {
+    //     alloc.concat([
+    //         alloc.note(""),
+    //         alloc.reflow("Record builders need a mapper function before the "),
+    //         alloc.keyword("<-"),
+    //         alloc.reflow(" to combine fields together with.")
+    //     ])
+    // }
+    // _ => {
+    //     alloc.reflow("Are there any missing commas? Or missing parentheses?")
+
+    test_report!(
+        record_builder_with_non_function_mapper,
+        indoc!(
+            r#"
+            xyz = "abc"
+
+            { xyz <-
+                b: 123,
+                c: 456
+            }
+            "#
+        ),
+        @r#"
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+
+    The `xyz` value is not a function, but it was given 3 arguments:
+
+    6│      { xyz <-
+              ^^^
+
+    Note: Record builders need a mapper function before the `<-` to combine
+    fields together with.
+    "#
+    );
 
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
@@ -11382,10 +11505,50 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" imports [] provides [main] to "./platform"
 
-            import TotallyNotJson
+            ErrDecoder := {} implements [DecoderFormatting {
+                u8: decodeU8,
+                u16: decodeU16,
+                u32: decodeU32,
+                u64: decodeU64,
+                u128: decodeU128,
+                i8: decodeI8,
+                i16: decodeI16,
+                i32: decodeI32,
+                i64: decodeI64,
+                i128: decodeI128,
+                f32: decodeF32,
+                f64: decodeF64,
+                dec: decodeDec,
+                bool: decodeBool,
+                string: decodeString,
+                list: decodeList,
+                record: decodeRecord,
+                tuple: decodeTuple,
+            }]
+            decodeU8 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU16 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeU128 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI8 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI16 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeI128 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeF32 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeF64 = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeDec = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeBool = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeString = Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeList : Decoder elem (ErrDecoder) -> Decoder (List elem) (ErrDecoder)
+            decodeList = \_ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeRecord : state, (state, Str -> [Keep (Decoder state (ErrDecoder)), Skip]), (state, (ErrDecoder) -> Result val DecodeError) -> Decoder val (ErrDecoder)
+            decodeRecord =\_, _, _ ->  Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
+            decodeTuple : state, (state, U64 -> [Next (Decoder state (ErrDecoder)), TooLong]), (state -> Result val DecodeError) -> Decoder val (ErrDecoder)
+            decodeTuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> {result: Err TooShort, rest}
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes (@ErrDecoder {})
                 when decoded is
                     Ok rcd -> rcd.first rcd.second
                     _ -> "something went wrong"
@@ -11396,8 +11559,8 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    8│          Ok rcd -> rcd.first rcd.second
-                          ^^^^^^^^^
+    48│          Ok rcd -> rcd.first rcd.second
+                           ^^^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -11720,6 +11883,30 @@ In roc, functions are always written as a lambda, like{}
     this one. Did you mean one of these?
 
         pf
+    "###
+    );
+
+    test_report!(
+        import_qualified_builtin,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../tests/platform.roc" }
+
+            import pf.Bool
+
+            main =
+                ""
+            "#
+        ),
+        @r###"
+    [1;36m── FILE NOT FOUND in tmp/import_qualified_builtin/../../tests/Bool.roc ─────────[0m
+
+    I am looking for this file, but it's not there:
+
+        [1;33mtmp/import_qualified_builtin/../../tests/Bool.roc[0m
+
+    Is the file supposed to be there? Maybe there is a typo in the file
+    name?
     "###
     );
 

@@ -10,6 +10,5 @@ package [
     Encode,
     Hash,
     Box,
-    TotallyNotJson,
     Inspect,
 ] {}

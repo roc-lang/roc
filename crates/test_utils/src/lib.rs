@@ -18,3 +18,11 @@ macro_rules! assert_multiline_str_eq {
         $crate::_pretty_assert_eq!($crate::DebugAsDisplay($a), $crate::DebugAsDisplay($b))
     };
 }
+
+/// a very simple implementation of En/DecoderFormatting to be embedded in roc source under test
+///
+/// - numbers and bools are encoded as 'n' <num> ' '
+/// - strings are encoded as 's' <count utf-8 bytes> ' ' <str> ' '
+/// - records are encoded as 'r' <number of fields> ' ' [<key><value>]*
+/// - lists and tuples are encoded as 'l' <len> ' ' [<elem>]*
+pub const TAG_LEN_ENCODER_FMT: &str = include_str!("TagLenEncoderFmt.roc");

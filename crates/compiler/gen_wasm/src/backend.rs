@@ -39,7 +39,6 @@ pub enum ProcSource {
     Roc,
     Helper,
     /// Wrapper function for higher-order calls from Zig to Roc
-    HigherOrderMapper(usize),
     HigherOrderCompare(usize),
 }
 
@@ -491,126 +490,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.module.names.append_function(wasm_fn_index, name);
     }
 
-    /// Build a wrapper around a Roc procedure so that it can be called from Zig builtins List.map*
-    ///
-    /// The generic Zig code passes *pointers* to all of the argument values (e.g. on the heap in a List).
-    /// Numbers up to 64 bits are passed by value, so we need to load them from the provided pointer.
-    /// Everything else is passed by reference, so we can just pass the pointer through.
-    ///
-    /// NOTE: If the builtins expected the return pointer first and closure data last, we could eliminate the wrapper
-    /// when all args are pass-by-reference and non-zero size. But currently we need it to swap those around.
-    pub fn build_higher_order_mapper(
-        &mut self,
-        wrapper_lookup_idx: usize,
-        inner_lookup_idx: usize,
-    ) {
-        use Align::*;
-        use ValueType::*;
-
-        let ProcLookupData {
-            name: wrapper_name,
-            layout: wrapper_proc_layout,
-            ..
-        } = self.proc_lookup[wrapper_lookup_idx];
-        let wrapper_arg_layouts = wrapper_proc_layout.arguments;
-
-        // Our convention is that the last arg of the wrapper is the heap return pointer
-        let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
-        let inner_ret_layout = match wrapper_arg_layouts
-            .last()
-            .map(|l| self.layout_interner.get_repr(*l))
-        {
-            Some(LayoutRepr::Ptr(inner)) => WasmLayout::new(self.layout_interner, inner),
-            x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
-        };
-
-        let ret_type_and_size = match inner_ret_layout.return_method() {
-            ReturnMethod::NoReturnValue => None,
-            ReturnMethod::Primitive(ty, size) => {
-                // If the inner function returns a primitive, load the address to store it at
-                // After the call, it will be under the call result in the value stack
-                self.code_builder.get_local(heap_return_ptr_id);
-                Some((ty, size))
-            }
-            ReturnMethod::WriteToPointerArg => {
-                // If the inner function writes to a return pointer, load its address
-                self.code_builder.get_local(heap_return_ptr_id);
-                None
-            }
-        };
-
-        // Load all the arguments for the inner function
-        for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
-            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner). We'll handle it below.
-            let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
-            if is_closure_data || is_return_pointer {
-                continue;
-            }
-
-            let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
-                LayoutRepr::Ptr(inner) => inner,
-                x => internal_error!("Expected a Ptr layout, got {:?}", x),
-            };
-            if self.layout_interner.stack_size(inner_layout) == 0 {
-                continue;
-            }
-
-            // Load the argument pointer. If it's a primitive value, dereference it too.
-            self.code_builder.get_local(LocalId(i as u32));
-            self.dereference_boxed_value(inner_layout);
-        }
-
-        // If the inner function has closure data, it's the last arg of the inner fn
-        let closure_data_layout = wrapper_arg_layouts[0];
-        if self.layout_interner.stack_size(closure_data_layout) > 0 {
-            // The closure data exists, and will have been passed in to the wrapper as a
-            // one-element struct.
-            let inner_closure_data_layout = match self.layout_interner.get_repr(closure_data_layout)
-            {
-                LayoutRepr::Struct([inner]) => inner,
-                other => internal_error!(
-                    "Expected a boxed layout for wrapped closure data, got {:?}",
-                    other
-                ),
-            };
-            self.code_builder.get_local(LocalId(0));
-            // Since the closure data is wrapped in a one-element struct, we've been passed in the
-            // pointer to that struct in the stack memory. To get the closure data we just need to
-            // dereference the pointer.
-            self.dereference_boxed_value(*inner_closure_data_layout);
-        }
-
-        // Call the wrapped inner function
-        let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        self.code_builder.call(inner_wasm_fn_index);
-
-        // If the inner function returns a primitive, store it to the address we loaded at the very beginning
-        if let Some((ty, size)) = ret_type_and_size {
-            match (ty, size) {
-                (I64, 8) => self.code_builder.i64_store(Bytes8, 0),
-                (I32, 4) => self.code_builder.i32_store(Bytes4, 0),
-                (I32, 2) => self.code_builder.i32_store16(Bytes2, 0),
-                (I32, 1) => self.code_builder.i32_store8(Bytes1, 0),
-                (F32, 4) => self.code_builder.f32_store(Bytes4, 0),
-                (F64, 8) => self.code_builder.f64_store(Bytes8, 0),
-                _ => {
-                    internal_error!("Cannot store {:?} with alignment of {:?}", ty, size);
-                }
-            }
-        }
-
-        // Write empty function header (local variables array with zero length)
-        self.code_builder.build_fn_header_and_footer(&[], 0, None);
-
-        self.module.add_function_signature(Signature {
-            param_types: bumpalo::vec![in self.env.arena; I32; wrapper_arg_layouts.len()],
-            ret_type: None,
-        });
-
-        self.append_proc_debug_name(wrapper_name);
-        self.reset();
-    }
-
     /// Build a wrapper around a Roc comparison proc so that it can be called from higher-order Zig builtins.
     /// Comparison procedure signature is: closure_data, a, b -> Order (u8)
     ///
@@ -986,6 +865,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
     fn stmt_refcounting_free(&mut self, value: Symbol, following: &'a Stmt<'a>) {
         let layout = self.storage.symbol_layouts[&value];
+        debug_assert!(!matches!(self.layout_interner.get_repr(layout), LayoutRepr::Builtin(Builtin::List(_))), "List are no longer safe to refcount through pointer alone. They must go through the zig bitcode functions");
+
         let alignment = self.layout_interner.allocation_alignment_bytes(layout);
 
         // Get pointer and offset
@@ -1009,6 +890,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // push the allocation's alignment
         self.code_builder.i32_const(alignment as i32);
+
+        // elems_refcounted (always false except for list which are refcounted differently)
+        self.code_builder.i32_const(false as i32);
 
         self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR);
 
@@ -1557,7 +1441,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             // Allocate heap space and store its address in a local variable
             let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
             let heap_alignment = self.layout_interner.alignment_bytes(elem_layout);
-            self.allocate_with_refcount(Some(size), heap_alignment, 1);
+            let elems_refcounted = self.layout_interner.contains_refcounted(elem_layout);
+            self.allocate_with_refcount(size, heap_alignment, elems_refcounted);
             self.code_builder.set_local(heap_local_id);
 
             let (stack_local_id, stack_offset) =
@@ -1671,13 +1556,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     }
                     self.code_builder.else_();
                     {
-                        self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                        self.allocate_with_refcount(data_size, data_alignment, false);
                         self.code_builder.set_local(*local_id);
                     }
                     self.code_builder.end();
                 } else {
                     // Call the allocator to get a memory address.
-                    self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                    self.allocate_with_refcount(data_size, data_alignment, false);
                     self.code_builder.set_local(*local_id);
                 }
                 (*local_id, 0)
@@ -1960,53 +1845,31 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      * Refcounting & Heap allocation
      *******************************************************************/
 
-    /// Allocate heap space and write an initial refcount
-    /// If the data size is known at compile time, pass it in comptime_data_size.
-    /// If size is only known at runtime, push *data* size to the VM stack first.
+    /// Allocates heap space and write an initial refcount of 1.
     /// Leaves the *data* address on the VM stack
+    ///
+    /// elements_refcounted should only ever be set for lists.
     fn allocate_with_refcount(
         &mut self,
-        comptime_data_size: Option<u32>,
+        data_size: u32,
         alignment_bytes: u32,
-        initial_refcount: u32,
+        elements_refcounted: bool,
     ) {
         if !self.can_relocate_heap {
             // This will probably only happen for test hosts.
             panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export symbols __heap_base and __heap_end");
         }
-        // Add extra bytes for the refcount
-        let extra_bytes = alignment_bytes.max(PTR_SIZE);
 
-        if let Some(data_size) = comptime_data_size {
-            // Data size known at compile time and passed as an argument
-            self.code_builder
-                .i32_const((data_size + extra_bytes) as i32);
-        } else {
-            // Data size known only at runtime and is on top of VM stack
-            self.code_builder.i32_const(extra_bytes as i32);
-            self.code_builder.i32_add();
-        }
+        // Zig arguments              Wasm types
+        //  data_bytes: usize          i32
+        //  element_alignment: u32     i32
+        //  element_refcounted: bool   i32
 
-        // Provide a constant for the alignment argument
+        self.code_builder.i32_const(data_size as i32);
         self.code_builder.i32_const(alignment_bytes as i32);
+        self.code_builder.i32_const(elements_refcounted as i32);
 
-        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_host_fn_after_loading_args("roc_alloc");
-
-        // Save the allocation address to a temporary local variable
-        let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.tee_local(local_id);
-
-        // Write the initial refcount
-        let refcount_offset = extra_bytes - PTR_SIZE;
-        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.i32_const(encoded_refcount);
-        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
-
-        // Put the data address on the VM stack
-        self.code_builder.get_local(local_id);
-        self.code_builder.i32_const(extra_bytes as i32);
-        self.code_builder.i32_add();
+        self.call_host_fn_after_loading_args(bitcode::UTILS_ALLOCATE_WITH_REFCOUNT);
     }
 
     fn expr_reset(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
@@ -2118,9 +1981,51 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
+        self.get_existing_helper_fn_index(proc_symbol, layout, op)
+    }
+
+    /// Generate a copy helper procedure and return a pointer (table index) to it
+    /// This allows it to be indirectly called from Zig code
+    pub fn get_copy_fn_index(&mut self, layout: InLayout<'a>) -> u32 {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (proc_symbol, new_specializations) =
+            self.helper_proc_gen
+                .gen_copy_proc(ident_ids, self.layout_interner, layout);
+
+        // If any new specializations were created, register their symbol data
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
+        }
+
+        self.get_existing_helper_fn_index(proc_symbol, layout, HelperOp::IndirectCopy)
+    }
+
+    /// return a pointer (table index) to a refcount helper procedure.
+    /// This allows it to be indirectly called from Zig code
+    pub fn get_existing_helper_fn_index(
+        &mut self,
+        proc_symbol: Symbol,
+        layout: InLayout<'a>,
+        op: HelperOp,
+    ) -> u32 {
         let layout_repr = self.layout_interner.runtime_representation(layout);
-        let same_layout =
-            |layout| self.layout_interner.runtime_representation(layout) == layout_repr;
+        let same_layout = |layout| {
+            if op.is_indirect() {
+                if let LayoutRepr::Ptr(inner) = self.layout_interner.runtime_representation(layout)
+                {
+                    self.layout_interner.runtime_representation(inner) == layout_repr
+                } else {
+                    false
+                }
+            } else {
+                self.layout_interner.runtime_representation(layout) == layout_repr
+            }
+        };
         let proc_index = self
             .proc_lookup
             .iter()
