@@ -73,7 +73,16 @@ fn quadsort_direct(
 
 /// Merges two neighboring sorted arrays into dest.
 /// Left must be equal to or 1 smaller than right.
-fn parity_merge(dest: [*]u8, src: [*]u8, left_len: usize, right_len: usize, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+fn parity_merge(
+    dest: [*]u8,
+    src: [*]u8,
+    left_len: usize,
+    right_len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     std.debug.assert(left_len == right_len or left_len == right_len - 1);
 
     var left_head = src;
@@ -137,7 +146,15 @@ test "parity_merge" {
 // Below are functions for sorting 0 to 7 element arrays.
 
 /// Sort arrays of 0 to 7 elements.
-fn tiny_sort(array: [*]u8, len: usize, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+fn tiny_sort(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     std.debug.assert(len < 8);
 
     var buffer: [MAX_ELEMENT_BUFFER_SIZE]u8 = undefined;
@@ -176,7 +193,14 @@ fn tiny_sort(array: [*]u8, len: usize, swap: [*]u8, cmp_data: Opaque, cmp: Compa
     }
 }
 
-fn parity_swap_four(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+fn parity_swap_four(
+    array: [*]u8,
+    tmp_ptr: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += 2 * element_width;
@@ -197,7 +221,14 @@ fn parity_swap_four(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: Compare
     }
 }
 
-fn parity_swap_five(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+fn parity_swap_five(
+    array: [*]u8,
+    tmp_ptr: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += 2 * element_width;
@@ -223,7 +254,15 @@ fn parity_swap_five(array: [*]u8, tmp_ptr: [*]u8, cmp_data: Opaque, cmp: Compare
     }
 }
 
-fn parity_swap_six(array: [*]u8, tmp_ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+fn parity_swap_six(
+    array: [*]u8,
+    tmp_ptr: [*]u8,
+    swap: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += element_width;
@@ -281,7 +320,15 @@ fn parity_swap_six(array: [*]u8, tmp_ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, 
     copy(arr_ptr, from);
 }
 
-fn parity_swap_seven(array: [*]u8, tmp_ptr: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+fn parity_swap_seven(
+    array: [*]u8,
+    tmp_ptr: [*]u8,
+    swap: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
     arr_ptr += 2 * element_width;
@@ -419,7 +466,14 @@ test "tiny_sort" {
 // The are the smallest fundamental unit.
 
 /// Merge two neighboring sorted 4 element arrays into swap.
-inline fn parity_merge_four(array: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+inline fn parity_merge_four(
+    array: [*]u8,
+    swap: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     var left = array;
     var right = array + (4 * element_width);
     var swap_ptr = swap;
@@ -442,7 +496,14 @@ inline fn parity_merge_four(array: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Co
 }
 
 /// Merge two neighboring sorted 2 element arrays into swap.
-inline fn parity_merge_two(array: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+inline fn parity_merge_two(
+    array: [*]u8,
+    swap: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     var left = array;
     var right = array + (2 * element_width);
     var swap_ptr = swap;
@@ -464,7 +525,15 @@ inline fn parity_merge_two(array: [*]u8, swap: [*]u8, cmp_data: Opaque, cmp: Com
 /// Will increment both dest and the smaller element ptr to their next index.
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
-inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+inline fn head_branchless_merge(
+    dest: *[*]u8,
+    left: *[*]u8,
+    right: *[*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     // Note equivalent c code:
     //    *ptd++ = cmp(ptl, ptr) <= 0 ? *ptl++ : *ptr++;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
@@ -479,7 +548,15 @@ inline fn head_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 /// Will decrement both dest and the smaller element ptr to their previous index.
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
-inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+inline fn tail_branchless_merge(
+    dest: *[*]u8,
+    left: *[*]u8,
+    right: *[*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     // Note equivalent c code:
     //    *tpd-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
@@ -491,12 +568,26 @@ inline fn tail_branchless_merge(dest: *[*]u8, left: *[*]u8, right: *[*]u8, cmp_d
 }
 
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
-inline fn swap_branchless(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) void {
+inline fn swap_branchless(
+    ptr: [*]u8,
+    tmp: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     _ = swap_branchless_return_gt(ptr, tmp, cmp_data, cmp, element_width, copy);
 }
 
-inline fn swap_branchless_return_gt(ptr: [*]u8, tmp: [*]u8, cmp_data: Opaque, cmp: CompareFn, element_width: usize, copy: CopyFn) u8 {
+inline fn swap_branchless_return_gt(
+    ptr: [*]u8,
+    tmp: [*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) u8 {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const gt = compare(cmp, cmp_data, ptr, ptr + element_width) == GT;
     var x = if (gt) element_width else 0;
