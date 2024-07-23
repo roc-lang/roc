@@ -647,7 +647,7 @@ fn too_few_args() {
     expect_failure(
         "Num.add 2",
         indoc!(
-            r#"
+            r"
                 ── TOO FEW ARGS ────────────────────────────────────────────────────────────────
 
                 The add function expects 2 arguments, but it got only 1:
@@ -657,11 +657,7 @@ fn too_few_args() {
 
                 Roc does not allow functions to be partially applied. Use a closure to
                 make partial application explicit.
-
-                For example: ["a", "b"] |> \list -> Str.joinWith list ", "
-
-                or simplier: ["a", "b"] |> Str.joinWith ", "
-                "#
+                "
         ),
     );
 }
