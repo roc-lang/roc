@@ -14,7 +14,15 @@ const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
 const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
 
 /// Any size larger than the max element buffer will be sorted indirectly via pointers.
-const MAX_ELEMENT_BUFFER_SIZE: usize = 64;
+/// TODO: tune this.
+/// I did some basic basic testing on my M1 and x86 machines with the c version of fluxsort.
+/// The best tradeoff point is not the clearest and heavily depends on machine specifics.
+/// Generally speaking, the faster memcpy is and the larger the cache line, the larger this should be.
+/// Also, to my surprise, sorting by pointer is more performant on short arrays than long arrays (probably reduces time of final gather to order main array).
+/// Anyway, there seems to be a hard cut off were the direct sort cost suddenly gets way larger.
+/// In my testing for long arrays, the cutoff seems to be around 96-128 bytes.
+/// For sort arrays, the custoff seems to be around 64-96 bytes.
+const MAX_ELEMENT_BUFFER_SIZE: usize = 96;
 
 pub fn quadsort(
     source_ptr: [*]u8,
