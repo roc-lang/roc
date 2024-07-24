@@ -14,12 +14,12 @@ use crate::ident::{
 };
 use crate::module::module_name_help;
 use crate::parser::{
-    self, and, backtrackable, between, byte, byte_indent, collection_inner,
-    collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first,
-    line_min_indent, loc, map, map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e,
-    set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes,
-    zero_or_more, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber,
-    EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    self, and, backtrackable, between, byte, collection_inner, collection_trailing_sep_e, either,
+    increment_min_indent, indented_seq_skip_first, line_min_indent, loc, map, map_with_arena,
+    optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second,
+    specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure, EExpect, EExpr,
+    EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord, EString, EType,
+    EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -2545,9 +2545,16 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
     move |arena, state: State<'a>, _min_indent| {
         // After the first token, all other tokens must be indented past the start of the line
         // All closures start with a '\' - e.g. (\x -> x + 1)
-        let starting_slash = byte_indent(b'\\', EClosure::Start);
         let slash_indent = state.line_indent();
-        let (p1, (), state) = starting_slash.parse(arena, state, slash_indent)?;
+        if slash_indent > state.column() {
+            return Err((NoProgress, EClosure::Start(state.pos())));
+        }
+
+        if state.bytes().first() != Some(&b'\\') {
+            return Err((NoProgress, EClosure::Start(state.pos())));
+        }
+
+        let state = state.advance(1);
 
         // Once we see the '\', we're committed to parsing this as a closure.
         // It may turn out to be malformed, but it is definitely a closure.
@@ -2575,11 +2582,11 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
         );
 
         match params_body.parse(arena, state, slash_indent + 1) {
-            Ok((p2, (params, body), state)) => {
+            Ok((_, (params, body), state)) => {
                 let res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                Ok((p1.or(p2), res, state))
+                Ok((MadeProgress, res, state))
             }
-            Err((p2, fail)) => Err((p1.or(p2), fail)),
+            Err((_, fail)) => Err((MadeProgress, fail)),
         }
     }
 }

@@ -2090,60 +2090,6 @@ where
     }
 }
 
-/// Matches a single `u8` and moves the state's position forward if it succeeds.
-/// This parser will fail if it is a lower indentation level than it should be.
-///
-/// # Example
-///
-/// ```
-/// # #![forbid(unused_imports)]
-/// # use roc_parse::state::State;
-/// # use crate::roc_parse::parser::{Parser, Progress, byte, byte_indent};
-/// # use roc_region::all::Position;
-/// # use bumpalo::Bump;
-/// # #[derive(Debug, PartialEq)]
-/// # enum Problem {
-/// #     NotFound(Position),
-/// #     WrongIndentLevel(Position),
-/// # }
-/// # let arena = Bump::new();
-/// let parser = byte_indent(b'h', Problem::WrongIndentLevel);
-///
-/// // Success case
-/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
-/// assert_eq!(progress, Progress::MadeProgress);
-/// assert_eq!(output, ());
-/// assert_eq!(state.pos(), Position::new(1));
-///
-/// // Error case
-/// let state = State::new(" hello, world".as_bytes());
-/// let _ = byte(b' ', Problem::NotFound).parse(&arena, state.clone(), 0).unwrap();
-/// let (progress, problem) = parser.parse(&arena, state, 0).unwrap_err();
-/// assert_eq!(progress, Progress::NoProgress);
-/// assert_eq!(problem, Problem::WrongIndentLevel(Position::zero()));
-/// ```
-pub fn byte_indent<'a, ToError, E>(byte_to_match: u8, to_error: ToError) -> impl Parser<'a, (), E>
-where
-    ToError: Fn(Position) -> E,
-    E: 'a,
-{
-    debug_assert_ne!(byte_to_match, b'\n');
-
-    move |_arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        if min_indent > state.column() {
-            return Err((NoProgress, to_error(state.pos())));
-        }
-
-        match state.bytes().first() {
-            Some(x) if *x == byte_to_match => {
-                let state = state.advance(1);
-                Ok((MadeProgress, (), state))
-            }
-            _ => Err((NoProgress, to_error(state.pos()))),
-        }
-    }
-}
-
 /// Matches two `u8` in a row.
 ///
 /// # Example
