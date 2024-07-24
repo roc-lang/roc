@@ -74,6 +74,8 @@ fn quadsort_direct(
 }
 // ================ Quad Merge Support ========================================
 
+// TODO: quad_merge, requires tail merge first.
+
 /// Merges 4 even sized blocks of sorted elements.
 fn quad_merge_block(
     array: [*]u8,
@@ -338,7 +340,7 @@ test "cross_merge" {
 // ================ 32 Element Blocks =========================================
 // This is basically a fast path to avoid `roc_alloc` for very sort arrays.
 
-// TODO: Implement quad_swap here.
+// TODO: quad_swap, requires tail merge first.
 // It deals with 32 elements without a large allocation.
 
 /// Merge 4 sorted arrays of length 2 into a sorted array of length 8 using swap space.
