@@ -1,0 +1,166 @@
+Full {
+    header: Module {
+        comments: [],
+        header: App(
+            AppHeader {
+                before_provides: [
+                    Newline,
+                ],
+                provides: [
+                    @94-98 ExposedName(
+                        "main",
+                    ),
+                ],
+                before_packages: [
+                    Newline,
+                ],
+                packages: @6-44 Collection {
+                    items: [
+                        @30-37 SpaceBefore(
+                            PackageEntry {
+                                shorthand: "cli",
+                                spaces_after_shorthand: [],
+                                platform_marker: Some(
+                                    [],
+                                ),
+                                package_name: @35-37 PackageName(
+                                    "",
+                                ),
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    final_comments: [
+                        Newline,
+                    ],
+                },
+                old_imports: None,
+                old_provides_to_new_package: None,
+            },
+        ),
+    },
+    module_defs: Defs {
+        tags: [
+            Index(2147483648),
+            Index(2147483649),
+            Index(2147483650),
+        ],
+        regions: [
+            @58-68,
+            @70-78,
+            @108-199,
+        ],
+        space_before: [
+            Slice(start = 0, length = 2),
+            Slice(start = 2, length = 0),
+            Slice(start = 4, length = 2),
+        ],
+        space_after: [
+            Slice(start = 2, length = 0),
+            Slice(start = 2, length = 2),
+            Slice(start = 6, length = 0),
+        ],
+        spaces: [
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+        ],
+        type_defs: [],
+        value_defs: [
+            ModuleImport(
+                ModuleImport {
+                    before_name: [],
+                    name: @58-68 ImportedModuleName {
+                        package: Some(
+                            "cli",
+                        ),
+                        name: ModuleName(
+                            "Stdout",
+                        ),
+                    },
+                    params: None,
+                    alias: None,
+                    exposed: None,
+                },
+            ),
+            ModuleImport(
+                ModuleImport {
+                    before_name: [],
+                    name: @70-78 ImportedModuleName {
+                        package: Some(
+                            "cli",
+                        ),
+                        name: ModuleName(
+                            "Task",
+                        ),
+                    },
+                    params: None,
+                    alias: None,
+                    exposed: None,
+                },
+            ),
+            Body(
+                @108-112 Identifier {
+                    ident: "main",
+                },
+                @120-199 SpaceBefore(
+                    BinOps(
+                        [
+                            (
+                                @120-134 SpaceAfter(
+                                    Str(
+                                        PlainLine(
+                                            "jq --version",
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @143-145 Pizza,
+                            ),
+                            (
+                                @146-153 SpaceAfter(
+                                    Var {
+                                        module_name: "Cmd",
+                                        ident: "new",
+                                    },
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @162-164 Pizza,
+                            ),
+                            (
+                                @165-175 SpaceAfter(
+                                    ResultTryQuestion(
+                                        Var {
+                                            module_name: "Cmd",
+                                            ident: "status",
+                                        },
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @185-187 Pizza,
+                            ),
+                        ],
+                        @188-199 Var {
+                            module_name: "Stdout",
+                            ident: "line",
+                        },
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+    },
+}

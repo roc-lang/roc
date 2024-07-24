@@ -425,6 +425,9 @@ pub enum Expr<'a> {
     /// Task await bang - i.e. the ! in `File.readUtf8! path`
     TaskAwaitBang(&'a Expr<'a>),
 
+    /// Result try question - i.e. the ? in `List.first? list`
+    ResultTryQuestion(&'a Expr<'a>),
+
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
 
@@ -567,7 +570,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         // expression without arguments, `read!`
         Expr::Var { .. } => false,
 
-        Expr::TaskAwaitBang(..) => true,
+        Expr::TaskAwaitBang(..) | Expr::ResultTryQuestion(..) => true,
 
         // expression with arguments, `line! "Foo"`
         Expr::Apply(sub_loc_expr, apply_args, _) => {
@@ -992,6 +995,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 RecordAccess(expr, _)
                 | TupleAccess(expr, _)
                 | TaskAwaitBang(expr)
+                | ResultTryQuestion(expr)
                 | SpaceBefore(expr, _)
                 | SpaceAfter(expr, _)
                 | ParensAround(expr) => expr_stack.push(expr),
@@ -2434,7 +2438,8 @@ impl<'a> Malformed for Expr<'a> {
 
             RecordAccess(inner, _) |
             TupleAccess(inner, _) |
-            TaskAwaitBang(inner) => inner.is_malformed(),
+            TaskAwaitBang(inner) |
+            ResultTryQuestion(inner)=> inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 

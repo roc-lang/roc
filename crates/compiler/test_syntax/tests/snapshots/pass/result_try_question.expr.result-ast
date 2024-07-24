@@ -1,0 +1,10 @@
+ResultTryQuestion(
+    ResultTryQuestion(
+        ResultTryQuestion(
+            Var {
+                module_name: "List",
+                ident: "first",
+            },
+        ),
+    ),
+)
