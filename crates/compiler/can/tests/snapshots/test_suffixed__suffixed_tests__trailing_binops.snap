@@ -37,24 +37,68 @@ Defs {
                         ident: "await",
                     },
                     [
-                        @19-30 Apply(
+                        @19-30 Defs(
+                            Defs {
+                                tags: [
+                                    Index(2147483648),
+                                ],
+                                regions: [
+                                    @19-30,
+                                ],
+                                space_before: [
+                                    Slice(start = 0, length = 0),
+                                ],
+                                space_after: [
+                                    Slice(start = 0, length = 0),
+                                ],
+                                spaces: [],
+                                type_defs: [],
+                                value_defs: [
+                                    AnnotatedBody {
+                                        ann_pattern: @19-30 Identifier {
+                                            ident: "#!1_stmt",
+                                        },
+                                        ann_type: @19-30 Apply(
+                                            "",
+                                            "Task",
+                                            [
+                                                @19-30 Record {
+                                                    fields: [],
+                                                    ext: None,
+                                                },
+                                                @19-30 Inferred,
+                                            ],
+                                        ),
+                                        comment: None,
+                                        body_pattern: @19-30 Identifier {
+                                            ident: "#!1_stmt",
+                                        },
+                                        body_expr: @19-30 Apply(
+                                            @19-30 Var {
+                                                module_name: "",
+                                                ident: "line",
+                                            },
+                                            [
+                                                @25-30 Str(
+                                                    PlainLine(
+                                                        "FOO",
+                                                    ),
+                                                ),
+                                            ],
+                                            Space,
+                                        ),
+                                    },
+                                ],
+                            },
                             @19-30 Var {
                                 module_name: "",
-                                ident: "line",
+                                ident: "#!1_stmt",
                             },
-                            [
-                                @25-30 Str(
-                                    PlainLine(
-                                        "FOO",
-                                    ),
-                                ),
-                            ],
-                            Space,
                         ),
                         @19-30 Closure(
                             [
-                                @19-30 RecordDestructure(
-                                    [],
+                                @19-30 Underscore(
+                                    "#!stmt",
                                 ),
                             ],
                             @36-67 Apply(

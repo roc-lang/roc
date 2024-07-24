@@ -28,42 +28,86 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @11-56 Apply(
+                    @26-56 Defs(
+                        Defs {
+                            tags: [
+                                Index(2147483648),
+                            ],
+                            regions: [
+                                @11-56,
+                            ],
+                            space_before: [
+                                Slice(start = 0, length = 0),
+                            ],
+                            space_after: [
+                                Slice(start = 0, length = 0),
+                            ],
+                            spaces: [],
+                            type_defs: [],
+                            value_defs: [
+                                AnnotatedBody {
+                                    ann_pattern: @26-56 Identifier {
+                                        ident: "#!0_stmt",
+                                    },
+                                    ann_type: @26-56 Apply(
+                                        "",
+                                        "Task",
+                                        [
+                                            @26-56 Record {
+                                                fields: [],
+                                                ext: None,
+                                            },
+                                            @26-56 Inferred,
+                                        ],
+                                    ),
+                                    comment: None,
+                                    body_pattern: @26-56 Identifier {
+                                        ident: "#!0_stmt",
+                                    },
+                                    body_expr: @11-56 Apply(
+                                        @11-56 Var {
+                                            module_name: "",
+                                            ident: "line",
+                                        },
+                                        [
+                                            @11-44 Apply(
+                                                @26-36 Var {
+                                                    module_name: "Str",
+                                                    ident: "concat",
+                                                },
+                                                [
+                                                    @11-18 Str(
+                                                        PlainLine(
+                                                            "hello",
+                                                        ),
+                                                    ),
+                                                    @37-44 Str(
+                                                        PlainLine(
+                                                            "world",
+                                                        ),
+                                                    ),
+                                                ],
+                                                BinOp(
+                                                    Pizza,
+                                                ),
+                                            ),
+                                        ],
+                                        BinOp(
+                                            Pizza,
+                                        ),
+                                    ),
+                                },
+                            ],
+                        },
                         @11-56 Var {
                             module_name: "",
-                            ident: "line",
+                            ident: "#!0_stmt",
                         },
-                        [
-                            @11-44 Apply(
-                                @26-36 Var {
-                                    module_name: "Str",
-                                    ident: "concat",
-                                },
-                                [
-                                    @11-18 Str(
-                                        PlainLine(
-                                            "hello",
-                                        ),
-                                    ),
-                                    @37-44 Str(
-                                        PlainLine(
-                                            "world",
-                                        ),
-                                    ),
-                                ],
-                                BinOp(
-                                    Pizza,
-                                ),
-                            ),
-                        ],
-                        BinOp(
-                            Pizza,
-                        ),
                     ),
                     @11-56 Closure(
                         [
-                            @26-56 RecordDestructure(
-                                [],
+                            @26-56 Underscore(
+                                "#!stmt",
                             ),
                         ],
                         @63-73 Apply(

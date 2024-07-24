@@ -96,7 +96,7 @@ Defs {
                         @79-87 Closure(
                             [
                                 @79-87 Identifier {
-                                    ident: "#!a0",
+                                    ident: "#!0_arg",
                                 },
                             ],
                             @76-189 If(
@@ -104,7 +104,7 @@ Defs {
                                     (
                                         @79-87 Var {
                                             module_name: "",
-                                            ident: "#!a0",
+                                            ident: "#!0_arg",
                                         },
                                         @101-112 Apply(
                                             @101-105 Var {
@@ -135,7 +135,7 @@ Defs {
                                         @125-132 Closure(
                                             [
                                                 @125-132 Identifier {
-                                                    ident: "#!a1",
+                                                    ident: "#!1_arg",
                                                 },
                                             ],
                                             @76-189 If(
@@ -143,7 +143,7 @@ Defs {
                                                     (
                                                         @125-132 Var {
                                                             module_name: "",
-                                                            ident: "#!a1",
+                                                            ident: "#!1_arg",
                                                         },
                                                         @146-160 Apply(
                                                             @146-150 Var {

@@ -1,0 +1,112 @@
+---
+source: crates/compiler/can/tests/test_suffixed.rs
+expression: snapshot
+---
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-44,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+    ],
+    spaces: [],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-1 Identifier {
+                ident: "f",
+            },
+            @4-44 Closure(
+                [
+                    @5-6 Identifier {
+                        ident: "x",
+                    },
+                ],
+                @24-30 Apply(
+                    @24-30 Var {
+                        module_name: "Task",
+                        ident: "await",
+                    },
+                    [
+                        @14-30 Defs(
+                            Defs {
+                                tags: [
+                                    Index(2147483648),
+                                ],
+                                regions: [
+                                    @24-30,
+                                ],
+                                space_before: [
+                                    Slice(start = 0, length = 0),
+                                ],
+                                space_after: [
+                                    Slice(start = 0, length = 0),
+                                ],
+                                spaces: [],
+                                type_defs: [],
+                                value_defs: [
+                                    AnnotatedBody {
+                                        ann_pattern: @14-15 Identifier {
+                                            ident: "#!0_expr",
+                                        },
+                                        ann_type: @18-19 Apply(
+                                            "",
+                                            "Task",
+                                            [
+                                                @18-19 Apply(
+                                                    "",
+                                                    "A",
+                                                    [],
+                                                ),
+                                                @18-19 Inferred,
+                                            ],
+                                        ),
+                                        comment: None,
+                                        body_pattern: @24-25 Identifier {
+                                            ident: "#!0_expr",
+                                        },
+                                        body_expr: @24-30 Var {
+                                            module_name: "",
+                                            ident: "x",
+                                        },
+                                    },
+                                ],
+                            },
+                            @24-30 Var {
+                                module_name: "",
+                                ident: "#!0_expr",
+                            },
+                        ),
+                        @24-30 Closure(
+                            [
+                                @24-25 Identifier {
+                                    ident: "r",
+                                },
+                            ],
+                            @35-44 Apply(
+                                @35-42 Var {
+                                    module_name: "Task",
+                                    ident: "ok",
+                                },
+                                [
+                                    @43-44 Var {
+                                        module_name: "",
+                                        ident: "r",
+                                    },
+                                ],
+                                Space,
+                            ),
+                        ),
+                    ],
+                    BangSuffix,
+                ),
+            ),
+        ),
+    ],
+}
