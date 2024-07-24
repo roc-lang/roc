@@ -244,8 +244,11 @@ pub const RocDec = extern struct {
     }
 
     pub fn abs(self: RocDec) !RocDec {
-        const absolute = try math.absInt(self.num);
-        return RocDec{ .num = absolute };
+        const absolute = @abs(self.num);
+        if (absolute <= @as(u128, @intCast(std.math.maxInt(i128)))) {
+            return RocDec{ .num = @intCast(absolute) };
+        }
+        return error.OutOfRange;
     }
 
     pub fn addWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
@@ -314,7 +317,8 @@ pub const RocDec = extern struct {
 
         const is_answer_negative = (self_i128 < 0) != (other_i128 < 0);
 
-        const self_u128 = @as(u128, @intCast(math.absInt(self_i128) catch {
+        const self_u128 = @abs(self_i128);
+        if (self_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
             if (other_i128 == 0) {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (other_i128 == RocDec.one_point_zero.num) {
@@ -324,9 +328,10 @@ pub const RocDec = extern struct {
             } else {
                 return .{ .value = RocDec.max, .has_overflowed = true };
             }
-        }));
+        }
 
-        const other_u128 = @as(u128, @intCast(math.absInt(other_i128) catch {
+        const other_u128 = @abs(other_i128);
+        if (other_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
             if (self_i128 == 0) {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (self_i128 == RocDec.one_point_zero.num) {
@@ -336,7 +341,7 @@ pub const RocDec = extern struct {
             } else {
                 return .{ .value = RocDec.max, .has_overflowed = true };
             }
-        }));
+        }
 
         const unsigned_answer: i128 = mul_and_decimalize(self_u128, other_u128);
 
@@ -464,7 +469,8 @@ pub const RocDec = extern struct {
         //
         // We do checked_abs because if we had -i128::MAX before, this will overflow.
 
-        const numerator_abs_i128 = math.absInt(numerator_i128) catch {
+        const numerator_u128 = @abs(numerator_i128);
+        if (numerator_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
             // Currently, if you try to do multiplication on i64::MIN, panic
             // unless you're specifically multiplying by 0 or 1.
             //
@@ -474,10 +480,10 @@ pub const RocDec = extern struct {
             } else {
                 roc_panic("Decimal division overflow in numerator!", 0);
             }
-        };
-        const numerator_u128 = @as(u128, @intCast(numerator_abs_i128));
+        }
 
-        const denominator_abs_i128 = math.absInt(denominator_i128) catch {
+        const denominator_u128 = @abs(denominator_i128);
+        if (denominator_u128 > @as(u128, @intCast(std.math.maxInt(i128)))) {
             // Currently, if you try to do multiplication on i64::MIN, panic
             // unless you're specifically multiplying by 0 or 1.
             //
@@ -487,8 +493,7 @@ pub const RocDec = extern struct {
             } else {
                 roc_panic("Decimal division overflow in denominator!", 0);
             }
-        };
-        const denominator_u128 = @as(u128, @intCast(denominator_abs_i128));
+        }
 
         const numerator_u256: U256 = mul_u128(numerator_u128, math.pow(u128, 10, decimal_places));
         const answer = div_u256_by_u128(numerator_u256, denominator_u128);
@@ -516,7 +521,7 @@ pub const RocDec = extern struct {
         // This is dec/(b0+1), but as a multiplication.
         // So dec * (1/(b0+1)). This is way faster.
         const dec = self.num;
-        const tmp = @as(i128, @intCast(num_.mul_u128(math.absCast(dec), 249757942369376157886101012127821356963).hi >> (190 - 128)));
+        const tmp = @as(i128, @intCast(num_.mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi >> (190 - 128)));
         const q0 = if (dec < 0) -tmp else tmp;
 
         const upper = q0 * b0;
@@ -1468,7 +1473,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
             }
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn fromU64C(arg: u64) callconv(.C) i128 {
@@ -1582,7 +1587,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
             return @as(T, @intCast(@divFloor(input.round().num, RocDec.one_point_zero_i128)));
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
@@ -1591,7 +1596,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
             return @as(T, @intCast(@divFloor(input.floor().num, RocDec.one_point_zero_i128)));
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
@@ -1600,5 +1605,5 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
             return @as(T, @intCast(@divFloor(input.ceiling().num, RocDec.one_point_zero_i128)));
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }

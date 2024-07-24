@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
 const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
@@ -181,10 +180,10 @@ const Refcount = enum {
     atomic,
 };
 
-const RC_TYPE = Refcount.normal;
+const RC_TYPE: Refcount = .normal;
 
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
-    if (RC_TYPE == Refcount.none) return;
+    if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| increment {*}: ", .{ptr_to_refcount});
@@ -195,7 +194,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
-            Refcount.normal => {
+            .normal => {
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
                     const old = @as(usize, @bitCast(ptr_to_refcount.*));
                     const new = old + @as(usize, @intCast(amount));
@@ -208,10 +207,10 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
                 ptr_to_refcount.* += amount;
             },
-            Refcount.atomic => {
-                _ = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, amount, Monotonic);
+            .atomic => {
+                _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
             },
-            Refcount.none => unreachable,
+            .none => unreachable,
         }
     }
 }
@@ -321,7 +320,7 @@ inline fn free_ptr_to_refcount(
     alignment: u32,
     elements_refcounted: bool,
 ) void {
-    if (RC_TYPE == Refcount.none) return;
+    if (RC_TYPE == .none) return;
     const ptr_width = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, alignment);
@@ -340,7 +339,7 @@ inline fn decref_ptr_to_refcount(
     element_alignment: u32,
     elements_refcounted: bool,
 ) void {
-    if (RC_TYPE == Refcount.none) return;
+    if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| decrement {*}: ", .{refcount_ptr});
@@ -354,7 +353,7 @@ inline fn decref_ptr_to_refcount(
     const refcount: isize = refcount_ptr[0];
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
-            Refcount.normal => {
+            .normal => {
                 const old = @as(usize, @bitCast(refcount));
                 refcount_ptr[0] = refcount -% 1;
                 const new = @as(usize, @bitCast(refcount -% 1));
@@ -370,13 +369,13 @@ inline fn decref_ptr_to_refcount(
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                 }
             },
-            Refcount.atomic => {
-                const last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
+            .atomic => {
+                const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
                 }
             },
-            Refcount.none => unreachable,
+            .none => unreachable,
         }
     }
 }
@@ -478,7 +477,7 @@ pub fn allocateWithRefcount(
 
     const data_ptr = new_bytes + extra_bytes;
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));
-    refcount_ptr[0] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
+    refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
 
     return data_ptr;
 }
