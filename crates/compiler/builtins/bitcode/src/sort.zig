@@ -83,7 +83,7 @@ fn quadsort_direct(
         }
 
         if (utils.alloc(swap_size * element_width, alignment)) |swap| {
-            const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy);
+            const block_len = quad_merge(arr_ptr, len, swap, swap_size, 32, cmp, cmp_data, element_width, copy);
             _ = block_len;
 
             // TODO: final rotate merge.
