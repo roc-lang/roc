@@ -74,7 +74,58 @@ fn quadsort_direct(
 }
 // ================ Quad Merge Support ========================================
 
-// Cross merge attempts to merge two arrays in chunks of multiple elements.
+/// Merges 4 even sized blocks of sorted elements.
+fn quad_merge_block(
+    array: [*]u8,
+    swap: [*]u8,
+    block_len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    const block_x_2 = 2 * block_len;
+
+    const block1 = array;
+    const block2 = block1 + block_len * element_width;
+    const block3 = block2 + block_len * element_width;
+    const block4 = block3 + block_len * element_width;
+
+    const in_order_1_2: u2 = @intFromBool(compare(cmp, cmp_data, block2 - element_width, block2) != GT);
+    const in_order_3_4: u2 = @intFromBool(compare(cmp, cmp_data, block4 - element_width, block4) != GT);
+
+    switch (in_order_1_2 | (in_order_3_4 << 1)) {
+        0 => {
+            // Nothing sorted. Just run merges on both.
+            cross_merge(swap, array, block_len, block_len, cmp_data, cmp, element_width, copy);
+            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp_data, cmp, element_width, copy);
+        },
+        1 => {
+            // First half sorted already.
+            @memcpy(swap[0..(element_width * block_x_2)], array[0..(element_width * block_x_2)]);
+            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp_data, cmp, element_width, copy);
+        },
+        2 => {
+            // Second half sorted already.
+            cross_merge(swap, array, block_len, block_len, cmp_data, cmp, element_width, copy);
+            @memcpy((swap + element_width * block_x_2)[0..(element_width * block_x_2)], block3[0..(element_width * block_x_2)]);
+        },
+        3 => {
+            const in_order_2_3 = compare(cmp, cmp_data, block3 - element_width, block3) != GT;
+            if (in_order_2_3)
+                // Lucky, all sorted.
+                return;
+
+            // Copy everything into swap to merge back into this array.
+            @memcpy(swap[0..(element_width * block_x_2 * 2)], array[0..(element_width * block_x_2 * 2)]);
+        },
+    }
+
+    // Merge 2 larger blocks.
+    cross_merge(array, swap, block_x_2, block_x_2, cmp_data, cmp, element_width, copy);
+}
+
+/// Cross merge attempts to merge two arrays in chunks of multiple elements.
 fn cross_merge(
     dest: [*]u8,
     src: [*]u8,
@@ -194,6 +245,40 @@ fn cross_merge(
     }
 }
 
+test "quad_merge_block" {
+    const expected = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
+
+    var arr: [8]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [8]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    // case 0 - totally unsorted
+    arr = [8]i64{ 7, 8, 5, 6, 3, 4, 1, 2 };
+    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    // case 1 - first half sorted
+    arr = [8]i64{ 5, 6, 7, 8, 3, 4, 1, 2 };
+    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    // case 2 - second half sorted
+    arr = [8]i64{ 7, 8, 5, 6, 1, 2, 3, 4 };
+    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    // case 3 both haves sorted
+    arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
+    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    // case 3 - lucky, sorted
+    arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+}
+
 test "cross_merge" {
     var expected: [64]i64 = undefined;
     for (0..64) |i| {
@@ -271,7 +356,7 @@ fn quad_swap_merge(
     parity_merge_four(array, swap, cmp_data, cmp, element_width, copy);
 }
 
-// Reverse values from start to end.
+/// Reverse values from start to end.
 fn quad_reversal(
     start: [*]u8,
     end: [*]u8,
