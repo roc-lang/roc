@@ -76,7 +76,7 @@
           # provides lld
           llvmPkgs.bintools-unwrapped
           # provides clang
-          llvmPkgs.clangUseLLVM
+          llvmPkgs.libllvm
           pkg-config
           zigPkg # roc builtins are implemented in zig, see compiler/builtins/bitcode/
           # lib deps
@@ -134,7 +134,7 @@
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
           shellHook = ''
-            export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.clangUseLLVM.out}"
+            export LLVM_SYS_180_PREFIX="${llvmPkgs.libllvm.dev}"
             ${aliases}
           '' + pkgs.lib.optionalString (system == "aarch64-darwin") ''
             export RUSTFLAGS="-C link-arg=-lc++abi"

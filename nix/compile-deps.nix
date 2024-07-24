@@ -1,7 +1,7 @@
 { pkgs }:
 let
   zigPkg = pkgs.zig;
-  llvmPkgs = pkgs.llvmPackages_17;
+  llvmPkgs = pkgs.llvmPackages_18;
   llvmVersion = builtins.splitVersion llvmPkgs.release_version;
   llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
   # nix does not store libs in /usr/lib or /lib
