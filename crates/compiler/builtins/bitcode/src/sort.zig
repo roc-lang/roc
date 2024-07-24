@@ -73,6 +73,10 @@ fn quadsort_direct(
     roc_panic("todo: quadsort", 0);
 }
 
+// ================ Inplace Rotate Merge ======================================
+// These are used as backup if the swap size is not large enough.
+// Also used for the final merge to reduce copying of data.
+
 // ================ Unbalanced Merges =========================================
 
 /// Merges the remaining blocks at the tail of the array.
@@ -89,7 +93,7 @@ fn tail_merge(
 ) void {
     const end_ptr = array + len * element_width;
     var current_block_len = block_len;
-    while (current_block_len < len and current_block_len <= swap_len) {
+    while (current_block_len < len and current_block_len <= swap_len) : (current_block_len *= 2) {
         var arr_ptr = array;
         while (@intFromPtr(arr_ptr) + current_block_len * element_width < @intFromPtr(end_ptr)) : (arr_ptr += 2 * current_block_len * element_width) {
             if (@intFromPtr(arr_ptr) + 2 * current_block_len * element_width < @intFromPtr(end_ptr)) {
@@ -100,7 +104,6 @@ fn tail_merge(
             partial_backwards_merge(arr_ptr, rem_len, swap, swap_len, current_block_len, cmp_data, cmp, element_width, copy);
             break;
         }
-        current_block_len *= 2;
     }
 }
 
@@ -455,26 +458,24 @@ fn partial_forward_merge_left_head_2(
 }
 
 test "tail_merge" {
-    {
-        const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
-        var arr: [10]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var swap: [10]i64 = undefined;
-        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    var arr: [10]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [10]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
-        arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-        tail_merge(arr_ptr, 10, swap_ptr, 10, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, expected);
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
+    tail_merge(arr_ptr, 10, swap_ptr, 10, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
 
-        arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-        tail_merge(arr_ptr, 9, swap_ptr, 9, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, expected);
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
+    tail_merge(arr_ptr, 9, swap_ptr, 9, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
 
-        arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-        tail_merge(arr_ptr, 10, swap_ptr, 10, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, expected);
-    }
+    arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
+    tail_merge(arr_ptr, 10, swap_ptr, 10, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
 }
 
 test "partial_backwards_merge" {
@@ -578,7 +579,41 @@ test "partial_forward_merge" {
 
 // ================ Quad Merge Support ========================================
 
-// TODO: quad_merge, requires tail merge first.
+/// Merges an array of of sized blocks of sorted elements with a tail.
+/// Returns the block length of sorted runs after the call.
+/// This is needed if the merge ran out of swap space.
+fn quad_merge(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    swap_len: usize,
+    block_len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) usize {
+    const end_ptr = array + len * element_width;
+    var current_block_len = block_len * 4;
+
+    while (current_block_len <= len and current_block_len <= swap_len) : (current_block_len *= 4) {
+        var arr_ptr = array;
+        while (true) {
+            quad_merge_block(arr_ptr, swap, current_block_len / 4, cmp_data, cmp, element_width, copy);
+
+            arr_ptr += current_block_len * element_width;
+            if (@intFromPtr(arr_ptr) + current_block_len * element_width > @intFromPtr(end_ptr))
+                break;
+        }
+
+        const rem_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width;
+        tail_merge(arr_ptr, rem_len, swap, swap_len, current_block_len / 4, cmp_data, cmp, element_width, copy);
+    }
+
+    tail_merge(array, len, swap, swap_len, current_block_len / 4, cmp_data, cmp, element_width, copy);
+
+    return current_block_len / 2;
+}
 
 /// Merges 4 even sized blocks of sorted elements.
 fn quad_merge_block(
@@ -741,6 +776,42 @@ fn cross_merge(
         dest_head += element_width;
         right_head += element_width;
     }
+}
+
+test "quad_merge" {
+    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+    var arr: [10]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [10]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    var size: usize = undefined;
+
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
+    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+    try testing.expectEqual(size, 16);
+
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
+    size = quad_merge(arr_ptr, 9, swap_ptr, 9, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+    try testing.expectEqual(size, 16);
+
+    arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
+    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+    try testing.expectEqual(size, 8);
+
+    // Limited swap, can't finish merge
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
+    size = quad_merge(arr_ptr, 10, swap_ptr, 4, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [10]i64{ 1, 3, 4, 5, 6, 7, 8, 9, 2, 10 });
+    try testing.expectEqual(size, 4);
+
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
+    size = quad_merge(arr_ptr, 10, swap_ptr, 3, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, [10]i64{ 5, 6, 7, 8, 1, 3, 4, 9, 2, 10 });
+    try testing.expectEqual(size, 4);
 }
 
 test "quad_merge_block" {
