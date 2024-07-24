@@ -72,8 +72,189 @@ fn quadsort_direct(
     _ = source_ptr;
     roc_panic("todo: quadsort", 0);
 }
+// ================ Quad Merge Support ========================================
+
+// Cross merge attempts to merge two arrays in chunks of multiple elements.
+fn cross_merge(
+    dest: [*]u8,
+    src: [*]u8,
+    left_len: usize,
+    right_len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    var left_head = src;
+    var right_head = src + left_len * element_width;
+    var left_tail = right_head - element_width;
+    var right_tail = left_tail + right_len * element_width;
+
+    // If the data looks too random and the sizes are similar,
+    // fallback to the branchless parity merge.
+    if (left_len + 1 >= right_len and right_len + 1 >= left_len and left_len >= 32) {
+        const offset = 15 * element_width;
+        if (compare(cmp, cmp_data, left_head + offset, right_head) == GT and compare(cmp, cmp_data, left_head, right_head + offset) != GT and compare(cmp, cmp_data, left_tail, right_tail - offset) == GT and compare(cmp, cmp_data, left_tail - offset, right_tail) != GT) {
+            parity_merge(dest, src, left_len, right_len, cmp_data, cmp, element_width, copy);
+            return;
+        }
+    }
+
+    var dest_head = dest;
+    var dest_tail = dest + (left_len + right_len - 1) * element_width;
+
+    outer: while (true) {
+        if (@intFromPtr(left_tail) - @intFromPtr(left_head) > 8 * element_width) {
+            // 8 elements all less than or equal to and can be moved together.
+            while (compare(cmp, cmp_data, left_head + 7 * element_width, right_head) != GT) {
+                // TODO: Should this actually be a memcpy?
+                // Memcpy won't know the size until runtime but it is 1 call instead of 8.
+                inline for (0..8) |_| {
+                    copy(dest_head, left_head);
+                    dest_head += element_width;
+                    left_head += element_width;
+                }
+                if (@intFromPtr(left_tail) - @intFromPtr(left_head) <= 8 * element_width)
+                    continue :outer;
+            }
+
+            // Attempt to do the same from the tail.
+            // 8 elements all greater than and can be moved together.
+            while (compare(cmp, cmp_data, left_tail - 7 * element_width, right_tail) == GT) {
+                // TODO: Should this actually be a memcpy?
+                // Memcpy won't know the size until runtime but it is 1 call instead of 8.
+                inline for (0..8) |_| {
+                    copy(dest_tail, left_tail);
+                    dest_tail -= element_width;
+                    left_tail -= element_width;
+                }
+                if (@intFromPtr(left_tail) - @intFromPtr(left_head) <= 8 * element_width)
+                    continue :outer;
+            }
+        }
+
+        // Attempt to do the same for the right list.
+        if (@intFromPtr(right_tail) - @intFromPtr(right_head) > 8 * element_width) {
+            // left greater than 8 elements right and can be moved together.
+            while (compare(cmp, cmp_data, left_head, right_head + 7 * element_width) == GT) {
+                // TODO: Should this actually be a memcpy?
+                // Memcpy won't know the size until runtime but it is 1 call instead of 8.
+                inline for (0..8) |_| {
+                    copy(dest_head, right_head);
+                    dest_head += element_width;
+                    right_head += element_width;
+                }
+                if (@intFromPtr(right_tail) - @intFromPtr(right_head) <= 8 * element_width)
+                    continue :outer;
+            }
+
+            // Attempt to do the same from the tail.
+            // left less than or equalt to 8 elements right and can be moved together.
+            while (compare(cmp, cmp_data, left_tail, right_tail - 7 * element_width) != GT) {
+                // TODO: Should this actually be a memcpy?
+                // Memcpy won't know the size until runtime but it is 1 call instead of 8.
+                inline for (0..8) |_| {
+                    copy(dest_tail, right_tail);
+                    dest_tail -= element_width;
+                    right_tail -= element_width;
+                }
+                if (@intFromPtr(right_tail) - @intFromPtr(right_head) <= 8 * element_width)
+                    continue :outer;
+            }
+        }
+
+        if (@intFromPtr(dest_tail) - @intFromPtr(dest_head) < 16 * element_width)
+            break;
+
+        // Large enough to warrent a two way merge.
+        var loops: usize = 8;
+        while (true) {
+            head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+            tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+
+            loops -= 1;
+            if (loops == 0)
+                break;
+        }
+    }
+
+    // Clean up tail.
+    while (@intFromPtr(left_head) <= @intFromPtr(left_tail) and @intFromPtr(right_head) <= @intFromPtr(right_tail)) {
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+    }
+    while (@intFromPtr(left_head) <= @intFromPtr(left_tail)) {
+        copy(dest_head, left_head);
+        dest_head += element_width;
+        left_head += element_width;
+    }
+    while (@intFromPtr(right_head) <= @intFromPtr(right_tail)) {
+        copy(dest_head, right_head);
+        dest_head += element_width;
+        right_head += element_width;
+    }
+}
+
+test "cross_merge" {
+    var expected: [64]i64 = undefined;
+    for (0..64) |i| {
+        expected[i] = @intCast(i + 1);
+    }
+
+    var src: [64]i64 = undefined;
+    var dest: [64]i64 = undefined;
+    var src_ptr = @as([*]u8, @ptrCast(&src[0]));
+    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+
+    // Opitimal case, ordered but swapped
+    for (0..32) |i| {
+        src[i] = @intCast(i + 33);
+    }
+    for (0..32) |i| {
+        src[i + 32] = @intCast(i + 1);
+    }
+    cross_merge(dest_ptr, src_ptr, 32, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, expected);
+
+    // will fallback, every other
+    for (0..32) |i| {
+        src[i * 2] = @intCast(i * 2 + 1);
+        src[i * 2 + 1] = @intCast(i * 2 + 2);
+    }
+    cross_merge(dest_ptr, src_ptr, 32, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, expected);
+
+    // super uneven
+    for (0..20) |i| {
+        src[i] = @intCast(i + 45);
+    }
+    for (0..44) |i| {
+        src[i + 20] = @intCast(i + 1);
+    }
+    cross_merge(dest_ptr, src_ptr, 20, 44, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, expected);
+
+    // chunks
+    for (0..16) |i| {
+        src[i] = @intCast(i + 17);
+    }
+    for (0..16) |i| {
+        src[i + 16] = @intCast(i + 49);
+    }
+    for (0..16) |i| {
+        src[i + 32] = @intCast(i + 1);
+    }
+    for (0..16) |i| {
+        src[i + 48] = @intCast(i + 33);
+    }
+    cross_merge(dest_ptr, src_ptr, 32, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(dest, expected);
+}
 
 // ================ 32 Element Blocks =========================================
+// This is basically a fast path to avoid `roc_alloc` for very sort arrays.
+
+// TODO: Implement quad_swap here.
+// It deals with 32 elements without a large allocation.
 
 /// Merge 4 sorted arrays of length 2 into a sorted array of length 8 using swap space.
 fn quad_swap_merge(
