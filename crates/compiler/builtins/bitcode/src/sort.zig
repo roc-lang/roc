@@ -72,6 +72,175 @@ fn quadsort_direct(
     _ = source_ptr;
     roc_panic("todo: quadsort", 0);
 }
+
+// ================ Unbalanced Merges =========================================
+
+/// Merges a full left block with a smaller than block size right chunk.
+fn partial_forward_merge(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    swap_len: usize,
+    block_len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    std.debug.assert(swap_len >= block_len);
+
+    if (len == block_len) {
+        // Just a single block, already done.
+        return;
+    }
+
+    var right_head = array + block_len * element_width;
+    var right_tail = array + (len - 1) * element_width;
+
+    if (compare(cmp, cmp_data, right_head - element_width, right_head) != GT) {
+        // Luck case, blocks happen to be sorted.
+        return;
+    }
+
+    @memcpy(swap[0..(element_width * block_len)], array[0..(element_width * block_len)]);
+
+    var left_head = swap;
+    var left_tail = swap + (block_len - 1) * element_width;
+
+    var dest_head = array;
+    // Attempt to merge 2 elements a time from head then tail.
+    while (@intFromPtr(left_head) < @intFromPtr(left_tail) - element_width and @intFromPtr(right_head) < @intFromPtr(right_tail) - element_width) {
+        // Note: I am not sure how to get the same generation as the original C.
+        // This implementation has an extra function call here.
+        // The C use `goto` to implement the two tail recursive functions below inline.
+        const break_loop = partial_forward_merge_right_head_2(&dest_head, &left_head, &left_tail, &right_head, &right_tail, cmp_data, cmp, element_width, copy);
+        if (break_loop)
+            break;
+
+        // Couldn't move two elements, do a cross swap and continue.
+        const lte = compare(cmp, cmp_data, left_head, right_head) != GT;
+        var x = if (lte) element_width else 0;
+        var not_x = if (!lte) element_width else 0;
+        copy(dest_head + x, right_head);
+        right_head += element_width;
+        copy(dest_head + not_x, left_head);
+        left_head += element_width;
+        dest_head += 2 * element_width;
+
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+    }
+
+    // Deal with tail.
+    while (@intFromPtr(left_head) <= @intFromPtr(left_tail) and @intFromPtr(right_head) <= @intFromPtr(right_tail)) {
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+    }
+    while (@intFromPtr(left_head) <= @intFromPtr(left_tail)) {
+        copy(dest_head, left_head);
+        dest_head += element_width;
+        left_head += element_width;
+    }
+}
+
+// The following two functions are exactly the same but with the if blocks swapped.
+// They hot loop on one side until it fails, then switch to the other list.
+
+fn partial_forward_merge_right_head_2(
+    dest: *[*]u8,
+    left_head: *[*]u8,
+    left_tail: *[*]u8,
+    right_head: *[*]u8,
+    right_tail: *[*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) bool {
+    if (compare(cmp, cmp_data, left_head.*, right_head.* + element_width) == GT) {
+        inline for (0..2) |_| {
+            copy(dest.*, right_head.*);
+            dest.* += element_width;
+            right_head.* += element_width;
+        }
+        if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
+            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+        }
+        return true;
+    }
+    if (compare(cmp, cmp_data, left_head.* + element_width, right_head.*) != GT) {
+        inline for (0..2) |_| {
+            copy(dest.*, left_head.*);
+            dest.* += element_width;
+            left_head.* += element_width;
+        }
+        if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
+            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+        }
+        return true;
+    }
+    return false;
+}
+
+fn partial_forward_merge_left_head_2(
+    dest: *[*]u8,
+    left_head: *[*]u8,
+    left_tail: *[*]u8,
+    right_head: *[*]u8,
+    right_tail: *[*]u8,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) bool {
+    if (compare(cmp, cmp_data, left_head.* + element_width, right_head.*) != GT) {
+        inline for (0..2) |_| {
+            copy(dest.*, left_head.*);
+            dest.* += element_width;
+            left_head.* += element_width;
+        }
+        if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
+            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+        }
+        return true;
+    }
+    if (compare(cmp, cmp_data, left_head.*, right_head.* + element_width) == GT) {
+        inline for (0..2) |_| {
+            copy(dest.*, right_head.*);
+            dest.* += element_width;
+            right_head.* += element_width;
+        }
+        if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
+            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+        }
+        return true;
+    }
+    return false;
+}
+
+test "partial_forward_merge" {
+    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+    var arr: [10]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [10]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 9, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 9, 7, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+}
+
 // ================ Quad Merge Support ========================================
 
 // TODO: quad_merge, requires tail merge first.
@@ -338,8 +507,8 @@ test "cross_merge" {
 }
 
 // ================ 32 Element Blocks =========================================
-// This is basically a fast path to avoid `roc_alloc` for very sort arrays.
 
+/// This is basically a fast path to avoid `roc_alloc` for very sort arrays.
 // TODO: quad_swap, requires tail merge first.
 // It deals with 32 elements without a large allocation.
 
