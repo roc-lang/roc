@@ -211,6 +211,8 @@ fn partial_backwards_merge(
         // Note: I am not sure how to get the same generation as the original C.
         // This implementation has an extra function call here.
         // The C use `goto` to implement the two tail recursive functions below inline.
+        // I think the closest equivalent in zig would be to use an enum and a switch.
+        // That would potentially optimize to computed gotos.
         const break_loop = partial_forward_merge_right_tail_2(&dest_tail, &array, &left_tail, &swap, &right_tail, cmp_data, cmp, element_width, copy);
         if (break_loop)
             break;
@@ -354,6 +356,8 @@ fn partial_forward_merge(
         // Note: I am not sure how to get the same generation as the original C.
         // This implementation has an extra function call here.
         // The C use `goto` to implement the two tail recursive functions below inline.
+        // I think the closest equivalent in zig would be to use an enum and a switch.
+        // That would potentially optimize to computed gotos.
         const break_loop = partial_forward_merge_right_head_2(&dest_head, &left_head, &left_tail, &right_head, &right_tail, cmp_data, cmp, element_width, copy);
         if (break_loop)
             break;
@@ -906,9 +910,235 @@ test "cross_merge" {
 
 // ================ 32 Element Blocks =========================================
 
-/// This is basically a fast path to avoid `roc_alloc` for very sort arrays.
-// TODO: quad_swap, requires tail merge first.
-// It deals with 32 elements without a large allocation.
+const QuadSwapResult = enum {
+    sorted,
+    unfinished,
+};
+
+/// Starts with an unsorted array and turns it into sorted blocks of length 32.
+fn quad_swap(
+    array: [*]u8,
+    len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) QuadSwapResult {
+    // TODO: This is a solid amount of stack space. Is that ok?
+    // That said, it only ever allocates once (not recursive).
+    // Aside from embedded is probably ok. Just a 3 KB with 96 byte MAX_ELEMENT_BUFFER_SIZE.
+    var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 32]u8 align(BufferAlign) = undefined;
+    const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
+    var tmp_buffer: BufferType align(BufferAlign) = undefined;
+    const tmp_ptr = @as([*]u8, @ptrCast(&tmp_buffer[0]));
+
+    var arr_ptr = array;
+    var reverse_head = arr_ptr;
+
+    // First sort groups of 8 elements.
+    var count = len / 8;
+    var skip_tail_swap = false;
+    outer: while (count != 0) {
+        count -= 1;
+
+        var v1: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) == GT);
+        var v2: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) == GT);
+        var v3: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) == GT);
+        var v4: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width) == GT);
+
+        // This is an attempt at computed gotos in zig.
+        // Not yet sure if it will optimize as well as the raw gotos in C.
+        const Cases = enum { ordered, reversed, not_ordered };
+        var state: Cases = switch_state: {
+            switch (v1 | (v2 << 1) | (v3 << 2) | (v4 << 3)) {
+                0 => {
+                    // potentially already ordered, check rest!
+                    if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
+                        break :switch_state .ordered;
+                    }
+                    quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+
+                    arr_ptr += 8 * element_width;
+                    continue :outer;
+                },
+                15 => {
+                    // potentially already reverse ordered, check rest!
+                    if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                        reverse_head = arr_ptr;
+                        break :switch_state .reversed;
+                    }
+                    break :switch_state .not_ordered;
+                },
+                else => {
+                    break :switch_state .not_ordered;
+                },
+            }
+        };
+        while (true) {
+            switch (state) {
+                .not_ordered => {
+                    inline for ([4]u4{ v1, v2, v3, v4 }) |v| {
+                        const x = if (v == 0) element_width else 0;
+                        const not_x = if (v != 0) element_width else 0;
+                        copy(tmp_ptr, arr_ptr + x);
+                        copy(arr_ptr, arr_ptr + not_x);
+                        copy(arr_ptr + element_width, tmp_ptr);
+                        arr_ptr += 2 * element_width;
+                    }
+                    arr_ptr -= 8 * element_width;
+
+                    quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+
+                    arr_ptr += 8 * element_width;
+                    continue :outer;
+                },
+                .ordered => {
+                    arr_ptr += 8 * element_width;
+
+                    // 1 group was order, lets see if that continues!
+                    if (count != 0) {
+                        count -= 1;
+                        v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) == GT);
+                        v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) == GT);
+                        v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) == GT);
+                        v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width) == GT);
+                        if (v1 | v2 | v3 | v4 != 0) {
+                            // Sadly not ordered still, maybe reversed though?
+                            if (v1 + v2 + v3 + v4 == 4 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                                reverse_head = arr_ptr;
+                                state = .reversed;
+                                continue;
+                            }
+                            state = .not_ordered;
+                            continue;
+                        }
+                        if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
+                            state = .ordered;
+                            continue;
+                        }
+
+                        quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+                        arr_ptr += 8 * element_width;
+                        continue :outer;
+                    }
+                    break :outer;
+                },
+                .reversed => {
+                    arr_ptr += 8 * element_width;
+
+                    // 1 group was reversed, lets see if that continues!
+                    if (count != 0) {
+                        count -= 1;
+                        v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) != GT);
+                        v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT);
+                        v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) != GT);
+                        v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width) != GT);
+                        if (v1 | v2 | v3 | v4 != 0) {
+                            // Sadly not still reversed.
+                            // So we just need to reverse upto this point, but not the current 8 element block.
+                        } else {
+                            // This also checks the boundary between this and the last block.
+                            if (compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                                // Row multiple reversed blocks in a row!
+                                state = .reversed;
+                                continue;
+                            }
+                        }
+                        // Actually fix up the reversed blocks.
+                        quad_reversal(reverse_head, arr_ptr - element_width, element_width, copy);
+
+                        // Since we already have v1 to v4, check the next block state.
+                        if (v1 + v2 + v3 + v4 == 4 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
+                            state = .ordered;
+                            continue;
+                        }
+                        if (v1 + v2 + v3 + v4 == 0 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                            reverse_head = arr_ptr;
+                            state = .reversed;
+                            continue;
+                        }
+
+                        // Just an unorderd block, do it inplace.
+
+                        inline for ([4]u4{ v1, v2, v3, v4 }) |v| {
+                            const x = if (v == 0) element_width else 0;
+                            const not_x = if (v != 0) element_width else 0;
+                            copy(tmp_ptr, arr_ptr + not_x);
+                            copy(arr_ptr, arr_ptr + x);
+                            copy(arr_ptr + element_width, tmp_ptr);
+                            arr_ptr += 2 * element_width;
+                        }
+                        arr_ptr -= 8 * element_width;
+
+                        if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT or compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT or compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                            quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+                        }
+                        arr_ptr += 8;
+                        continue :outer;
+                    }
+
+                    // Handle tail block when reversing.
+                    const rem = len % 8;
+                    reverse_block: {
+                        if (rem == 7 and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT)
+                            break :reverse_block;
+                        if (rem >= 6 and compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) != GT)
+                            break :reverse_block;
+                        if (rem >= 5 and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT)
+                            break :reverse_block;
+                        if (rem >= 4 and compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT)
+                            break :reverse_block;
+                        if (rem >= 3 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT)
+                            break :reverse_block;
+                        if (rem >= 2 and compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) != GT)
+                            break :reverse_block;
+                        if (rem >= 1 and compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width) != GT)
+                            break :reverse_block;
+                        quad_reversal(reverse_head, arr_ptr + (rem - 1) * element_width, element_width, copy);
+
+                        // If we just reversed the entire array, it is sorted.
+                        if (reverse_head == array)
+                            return .sorted;
+
+                        skip_tail_swap = true;
+                        break :outer;
+                    }
+                    quad_reversal(reverse_head, arr_ptr - element_width, element_width, copy);
+
+                    break :outer;
+                },
+            }
+        }
+    }
+    if (!skip_tail_swap) {
+        tail_swap(arr_ptr, len % 8, swap, cmp_data, cmp, element_width, copy);
+    }
+
+    // Group into 32 element blocks.
+    arr_ptr = array;
+
+    count = len / 32;
+    while (count != 0) : ({
+        count -= 1;
+        arr_ptr += 32 * element_width;
+    }) {
+        if (compare(cmp, cmp_data, arr_ptr + 7 * element_width, arr_ptr + 8 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 15 * element_width, arr_ptr + 16 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 23 * element_width, arr_ptr + 24 * element_width) != GT) {
+            // Already in order.
+            continue;
+        }
+        parity_merge(swap, arr_ptr, 8, 8, cmp_data, cmp, element_width, copy);
+        parity_merge(swap + 16 * element_width, arr_ptr + 16 * element_width, 8, 8, cmp_data, cmp, element_width, copy);
+        parity_merge(arr_ptr, swap, 16, 16, cmp_data, cmp, element_width, copy);
+    }
+
+    // Deal with final tail for 32 element blocks.
+    // Anything over 8 elements is multiple blocks worth merging together.
+    if (len % 32 > 8) {
+        tail_merge(arr_ptr, len % 32, swap, 32, 8, cmp_data, cmp, element_width, copy);
+    }
+
+    return .unfinished;
+}
 
 /// Merge 4 sorted arrays of length 2 into a sorted array of length 8 using swap space.
 fn quad_swap_merge(
@@ -973,6 +1203,69 @@ fn quad_reversal(
             break;
         loops -= 1;
     }
+}
+
+test "quad_swap" {
+    var arr: [75]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+
+    arr = [75]i64{
+        // multiple ordered chunks
+        1,  3,  5,  7,  9,  11, 13, 15,
+        //
+        33, 34, 35, 36, 37, 38, 39, 40,
+        // partially ordered
+        41, 42, 45, 46, 43, 44, 47, 48,
+        // multiple reverse chunks
+        70, 69, 68, 67, 66, 65, 64, 63,
+        //
+        16, 14, 12, 10, 8,  6,  4,  2,
+        // another ordered
+        49, 50, 51, 52, 53, 54, 55, 56,
+        // unordered
+        23, 21, 19, 20, 24, 22, 18, 17,
+        // partially reversed
+        32, 31, 28, 27, 30, 29, 26, 25,
+        // awkward tail
+        62, 59, 61, 60, 71, 73, 75, 74,
+        //
+        72, 58, 57,
+    };
+
+    var result = quad_swap(arr_ptr, 75, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(result, .unfinished);
+    try testing.expectEqual(arr, [75]i64{
+        // first 32 elements sorted (with 8 reversed that get flipped here)
+        1,  2,  3,  4,  5,  6,  7,  8,
+        //
+        9,  10, 11, 12, 13, 14, 15, 16,
+        //
+        33, 34, 35, 36, 37, 38, 39, 40,
+        //
+        41, 42, 43, 44, 45, 46, 47, 48,
+        // second 32 elements sorted (with 8 reversed that get flipped here)
+        17, 18, 19, 20, 21, 22, 23, 24,
+        //
+        25, 26, 27, 28, 29, 30, 31, 32,
+        //
+        49, 50, 51, 52, 53, 54, 55, 56,
+        //
+        63, 64, 65, 66, 67, 68, 69, 70,
+        // awkward tail
+        57, 58, 59, 60, 61, 62, 71, 72,
+        //
+        73, 74, 75,
+    });
+
+    // Just reversed.
+    var expected: [75]i64 = undefined;
+    for (0..75) |i| {
+        expected[i] = @intCast(i + 1);
+        arr[i] = @intCast(75 - i);
+    }
+    result = quad_swap(arr_ptr, 75, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(result, .sorted);
+    try testing.expectEqual(arr, expected);
 }
 
 test "quad_swap_merge" {
