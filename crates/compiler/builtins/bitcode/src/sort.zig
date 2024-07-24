@@ -75,6 +75,35 @@ fn quadsort_direct(
 
 // ================ Unbalanced Merges =========================================
 
+/// Merges the remaining blocks at the tail of the array.
+fn tail_merge(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    swap_len: usize,
+    block_len: usize,
+    cmp_data: Opaque,
+    cmp: CompareFn,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    const end_ptr = array + len * element_width;
+    var current_block_len = block_len;
+    while (current_block_len < len and current_block_len <= swap_len) {
+        var arr_ptr = array;
+        while (@intFromPtr(arr_ptr) + current_block_len * element_width < @intFromPtr(end_ptr)) : (arr_ptr += 2 * current_block_len * element_width) {
+            if (@intFromPtr(arr_ptr) + 2 * current_block_len * element_width < @intFromPtr(end_ptr)) {
+                partial_backwards_merge(arr_ptr, 2 * current_block_len, swap, swap_len, current_block_len, cmp_data, cmp, element_width, copy);
+                continue;
+            }
+            const rem_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width;
+            partial_backwards_merge(arr_ptr, rem_len, swap, swap_len, current_block_len, cmp_data, cmp, element_width, copy);
+            break;
+        }
+        current_block_len *= 2;
+    }
+}
+
 /// Merges a full left block with a smaller than block size right chunk.
 /// The merge goes from tail to head.
 fn partial_backwards_merge(
@@ -423,6 +452,29 @@ fn partial_forward_merge_left_head_2(
         return true;
     }
     return false;
+}
+
+test "tail_merge" {
+    {
+        const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+        var arr: [10]i64 = undefined;
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        var swap: [10]i64 = undefined;
+        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+        arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
+        tail_merge(arr_ptr, 10, swap_ptr, 10, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, expected);
+
+        arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
+        tail_merge(arr_ptr, 9, swap_ptr, 9, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, expected);
+
+        arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
+        tail_merge(arr_ptr, 10, swap_ptr, 10, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, expected);
+    }
 }
 
 test "partial_backwards_merge" {
@@ -1544,7 +1596,7 @@ test "parity_merge_two" {
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 }
 
-test "head_merge" {
+test "head_branchless_merge" {
     var dest = [6]i64{ 0, 0, 0, 0, 0, 0 };
     var left = [4]i64{ 1, 7, 10, 22 };
     var right = [4]i64{ 2, 2, 8, 22 };
@@ -1562,7 +1614,7 @@ test "head_merge" {
     try testing.expectEqual(dest, [6]i64{ 1, 2, 2, 7, 8, 10 });
 }
 
-test "tail_merge" {
+test "tail_branchless_merge" {
     var dest = [6]i64{ 0, 0, 0, 0, 0, 0 };
     var left = [4]i64{ -22, 1, 7, 10 };
     var right = [4]i64{ -22, 2, 2, 8 };
