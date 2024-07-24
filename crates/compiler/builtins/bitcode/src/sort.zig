@@ -72,8 +72,8 @@ fn quadsort_direct(
         // Also, zig doesn't hav alloca, so we always do max size here.
         var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 32]u8 align(BufferAlign) = undefined;
         const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
-        tail_swap(arr_ptr, len, swap, cmp_data, cmp, element_width, copy);
-    } else if (quad_swap(arr_ptr, len, cmp_data, cmp, element_width, copy) != .sorted) {
+        tail_swap(arr_ptr, len, swap, cmp, cmp_data, element_width, copy);
+    } else if (quad_swap(arr_ptr, len, cmp, cmp_data, element_width, copy) != .sorted) {
         var swap_size = len;
 
         // for crazy large arrays, limit swap.
@@ -83,7 +83,7 @@ fn quadsort_direct(
         }
 
         if (utils.alloc(swap_size * element_width, alignment)) |swap| {
-            const block_len = quad_merge(array, len, swap, 512, 32, cmp_data, cmp, element_width, copy);
+            const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy);
             _ = block_len;
 
             // TODO: final rotate merge.
@@ -112,7 +112,7 @@ fn quadsort_stack_swap(
     var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 512]u8 align(BufferAlign) = undefined;
     const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
 
-    const block_len = quad_merge(array, len, swap, 512, 32, cmp_data, cmp, element_width, copy);
+    const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy);
     _ = block_len;
 
     // TODO: final rotate merge.
@@ -131,8 +131,8 @@ fn tail_merge(
     swap: [*]u8,
     swap_len: usize,
     block_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -142,11 +142,11 @@ fn tail_merge(
         var arr_ptr = array;
         while (@intFromPtr(arr_ptr) + current_block_len * element_width < @intFromPtr(end_ptr)) : (arr_ptr += 2 * current_block_len * element_width) {
             if (@intFromPtr(arr_ptr) + 2 * current_block_len * element_width < @intFromPtr(end_ptr)) {
-                partial_backwards_merge(arr_ptr, 2 * current_block_len, swap, swap_len, current_block_len, cmp_data, cmp, element_width, copy);
+                partial_backwards_merge(arr_ptr, 2 * current_block_len, swap, swap_len, current_block_len, cmp, cmp_data, element_width, copy);
                 continue;
             }
             const rem_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width;
-            partial_backwards_merge(arr_ptr, rem_len, swap, swap_len, current_block_len, cmp_data, cmp, element_width, copy);
+            partial_backwards_merge(arr_ptr, rem_len, swap, swap_len, current_block_len, cmp, cmp_data, element_width, copy);
             break;
         }
     }
@@ -160,8 +160,8 @@ fn partial_backwards_merge(
     swap: [*]u8,
     swap_len: usize,
     block_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -184,7 +184,7 @@ fn partial_backwards_merge(
     if (len <= swap_len and right_len >= 64) {
         // Large remaining merge and we have enough space to just do it in swap.
 
-        cross_merge(swap, array, block_len, right_len, cmp_data, cmp, element_width, copy);
+        cross_merge(swap, array, block_len, right_len, cmp, cmp_data, element_width, copy);
 
         @memcpy(array[0..(element_width * len)], swap[0..(element_width * len)]);
 
@@ -242,7 +242,7 @@ fn partial_backwards_merge(
                 left_tail -= element_width;
                 dest_tail -= element_width;
 
-                tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+                tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
             }
 
             loops -= 1;
@@ -258,7 +258,7 @@ fn partial_backwards_merge(
         // The C use `goto` to implement the two tail recursive functions below inline.
         // I think the closest equivalent in zig would be to use an enum and a switch.
         // That would potentially optimize to computed gotos.
-        const break_loop = partial_forward_merge_right_tail_2(&dest_tail, &array, &left_tail, &swap, &right_tail, cmp_data, cmp, element_width, copy);
+        const break_loop = partial_forward_merge_right_tail_2(&dest_tail, &array, &left_tail, &swap, &right_tail, cmp, cmp_data, element_width, copy);
         if (break_loop)
             break;
 
@@ -273,12 +273,12 @@ fn partial_backwards_merge(
         left_tail -= element_width;
         dest_tail -= element_width;
 
-        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
     }
 
     // Deal with tail.
     while (@intFromPtr(right_tail) >= @intFromPtr(swap) and @intFromPtr(left_tail) >= @intFromPtr(array)) {
-        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
     }
     while (@intFromPtr(right_tail) >= @intFromPtr(swap)) {
         copy(dest_tail, right_tail);
@@ -296,8 +296,8 @@ fn partial_forward_merge_right_tail_2(
     left_tail: *[*]u8,
     right_head: *const [*]u8,
     right_tail: *[*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) bool {
@@ -308,7 +308,7 @@ fn partial_forward_merge_right_tail_2(
             right_tail.* -= element_width;
         }
         if (@intFromPtr(right_tail.*) > @intFromPtr(right_head.*) + element_width) {
-            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy);
+            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -319,7 +319,7 @@ fn partial_forward_merge_right_tail_2(
             left_tail.* -= element_width;
         }
         if (@intFromPtr(left_tail.*) > @intFromPtr(left_head.*) + element_width) {
-            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy);
+            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -332,8 +332,8 @@ fn partial_forward_merge_left_tail_2(
     left_tail: *[*]u8,
     right_head: *const [*]u8,
     right_tail: *[*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) bool {
@@ -344,7 +344,7 @@ fn partial_forward_merge_left_tail_2(
             left_tail.* -= element_width;
         }
         if (@intFromPtr(left_tail.*) > @intFromPtr(left_head.*) + element_width) {
-            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy);
+            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -355,7 +355,7 @@ fn partial_forward_merge_left_tail_2(
             right_tail.* -= element_width;
         }
         if (@intFromPtr(right_tail.*) > @intFromPtr(right_head.*) + element_width) {
-            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy);
+            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -370,8 +370,8 @@ fn partial_forward_merge(
     swap: [*]u8,
     swap_len: usize,
     block_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -403,7 +403,7 @@ fn partial_forward_merge(
         // The C use `goto` to implement the two tail recursive functions below inline.
         // I think the closest equivalent in zig would be to use an enum and a switch.
         // That would potentially optimize to computed gotos.
-        const break_loop = partial_forward_merge_right_head_2(&dest_head, &left_head, &left_tail, &right_head, &right_tail, cmp_data, cmp, element_width, copy);
+        const break_loop = partial_forward_merge_right_head_2(&dest_head, &left_head, &left_tail, &right_head, &right_tail, cmp, cmp_data, element_width, copy);
         if (break_loop)
             break;
 
@@ -417,12 +417,12 @@ fn partial_forward_merge(
         left_head += element_width;
         dest_head += 2 * element_width;
 
-        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
     }
 
     // Deal with tail.
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail) and @intFromPtr(right_head) <= @intFromPtr(right_tail)) {
-        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
     }
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail)) {
         copy(dest_head, left_head);
@@ -440,8 +440,8 @@ fn partial_forward_merge_right_head_2(
     left_tail: *const [*]u8,
     right_head: *[*]u8,
     right_tail: *const [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) bool {
@@ -452,7 +452,7 @@ fn partial_forward_merge_right_head_2(
             right_head.* += element_width;
         }
         if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
         }
         return true;
     }
@@ -463,7 +463,7 @@ fn partial_forward_merge_right_head_2(
             left_head.* += element_width;
         }
         if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
         }
         return true;
     }
@@ -476,8 +476,8 @@ fn partial_forward_merge_left_head_2(
     left_tail: *const [*]u8,
     right_head: *[*]u8,
     right_tail: *const [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) bool {
@@ -488,7 +488,7 @@ fn partial_forward_merge_left_head_2(
             left_head.* += element_width;
         }
         if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
         }
         return true;
     }
@@ -499,7 +499,7 @@ fn partial_forward_merge_left_head_2(
             right_head.* += element_width;
         }
         if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp_data, cmp, element_width, copy });
+            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
         }
         return true;
     }
@@ -515,15 +515,15 @@ test "tail_merge" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    tail_merge(arr_ptr, 10, swap_ptr, 10, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    tail_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    tail_merge(arr_ptr, 9, swap_ptr, 9, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    tail_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    tail_merge(arr_ptr, 10, swap_ptr, 10, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    tail_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 }
 
@@ -537,19 +537,19 @@ test "partial_backwards_merge" {
         var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
         arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
 
         arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
 
         arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 9, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
 
         arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 9, 7, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
     }
 
@@ -577,7 +577,7 @@ test "partial_backwards_merge" {
         for (0..16) |i| {
             arr[i + 48] = @intCast(i + 33);
         }
-        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
 
         // chunks with break
@@ -596,7 +596,7 @@ test "partial_backwards_merge" {
         arr[16] = 33;
         arr[63] = 49;
 
-        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
     }
 }
@@ -610,19 +610,19 @@ test "partial_forward_merge" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 9, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 9, 7, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 }
 
@@ -637,8 +637,8 @@ fn quad_merge(
     swap: [*]u8,
     swap_len: usize,
     block_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) usize {
@@ -648,7 +648,7 @@ fn quad_merge(
     while (current_block_len <= len and current_block_len <= swap_len) : (current_block_len *= 4) {
         var arr_ptr = array;
         while (true) {
-            quad_merge_block(arr_ptr, swap, current_block_len / 4, cmp_data, cmp, element_width, copy);
+            quad_merge_block(arr_ptr, swap, current_block_len / 4, cmp, cmp_data, element_width, copy);
 
             arr_ptr += current_block_len * element_width;
             if (@intFromPtr(arr_ptr) + current_block_len * element_width > @intFromPtr(end_ptr))
@@ -656,10 +656,10 @@ fn quad_merge(
         }
 
         const rem_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width;
-        tail_merge(arr_ptr, rem_len, swap, swap_len, current_block_len / 4, cmp_data, cmp, element_width, copy);
+        tail_merge(arr_ptr, rem_len, swap, swap_len, current_block_len / 4, cmp, cmp_data, element_width, copy);
     }
 
-    tail_merge(array, len, swap, swap_len, current_block_len / 4, cmp_data, cmp, element_width, copy);
+    tail_merge(array, len, swap, swap_len, current_block_len / 4, cmp, cmp_data, element_width, copy);
 
     return current_block_len / 2;
 }
@@ -669,8 +669,8 @@ fn quad_merge_block(
     array: [*]u8,
     swap: [*]u8,
     block_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -687,17 +687,17 @@ fn quad_merge_block(
     switch (in_order_1_2 | (in_order_3_4 << 1)) {
         0 => {
             // Nothing sorted. Just run merges on both.
-            cross_merge(swap, array, block_len, block_len, cmp_data, cmp, element_width, copy);
-            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp_data, cmp, element_width, copy);
+            cross_merge(swap, array, block_len, block_len, cmp, cmp_data, element_width, copy);
+            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp, cmp_data, element_width, copy);
         },
         1 => {
             // First half sorted already.
             @memcpy(swap[0..(element_width * block_x_2)], array[0..(element_width * block_x_2)]);
-            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp_data, cmp, element_width, copy);
+            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp, cmp_data, element_width, copy);
         },
         2 => {
             // Second half sorted already.
-            cross_merge(swap, array, block_len, block_len, cmp_data, cmp, element_width, copy);
+            cross_merge(swap, array, block_len, block_len, cmp, cmp_data, element_width, copy);
             @memcpy((swap + element_width * block_x_2)[0..(element_width * block_x_2)], block3[0..(element_width * block_x_2)]);
         },
         3 => {
@@ -712,7 +712,7 @@ fn quad_merge_block(
     }
 
     // Merge 2 larger blocks.
-    cross_merge(array, swap, block_x_2, block_x_2, cmp_data, cmp, element_width, copy);
+    cross_merge(array, swap, block_x_2, block_x_2, cmp, cmp_data, element_width, copy);
 }
 
 /// Cross merge attempts to merge two arrays in chunks of multiple elements.
@@ -721,8 +721,8 @@ fn cross_merge(
     src: [*]u8,
     left_len: usize,
     right_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -736,7 +736,7 @@ fn cross_merge(
     if (left_len + 1 >= right_len and right_len + 1 >= left_len and left_len >= 32) {
         const offset = 15 * element_width;
         if (compare(cmp, cmp_data, left_head + offset, right_head) == GT and compare(cmp, cmp_data, left_head, right_head + offset) != GT and compare(cmp, cmp_data, left_tail, right_tail - offset) == GT and compare(cmp, cmp_data, left_tail - offset, right_tail) != GT) {
-            parity_merge(dest, src, left_len, right_len, cmp_data, cmp, element_width, copy);
+            parity_merge(dest, src, left_len, right_len, cmp, cmp_data, element_width, copy);
             return;
         }
     }
@@ -802,8 +802,8 @@ fn cross_merge(
         // Large enough to warrent a two way merge.
         var loops: usize = 8;
         while (true) {
-            head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
-            tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+            head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
+            tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
 
             loops -= 1;
             if (loops == 0)
@@ -813,7 +813,7 @@ fn cross_merge(
 
     // Clean up tail.
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail) and @intFromPtr(right_head) <= @intFromPtr(right_tail)) {
-        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
     }
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail)) {
         copy(dest_head, left_head);
@@ -837,28 +837,28 @@ test "quad_merge" {
     var size: usize = undefined;
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
     try testing.expectEqual(size, 16);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 9, swap_ptr, 9, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
     try testing.expectEqual(size, 16);
 
     arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
     try testing.expectEqual(size, 8);
 
     // Limited swap, can't finish merge
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 4, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [10]i64{ 1, 3, 4, 5, 6, 7, 8, 9, 2, 10 });
     try testing.expectEqual(size, 4);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 3, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 3, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [10]i64{ 5, 6, 7, 8, 1, 3, 4, 9, 2, 10 });
     try testing.expectEqual(size, 4);
 }
@@ -873,27 +873,27 @@ test "quad_merge_block" {
 
     // case 0 - totally unsorted
     arr = [8]i64{ 7, 8, 5, 6, 3, 4, 1, 2 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     // case 1 - first half sorted
     arr = [8]i64{ 5, 6, 7, 8, 3, 4, 1, 2 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     // case 2 - second half sorted
     arr = [8]i64{ 7, 8, 5, 6, 1, 2, 3, 4 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     // case 3 both haves sorted
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 
     // case 3 - lucky, sorted
     arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, expected);
 }
 
@@ -915,7 +915,7 @@ test "cross_merge" {
     for (0..32) |i| {
         src[i + 32] = @intCast(i + 1);
     }
-    cross_merge(dest_ptr, src_ptr, 32, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, expected);
 
     // will fallback, every other
@@ -923,7 +923,7 @@ test "cross_merge" {
         src[i * 2] = @intCast(i * 2 + 1);
         src[i * 2 + 1] = @intCast(i * 2 + 2);
     }
-    cross_merge(dest_ptr, src_ptr, 32, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, expected);
 
     // super uneven
@@ -933,7 +933,7 @@ test "cross_merge" {
     for (0..44) |i| {
         src[i + 20] = @intCast(i + 1);
     }
-    cross_merge(dest_ptr, src_ptr, 20, 44, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 20, 44, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, expected);
 
     // chunks
@@ -949,7 +949,7 @@ test "cross_merge" {
     for (0..16) |i| {
         src[i + 48] = @intCast(i + 33);
     }
-    cross_merge(dest_ptr, src_ptr, 32, 32, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, expected);
 }
 
@@ -964,8 +964,8 @@ const QuadSwapResult = enum {
 fn quad_swap(
     array: [*]u8,
     len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) QuadSwapResult {
@@ -1001,7 +1001,7 @@ fn quad_swap(
                     if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
                         break :switch_state .ordered;
                     }
-                    quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+                    quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
 
                     arr_ptr += 8 * element_width;
                     continue :outer;
@@ -1032,7 +1032,7 @@ fn quad_swap(
                     }
                     arr_ptr -= 8 * element_width;
 
-                    quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+                    quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
 
                     arr_ptr += 8 * element_width;
                     continue :outer;
@@ -1062,7 +1062,7 @@ fn quad_swap(
                             continue;
                         }
 
-                        quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+                        quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
                         arr_ptr += 8 * element_width;
                         continue :outer;
                     }
@@ -1116,7 +1116,7 @@ fn quad_swap(
                         arr_ptr -= 8 * element_width;
 
                         if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT or compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT or compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
-                            quad_swap_merge(arr_ptr, swap, cmp_data, cmp, element_width, copy);
+                            quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
                         }
                         arr_ptr += 8;
                         continue :outer;
@@ -1156,7 +1156,7 @@ fn quad_swap(
         }
     }
     if (!skip_tail_swap) {
-        tail_swap(arr_ptr, len % 8, swap, cmp_data, cmp, element_width, copy);
+        tail_swap(arr_ptr, len % 8, swap, cmp, cmp_data, element_width, copy);
     }
 
     // Group into 32 element blocks.
@@ -1171,15 +1171,15 @@ fn quad_swap(
             // Already in order.
             continue;
         }
-        parity_merge(swap, arr_ptr, 8, 8, cmp_data, cmp, element_width, copy);
-        parity_merge(swap + 16 * element_width, arr_ptr + 16 * element_width, 8, 8, cmp_data, cmp, element_width, copy);
-        parity_merge(arr_ptr, swap, 16, 16, cmp_data, cmp, element_width, copy);
+        parity_merge(swap, arr_ptr, 8, 8, cmp, cmp_data, element_width, copy);
+        parity_merge(swap + 16 * element_width, arr_ptr + 16 * element_width, 8, 8, cmp, cmp_data, element_width, copy);
+        parity_merge(arr_ptr, swap, 16, 16, cmp, cmp_data, element_width, copy);
     }
 
     // Deal with final tail for 32 element blocks.
     // Anything over 8 elements is multiple blocks worth merging together.
     if (len % 32 > 8) {
-        tail_merge(arr_ptr, len % 32, swap, 32, 8, cmp_data, cmp, element_width, copy);
+        tail_merge(arr_ptr, len % 32, swap, 32, 8, cmp, cmp_data, element_width, copy);
     }
 
     return .unfinished;
@@ -1189,15 +1189,15 @@ fn quad_swap(
 fn quad_swap_merge(
     array: [*]u8,
     swap: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
-    parity_merge_two(swap, array, cmp_data, cmp, element_width, copy);
-    parity_merge_two(swap + 4 * element_width, array + 4 * element_width, cmp_data, cmp, element_width, copy);
+    parity_merge_two(swap, array, cmp, cmp_data, element_width, copy);
+    parity_merge_two(swap + 4 * element_width, array + 4 * element_width, cmp, cmp_data, element_width, copy);
 
-    parity_merge_four(array, swap, cmp_data, cmp, element_width, copy);
+    parity_merge_four(array, swap, cmp, cmp_data, element_width, copy);
 }
 
 /// Reverse values from start to end.
@@ -1277,7 +1277,7 @@ test "quad_swap" {
         72, 58, 57,
     };
 
-    var result = quad_swap(arr_ptr, 75, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    var result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(result, .unfinished);
     try testing.expectEqual(arr, [75]i64{
         // first 32 elements sorted (with 8 reversed that get flipped here)
@@ -1308,7 +1308,7 @@ test "quad_swap" {
         expected[i] = @intCast(i + 1);
         arr[i] = @intCast(75 - i);
     }
-    result = quad_swap(arr_ptr, 75, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(result, .sorted);
     try testing.expectEqual(arr, expected);
 }
@@ -1321,17 +1321,17 @@ test "quad_swap_merge" {
 
     arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
     swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    quad_swap_merge(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_swap_merge(arr_ptr, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 5, 7, 1, 3, 6, 8, 2, 4 };
     swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    quad_swap_merge(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_swap_merge(arr_ptr, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 1, 8, 3, 4, 5, 6, 2, 7 };
     swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    quad_swap_merge(arr_ptr, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    quad_swap_merge(arr_ptr, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 }
 
@@ -1361,15 +1361,15 @@ fn tail_swap(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     std.debug.assert(len < 32);
 
     if (len < 8) {
-        tiny_sort(array, len, swap, cmp_data, cmp, element_width, copy);
+        tiny_sort(array, len, swap, cmp, cmp_data, element_width, copy);
         return;
     }
 
@@ -1381,21 +1381,21 @@ fn tail_swap(
     const quad4 = half2 - quad3;
 
     var arr_ptr = array;
-    tail_swap(arr_ptr, quad1, swap, cmp_data, cmp, element_width, copy);
+    tail_swap(arr_ptr, quad1, swap, cmp, cmp_data, element_width, copy);
     arr_ptr += quad1 * element_width;
-    tail_swap(arr_ptr, quad2, swap, cmp_data, cmp, element_width, copy);
+    tail_swap(arr_ptr, quad2, swap, cmp, cmp_data, element_width, copy);
     arr_ptr += quad2 * element_width;
-    tail_swap(arr_ptr, quad3, swap, cmp_data, cmp, element_width, copy);
+    tail_swap(arr_ptr, quad3, swap, cmp, cmp_data, element_width, copy);
     arr_ptr += quad3 * element_width;
-    tail_swap(arr_ptr, quad4, swap, cmp_data, cmp, element_width, copy);
+    tail_swap(arr_ptr, quad4, swap, cmp, cmp_data, element_width, copy);
 
     if (compare(cmp, cmp_data, array + (quad1 - 1) * element_width, array + quad1 * element_width) != GT and compare(cmp, cmp_data, array + (half1 - 1) * element_width, array + half1 * element_width) != GT and compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr) != GT) {
         return;
     }
 
-    parity_merge(swap, array, quad1, quad2, cmp_data, cmp, element_width, copy);
-    parity_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp_data, cmp, element_width, copy);
-    parity_merge(array, swap, half1, half2, cmp_data, cmp, element_width, copy);
+    parity_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy);
+    parity_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp, cmp_data, element_width, copy);
+    parity_merge(array, swap, half1, half2, cmp, cmp_data, element_width, copy);
 }
 
 /// Merges two neighboring sorted arrays into dest.
@@ -1405,8 +1405,8 @@ fn parity_merge(
     src: [*]u8,
     left_len: usize,
     right_len: usize,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -1421,16 +1421,16 @@ fn parity_merge(
     var dest_tail = dest + (left_len + right_len - 1) * element_width;
 
     if (left_len < right_len) {
-        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
     }
-    head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
 
     var ll = left_len - 1;
     while (ll != 0) : (ll -= 1) {
-        head_branchless_merge(&dest_head, &left_head, &right_head, cmp_data, cmp, element_width, copy);
-        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+        head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
+        tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
     }
-    tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
 }
 
 test "tail_swap" {
@@ -1449,7 +1449,7 @@ test "tail_swap" {
         var rng = std.rand.DefaultPrng.init(seed);
         rng.random().shuffle(i64, arr[0..]);
 
-        tail_swap(arr_ptr, 31, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tail_swap(arr_ptr, 31, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, expected);
     }
 }
@@ -1464,12 +1464,12 @@ test "parity_merge" {
 
         arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
         dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
         arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
         dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 4, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
     }
     {
@@ -1481,12 +1481,12 @@ test "parity_merge" {
 
         arr = [9]i64{ 1, 3, 5, 8, 2, 4, 6, 7, 9 };
         dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 5, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
 
         arr = [9]i64{ 6, 7, 8, 9, 1, 2, 3, 4, 5 };
         dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 5, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
     }
 }
@@ -1499,8 +1499,8 @@ fn tiny_sort(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -1514,27 +1514,27 @@ fn tiny_sort(
             return;
         },
         2 => {
-            swap_branchless(array, tmp_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(array, tmp_ptr, cmp, cmp_data, element_width, copy);
         },
         3 => {
             var arr_ptr = array;
-            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
             arr_ptr += element_width;
-            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
             arr_ptr -= element_width;
-            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         },
         4 => {
-            parity_swap_four(array, tmp_ptr, cmp_data, cmp, element_width, copy);
+            parity_swap_four(array, tmp_ptr, cmp, cmp_data, element_width, copy);
         },
         5 => {
-            parity_swap_five(array, tmp_ptr, cmp_data, cmp, element_width, copy);
+            parity_swap_five(array, tmp_ptr, cmp, cmp_data, element_width, copy);
         },
         6 => {
-            parity_swap_six(array, tmp_ptr, swap, cmp_data, cmp, element_width, copy);
+            parity_swap_six(array, tmp_ptr, swap, cmp, cmp_data, element_width, copy);
         },
         7 => {
-            parity_swap_seven(array, tmp_ptr, swap, cmp_data, cmp, element_width, copy);
+            parity_swap_seven(array, tmp_ptr, swap, cmp, cmp_data, element_width, copy);
         },
         else => {
             unreachable;
@@ -1545,15 +1545,15 @@ fn tiny_sort(
 fn parity_swap_four(
     array: [*]u8,
     tmp_ptr: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     var arr_ptr = array;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr -= element_width;
 
     const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
@@ -1562,44 +1562,44 @@ fn parity_swap_four(
         copy(arr_ptr, arr_ptr + element_width);
         copy(arr_ptr + element_width, tmp_ptr);
         arr_ptr -= element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr += 2 * element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr -= element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     }
 }
 
 fn parity_swap_five(
     array: [*]u8,
     tmp_ptr: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     var arr_ptr = array;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr -= element_width;
-    var more_work = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    var more_work = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr = array;
 
     if (more_work != 0) {
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr += 2 * element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr -= element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr += 2 * element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr = array;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr += 2 * element_width;
-        swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+        swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     }
 }
 
@@ -1607,27 +1607,27 @@ fn parity_swap_six(
     array: [*]u8,
     tmp_ptr: [*]u8,
     swap: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     var arr_ptr = array;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 3 * element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr -= element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr = array;
 
     {
         const lte = compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT;
         if (lte) {
-            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
             arr_ptr += 4 * element_width;
-            swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+            swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
             return;
         }
     }
@@ -1654,16 +1654,16 @@ fn parity_swap_six(
     var left = swap;
     var right = swap + 3 * element_width;
 
-    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
 
     arr_ptr = array + 5 * element_width;
     left = swap + 2 * element_width;
     right = swap + 5 * element_width;
 
-    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
     const from = if (gt) left else right;
     copy(arr_ptr, from);
@@ -1673,29 +1673,29 @@ fn parity_swap_seven(
     array: [*]u8,
     tmp_ptr: [*]u8,
     swap: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     var arr_ptr = array;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr -= 3 * element_width;
-    var more_work = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    var more_work = swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
-    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    more_work += swap_branchless_return_gt(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr -= element_width;
 
     if (more_work == 0)
         return;
 
-    swap_branchless(arr_ptr, tmp_ptr, cmp_data, cmp, element_width, copy);
+    swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr = array;
 
     {
@@ -1727,17 +1727,17 @@ fn parity_swap_seven(
     var left = swap;
     var right = swap + 3 * element_width;
 
-    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    head_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
 
     arr_ptr = array + 6 * element_width;
     left = swap + 2 * element_width;
     right = swap + 6 * element_width;
 
-    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&arr_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    tail_branchless_merge(&arr_ptr, &left, &right, cmp, cmp_data, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
     const from = if (gt) left else right;
     copy(arr_ptr, from);
@@ -1752,11 +1752,11 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [7]i64{ 3, 1, 2, 5, 4, 7, 6 };
-        tiny_sort(arr_ptr, 7, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
 
         arr = [7]i64{ 7, 6, 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 7, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
     }
     {
@@ -1764,11 +1764,11 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [6]i64{ 3, 1, 2, 6, 4, 5 };
-        tiny_sort(arr_ptr, 6, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
 
         arr = [6]i64{ 6, 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 6, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
     }
     {
@@ -1776,11 +1776,11 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [5]i64{ 2, 1, 4, 3, 5 };
-        tiny_sort(arr_ptr, 5, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
 
         arr = [5]i64{ 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 5, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
     }
     {
@@ -1788,23 +1788,23 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [4]i64{ 4, 2, 1, 3 };
-        tiny_sort(arr_ptr, 4, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
 
         arr = [4]i64{ 2, 1, 4, 3 };
-        tiny_sort(arr_ptr, 4, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
     }
     {
         var arr = [3]i64{ 2, 3, 1 };
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        tiny_sort(arr_ptr, 3, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 3, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [3]i64{ 1, 2, 3 });
     }
     {
         var arr = [2]i64{ 2, 1 };
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        tiny_sort(arr_ptr, 2, swap_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 2, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [2]i64{ 1, 2 });
     }
 }
@@ -1818,17 +1818,17 @@ test "tiny_sort" {
 inline fn parity_merge_four(
     dest: [*]u8,
     array: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     var left = array;
     var right = array + (4 * element_width);
     var dest_ptr = dest;
-    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    head_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    head_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
     const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
     copy(dest_ptr, to_copy);
@@ -1836,9 +1836,9 @@ inline fn parity_merge_four(
     left = array + (3 * element_width);
     right = array + (7 * element_width);
     dest_ptr = dest + (7 * element_width);
-    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
-    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
     to_copy = if (gt) left else right;
     copy(dest_ptr, to_copy);
@@ -1848,15 +1848,15 @@ inline fn parity_merge_four(
 inline fn parity_merge_two(
     dest: [*]u8,
     array: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     var left = array;
     var right = array + (2 * element_width);
     var dest_ptr = dest;
-    head_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    head_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
     const lte = compare(cmp, cmp_data, left, right) != GT;
     var to_copy = if (lte) left else right;
     copy(dest_ptr, to_copy);
@@ -1864,7 +1864,7 @@ inline fn parity_merge_two(
     left = array + element_width;
     right = array + (3 * element_width);
     dest_ptr = dest + (3 * element_width);
-    tail_branchless_merge(&dest_ptr, &left, &right, cmp_data, cmp, element_width, copy);
+    tail_branchless_merge(&dest_ptr, &left, &right, cmp, cmp_data, element_width, copy);
     const gt = compare(cmp, cmp_data, left, right) == GT;
     to_copy = if (gt) left else right;
     copy(dest_ptr, to_copy);
@@ -1878,8 +1878,8 @@ inline fn head_branchless_merge(
     dest: *[*]u8,
     left: *[*]u8,
     right: *[*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -1901,8 +1901,8 @@ inline fn tail_branchless_merge(
     dest: *[*]u8,
     left: *[*]u8,
     right: *[*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
@@ -1920,20 +1920,20 @@ inline fn tail_branchless_merge(
 inline fn swap_branchless(
     ptr: [*]u8,
     tmp: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) void {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    _ = swap_branchless_return_gt(ptr, tmp, cmp_data, cmp, element_width, copy);
+    _ = swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy);
 }
 
 inline fn swap_branchless_return_gt(
     ptr: [*]u8,
     tmp: [*]u8,
-    cmp_data: Opaque,
     cmp: CompareFn,
+    cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
 ) u8 {
@@ -1959,17 +1959,17 @@ test "parity_merge_four" {
 
     arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_four(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_four(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_four(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 }
 
@@ -1981,27 +1981,27 @@ test "parity_merge_two" {
 
     arr = [4]i64{ 1, 2, 3, 4 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 3, 2, 4 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 3, 4, 1, 2 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 2, 4, 1, 3 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 
     arr = [4]i64{ 1, 4, 2, 3 };
     dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
 }
 
@@ -2013,12 +2013,12 @@ test "head_branchless_merge" {
     var left_ptr = @as([*]u8, @ptrCast(&left[0]));
     var right_ptr = @as([*]u8, @ptrCast(&right[0]));
 
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
 
     try testing.expectEqual(dest, [6]i64{ 1, 2, 2, 7, 8, 10 });
 }
@@ -2031,12 +2031,12 @@ test "tail_branchless_merge" {
     var left_ptr = @as([*]u8, @ptrCast(&left[left.len - 1]));
     var right_ptr = @as([*]u8, @ptrCast(&right[right.len - 1]));
 
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
 
     try testing.expectEqual(dest, [6]i64{ 1, 2, 2, 7, 8, 10 });
 }
@@ -2048,15 +2048,15 @@ test "swap" {
     var tmp_ptr = @as([*]u8, @ptrCast(&tmp));
 
     arr = [2]i64{ 10, 20 };
-    swap_branchless(arr_ptr, tmp_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ 10, 20 });
 
     arr = [2]i64{ 77, -12 };
-    swap_branchless(arr_ptr, tmp_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ -12, 77 });
 
     arr = [2]i64{ -22, -22 };
-    swap_branchless(arr_ptr, tmp_ptr, null, &test_i64_compare, @sizeOf(i64), &test_i64_copy);
+    swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ -22, -22 });
 }
 
