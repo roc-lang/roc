@@ -1,6 +1,6 @@
-{ pkgs, lib, rustPlatform, compile-deps, subPackage ? null }:
+{ pkgs, lib, zig, zls, rustPlatform, compile-deps, subPackage ? null }:
 let
-  inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+  inherit (compile-deps) llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
   subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
   mainBin = if subPackage == "language_server" then "roc_language_server" else "roc";
@@ -18,7 +18,7 @@ rustPlatform.buildRustPackage {
     lockFile = ../Cargo.lock;
     outputHashes = {
       "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
-      "inkwell-0.2.0" = "sha256-VhTapYGonoSQ4hnDoLl4AAgj0BppAhPNA+UPuAJSuAU=";
+      "inkwell-0.4.0" = "";
       "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
       "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
     };
@@ -47,7 +47,8 @@ rustPlatform.buildRustPackage {
     python3
     llvmPkgs.clangUseLLVM
     llvmPkgs.bintools-unwrapped # contains lld
-    zigPkg
+    zig
+    zls
   ]);
 
   buildInputs = (with pkgs;

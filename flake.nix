@@ -4,6 +4,12 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?rev=63dacb46bf939521bdc93981b4cbb7ecb58427a0";
 
+    zig-overlay.url = "github:mitchellh/zig-overlay?rev=c7615d701b2a5355a3f3013918b6b945c394e791";
+    zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
+
+    zls-overlay.url = "github:zigtools/zls?rev=a26718049a8657d4da04c331aeced1697bc7652b";
+    zls-overlay.inputs.nixpkgs.follows = "nixpkgs";
+
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -26,7 +32,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
+  outputs = { self, zig-overlay, zls-overlay, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
@@ -35,6 +41,14 @@
     { inherit templates; } //
     flake-utils.lib.eachSystem supportedSystems (system:
       let
+
+        zig = zig-overlay.packages.${system}."0.13.0";
+        zls = zls-overlay.packages.${system}.zls.overrideAttrs (
+                old: {
+                    nativeBuildInputs = [ zig ];
+                }
+            );
+
         overlays = [ (import rust-overlay) ]
         ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
@@ -42,7 +56,7 @@
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
+        inherit (compile-deps) llvmPkgs llvmVersion
           llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
         # DevInputs are not necessary to build roc as a user
@@ -78,7 +92,11 @@
           # provides clang
           llvmPkgs.libllvm
           pkg-config
-          zigPkg # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+
+          # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zig
+          zls
+
           # lib deps
           libffi
           libxml2

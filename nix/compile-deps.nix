@@ -1,6 +1,5 @@
 { pkgs }:
 let
-  zigPkg = pkgs.zig;
   llvmPkgs = pkgs.llvmPackages_18;
   llvmVersion = builtins.splitVersion llvmPkgs.release_version;
   llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
@@ -11,7 +10,7 @@ let
     if pkgs.stdenv.isLinux then "${pkgs.stdenv.cc.cc.lib}/lib" else "";
 in
 {
-  inherit zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+  inherit llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
   darwinInputs = with pkgs;
     lib.optionals stdenv.isDarwin
