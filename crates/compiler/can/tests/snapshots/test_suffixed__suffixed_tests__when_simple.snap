@@ -35,13 +35,13 @@ Defs {
                     @11-74 Closure(
                         [
                             @16-24 Identifier {
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                         ],
                         @11-74 When(
                             @16-24 Var {
                                 module_name: "",
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                             [
                                 WhenBranch {

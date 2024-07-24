@@ -45,7 +45,7 @@ Defs {
                     @15-35 Closure(
                         [
                             Identifier {
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                         ],
                         @15-35 Defs(
@@ -73,7 +73,7 @@ Defs {
                                             @16-26 ParensAround(
                                                 Var {
                                                     module_name: "",
-                                                    ident: "#!a0",
+                                                    ident: "#!0_arg",
                                                 },
                                             ),
                                             [

@@ -476,8 +476,10 @@ third = tuple.2 # ["list"]
 # tuple destructuring
 (first, second, third) = ("hello", 42, ["list"])
 ```
-
-By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+<details>
+    <summary>Pronouncing Tuple</summary>
+    By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+</details>
 
 ## [Pattern Matching](#pattern-matching) {#pattern-matching}
 

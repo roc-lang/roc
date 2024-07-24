@@ -98,23 +98,67 @@ Defs {
                                         ident: "await",
                                     },
                                     [
-                                        @76-83 Apply(
+                                        @76-83 Defs(
+                                            Defs {
+                                                tags: [
+                                                    Index(2147483648),
+                                                ],
+                                                regions: [
+                                                    @76-83,
+                                                ],
+                                                space_before: [
+                                                    Slice(start = 0, length = 0),
+                                                ],
+                                                space_after: [
+                                                    Slice(start = 0, length = 0),
+                                                ],
+                                                spaces: [],
+                                                type_defs: [],
+                                                value_defs: [
+                                                    AnnotatedBody {
+                                                        ann_pattern: @76-83 Identifier {
+                                                            ident: "#!1_stmt",
+                                                        },
+                                                        ann_type: @76-83 Apply(
+                                                            "",
+                                                            "Task",
+                                                            [
+                                                                @76-83 Record {
+                                                                    fields: [],
+                                                                    ext: None,
+                                                                },
+                                                                @76-83 Inferred,
+                                                            ],
+                                                        ),
+                                                        comment: None,
+                                                        body_pattern: @76-83 Identifier {
+                                                            ident: "#!1_stmt",
+                                                        },
+                                                        body_expr: @76-83 Apply(
+                                                            @76-83 Var {
+                                                                module_name: "",
+                                                                ident: "line",
+                                                            },
+                                                            [
+                                                                @82-83 Var {
+                                                                    module_name: "",
+                                                                    ident: "a",
+                                                                },
+                                                            ],
+                                                            Space,
+                                                        ),
+                                                    },
+                                                ],
+                                            },
                                             @76-83 Var {
                                                 module_name: "",
-                                                ident: "line",
+                                                ident: "#!1_stmt",
                                             },
-                                            [
-                                                @82-83 Var {
-                                                    module_name: "",
-                                                    ident: "a",
-                                                },
-                                            ],
-                                            Space,
                                         ),
                                         @76-83 Closure(
                                             [
-                                                @76-83 RecordDestructure(
-                                                    [],
+                                                @76-83 Underscore(
+                                                    "#!stmt",
                                                 ),
                                             ],
                                             @92-99 Apply(
@@ -123,23 +167,67 @@ Defs {
                                                     ident: "await",
                                                 },
                                                 [
-                                                    @92-99 Apply(
+                                                    @92-99 Defs(
+                                                        Defs {
+                                                            tags: [
+                                                                Index(2147483648),
+                                                            ],
+                                                            regions: [
+                                                                @92-99,
+                                                            ],
+                                                            space_before: [
+                                                                Slice(start = 0, length = 0),
+                                                            ],
+                                                            space_after: [
+                                                                Slice(start = 0, length = 0),
+                                                            ],
+                                                            spaces: [],
+                                                            type_defs: [],
+                                                            value_defs: [
+                                                                AnnotatedBody {
+                                                                    ann_pattern: @92-99 Identifier {
+                                                                        ident: "#!0_stmt",
+                                                                    },
+                                                                    ann_type: @92-99 Apply(
+                                                                        "",
+                                                                        "Task",
+                                                                        [
+                                                                            @92-99 Record {
+                                                                                fields: [],
+                                                                                ext: None,
+                                                                            },
+                                                                            @92-99 Inferred,
+                                                                        ],
+                                                                    ),
+                                                                    comment: None,
+                                                                    body_pattern: @92-99 Identifier {
+                                                                        ident: "#!0_stmt",
+                                                                    },
+                                                                    body_expr: @92-99 Apply(
+                                                                        @92-99 Var {
+                                                                            module_name: "",
+                                                                            ident: "line",
+                                                                        },
+                                                                        [
+                                                                            @98-99 Var {
+                                                                                module_name: "",
+                                                                                ident: "b",
+                                                                            },
+                                                                        ],
+                                                                        Space,
+                                                                    ),
+                                                                },
+                                                            ],
+                                                        },
                                                         @92-99 Var {
                                                             module_name: "",
-                                                            ident: "line",
+                                                            ident: "#!0_stmt",
                                                         },
-                                                        [
-                                                            @98-99 Var {
-                                                                module_name: "",
-                                                                ident: "b",
-                                                            },
-                                                        ],
-                                                        Space,
                                                     ),
                                                     @92-99 Closure(
                                                         [
-                                                            @92-99 RecordDestructure(
-                                                                [],
+                                                            @92-99 Underscore(
+                                                                "#!stmt",
                                                             ),
                                                         ],
                                                         @109-119 Apply(

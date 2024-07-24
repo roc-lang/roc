@@ -55,25 +55,69 @@ Defs {
                                         ident: "await",
                                     },
                                     [
-                                        @31-42 Apply(
+                                        @31-42 Defs(
+                                            Defs {
+                                                tags: [
+                                                    Index(2147483648),
+                                                ],
+                                                regions: [
+                                                    @31-42,
+                                                ],
+                                                space_before: [
+                                                    Slice(start = 0, length = 0),
+                                                ],
+                                                space_after: [
+                                                    Slice(start = 0, length = 0),
+                                                ],
+                                                spaces: [],
+                                                type_defs: [],
+                                                value_defs: [
+                                                    AnnotatedBody {
+                                                        ann_pattern: @31-42 Identifier {
+                                                            ident: "#!0_stmt",
+                                                        },
+                                                        ann_type: @31-42 Apply(
+                                                            "",
+                                                            "Task",
+                                                            [
+                                                                @31-42 Record {
+                                                                    fields: [],
+                                                                    ext: None,
+                                                                },
+                                                                @31-42 Inferred,
+                                                            ],
+                                                        ),
+                                                        comment: None,
+                                                        body_pattern: @31-42 Identifier {
+                                                            ident: "#!0_stmt",
+                                                        },
+                                                        body_expr: @31-42 Apply(
+                                                            @31-42 Var {
+                                                                module_name: "",
+                                                                ident: "line",
+                                                            },
+                                                            [
+                                                                @31-34 Var {
+                                                                    module_name: "",
+                                                                    ident: "msg",
+                                                                },
+                                                            ],
+                                                            BinOp(
+                                                                Pizza,
+                                                            ),
+                                                        ),
+                                                    },
+                                                ],
+                                            },
                                             @31-42 Var {
                                                 module_name: "",
-                                                ident: "line",
+                                                ident: "#!0_stmt",
                                             },
-                                            [
-                                                @31-34 Var {
-                                                    module_name: "",
-                                                    ident: "msg",
-                                                },
-                                            ],
-                                            BinOp(
-                                                Pizza,
-                                            ),
                                         ),
                                         @31-42 Closure(
                                             [
-                                                @31-42 RecordDestructure(
-                                                    [],
+                                                @31-42 Underscore(
+                                                    "#!stmt",
                                                 ),
                                             ],
                                             @52-57 Apply(
