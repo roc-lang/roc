@@ -37,6 +37,7 @@ pub fn quadsort(
     data_is_owned: bool,
     inc_n_data: IncN,
     element_width: usize,
+    alignment: u32,
     copy: CopyFn,
 ) void {
     // Note, knowing constant versions of element_width and copy could have huge perf gains.
@@ -46,14 +47,57 @@ pub fn quadsort(
     // llvm garbage collection would remove all other variants.
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
-        quadsort_direct(source_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, copy);
+        quadsort_direct(source_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, alignment, copy);
     } else {
         roc_panic("todo: fallback to an indirect pointer sort", 0);
     }
 }
 
 fn quadsort_direct(
-    source_ptr: [*]u8,
+    array: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    data_is_owned: bool,
+    inc_n_data: IncN,
+    element_width: usize,
+    alignment: u32,
+    copy: CopyFn,
+) void {
+    var arr_ptr = array;
+    if (len < 32) {
+        // TODO: This is a solid amount of stack space. Is that ok?
+        // That said, it only ever allocates once (not recursive).
+        // Aside from embedded is probably ok. Just a 3 KB with 96 byte MAX_ELEMENT_BUFFER_SIZE.
+        // Also, zig doesn't hav alloca, so we always do max size here.
+        var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 32]u8 align(BufferAlign) = undefined;
+        const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
+        tail_swap(arr_ptr, len, swap, cmp_data, cmp, element_width, copy);
+    } else if (quad_swap(arr_ptr, len, cmp_data, cmp, element_width, copy) != .sorted) {
+        var swap_size = len;
+
+        // for crazy large arrays, limit swap.
+        if (len > 4194304) {
+            swap_size = 4194304;
+            while (swap_size * 8 <= len) : (swap_size *= 4) {}
+        }
+
+        if (utils.alloc(swap_size * element_width, alignment)) |swap| {
+            const block_len = quad_merge(array, len, swap, 512, 32, cmp_data, cmp, element_width, copy);
+            _ = block_len;
+
+            // TODO: final rotate merge.
+
+            utils.dealloc(swap, alignment);
+        } else {
+            // Fallback to still sort even when out of memory.
+            @call(.never_inline, quadsort_stack_swap, .{ arr_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, copy });
+        }
+    }
+}
+
+fn quadsort_stack_swap(
+    array: [*]u8,
     len: usize,
     cmp: CompareFn,
     cmp_data: Opaque,
@@ -64,13 +108,14 @@ fn quadsort_direct(
 ) void {
     _ = inc_n_data;
     _ = data_is_owned;
-    _ = cmp_data;
-    _ = len;
-    _ = copy;
-    _ = element_width;
-    _ = cmp;
-    _ = source_ptr;
-    roc_panic("todo: quadsort", 0);
+    // Use a 512 element on stack swap buffer.
+    var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 512]u8 align(BufferAlign) = undefined;
+    const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
+
+    const block_len = quad_merge(array, len, swap, 512, 32, cmp_data, cmp, element_width, copy);
+    _ = block_len;
+
+    // TODO: final rotate merge.
 }
 
 // ================ Inplace Rotate Merge ======================================
