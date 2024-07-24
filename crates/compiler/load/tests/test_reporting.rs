@@ -14503,4 +14503,38 @@ In roc, functions are always written as a lambda, like{}
     make partial application explicit.
     "
     );
+
+    // TODO: add the following tests after built-in Tasks are added
+    // https://github.com/roc-lang/roc/pull/6836
+
+    // test_report!(
+    // suffixed_stmt_invalid_type,
+    //     indoc!(
+    //         r###"
+    //         app "test" provides [main] to "./platform"
+
+    //         main : Task U64 _ -> _
+    //         main = \task ->
+    //             task!
+    //             42
+    //         "###
+    //     ),
+    //     @r""
+    // );
+
+    // test_report!(
+    // suffixed_expr_invalid_type,
+    //     indoc!(
+    //         r###"
+    //         app "test" provides [main] to "./platform"
+
+    //         main : Task U64 _ -> _
+    //         main = \task ->
+    //             result : U32
+    //             result = task!
+    //             result
+    //         "###
+    //     ),
+    //     @r""
+    // );
 }
