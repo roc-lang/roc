@@ -2608,21 +2608,23 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
         if state.bytes().starts_with(b"->") {
             state.advance_mut(2);
 
-            let body_parser = and(
-                space0_e(EClosure::IndentBody),
-                specialize_err_ref(EClosure::Body, expr_start(options)),
-            );
+            let indent_body_parser = space0_e(EClosure::IndentBody);
+            let body_parser = specialize_err_ref(EClosure::Body, expr_start(options));
 
-            match body_parser.parse(arena, state, min_indent) {
-                Ok((_, (space_list, mut body), state)) => {
-                    if !space_list.is_empty() {
-                        body = arena
-                            .alloc(body.value)
-                            .with_spaces_before(space_list, body.region)
-                    };
-                    let closure_res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                    Ok((MadeProgress, closure_res, state))
-                }
+            match indent_body_parser.parse(arena, state, min_indent) {
+                Ok((_, space_list, state)) => match body_parser.parse(arena, state, min_indent) {
+                    Ok((_, mut body, state)) => {
+                        if !space_list.is_empty() {
+                            body = arena
+                                .alloc(body.value)
+                                .with_spaces_before(space_list, body.region)
+                        };
+                        let closure_res =
+                            Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                        Ok((MadeProgress, closure_res, state))
+                    }
+                    Err((_, fail)) => Err((MadeProgress, fail)),
+                },
                 Err((_, fail)) => Err((MadeProgress, fail)),
             }
         } else {
