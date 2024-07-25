@@ -2604,17 +2604,22 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
             }
         }
 
-        // Parse the arrow which separates params from body, then the body
+        // Parse the arrow which separates params from body, then parse the body
         if state.bytes().starts_with(b"->") {
             state.advance_mut(2);
 
-            let body_parser = space0_before_e(
+            let body_parser = and(
+                space0_e(EClosure::IndentBody),
                 specialize_err_ref(EClosure::Body, expr_start(options)),
-                EClosure::IndentBody,
             );
 
             match body_parser.parse(arena, state, min_indent) {
-                Ok((_, body, state)) => {
+                Ok((_, (space_list, mut body), state)) => {
+                    if !space_list.is_empty() {
+                        body = arena
+                            .alloc(body.value)
+                            .with_spaces_before(space_list, body.region)
+                    };
                     let closure_res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
                     Ok((MadeProgress, closure_res, state))
                 }
