@@ -74,19 +74,18 @@ fn quadsort_direct(
         const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
         tail_swap(arr_ptr, len, swap, cmp, cmp_data, element_width, copy);
     } else if (quad_swap(arr_ptr, len, cmp, cmp_data, element_width, copy) != .sorted) {
-        var swap_size = len;
+        var swap_len = len;
 
         // This is optional, for about 5% perf hit, lower memory usage on large arrays.
         // if (len > 4194304) {
-        //     swap_size = 4194304;
-        //     while (swap_size * 8 <= len) : (swap_size *= 4) {}
+        //     swap_len = 4194304;
+        //     while (swap_len * 8 <= len) : (swap_len *= 4) {}
         // }
 
-        if (utils.alloc(swap_size * element_width, alignment)) |swap| {
-            const block_len = quad_merge(arr_ptr, len, swap, swap_size, 32, cmp, cmp_data, element_width, copy);
-            _ = block_len;
+        if (utils.alloc(swap_len * element_width, alignment)) |swap| {
+            const block_len = quad_merge(arr_ptr, len, swap, swap_len, 32, cmp, cmp_data, element_width, copy);
 
-            // TODO: final rotate merge.
+            rotate_merge(arr_ptr, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy);
 
             utils.dealloc(swap, alignment);
         } else {
@@ -113,14 +112,46 @@ fn quadsort_stack_swap(
     const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
 
     const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy);
-    _ = block_len;
 
-    // TODO: final rotate merge.
+    rotate_merge(array, len, swap, 512, block_len, cmp, cmp_data, element_width, copy);
 }
 
 // ================ Inplace Rotate Merge ======================================
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
+
+fn rotate_merge(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    swap_len: usize,
+    block_len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    var end_ptr = array + len * element_width;
+
+    if (len <= block_len * 2 and len - block_len <= swap_len) {
+        partial_backwards_merge(array, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy);
+        return;
+    }
+
+    var current_block_len = block_len;
+    while (current_block_len < len) : (current_block_len *= 2) {
+        var arr_ptr = array;
+        while (@intFromPtr(arr_ptr) + current_block_len * element_width < @intFromPtr(end_ptr)) : (arr_ptr += current_block_len * 2 * element_width) {
+            if (@intFromPtr(arr_ptr) + current_block_len * 2 * element_width < @intFromPtr(end_ptr)) {
+                rotate_merge_block(arr_ptr, swap, swap_len, current_block_len, current_block_len, cmp, cmp_data, element_width, copy);
+                continue;
+            }
+            const right_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width - current_block_len;
+            rotate_merge_block(arr_ptr, swap, swap_len, current_block_len, right_len, cmp, cmp_data, element_width, copy);
+            break;
+        }
+    }
+}
 
 /// Merges two blocks together while only using limited memory.
 fn rotate_merge_block(
@@ -149,15 +180,15 @@ fn rotate_merge_block(
 
     if (left != 0) {
         if (left_block + left <= swap_len) {
-            @memcpy(swap[0 .. left_block * element_width], array[0 .. left_block * element_width]);
-            @memcpy((swap + left_block * element_width[0 .. left * element_width]), (array + (left_block + right_block) * element_width)[0 .. left * element_width]);
+            @memcpy(swap[0..(left_block * element_width)], array[0..(left_block * element_width)]);
+            @memcpy((swap + left_block * element_width)[0..(left * element_width)], (array + (left_block + right_block) * element_width)[0..(left * element_width)]);
             std.mem.copyBackwards(u8, (array + (left + left_block) * element_width)[0..(right_block * element_width)], (array + left_block * element_width)[0..(right_block * element_width)]);
 
             cross_merge(array, swap, left_block, left, cmp, cmp_data, element_width, copy);
         } else {
             trinity_rotation(array + left_block * element_width, right_block + left, swap, swap_len, right_block, element_width, copy);
 
-            const unbalanced = (left * 2 < left_block) | (left_block * 2 < left);
+            const unbalanced = (left * 2 < left_block) or (left_block * 2 < left);
             if (unbalanced and left <= swap_len) {
                 partial_backwards_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy);
             } else if (unbalanced and left_block <= swap_len) {
@@ -169,7 +200,7 @@ fn rotate_merge_block(
     }
 
     if (right != 0) {
-        const unbalanced = (right * 2 < right_block) | (right_block * 2 < right);
+        const unbalanced = (right * 2 < right_block) or (right_block * 2 < right);
         if ((unbalanced and right <= swap_len) or right + right_block <= swap_len) {
             partial_backwards_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy);
         } else if (unbalanced and left_block <= swap_len) {
@@ -365,6 +396,38 @@ fn trinity_rotation(
             right_ptr += element_width;
         }
     }
+}
+
+// TODO: better testing for rotate_merge and rotate_merge_block (or just fuzzing).
+test "rotate_merge" {
+    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+    var arr: [10]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [10]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
+    rotate_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
+    rotate_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
+    rotate_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    // Limited swap, can't finish merge
+    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
+    rotate_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    try testing.expectEqual(arr, expected);
+
+    // TODO: should this work? Has too little swap.
+    // arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
+    // rotate_merge(arr_ptr, 10, swap_ptr, 3, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    // try testing.expectEqual(arr, expected);
 }
 
 test "monobound_binary_first" {
