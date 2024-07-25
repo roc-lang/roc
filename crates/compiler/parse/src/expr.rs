@@ -2544,48 +2544,51 @@ pub fn parse_top_level_defs<'a>(
 fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     move |arena, state: State<'a>, _min_indent| {
         // After the first token, all other tokens must be indented past the start of the line
-        // All closures start with a '\' - e.g. (\x -> x + 1)
         let slash_indent = state.line_indent();
         if slash_indent > state.column() {
             return Err((NoProgress, EClosure::Start(state.pos())));
         }
 
+        // All closures start with a '\' - e.g. (\x -> x + 1)
         if state.bytes().first() != Some(&b'\\') {
             return Err((NoProgress, EClosure::Start(state.pos())));
         }
 
         let state = state.advance(1);
 
-        // Once we see the '\', we're committed to parsing this as a closure.
-        // It may turn out to be malformed, but it is definitely a closure.
-        let params_body = and(
-            // Parse the params
-            // Params are comma-separated
-            sep_by1_e(
-                byte(b',', EClosure::Comma),
-                space0_around_ee(
-                    specialize_err(EClosure::Pattern, closure_param()),
-                    EClosure::IndentArg,
-                    EClosure::IndentArrow,
-                ),
-                EClosure::Arg,
+        // Parse the params
+        // Params are comma-separated
+        let params_parser = sep_by1_e(
+            byte(b',', EClosure::Comma),
+            space0_around_ee(
+                specialize_err(EClosure::Pattern, closure_param()),
+                EClosure::IndentArg,
+                EClosure::IndentArrow,
             ),
-            skip_first(
-                // Parse the -> which separates params from body
-                two_bytes(b'-', b'>', EClosure::Arrow),
-                // Parse the body
-                space0_before_e(
-                    specialize_err_ref(EClosure::Body, expr_start(options)),
-                    EClosure::IndentBody,
-                ),
+            EClosure::Arg,
+        );
+
+        let body_parser = skip_first(
+            // Parse the -> which separates params from body
+            two_bytes(b'-', b'>', EClosure::Arrow),
+            // Parse the body
+            space0_before_e(
+                specialize_err_ref(EClosure::Body, expr_start(options)),
+                EClosure::IndentBody,
             ),
         );
 
-        match params_body.parse(arena, state, slash_indent + 1) {
-            Ok((_, (params, body), state)) => {
-                let res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                Ok((MadeProgress, res, state))
-            }
+        // Once we see the '\', we're committed to parsing this as a closure.
+        // It may turn out to be malformed, but it is definitely a closure.
+        let min_indent = slash_indent + 1;
+        match params_parser.parse(arena, state, min_indent) {
+            Ok((_, params, state)) => match body_parser.parse(arena, state, min_indent) {
+                Ok((_, body, state)) => {
+                    let res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                    Ok((MadeProgress, res, state))
+                }
+                Err((_, fail)) => Err((MadeProgress, fail)),
+            },
             Err((_, fail)) => Err((MadeProgress, fail)),
         }
     }
