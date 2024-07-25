@@ -122,6 +122,34 @@ fn quadsort_stack_swap(
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
 
+/// Binary search, but more cache friendly!
+fn monobound_binary_first(
+    array: [*]u8,
+    initial_top: usize,
+    value_ptr: [*]u8,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+) usize {
+    var top = initial_top;
+    var end_ptr = array + top * element_width;
+
+    while (top > 1) {
+        const mid = top / 2;
+
+        if (compare(cmp, cmp_data, value_ptr, end_ptr - mid * element_width) != GT) {
+            end_ptr -= mid * element_width;
+        }
+        top -= mid;
+    }
+
+    if (compare(cmp, cmp_data, value_ptr, end_ptr - element_width) != GT) {
+        end_ptr -= element_width;
+    }
+    return (@intFromPtr(end_ptr) - @intFromPtr(array)) / element_width;
+}
+
+/// Swap two neighboring chunks of an array quickly with limited memory.
 fn trinity_rotation(
     array: [*]u8,
     len: usize,
@@ -279,6 +307,33 @@ fn trinity_rotation(
             right_ptr += element_width;
         }
     }
+}
+
+test "monobound_binary_first" {
+    var arr = [25]i64{ 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49 };
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var value: i64 = undefined;
+    var value_ptr = @as([*]u8, @ptrCast(&value));
+
+    value = 7;
+    var res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    try testing.expectEqual(res, 3);
+
+    value = 39;
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    try testing.expectEqual(res, 19);
+
+    value = 40;
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    try testing.expectEqual(res, 20);
+
+    value = -10;
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    try testing.expectEqual(res, 0);
+
+    value = 10000;
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    try testing.expectEqual(res, 25);
 }
 
 test "trinity_rotation" {
