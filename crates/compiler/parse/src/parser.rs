@@ -455,7 +455,6 @@ pub enum EClosure<'a> {
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
-    Comma(Position),
     Arg(Position),
     // TODO make EEXpr
     Pattern(EPattern<'a>, Position),

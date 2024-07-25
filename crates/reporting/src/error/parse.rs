@@ -784,54 +784,6 @@ fn to_lambda_report<'a>(
                 }
             }
         },
-
-        EClosure::Comma(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
-            Next::Token("=>") => {
-                let surroundings = Region::new(start, pos);
-                let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                let doc = alloc.stack([
-                    alloc
-                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                    alloc.concat([
-                        alloc.reflow("I was expecting a "),
-                        alloc.parser_suggestion("->"),
-                        alloc.reflow(" next."),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    doc,
-                    title: "WEIRD ARROW".to_string(),
-                    severity,
-                }
-            }
-            _ => {
-                let surroundings = Region::new(start, pos);
-                let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                let doc = alloc.stack([
-                    alloc
-                        .reflow(r"I am partway through parsing a function argument list, but I got stuck here:"),
-                    alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                    alloc.concat([
-                        alloc.reflow("I was expecting a "),
-                        alloc.parser_suggestion("->"),
-                        alloc.reflow(" next."),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    doc,
-                    title: "MISSING ARROW".to_string(),
-                    severity,
-                }
-            }
-        },
-
         EClosure::Arg(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Other(Some(',')) => {
                 let surroundings = Region::new(start, pos);

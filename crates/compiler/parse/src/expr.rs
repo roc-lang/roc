@@ -2558,7 +2558,6 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
         // Parse the params
         // Params are comma-separated
-        let param_delim_parser = byte(b',', EClosure::Comma);
         let param_parser = space0_around_ee(
             specialize_err(EClosure::Pattern, closure_param()),
             EClosure::IndentArg,
@@ -2582,30 +2581,26 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
         loop {
             let prev_state = state.clone();
-            match param_delim_parser.parse(arena, state, min_indent) {
-                Ok((_, (), next_state)) => {
-                    // After delimiter found, parse the element.
-                    match param_parser.parse(arena, next_state.clone(), min_indent) {
-                        Ok((_, param, next_state)) => {
-                            state = next_state;
-                            params.push(param);
-                        }
-                        Err((NoProgress, _)) => {
-                            return Err((MadeProgress, EClosure::Arg(next_state.pos())));
-                        }
-                        Err(fail) => {
-                            return Err(fail);
-                        }
+            if state.bytes().first() == Some(&b',') {
+                let next_state = state.advance(1);
+
+                // After delimiter found, parse the element.
+                match param_parser.parse(arena, next_state.clone(), min_indent) {
+                    Ok((_, param, next_state)) => {
+                        state = next_state;
+                        params.push(param);
+                    }
+                    Err((NoProgress, _)) => {
+                        return Err((MadeProgress, EClosure::Arg(next_state.pos())));
+                    }
+                    Err(fail) => {
+                        return Err(fail);
                     }
                 }
-                Err((NoProgress, _)) => {
-                    // Successfully completed the loop if no more delimiters found, restoring the previous state
-                    state = prev_state;
-                    break;
-                }
-                Err(fail) => {
-                    return Err(fail);
-                }
+            } else {
+                // Successfully completed the loop if no more delimiters found, restoring the previous state
+                state = prev_state;
+                break;
             }
         }
 
