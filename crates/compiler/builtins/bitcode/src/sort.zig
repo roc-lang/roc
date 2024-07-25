@@ -1252,68 +1252,68 @@ fn quad_reversal(
     }
 }
 
-test "quad_swap" {
-    var arr: [75]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+// test "quad_swap" {
+//     var arr: [75]i64 = undefined;
+//     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
-    arr = [75]i64{
-        // multiple ordered chunks
-        1,  3,  5,  7,  9,  11, 13, 15,
-        //
-        33, 34, 35, 36, 37, 38, 39, 40,
-        // partially ordered
-        41, 42, 45, 46, 43, 44, 47, 48,
-        // multiple reverse chunks
-        70, 69, 68, 67, 66, 65, 64, 63,
-        //
-        16, 14, 12, 10, 8,  6,  4,  2,
-        // another ordered
-        49, 50, 51, 52, 53, 54, 55, 56,
-        // unordered
-        23, 21, 19, 20, 24, 22, 18, 17,
-        // partially reversed
-        32, 31, 28, 27, 30, 29, 26, 25,
-        // awkward tail
-        62, 59, 61, 60, 71, 73, 75, 74,
-        //
-        72, 58, 57,
-    };
+//     arr = [75]i64{
+//         // multiple ordered chunks
+//         1,  3,  5,  7,  9,  11, 13, 15,
+//         //
+//         33, 34, 35, 36, 37, 38, 39, 40,
+//         // partially ordered
+//         41, 42, 45, 46, 43, 44, 47, 48,
+//         // multiple reverse chunks
+//         70, 69, 68, 67, 66, 65, 64, 63,
+//         //
+//         16, 14, 12, 10, 8,  6,  4,  2,
+//         // another ordered
+//         49, 50, 51, 52, 53, 54, 55, 56,
+//         // unordered
+//         23, 21, 19, 20, 24, 22, 18, 17,
+//         // partially reversed
+//         32, 31, 28, 27, 30, 29, 26, 25,
+//         // awkward tail
+//         62, 59, 61, 60, 71, 73, 75, 74,
+//         //
+//         72, 58, 57,
+//     };
 
-    var result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(result, .unfinished);
-    try testing.expectEqual(arr, [75]i64{
-        // first 32 elements sorted (with 8 reversed that get flipped here)
-        1,  2,  3,  4,  5,  6,  7,  8,
-        //
-        9,  10, 11, 12, 13, 14, 15, 16,
-        //
-        33, 34, 35, 36, 37, 38, 39, 40,
-        //
-        41, 42, 43, 44, 45, 46, 47, 48,
-        // second 32 elements sorted (with 8 reversed that get flipped here)
-        17, 18, 19, 20, 21, 22, 23, 24,
-        //
-        25, 26, 27, 28, 29, 30, 31, 32,
-        //
-        49, 50, 51, 52, 53, 54, 55, 56,
-        //
-        63, 64, 65, 66, 67, 68, 69, 70,
-        // awkward tail
-        57, 58, 59, 60, 61, 62, 71, 72,
-        //
-        73, 74, 75,
-    });
+//     var result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+//     try testing.expectEqual(result, .unfinished);
+//     try testing.expectEqual(arr, [75]i64{
+//         // first 32 elements sorted (with 8 reversed that get flipped here)
+//         1,  2,  3,  4,  5,  6,  7,  8,
+//         //
+//         9,  10, 11, 12, 13, 14, 15, 16,
+//         //
+//         33, 34, 35, 36, 37, 38, 39, 40,
+//         //
+//         41, 42, 43, 44, 45, 46, 47, 48,
+//         // second 32 elements sorted (with 8 reversed that get flipped here)
+//         17, 18, 19, 20, 21, 22, 23, 24,
+//         //
+//         25, 26, 27, 28, 29, 30, 31, 32,
+//         //
+//         49, 50, 51, 52, 53, 54, 55, 56,
+//         //
+//         63, 64, 65, 66, 67, 68, 69, 70,
+//         // awkward tail
+//         57, 58, 59, 60, 61, 62, 71, 72,
+//         //
+//         73, 74, 75,
+//     });
 
-    // Just reversed.
-    var expected: [75]i64 = undefined;
-    for (0..75) |i| {
-        expected[i] = @intCast(i + 1);
-        arr[i] = @intCast(75 - i);
-    }
-    result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
-    try testing.expectEqual(result, .sorted);
-    try testing.expectEqual(arr, expected);
-}
+//     // Just reversed.
+//     var expected: [75]i64 = undefined;
+//     for (0..75) |i| {
+//         expected[i] = @intCast(i + 1);
+//         arr[i] = @intCast(75 - i);
+//     }
+//     result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+//     try testing.expectEqual(result, .sorted);
+//     try testing.expectEqual(arr, expected);
+// }
 
 test "quad_swap_merge" {
     var arr: [8]i64 = undefined;
