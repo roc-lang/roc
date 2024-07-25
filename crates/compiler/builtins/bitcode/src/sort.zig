@@ -120,7 +120,216 @@ fn quadsort_stack_swap(
 
 // ================ Inplace Rotate Merge ======================================
 // These are used as backup if the swap size is not large enough.
-// Also used for the final merge to reduce copying of data.
+// Also can be used for the final merge to reduce memory footprint.
+
+fn trinity_rotation(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    full_swap_len: usize,
+    left_len: usize,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    var buffer: BufferType align(BufferAlign) = undefined;
+    const tmp_ptr = @as([*]u8, @ptrCast(&buffer[0]));
+
+    const right_len = len - left_len;
+
+    var swap_len = full_swap_len;
+    if (full_swap_len > 65536) {
+        swap_len = 65536;
+    }
+
+    if (left_len < right_len) {
+        if (left_len <= swap_len) {
+            @memcpy(swap[0..(element_width * left_len)], array[0..(element_width * left_len)]);
+            std.mem.copyForwards(u8, array[0..(element_width * right_len)], (array + left_len * element_width)[0..(element_width * right_len)]);
+            @memcpy((array + right_len * element_width)[0..(element_width * left_len)], swap[0..(element_width * left_len)]);
+        } else {
+            var a_ptr = array;
+            var b_ptr = a_ptr + left_len * element_width;
+
+            var bridge = right_len - left_len;
+            if (bridge <= swap_len and bridge > 3) {
+                var c_ptr = a_ptr + right_len * element_width;
+                var d_ptr = c_ptr + left_len * element_width;
+
+                @memcpy(swap[0..(bridge * element_width)], b_ptr[0..(bridge * element_width)]);
+
+                for (0..left_len) |_| {
+                    c_ptr -= element_width;
+                    d_ptr -= element_width;
+                    copy(c_ptr, d_ptr);
+                    b_ptr -= element_width;
+                    copy(d_ptr, b_ptr);
+                }
+                @memcpy(a_ptr[0..(bridge * element_width)], swap[0..(bridge * element_width)]);
+            } else {
+                var c_ptr = b_ptr;
+                var d_ptr = c_ptr + right_len * element_width;
+
+                bridge = left_len / 2;
+
+                for (0..bridge) |_| {
+                    b_ptr -= element_width;
+                    copy(tmp_ptr, b_ptr);
+                    copy(b_ptr, a_ptr);
+                    copy(a_ptr, c_ptr);
+                    a_ptr += element_width;
+                    d_ptr -= element_width;
+                    copy(c_ptr, d_ptr);
+                    c_ptr += element_width;
+                    copy(d_ptr, tmp_ptr);
+                }
+
+                bridge = (@intFromPtr(d_ptr) - @intFromPtr(c_ptr)) / (element_width * 2);
+                for (0..bridge) |_| {
+                    copy(tmp_ptr, c_ptr);
+                    d_ptr -= element_width;
+                    copy(c_ptr, d_ptr);
+                    c_ptr += element_width;
+                    copy(d_ptr, a_ptr);
+                    copy(a_ptr, tmp_ptr);
+                    a_ptr += element_width;
+                }
+
+                bridge = (@intFromPtr(d_ptr) - @intFromPtr(a_ptr)) / (element_width * 2);
+                for (0..bridge) |_| {
+                    copy(tmp_ptr, a_ptr);
+                    d_ptr -= element_width;
+                    copy(a_ptr, d_ptr);
+                    a_ptr += element_width;
+                    copy(d_ptr, tmp_ptr);
+                }
+            }
+        }
+    } else if (right_len < left_len) {
+        if (right_len <= swap_len) {
+            @memcpy(swap[0..(element_width * right_len)], (array + left_len * element_width)[0..(element_width * right_len)]);
+            std.mem.copyBackwards(u8, (array + right_len * element_width)[0..(element_width * left_len)], array[0..(element_width * left_len)]);
+            @memcpy(array[0..(element_width * right_len)], swap[0..(element_width * right_len)]);
+        } else {
+            var a_ptr = array;
+            var b_ptr = a_ptr + left_len * element_width;
+
+            var bridge = left_len - right_len;
+            if (bridge <= swap_len and bridge > 3) {
+                var c_ptr = a_ptr + right_len * element_width;
+                var d_ptr = c_ptr + left_len * element_width;
+
+                @memcpy(swap[0..(bridge * element_width)], c_ptr[0..(bridge * element_width)]);
+
+                for (0..right_len) |_| {
+                    copy(c_ptr, a_ptr);
+                    c_ptr += element_width;
+                    copy(a_ptr, b_ptr);
+                    a_ptr += element_width;
+                    b_ptr += element_width;
+                }
+                @memcpy((d_ptr - bridge * element_width)[0..(bridge * element_width)], swap[0..(bridge * element_width)]);
+            } else {
+                var c_ptr = b_ptr;
+                var d_ptr = c_ptr + right_len * element_width;
+
+                bridge = right_len / 2;
+
+                for (0..bridge) |_| {
+                    b_ptr -= element_width;
+                    copy(tmp_ptr, b_ptr);
+                    copy(b_ptr, a_ptr);
+                    copy(a_ptr, c_ptr);
+                    a_ptr += element_width;
+                    d_ptr -= element_width;
+                    copy(c_ptr, d_ptr);
+                    c_ptr += element_width;
+                    copy(d_ptr, tmp_ptr);
+                }
+
+                bridge = (@intFromPtr(b_ptr) - @intFromPtr(a_ptr)) / (element_width * 2);
+                for (0..bridge) |_| {
+                    b_ptr -= element_width;
+                    copy(tmp_ptr, b_ptr);
+                    copy(b_ptr, a_ptr);
+                    d_ptr -= element_width;
+                    copy(a_ptr, d_ptr);
+                    a_ptr += element_width;
+                    copy(d_ptr, tmp_ptr);
+                }
+
+                bridge = (@intFromPtr(d_ptr) - @intFromPtr(a_ptr)) / (element_width * 2);
+                for (0..bridge) |_| {
+                    copy(tmp_ptr, a_ptr);
+                    d_ptr -= element_width;
+                    copy(a_ptr, d_ptr);
+                    a_ptr += element_width;
+                    copy(d_ptr, tmp_ptr);
+                }
+            }
+        }
+    } else {
+        var left_ptr = array;
+        var right_ptr = left_ptr + left_len * element_width;
+
+        for (0..left_len) |_| {
+            copy(tmp_ptr, left_ptr);
+            copy(left_ptr, right_ptr);
+            left_ptr += element_width;
+            copy(right_ptr, tmp_ptr);
+            right_ptr += element_width;
+        }
+    }
+}
+
+test "trinity_rotation" {
+    {
+        var arr: [10]i64 = undefined;
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        var swap: [10]i64 = undefined;
+        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+        // Even.
+        arr = [10]i64{ 6, 7, 8, 9, 10, 1, 2, 3, 4, 5 };
+        trinity_rotation(arr_ptr, 10, swap_ptr, 10, 5, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+
+        // left large, right fits in swap.
+        arr = [10]i64{ 3, 4, 5, 6, 7, 8, 9, 10, 1, 2 };
+        trinity_rotation(arr_ptr, 10, swap_ptr, 10, 8, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+
+        // right large, left fits in swap.
+        arr = [10]i64{ 9, 10, 1, 2, 3, 4, 5, 6, 7, 8 };
+        trinity_rotation(arr_ptr, 10, swap_ptr, 10, 2, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+
+        // left large, no swap.
+        arr = [10]i64{ 3, 4, 5, 6, 7, 8, 9, 10, 1, 2 };
+        trinity_rotation(arr_ptr, 10, swap_ptr, 0, 8, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+
+        // right large, no swap.
+        arr = [10]i64{ 9, 10, 1, 2, 3, 4, 5, 6, 7, 8 };
+        trinity_rotation(arr_ptr, 10, swap_ptr, 0, 2, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
+    }
+    {
+        var arr: [16]i64 = undefined;
+        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        var swap: [5]i64 = undefined;
+        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+        // left larger, bridge in swap.
+        arr = [16]i64{ 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6 };
+        trinity_rotation(arr_ptr, 16, swap_ptr, 5, 10, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [16]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
+
+        // // right large, bridge in swap.
+        arr = [16]i64{ 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+        trinity_rotation(arr_ptr, 16, swap_ptr, 5, 6, @sizeOf(i64), &test_i64_copy);
+        try testing.expectEqual(arr, [16]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
+    }
+}
 
 // ================ Unbalanced Merges =========================================
 
