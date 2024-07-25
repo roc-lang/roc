@@ -122,6 +122,64 @@ fn quadsort_stack_swap(
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
 
+/// Merges two blocks together while only using limited memory.
+fn rotate_merge_block(
+    array: [*]u8,
+    swap: [*]u8,
+    swap_len: usize,
+    initial_left_block: usize,
+    initial_right: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+) void {
+    var left_block = initial_left_block;
+    var right = initial_right;
+    if (compare(cmp, cmp_data, array + (left_block - 1) * element_width, array + left_block * element_width) != GT) {
+        // Lucky us, already sorted.
+        return;
+    }
+
+    var right_block = left_block / 2;
+    left_block -= right_block;
+
+    var left = monobound_binary_first(array + (left_block + right_block) * element_width, right, array + left_block * element_width, cmp, cmp_data, element_width);
+    right -= left;
+
+    if (left != 0) {
+        if (left_block + left <= swap_len) {
+            @memcpy(swap[0 .. left_block * element_width], array[0 .. left_block * element_width]);
+            @memcpy((swap + left_block * element_width[0 .. left * element_width]), (array + (left_block + right_block) * element_width)[0 .. left * element_width]);
+            std.mem.copyBackwards(u8, (array + (left + left_block) * element_width)[0..(right_block * element_width)], (array + left_block * element_width)[0..(right_block * element_width)]);
+
+            cross_merge(array, swap, left_block, left, cmp, cmp_data, element_width, copy);
+        } else {
+            trinity_rotation(array + left_block * element_width, right_block + left, swap, swap_len, right_block, element_width, copy);
+
+            const unbalanced = (left * 2 < left_block) | (left_block * 2 < left);
+            if (unbalanced and left <= swap_len) {
+                partial_backwards_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy);
+            } else if (unbalanced and left_block <= swap_len) {
+                partial_forward_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy);
+            } else {
+                rotate_merge_block(array, swap, swap_len, left_block, left, cmp, cmp_data, element_width, copy);
+            }
+        }
+    }
+
+    if (right != 0) {
+        const unbalanced = (right * 2 < right_block) | (right_block * 2 < right);
+        if ((unbalanced and right <= swap_len) or right + right_block <= swap_len) {
+            partial_backwards_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy);
+        } else if (unbalanced and left_block <= swap_len) {
+            partial_forward_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy);
+        } else {
+            rotate_merge_block(array + (left_block + left) * element_width, swap, swap_len, right_block, right, cmp, cmp_data, element_width, copy);
+        }
+    }
+}
+
 /// Binary search, but more cache friendly!
 fn monobound_binary_first(
     array: [*]u8,
