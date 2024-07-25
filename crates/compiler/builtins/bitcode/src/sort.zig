@@ -76,11 +76,11 @@ fn quadsort_direct(
     } else if (quad_swap(arr_ptr, len, cmp, cmp_data, element_width, copy) != .sorted) {
         var swap_size = len;
 
-        // for crazy large arrays, limit swap.
-        if (len > 4194304) {
-            swap_size = 4194304;
-            while (swap_size * 8 <= len) : (swap_size *= 4) {}
-        }
+        // This is optional, for about 5% perf hit, lower memory usage on large arrays.
+        // if (len > 4194304) {
+        //     swap_size = 4194304;
+        //     while (swap_size * 8 <= len) : (swap_size *= 4) {}
+        // }
 
         if (utils.alloc(swap_size * element_width, alignment)) |swap| {
             const block_len = quad_merge(arr_ptr, len, swap, swap_size, 32, cmp, cmp_data, element_width, copy);
@@ -1006,14 +1006,15 @@ fn quad_swap(
                     arr_ptr += 8 * element_width;
                     continue :outer;
                 },
-                15 => {
-                    // potentially already reverse ordered, check rest!
-                    if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
-                        reverse_head = arr_ptr;
-                        break :switch_state .reversed;
-                    }
-                    break :switch_state .not_ordered;
-                },
+                // TODO: Figure out why the reversed case below is broken in some cases.
+                // 15 => {
+                //     // potentially already reverse ordered, check rest!
+                //     if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                //         reverse_head = arr_ptr;
+                //         break :switch_state .reversed;
+                //     }
+                //     break :switch_state .not_ordered;
+                // },
                 else => {
                     break :switch_state .not_ordered;
                 },
