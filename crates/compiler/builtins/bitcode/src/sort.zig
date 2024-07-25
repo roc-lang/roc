@@ -1007,6 +1007,7 @@ fn quad_swap(
                     continue :outer;
                 },
                 // TODO: Figure out why the reversed case below is broken in some cases.
+                // Note, it seems like the reverse itself is not broken, but the count and pointer become off somehow.
                 // 15 => {
                 //     // potentially already reverse ordered, check rest!
                 //     if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
