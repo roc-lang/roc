@@ -16,10 +16,10 @@ use crate::module::module_name_help;
 use crate::parser::{
     self, and, backtrackable, between, byte, collection_inner, collection_trailing_sep_e, either,
     increment_min_indent, indented_seq_skip_first, line_min_indent, loc, map, map_with_arena,
-    optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first, skip_second,
-    specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure, EExpect, EExpr,
-    EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord, EString, EType,
-    EWhen, Either, ParseResult, Parser,
+    optional, reset_min_indent, sep_by1, set_min_indent, skip_first, skip_second, specialize_err,
+    specialize_err_ref, then, two_bytes, zero_or_more, EClosure, EExpect, EExpr, EIf, EImport,
+    EImportParams, EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either,
+    ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -2558,37 +2558,79 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
         // Parse the params
         // Params are comma-separated
-        let params_parser = sep_by1_e(
-            byte(b',', EClosure::Comma),
-            space0_around_ee(
-                specialize_err(EClosure::Pattern, closure_param()),
-                EClosure::IndentArg,
-                EClosure::IndentArrow,
-            ),
-            EClosure::Arg,
-        );
-
-        let body_parser = skip_first(
-            // Parse the -> which separates params from body
-            two_bytes(b'-', b'>', EClosure::Arrow),
-            // Parse the body
-            space0_before_e(
-                specialize_err_ref(EClosure::Body, expr_start(options)),
-                EClosure::IndentBody,
-            ),
+        let param_delim_parser = byte(b',', EClosure::Comma);
+        let param_parser = space0_around_ee(
+            specialize_err(EClosure::Pattern, closure_param()),
+            EClosure::IndentArg,
+            EClosure::IndentArrow,
         );
 
         // Once we see the '\', we're committed to parsing this as a closure.
         // It may turn out to be malformed, but it is definitely a closure.
-        let min_indent = slash_indent + 1;
-        match params_parser.parse(arena, state, min_indent) {
-            Ok((_, params, state)) => match body_parser.parse(arena, state, min_indent) {
-                Ok((_, body, state)) => {
-                    let res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                    Ok((MadeProgress, res, state))
+        let min_indent: u32 = slash_indent + 1;
+        let original_state = state.clone();
+        let start_bytes_len = state.bytes().len();
+
+        let (first_param_progress, first_param, mut state) =
+            match param_parser.parse(arena, state, min_indent) {
+                Ok(ok) => Ok(ok),
+                Err((NoProgress, _)) => Err((MadeProgress, EClosure::Arg(original_state.pos()))),
+                Err(err) => Err(err),
+            }?;
+        debug_assert_eq!(first_param_progress, MadeProgress);
+
+        let mut params = Vec::with_capacity_in(1, arena);
+        params.push(first_param);
+
+        let params_res = loop {
+            let old_state = state.clone();
+            match param_delim_parser.parse(arena, state, min_indent) {
+                Ok((_, (), next_state)) => {
+                    // After delimiter found, parse the element.
+                    match param_parser.parse(arena, next_state.clone(), min_indent) {
+                        Ok((_, next_elem, next_state)) => {
+                            state = next_state;
+                            params.push(next_elem);
+                        }
+                        Err((NoProgress, _)) => {
+                            break Err((NoProgress, EClosure::Arg(next_state.pos())));
+                        }
+                        Err(fail) => {
+                            break Err(fail);
+                        }
+                    }
                 }
-                Err((_, fail)) => Err((MadeProgress, fail)),
-            },
+                Err((NoProgress, _)) => {
+                    // Successfully break out of loop if no more delimiters found
+                    let progress = Progress::from_lengths(start_bytes_len, old_state.bytes().len());
+                    break Ok((progress, params, old_state));
+                }
+                Err(fail) => {
+                    break Err(fail);
+                }
+            }
+        };
+
+        match params_res {
+            Ok((_, params, state)) => {
+                let body_parser = skip_first(
+                    // Parse the -> which separates params from body
+                    two_bytes(b'-', b'>', EClosure::Arrow),
+                    // Parse the body
+                    space0_before_e(
+                        specialize_err_ref(EClosure::Body, expr_start(options)),
+                        EClosure::IndentBody,
+                    ),
+                );
+
+                match body_parser.parse(arena, state, min_indent) {
+                    Ok((_, body, state)) => {
+                        let res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                        Ok((MadeProgress, res, state))
+                    }
+                    Err((_, fail)) => Err((MadeProgress, fail)),
+                }
+            }
             Err((_, fail)) => Err((MadeProgress, fail)),
         }
     }
