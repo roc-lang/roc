@@ -2604,23 +2604,24 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
             }
         }
 
-        // Parse the -> which separates params from body, ignore the output
-        let arrow_parser = two_bytes(b'-', b'>', EClosure::Arrow);
+        // Parse the arrow which separates params from body, then the body
+        if state.bytes().starts_with(b"->") {
+            state.advance_mut(2);
 
-        let body_parser = space0_before_e(
-            specialize_err_ref(EClosure::Body, expr_start(options)),
-            EClosure::IndentBody,
-        );
+            let body_parser = space0_before_e(
+                specialize_err_ref(EClosure::Body, expr_start(options)),
+                EClosure::IndentBody,
+            );
 
-        match arrow_parser.parse(arena, state, min_indent) {
-            Ok((_, _, state)) => match body_parser.parse(arena, state, min_indent) {
+            match body_parser.parse(arena, state, min_indent) {
                 Ok((_, body, state)) => {
                     let closure_res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
                     Ok((MadeProgress, closure_res, state))
                 }
                 Err((_, fail)) => Err((MadeProgress, fail)),
-            },
-            Err((_, fail)) => Err((MadeProgress, fail)),
+            }
+        } else {
+            Err((MadeProgress, EClosure::Arrow(state.pos())))
         }
     }
 }
