@@ -2582,16 +2582,16 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
         loop {
             let prev_state = state.clone();
             if state.bytes().first() == Some(&b',') {
-                let next_state = state.advance(1);
+                state.advance_mut(1);
 
                 // After delimiter found, parse the element.
-                match param_parser.parse(arena, next_state.clone(), min_indent) {
+                match param_parser.parse(arena, state.clone(), min_indent) {
                     Ok((_, param, next_state)) => {
                         state = next_state;
                         params.push(param);
                     }
                     Err((NoProgress, _)) => {
-                        return Err((MadeProgress, EClosure::Arg(next_state.pos())));
+                        return Err((MadeProgress, EClosure::Arg(state.pos())));
                     }
                     Err(fail) => {
                         return Err(fail);
@@ -2604,21 +2604,22 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
             }
         }
 
-        let body_parser = skip_first(
-            // Parse the -> which separates params from body
-            two_bytes(b'-', b'>', EClosure::Arrow),
-            // Parse the body
-            space0_before_e(
-                specialize_err_ref(EClosure::Body, expr_start(options)),
-                EClosure::IndentBody,
-            ),
+        // Parse the -> which separates params from body, ignore the output
+        let arrow_parser = two_bytes(b'-', b'>', EClosure::Arrow);
+
+        let body_parser = space0_before_e(
+            specialize_err_ref(EClosure::Body, expr_start(options)),
+            EClosure::IndentBody,
         );
 
-        match body_parser.parse(arena, state, min_indent) {
-            Ok((_, body, state)) => {
-                let closure_res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                Ok((MadeProgress, closure_res, state))
-            }
+        match arrow_parser.parse(arena, state, min_indent) {
+            Ok((_, _, state)) => match body_parser.parse(arena, state, min_indent) {
+                Ok((_, body, state)) => {
+                    let closure_res = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                    Ok((MadeProgress, closure_res, state))
+                }
+                Err((_, fail)) => Err((MadeProgress, fail)),
+            },
             Err((_, fail)) => Err((MadeProgress, fail)),
         }
     }
