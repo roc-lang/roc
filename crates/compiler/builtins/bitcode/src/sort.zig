@@ -837,7 +837,7 @@ fn partial_forward_merge_right_head_2(
             right_head.* += element_width;
         }
         if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
+            return partial_forward_merge_right_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -848,7 +848,7 @@ fn partial_forward_merge_right_head_2(
             left_head.* += element_width;
         }
         if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
+            return partial_forward_merge_left_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -873,7 +873,7 @@ fn partial_forward_merge_left_head_2(
             left_head.* += element_width;
         }
         if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_left_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
+            return partial_forward_merge_left_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
@@ -884,7 +884,7 @@ fn partial_forward_merge_left_head_2(
             right_head.* += element_width;
         }
         if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
-            return @call(.always_tail, partial_forward_merge_right_head_2, .{ dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy });
+            return partial_forward_merge_right_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
         }
         return true;
     }
