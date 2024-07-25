@@ -2604,36 +2604,38 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
             }
         }
 
-        // Parse the arrow which separates params from body, then parse the body
-        if state.bytes().starts_with(b"->") {
-            state.advance_mut(2);
+        // Parse the arrow which separates params from body, only then parse the body
+        if !state.bytes().starts_with(b"->") {
+            return Err((MadeProgress, EClosure::Arrow(state.pos())));
+        }
 
-            let start = state.pos();
-            match spaces().parse(arena, state, min_indent) {
-                Ok((progress, spaces, state)) => {
-                    if progress == NoProgress || state.column() >= min_indent {
-                        let body_parser = specialize_err_ref(EClosure::Body, expr_start(options));
-                        match body_parser.parse(arena, state, min_indent) {
-                            Ok((_, mut body, state)) => {
-                                if !spaces.is_empty() {
-                                    body = arena
-                                        .alloc(body.value)
-                                        .with_spaces_before(spaces, body.region)
-                                };
-                                let closure_res =
-                                    Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                                Ok((MadeProgress, closure_res, state))
-                            }
-                            Err((_, fail)) => Err((MadeProgress, fail)),
+        state.advance_mut(2);
+        let start = state.pos();
+
+        match spaces().parse(arena, state, min_indent) {
+            Ok((progress, spaces, state)) => {
+                if progress == NoProgress || state.column() >= min_indent {
+                    let start = state.pos();
+                    match expr_start(options).parse(arena, state, min_indent) {
+                        Ok((_, mut body, state)) => {
+                            if !spaces.is_empty() {
+                                body = arena
+                                    .alloc(body.value)
+                                    .with_spaces_before(spaces, body.region)
+                            };
+                            let closure =
+                                Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                            Ok((MadeProgress, closure, state))
                         }
-                    } else {
-                        Err((MadeProgress, EClosure::IndentBody(start)))
+                        Err((_, fail)) => {
+                            Err((MadeProgress, EClosure::Body(arena.alloc(fail), start)))
+                        }
                     }
+                } else {
+                    Err((MadeProgress, EClosure::IndentBody(start)))
                 }
-                Err((_, fail)) => Err((MadeProgress, fail)),
             }
-        } else {
-            Err((MadeProgress, EClosure::Arrow(state.pos())))
+            Err((_, fail)) => Err((MadeProgress, fail)),
         }
     }
 }
