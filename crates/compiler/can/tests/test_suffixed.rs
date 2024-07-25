@@ -128,7 +128,7 @@ mod suffixed_tests {
      * Example with a parens suffixed sub-expression
      * in the function part of an Apply.
      *
-     * Note how the parens unwraps into an intermediate answer #!a0 instead of
+     * Note how the parens unwraps into an intermediate answer #!0_arg instead of
      * unwrapping the def `do`.
      *
      */
@@ -162,7 +162,7 @@ mod suffixed_tests {
     /**
      * Example with a multiple suffixed Var
      *
-     * Note it unwraps into an intermediate answer `#!a0`
+     * Note it unwraps into an intermediate answer `#!0_arg`
      *
      */
     #[test]
@@ -546,42 +546,35 @@ mod suffixed_tests {
             "##
         );
     }
+
+    #[test]
+    fn type_annotation() {
+        run_test!(
+            r##"
+            f = \x ->
+                r : A
+                r = x!
+                Task.ok r
+            "##
+        );
+    }
 }
 
 #[cfg(test)]
 mod test_suffixed_helpers {
 
     use roc_can::suffixed::is_matching_intermediate_answer;
-    use roc_module::called_via::CalledVia;
-    use roc_module::ident::ModuleName;
     use roc_parse::ast::Expr;
     use roc_parse::ast::Pattern;
     use roc_region::all::Loc;
 
     #[test]
     fn test_matching_answer() {
-        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!a0" });
+        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!0_arg" });
         let loc_new = Loc::at_zero(Expr::Var {
             module_name: "",
-            ident: "#!a0",
+            ident: "#!0_arg",
         });
-
-        std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
-    }
-
-    #[test]
-    fn test_matching_answer_task_ok() {
-        let loc_pat = Loc::at_zero(Pattern::Identifier { ident: "#!a0" });
-        let intermetiate = &[&Loc::at_zero(Expr::Var {
-            module_name: "",
-            ident: "#!a0",
-        })];
-        let task_ok = Loc::at_zero(Expr::Var {
-            module_name: ModuleName::TASK,
-            ident: "ok",
-        });
-
-        let loc_new = Loc::at_zero(Expr::Apply(&task_ok, intermetiate, CalledVia::BangSuffix));
 
         std::assert!(is_matching_intermediate_answer(&loc_pat, &loc_new));
     }

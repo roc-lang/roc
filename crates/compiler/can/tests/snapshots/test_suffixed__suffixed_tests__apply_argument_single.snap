@@ -35,7 +35,7 @@ Defs {
                     @15-19 Closure(
                         [
                             @17-18 Identifier {
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                         ],
                         @15-19 Defs(
@@ -67,7 +67,7 @@ Defs {
                                             [
                                                 @17-18 Var {
                                                     module_name: "",
-                                                    ident: "#!a0",
+                                                    ident: "#!0_arg",
                                                 },
                                             ],
                                             Space,

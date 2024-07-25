@@ -129,7 +129,7 @@ Defs {
                                     Closure(
                                         [
                                             Identifier {
-                                                ident: "#!a0",
+                                                ident: "#!1_arg",
                                             },
                                         ],
                                         @109-298 If(
@@ -144,7 +144,7 @@ Defs {
                                                             @114-121 ParensAround(
                                                                 Var {
                                                                     module_name: "",
-                                                                    ident: "#!a0",
+                                                                    ident: "#!1_arg",
                                                                 },
                                                             ),
                                                         ],
@@ -158,24 +158,68 @@ Defs {
                                                             ident: "await",
                                                         },
                                                         [
-                                                            @140-152 Apply(
+                                                            @140-152 Defs(
+                                                                Defs {
+                                                                    tags: [
+                                                                        Index(2147483648),
+                                                                    ],
+                                                                    regions: [
+                                                                        @140-152,
+                                                                    ],
+                                                                    space_before: [
+                                                                        Slice(start = 0, length = 0),
+                                                                    ],
+                                                                    space_after: [
+                                                                        Slice(start = 0, length = 0),
+                                                                    ],
+                                                                    spaces: [],
+                                                                    type_defs: [],
+                                                                    value_defs: [
+                                                                        AnnotatedBody {
+                                                                            ann_pattern: @140-152 Identifier {
+                                                                                ident: "#!0_stmt",
+                                                                            },
+                                                                            ann_type: @140-152 Apply(
+                                                                                "",
+                                                                                "Task",
+                                                                                [
+                                                                                    @140-152 Record {
+                                                                                        fields: [],
+                                                                                        ext: None,
+                                                                                    },
+                                                                                    @140-152 Inferred,
+                                                                                ],
+                                                                            ),
+                                                                            comment: None,
+                                                                            body_pattern: @140-152 Identifier {
+                                                                                ident: "#!0_stmt",
+                                                                            },
+                                                                            body_expr: @140-152 Apply(
+                                                                                @140-152 Var {
+                                                                                    module_name: "",
+                                                                                    ident: "line",
+                                                                                },
+                                                                                [
+                                                                                    @146-152 Str(
+                                                                                        PlainLine(
+                                                                                            "fail",
+                                                                                        ),
+                                                                                    ),
+                                                                                ],
+                                                                                Space,
+                                                                            ),
+                                                                        },
+                                                                    ],
+                                                                },
                                                                 @140-152 Var {
                                                                     module_name: "",
-                                                                    ident: "line",
+                                                                    ident: "#!0_stmt",
                                                                 },
-                                                                [
-                                                                    @146-152 Str(
-                                                                        PlainLine(
-                                                                            "fail",
-                                                                        ),
-                                                                    ),
-                                                                ],
-                                                                Space,
                                                             ),
                                                             @140-152 Closure(
                                                                 [
-                                                                    @140-152 RecordDestructure(
-                                                                        [],
+                                                                    @140-152 Underscore(
+                                                                        "#!stmt",
                                                                     ),
                                                                 ],
                                                                 @165-170 Apply(
@@ -218,7 +262,7 @@ Defs {
                                                     Closure(
                                                         [
                                                             Identifier {
-                                                                ident: "#!a1",
+                                                                ident: "#!3_arg",
                                                             },
                                                         ],
                                                         @109-298 If(
@@ -227,7 +271,7 @@ Defs {
                                                                     @187-209 ParensAround(
                                                                         Var {
                                                                             module_name: "",
-                                                                            ident: "#!a1",
+                                                                            ident: "#!3_arg",
                                                                         },
                                                                     ),
                                                                     @227-239 Apply(
@@ -236,24 +280,68 @@ Defs {
                                                                             ident: "await",
                                                                         },
                                                                         [
-                                                                            @227-239 Apply(
+                                                                            @227-239 Defs(
+                                                                                Defs {
+                                                                                    tags: [
+                                                                                        Index(2147483648),
+                                                                                    ],
+                                                                                    regions: [
+                                                                                        @227-239,
+                                                                                    ],
+                                                                                    space_before: [
+                                                                                        Slice(start = 0, length = 0),
+                                                                                    ],
+                                                                                    space_after: [
+                                                                                        Slice(start = 0, length = 0),
+                                                                                    ],
+                                                                                    spaces: [],
+                                                                                    type_defs: [],
+                                                                                    value_defs: [
+                                                                                        AnnotatedBody {
+                                                                                            ann_pattern: @227-239 Identifier {
+                                                                                                ident: "#!2_stmt",
+                                                                                            },
+                                                                                            ann_type: @227-239 Apply(
+                                                                                                "",
+                                                                                                "Task",
+                                                                                                [
+                                                                                                    @227-239 Record {
+                                                                                                        fields: [],
+                                                                                                        ext: None,
+                                                                                                    },
+                                                                                                    @227-239 Inferred,
+                                                                                                ],
+                                                                                            ),
+                                                                                            comment: None,
+                                                                                            body_pattern: @227-239 Identifier {
+                                                                                                ident: "#!2_stmt",
+                                                                                            },
+                                                                                            body_expr: @227-239 Apply(
+                                                                                                @227-239 Var {
+                                                                                                    module_name: "",
+                                                                                                    ident: "line",
+                                                                                                },
+                                                                                                [
+                                                                                                    @233-239 Str(
+                                                                                                        PlainLine(
+                                                                                                            "nope",
+                                                                                                        ),
+                                                                                                    ),
+                                                                                                ],
+                                                                                                Space,
+                                                                                            ),
+                                                                                        },
+                                                                                    ],
+                                                                                },
                                                                                 @227-239 Var {
                                                                                     module_name: "",
-                                                                                    ident: "line",
+                                                                                    ident: "#!2_stmt",
                                                                                 },
-                                                                                [
-                                                                                    @233-239 Str(
-                                                                                        PlainLine(
-                                                                                            "nope",
-                                                                                        ),
-                                                                                    ),
-                                                                                ],
-                                                                                Space,
                                                                             ),
                                                                             @227-239 Closure(
                                                                                 [
-                                                                                    @227-239 RecordDestructure(
-                                                                                        [],
+                                                                                    @227-239 Underscore(
+                                                                                        "#!stmt",
                                                                                     ),
                                                                                 ],
                                                                                 @252-257 Apply(

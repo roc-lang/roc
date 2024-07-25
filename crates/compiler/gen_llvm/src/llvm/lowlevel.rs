@@ -225,12 +225,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
                             let return_type = zig_num_parse_result_type(env, return_type_name);
 
-                            let zig_return_alloca = create_entry_block_alloca(
-                                env,
-                                parent,
-                                return_type.into(),
-                                "str_to_num",
-                            );
+                            let zig_return_alloca =
+                                create_entry_block_alloca(env, return_type, "str_to_num");
 
                             let (a, b) =
                                 pass_list_or_string_to_zig_32bit(env, string.into_struct_value());
@@ -324,7 +320,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     let return_type = zig_num_parse_result_type(env, return_type_name);
 
                     let zig_return_alloca =
-                        create_entry_block_alloca(env, parent, return_type.into(), "str_to_num");
+                        create_entry_block_alloca(env, return_type, "str_to_num");
 
                     call_void_bitcode_fn(
                         env,
@@ -411,9 +407,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         StrFromUtf8 => {
             let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
-            let result_ptr = env
-                .builder
-                .new_build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+            let result_ptr =
+                create_entry_block_alloca(env, result_type, "alloca_utf8_validate_bytes_result");
 
             use roc_target::Architecture::*;
             match env.target.architecture() {
@@ -675,7 +670,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
             let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
-            list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
+            list_append_unsafe(
+                env,
+                layout_interner,
+                layout_ids,
+                original_wrapper,
+                elem,
+                elem_layout,
+            )
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
@@ -947,7 +949,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             build_int_unary_op(
                                 env,
                                 layout_interner,
-                                parent,
                                 arg.into_int_value(),
                                 int_width,
                                 int_type,
@@ -1396,9 +1397,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         layout_interner,
                         layout_interner.get_repr(layout),
                     );
-                    let ptr = env
-                        .builder
-                        .new_build_alloca(basic_type, "unreachable_alloca");
+                    let ptr = create_entry_block_alloca(env, basic_type, "unreachable_alloca");
                     env.builder.new_build_store(ptr, basic_type.const_zero());
 
                     ptr.into()
@@ -1933,7 +1932,7 @@ fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
             env.builder.position_at_end(entry);
 
             // ends in unreachable, so no return is needed
-            throw_internal_exception(env, function_value, message);
+            throw_internal_exception(env, message);
 
             function_value
         }
@@ -1973,7 +1972,7 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
         Windows => {
             let dec_type = zig_dec_type(env);
 
-            let alloca = env.builder.new_build_alloca(dec_type, "dec_alloca");
+            let alloca = create_entry_block_alloca(env, dec_type, "dec_alloca");
 
             let instruction = alloca.as_instruction_value().unwrap();
             instruction.set_alignment(16).unwrap();
@@ -2079,11 +2078,7 @@ fn dec_binary_op<'ctx>(
                 fn_name,
             );
 
-            let block = env.builder.get_insert_block().expect("to be in a function");
-            let parent = block.get_parent().expect("to be in a function");
-
-            let ptr =
-                create_entry_block_alloca(env, parent, env.context.i128_type().into(), "to_i128");
+            let ptr = create_entry_block_alloca(env, env.context.i128_type(), "to_i128");
             env.builder.build_store(ptr, lowr_highr).unwrap();
 
             env.builder
@@ -2109,7 +2104,7 @@ fn dec_binop_with_overflow<'ctx>(
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
-    let return_alloca = env.builder.new_build_alloca(return_type, "return_alloca");
+    let return_alloca = create_entry_block_alloca(env, return_type, "return_alloca");
 
     match env.target {
         Target::LinuxX32 | Target::LinuxX64 | Target::MacX64 => {
@@ -2195,7 +2190,7 @@ fn change_with_overflow_to_roc_type<'a, 'ctx>(
         layout_interner,
         layout_interner.get_repr(return_layout),
     );
-    let casted = cast_basic_basic(env.builder, val.as_basic_value_enum(), return_type);
+    let casted = cast_basic_basic(env, val.as_basic_value_enum(), return_type);
 
     use_roc_value(
         env,
@@ -2341,7 +2336,6 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &STLayoutInterner<'a>,
-    parent: FunctionValue<'ctx>,
     arg: IntValue<'ctx>,
     arg_width: IntWidth,
     arg_int_type: IntType<'ctx>,
@@ -2477,12 +2471,8 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     target_int_width.type_name(),
                                 );
 
-                                let zig_return_alloca = create_entry_block_alloca(
-                                    env,
-                                    parent,
-                                    return_type.into(),
-                                    "num_to_int",
-                                );
+                                let zig_return_alloca =
+                                    create_entry_block_alloca(env, return_type, "num_to_int");
 
                                 call_void_bitcode_fn(
                                     env,
@@ -2584,7 +2574,6 @@ fn int_neg_raise_on_overflow<'ctx>(
 
     throw_internal_exception(
         env,
-        parent,
         "Integer negation overflowed because its argument is the minimum value",
     );
 
@@ -2615,7 +2604,6 @@ fn int_abs_raise_on_overflow<'ctx>(
 
     throw_internal_exception(
         env,
-        parent,
         "Integer absolute overflowed because its argument is the minimum value",
     );
 
@@ -2642,7 +2630,7 @@ fn int_abs_with_overflow<'ctx>(
         let bits_to_shift = int_type.get_bit_width() as u64 - 1;
         let shift_val = int_type.const_int(bits_to_shift, false);
         let shifted = bd.new_build_right_shift(arg, shift_val, true, shifted_name);
-        let alloca = bd.new_build_alloca(int_type, "#int_abs_help");
+        let alloca = create_entry_block_alloca(env, int_type, "#int_abs_help");
 
         // shifted = arg >>> 63
         bd.new_build_store(alloca, shifted);

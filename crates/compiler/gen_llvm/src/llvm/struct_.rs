@@ -11,7 +11,7 @@ use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
 use crate::llvm::build::{load_roc_value, use_roc_value};
 
 use super::{
-    build::{store_roc_value, BuilderExt, Env},
+    build::{create_entry_block_alloca, store_roc_value, BuilderExt, Env},
     convert::basic_type_from_layout,
     scope::Scope,
 };
@@ -253,7 +253,7 @@ fn build_struct_alloca_helper<'a, 'ctx>(
 
     // Create the struct_type
     let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-    let alloca = env.builder.new_build_alloca(struct_type, "struct_alloca");
+    let alloca = create_entry_block_alloca(env, struct_type, "struct_alloca");
 
     for (i, (field_expr, field_repr)) in field_expr_repr.into_iter().enumerate() {
         let dst =
