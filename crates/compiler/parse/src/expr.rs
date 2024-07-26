@@ -2567,11 +2567,11 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
         // Once we see the '\', we're committed to parsing this as a closure.
         // It may turn out to be malformed, but it is definitely a closure.
         let min_indent: u32 = slash_indent + 1;
-        let prev_state = state.clone();
+        let param_pos = state.pos();
 
         let (first_param_progress, first_param, mut state) =
             match param_parser.parse(arena, state, min_indent) {
-                Err((NoProgress, _)) => Err((MadeProgress, EClosure::Arg(prev_state.pos()))),
+                Err((NoProgress, _)) => Err((MadeProgress, EClosure::Arg(param_pos))),
                 other => other,
             }?;
         debug_assert_eq!(first_param_progress, MadeProgress);
@@ -2610,7 +2610,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
         }
 
         state.advance_mut(2);
-        let start = state.pos();
+        let body_pos = state.pos();
 
         match spaces().parse(arena, state, min_indent) {
             Ok((progress, spaces, state)) => {
@@ -2632,7 +2632,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
                         }
                     }
                 } else {
-                    Err((MadeProgress, EClosure::IndentBody(start)))
+                    Err((MadeProgress, EClosure::IndentBody(body_pos)))
                 }
             }
             Err((_, fail)) => Err((MadeProgress, fail)),

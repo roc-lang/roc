@@ -301,6 +301,11 @@ impl<T> Loc<T> {
         Loc { region, value }
     }
 
+    pub const fn pos(start: Position, end: Position, value: T) -> Loc<T> {
+        let region = Region::new(start, end);
+        Loc { region, value }
+    }
+
     pub const fn at(region: Region, value: T) -> Loc<T> {
         Loc { region, value }
     }

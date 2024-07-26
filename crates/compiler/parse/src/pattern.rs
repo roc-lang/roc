@@ -34,10 +34,7 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
         // Underscore is also common, e.g. \_ -> ...
         loc(underscore_pattern_help()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
-        loc(specialize_err(
-            EPattern::Record,
-            crate::pattern::record_pattern_help()
-        )),
+        loc_record_pattern_help(),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
         specialize_err(EPattern::PInParens, loc_pattern_in_parens_help())
@@ -86,10 +83,7 @@ fn loc_pattern_help_help<'a>(
         specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
         loc(underscore_pattern_help()),
         loc_ident_pattern_help(can_have_arguments),
-        loc(specialize_err(
-            EPattern::Record,
-            crate::pattern::record_pattern_help()
-        )),
+        loc_record_pattern_help(),
         loc(specialize_err(EPattern::List, list_pattern_help())),
         loc(number_pattern_help()),
         loc(string_like_pattern_help()),
@@ -468,9 +462,17 @@ fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
     specialize_err(move |_, pos| EPattern::End(pos), lowercase_ident())
 }
 
-#[inline(always)]
-fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
-    map(record_pattern_fields(), Pattern::RecordDestructure)
+fn loc_record_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    move |arena, state: State<'a>, min_indent| {
+        let start = state.pos();
+        match record_pattern_fields().parse(arena, state, min_indent) {
+            Ok((p, pats, state)) => {
+                let pat = Loc::pos(start, state.pos(), Pattern::RecordDestructure(pats));
+                Ok((p, pat, state))
+            }
+            Err((p, fail)) => Err((p, EPattern::Record(fail, start))),
+        }
+    }
 }
 
 pub fn record_pattern_fields<'a>() -> impl Parser<'a, Collection<'a, Loc<Pattern<'a>>>, PRecord<'a>>
