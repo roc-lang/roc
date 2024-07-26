@@ -133,7 +133,7 @@ fn rotate_merge(
 ) void {
     var end_ptr = array + len * element_width;
 
-    if (len <= block_len * 2 and len - block_len <= swap_len) {
+    if (len <= block_len * 2 and len -% block_len <= swap_len) {
         partial_backwards_merge(array, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy);
         return;
     }
@@ -1129,7 +1129,9 @@ fn cross_merge(
     var dest_head = dest;
     var dest_tail = dest + (left_len + right_len - 1) * element_width;
 
-    outer: while (true) {
+    // TODO: For fluxsort, this can be while(true), for quadsort, it needs extra protection.
+    // That or I have a bug...not fully sure.
+    outer: while (@intFromPtr(left_tail) - @intFromPtr(left_head) > 8 * element_width and @intFromPtr(right_tail) - @intFromPtr(right_head) > 8 * element_width) {
         if (@intFromPtr(left_tail) - @intFromPtr(left_head) > 8 * element_width) {
             // 8 elements all less than or equal to and can be moved together.
             while (compare(cmp, cmp_data, left_head + 7 * element_width, right_head) != GT) {
