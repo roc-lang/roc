@@ -1520,7 +1520,7 @@ fn quad_swap(
                             break :reverse_block;
                         if (rem >= 1 and compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width) != GT)
                             break :reverse_block;
-                        quad_reversal(reverse_head, arr_ptr + (rem - 1) * element_width, element_width, copy);
+                        quad_reversal(reverse_head, arr_ptr + rem * element_width - element_width, element_width, copy);
 
                         // If we just reversed the entire array, it is sorted.
                         if (reverse_head == array)
