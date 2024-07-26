@@ -1129,10 +1129,9 @@ fn cross_merge(
     var dest_head = dest;
     var dest_tail = dest + (left_len + right_len - 1) * element_width;
 
-    // TODO: For fluxsort, this can be while(true), for quadsort, it needs extra protection.
-    // That or I have a bug...not fully sure.
-    outer: while (@intFromPtr(left_tail) - @intFromPtr(left_head) > 8 * element_width and @intFromPtr(right_tail) - @intFromPtr(right_head) > 8 * element_width) {
-        if (@intFromPtr(left_tail) - @intFromPtr(left_head) > 8 * element_width) {
+    outer: while (true) {
+        // This has to be allowed to go negative to be correct. Thus, isize.
+        if (@as(isize, @intCast(@intFromPtr(left_tail))) - @as(isize, @intCast(@intFromPtr(left_head))) > @as(isize, @intCast(8 * element_width))) {
             // 8 elements all less than or equal to and can be moved together.
             while (compare(cmp, cmp_data, left_head + 7 * element_width, right_head) != GT) {
                 inline for (0..8) |_| {
@@ -1158,7 +1157,8 @@ fn cross_merge(
         }
 
         // Attempt to do the same for the right list.
-        if (@intFromPtr(right_tail) - @intFromPtr(right_head) > 8 * element_width) {
+        // This has to be allowed to go negative to be correct. Thus, isize.
+        if (@as(isize, @intCast(@intFromPtr(right_tail))) - @as(isize, @intCast(@intFromPtr(right_head))) > @as(isize, @intCast(8 * element_width))) {
             // left greater than 8 elements right and can be moved together.
             while (compare(cmp, cmp_data, left_head, right_head + 7 * element_width) == GT) {
                 inline for (0..8) |_| {
