@@ -1187,14 +1187,9 @@ fn cross_merge(
             break;
 
         // Large enough to warrent a two way merge.
-        var loops: usize = 8;
-        while (true) {
+        for (0..8) |_| {
             head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
             tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
-
-            loops -= 1;
-            if (loops == 0)
-                break;
         }
     }
 
@@ -1811,8 +1806,7 @@ fn parity_merge(
     }
     head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
 
-    var ll = left_len - 1;
-    while (ll != 0) : (ll -= 1) {
+    for (0..(left_len - 1)) |_| {
         head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
         tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
     }
