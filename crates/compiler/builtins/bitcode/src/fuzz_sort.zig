@@ -1,24 +1,19 @@
 const std = @import("std");
 const sort = @import("sort.zig");
 
-var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
-var allocator: std.mem.Allocator = undefined;
+extern fn malloc(size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: *anyopaque) callconv(.C) void;
 
 pub fn main() !void {
-    gpa = .{};
-    allocator = gpa.allocator();
-
     const size = 1000000;
     var arr_ptr: [*]i64 = @alignCast(@ptrCast(testing_roc_alloc(size * @sizeOf(i64), @alignOf(i64))));
     defer testing_roc_dealloc(arr_ptr, @alignOf(i64));
 
-    for (0..size) |i| {
-        arr_ptr[i] = @intCast(i + 1);
-    }
-
     const seed = 42;
     var rng = std.rand.DefaultPrng.init(seed);
-    rng.random().shuffle(i64, arr_ptr[0..size]);
+    for (0..size) |i| {
+        arr_ptr[i] = rng.random().int(i64);
+    }
 
     var timer = try std.time.Timer.start();
     sort.quadsort(@ptrCast(arr_ptr), size, &test_i64_compare, null, false, &test_i64_inc_n, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
@@ -55,22 +50,11 @@ comptime {
 }
 
 fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
-    // We store an extra usize which is the size of the full allocation.
-    const full_size = size + @sizeOf(usize);
-    var raw_ptr = (allocator.alloc(u8, full_size) catch unreachable).ptr;
-    @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0] = full_size;
-    raw_ptr += @sizeOf(usize);
-    const ptr = @as(?*anyopaque, @ptrCast(raw_ptr));
-
-    return ptr;
+    return malloc(size);
 }
 
 fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
-    const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
-    const full_size = @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0];
-    const slice = raw_ptr[0..full_size];
-
-    allocator.free(slice);
+    free(c_ptr);
 }
 
 fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
