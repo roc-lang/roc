@@ -1,7 +1,13 @@
 const std = @import("std");
 const sort = @import("sort.zig");
 
+var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
+var allocator: std.mem.Allocator = undefined;
+
 pub fn main() !void {
+    gpa = .{};
+    allocator = gpa.allocator();
+
     const size = 1000000;
     var arr_ptr: [*]i64 = @alignCast(@ptrCast(testing_roc_alloc(size * @sizeOf(i64), @alignOf(i64))));
     defer testing_roc_dealloc(arr_ptr, @alignOf(i64));
@@ -47,9 +53,6 @@ comptime {
     @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
     @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
 }
-
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const allocator = gpa.allocator();
 
 fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
     // We store an extra usize which is the size of the full allocation.
