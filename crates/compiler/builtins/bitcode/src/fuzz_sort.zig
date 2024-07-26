@@ -1,3 +1,10 @@
+/// Sort Fuzzer!
+/// To fuzz: On linux, first install afl++.
+/// Then build this with:
+///   zig build-lib -static -fcompiler-rt -flto -fPIC src/fuzz_sort.zig
+///   afl-clang-lto -o fuzz libfuzz_sort.a
+/// Finally, run with afl
+///   afl-fuzz -i input -o output -- ./fuzz
 const std = @import("std");
 const sort = @import("sort.zig");
 
