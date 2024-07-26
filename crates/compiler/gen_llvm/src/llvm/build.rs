@@ -23,7 +23,7 @@ use inkwell::debug_info::{
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
-use inkwell::passes::{PassManager, PassManagerBuilder};
+use inkwell::passes::PassManager;
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatMathType, FunctionType,
     IntMathType, IntType, PointerMathType, StructType,
@@ -370,7 +370,7 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         T: BasicType<'ctx>,
         V: BasicValue<'ctx>,
     {
-        self.build_bitcast(val, ty, name).unwrap()
+        self.build_bit_cast(val, ty, name).unwrap()
     }
 
     fn new_build_pointer_cast<T: PointerMathValue<'ctx>>(
@@ -1083,7 +1083,7 @@ pub fn module_from_builtins<'ctx>(
 
     // Note, running DCE here is faster then waiting until full app DCE.
     let mpm = PassManager::create(());
-    mpm.add_global_dce_pass();
+    // mpm.add_global_dce_pass();
     mpm.run_on(&module);
 
     // Now that the unused compiler-rt functions have been removed,
@@ -1109,32 +1109,32 @@ pub fn construct_optimization_passes<'a>(
     let fpm = PassManager::create(module);
 
     // remove unused global values (e.g. those defined by zig, but unused in user code)
-    mpm.add_global_dce_pass();
+    // mpm.add_global_dce_pass();
 
-    mpm.add_always_inliner_pass();
+    // mpm.add_always_inliner_pass();
 
     // tail-call elimination is always on
-    fpm.add_instruction_combining_pass();
-    fpm.add_tail_call_elimination_pass();
+    // fpm.add_instruction_combining_pass();
+    // fpm.add_tail_call_elimination_pass();
 
-    let pmb = PassManagerBuilder::create();
+    // let pmb = PassManagerBuilder::create();
     match opt_level {
         OptLevel::Development | OptLevel::Normal => {
-            pmb.set_optimization_level(OptimizationLevel::None);
+            // pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Size => {
-            pmb.set_optimization_level(OptimizationLevel::Default);
+            // pmb.set_optimization_level(OptimizationLevel::Default);
             // 2 is equivalent to `-Oz`.
-            pmb.set_size_level(2);
+            // pmb.set_size_level(2);
 
             // TODO: For some usecase, like embedded, it is useful to expose this and tune it.
             // This really depends on if inlining causes enough simplifications to reduce code size.
-            pmb.set_inliner_with_threshold(50);
+            // pmb.set_inliner_with_threshold(50);
         }
         OptLevel::Optimize => {
-            pmb.set_optimization_level(OptimizationLevel::Aggressive);
+            // pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(750);
+            // pmb.set_inliner_with_threshold(750);
         }
     }
 
@@ -1145,15 +1145,15 @@ pub fn construct_optimization_passes<'a>(
 
         // function passes
 
-        fpm.add_cfg_simplification_pass();
-        mpm.add_cfg_simplification_pass();
+        // fpm.add_cfg_simplification_pass();
+        // mpm.add_cfg_simplification_pass();
 
-        fpm.add_jump_threading_pass();
-        mpm.add_jump_threading_pass();
+        // fpm.add_jump_threading_pass();
+        // mpm.add_jump_threading_pass();
 
-        fpm.add_memcpy_optimize_pass(); // this one is very important
+        // fpm.add_memcpy_optimize_pass(); // this one is very important
 
-        fpm.add_licm_pass();
+        // fpm.add_licm_pass();
 
         // turn invoke into call
         // TODO: is this pass needed. It theoretically prunes unused exception handling info.
@@ -1161,13 +1161,13 @@ pub fn construct_optimization_passes<'a>(
         // mpm.add_prune_eh_pass();
 
         // remove unused global values (often the `_wrapper` can be removed)
-        mpm.add_global_dce_pass();
+        // mpm.add_global_dce_pass();
 
-        mpm.add_function_inlining_pass();
+        // mpm.add_function_inlining_pass();
     }
 
-    pmb.populate_module_pass_manager(&mpm);
-    pmb.populate_function_pass_manager(&fpm);
+    // pmb.populate_module_pass_manager(&mpm);
+    // pmb.populate_function_pass_manager(&fpm);
 
     fpm.initialize();
 

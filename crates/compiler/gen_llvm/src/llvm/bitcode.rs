@@ -44,7 +44,7 @@ pub fn call_bitcode_fn<'ctx>(
         if ret.get_type() == vec_type.into() {
             return env
                 .builder
-                .build_bitcast(ret, env.context.i128_type(), "return_i128")
+                .build_bit_cast(ret, env.context.i128_type(), "return_i128")
                 .unwrap();
         }
     }
