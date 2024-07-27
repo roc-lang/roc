@@ -4,8 +4,8 @@ use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
-    optional, skip_first, specialize_err, specialize_err_ref, then, three_bytes, two_bytes,
-    zero_or_more, EPattern, PInParens, PList, PRecord, Parser,
+    optional, specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more,
+    EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::parser::{either, Progress::*};
 use crate::state::State;
@@ -32,7 +32,7 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
         // An ident is the most common param, e.g. \foo -> ...
         loc_ident_pattern_help(true),
         // Underscore is also common, e.g. \_ -> ...
-        loc(underscore_pattern_help()),
+        loc_underscore_pattern_help(),
         // You can destructure records in params, e.g. \{ x, y } -> ...
         loc_record_pattern_help(),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
@@ -81,7 +81,7 @@ fn loc_pattern_help_help<'a>(
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
-        loc(underscore_pattern_help()),
+        loc_underscore_pattern_help(),
         loc_ident_pattern_help(can_have_arguments),
         loc_record_pattern_help(),
         loc(specialize_err(EPattern::List, list_pattern_help())),
@@ -445,21 +445,43 @@ fn loc_ident_pattern_help<'a>(
     }
 }
 
-fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    map(
-        skip_first(
-            byte(b'_', EPattern::Underscore),
-            optional(lowercase_ident_pattern()),
-        ),
-        |output| match output {
-            Some(name) => Pattern::Underscore(name),
-            None => Pattern::Underscore(""),
-        },
-    )
-}
+// fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
+//     move |arena, state: State<'a>, min_indent| {
+//         if state.bytes().first() == Some(&b'_') {
+//             let state = state.advance(1);
+//             let original_state = state.clone();
+//             match lowercase_ident().parse(arena, state, min_indent) {
+//                 Ok((_, name, state)) => Ok((MadeProgress, Pattern::Underscore(name), state)),
+//                 Err((NoProgress, _)) => Ok((MadeProgress, Pattern::Underscore(""), original_state)),
+//                 Err(_) => Err((MadeProgress, EPattern::End(original_state.pos()))),
+//             }
+//         } else {
+//             Err((NoProgress, EPattern::Underscore(state.pos())))
+//         }
+//     }
+// }
 
-fn lowercase_ident_pattern<'a>() -> impl Parser<'a, &'a str, EPattern<'a>> {
-    specialize_err(move |_, pos| EPattern::End(pos), lowercase_ident())
+fn loc_underscore_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    move |arena, state: State<'a>, min_indent| {
+        let start = state.pos();
+        if state.bytes().first() == Some(&b'_') {
+            let state = state.advance(1);
+            let before_ident = state.clone();
+            match lowercase_ident().parse(arena, state, min_indent) {
+                Ok((_, name, state)) => {
+                    let ident = Loc::pos(start, state.pos(), Pattern::Underscore(name));
+                    Ok((MadeProgress, ident, state))
+                }
+                Err((NoProgress, _)) => {
+                    let ident = Loc::pos(start, before_ident.pos(), Pattern::Underscore(""));
+                    Ok((MadeProgress, ident, before_ident))
+                }
+                Err(_) => Err((MadeProgress, EPattern::End(before_ident.pos()))),
+            }
+        } else {
+            Err((NoProgress, EPattern::Underscore(state.pos())))
+        }
+    }
 }
 
 fn loc_record_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
