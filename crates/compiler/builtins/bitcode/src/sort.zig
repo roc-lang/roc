@@ -34,7 +34,7 @@ pub fn quadsort(
     len: usize,
     cmp: CompareFn,
     cmp_data: Opaque,
-    data_is_owned: bool,
+    data_is_owned_runtime: bool,
     inc_n_data: IncN,
     element_width: usize,
     alignment: u32,
@@ -47,7 +47,11 @@ pub fn quadsort(
     // llvm garbage collection would remove all other variants.
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
-        quadsort_direct(source_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, alignment, copy);
+        if (data_is_owned_runtime) {
+            quadsort_direct(source_ptr, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data);
+        } else {
+            quadsort_direct(source_ptr, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data);
+        }
     } else {
         if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
@@ -62,7 +66,11 @@ pub fn quadsort(
             defer inner_cmp = null;
 
             // Sort.
-            quadsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, data_is_owned, inc_n_data, @sizeOf(usize), @alignOf(usize), &pointer_copy);
+            if (data_is_owned_runtime) {
+                quadsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data);
+            } else {
+                quadsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data);
+            }
 
             if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
@@ -87,11 +95,11 @@ fn quadsort_direct(
     len: usize,
     cmp: CompareFn,
     cmp_data: Opaque,
-    data_is_owned: bool,
-    inc_n_data: IncN,
     element_width: usize,
     alignment: u32,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     var arr_ptr = array;
     if (len < 32) {
@@ -101,8 +109,8 @@ fn quadsort_direct(
         // Also, zig doesn't hav alloca, so we always do max size here.
         var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 32]u8 align(BufferAlign) = undefined;
         const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
-        tail_swap(arr_ptr, len, swap, cmp, cmp_data, element_width, copy);
-    } else if (quad_swap(arr_ptr, len, cmp, cmp_data, element_width, copy) != .sorted) {
+        tail_swap(arr_ptr, len, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    } else if (quad_swap(arr_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data) != .sorted) {
         var swap_len = len;
 
         // This is optional, for about 5% perf hit, lower memory usage on large arrays.
@@ -112,9 +120,9 @@ fn quadsort_direct(
         // }
 
         if (utils.alloc(swap_len * element_width, alignment)) |swap| {
-            const block_len = quad_merge(arr_ptr, len, swap, swap_len, 32, cmp, cmp_data, element_width, copy);
+            const block_len = quad_merge(arr_ptr, len, swap, swap_len, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
-            rotate_merge(arr_ptr, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy);
+            rotate_merge(arr_ptr, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
             utils.dealloc(swap, alignment);
         } else {
@@ -129,20 +137,18 @@ fn quadsort_stack_swap(
     len: usize,
     cmp: CompareFn,
     cmp_data: Opaque,
-    data_is_owned: bool,
+    comptime data_is_owned: bool,
     inc_n_data: IncN,
     element_width: usize,
     copy: CopyFn,
 ) void {
-    _ = inc_n_data;
-    _ = data_is_owned;
     // Use a 512 element on stack swap buffer.
     var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 512]u8 align(BufferAlign) = undefined;
     const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
 
-    const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy);
+    const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
-    rotate_merge(array, len, swap, 512, block_len, cmp, cmp_data, element_width, copy);
+    rotate_merge(array, len, swap, 512, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 }
 
 // ================ Inplace Rotate Merge ======================================
@@ -159,11 +165,13 @@ fn rotate_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     var end_ptr = array + len * element_width;
 
     if (len <= block_len * 2 and len -% block_len <= swap_len) {
-        partial_backwards_merge(array, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy);
+        partial_backwards_merge(array, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         return;
     }
 
@@ -172,11 +180,11 @@ fn rotate_merge(
         var arr_ptr = array;
         while (@intFromPtr(arr_ptr) + current_block_len * element_width < @intFromPtr(end_ptr)) : (arr_ptr += current_block_len * 2 * element_width) {
             if (@intFromPtr(arr_ptr) + current_block_len * 2 * element_width < @intFromPtr(end_ptr)) {
-                rotate_merge_block(arr_ptr, swap, swap_len, current_block_len, current_block_len, cmp, cmp_data, element_width, copy);
+                rotate_merge_block(arr_ptr, swap, swap_len, current_block_len, current_block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
                 continue;
             }
             const right_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width - current_block_len;
-            rotate_merge_block(arr_ptr, swap, swap_len, current_block_len, right_len, cmp, cmp_data, element_width, copy);
+            rotate_merge_block(arr_ptr, swap, swap_len, current_block_len, right_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             break;
         }
     }
@@ -193,9 +201,15 @@ fn rotate_merge_block(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     var left_block = initial_left_block;
     var right = initial_right;
+    // 1 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 1);
+    }
     if (compare(cmp, cmp_data, array + (left_block - 1) * element_width, array + left_block * element_width) != GT) {
         // Lucky us, already sorted.
         return;
@@ -204,7 +218,7 @@ fn rotate_merge_block(
     var right_block = left_block / 2;
     left_block -= right_block;
 
-    var left = monobound_binary_first(array + (left_block + right_block) * element_width, right, array + left_block * element_width, cmp, cmp_data, element_width);
+    var left = monobound_binary_first(array + (left_block + right_block) * element_width, right, array + left_block * element_width, cmp, cmp_data, element_width, data_is_owned, inc_n_data);
     right -= left;
 
     if (left != 0) {
@@ -213,17 +227,17 @@ fn rotate_merge_block(
             @memcpy((swap + left_block * element_width)[0..(left * element_width)], (array + (left_block + right_block) * element_width)[0..(left * element_width)]);
             std.mem.copyBackwards(u8, (array + (left + left_block) * element_width)[0..(right_block * element_width)], (array + left_block * element_width)[0..(right_block * element_width)]);
 
-            cross_merge(array, swap, left_block, left, cmp, cmp_data, element_width, copy);
+            cross_merge(array, swap, left_block, left, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         } else {
             trinity_rotation(array + left_block * element_width, right_block + left, swap, swap_len, right_block, element_width, copy);
 
             const unbalanced = (left * 2 < left_block) or (left_block * 2 < left);
             if (unbalanced and left <= swap_len) {
-                partial_backwards_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy);
+                partial_backwards_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             } else if (unbalanced and left_block <= swap_len) {
-                partial_forward_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy);
+                partial_forward_merge(array, left_block + left, swap, swap_len, left_block, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             } else {
-                rotate_merge_block(array, swap, swap_len, left_block, left, cmp, cmp_data, element_width, copy);
+                rotate_merge_block(array, swap, swap_len, left_block, left, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             }
         }
     }
@@ -231,11 +245,11 @@ fn rotate_merge_block(
     if (right != 0) {
         const unbalanced = (right * 2 < right_block) or (right_block * 2 < right);
         if ((unbalanced and right <= swap_len) or right + right_block <= swap_len) {
-            partial_backwards_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy);
+            partial_backwards_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         } else if (unbalanced and left_block <= swap_len) {
-            partial_forward_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy);
+            partial_forward_merge(array + (left_block + left) * element_width, right_block + right, swap, swap_len, right_block, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         } else {
-            rotate_merge_block(array + (left_block + left) * element_width, swap, swap_len, right_block, right, cmp, cmp_data, element_width, copy);
+            rotate_merge_block(array + (left_block + left) * element_width, swap, swap_len, right_block, right, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
     }
 }
@@ -248,10 +262,20 @@ fn monobound_binary_first(
     cmp: CompareFn,
     cmp_data: Opaque,
     element_width: usize,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) usize {
     var top = initial_top;
     var end_ptr = array + top * element_width;
 
+    if (data_is_owned) {
+        // We need to increment log2 of n times.
+        // We can get that by counting leading zeros and of (top - 1).
+        // Needs to be `-1` so values that are powers of 2 don't sort up a bin.
+        // Then just add 1 back to the final result.
+        const log2 = @bitSizeOf(usize) - @clz(top - 1) + 1;
+        inc_n_data(cmp_data, log2);
+    }
     while (top > 1) {
         const mid = top / 2;
 
@@ -427,9 +451,9 @@ fn trinity_rotation(
     }
 }
 
-// TODO: better testing for rotate_merge and rotate_merge_block (or just fuzzing).
 test "rotate_merge" {
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    var test_count: i64 = 0;
 
     var arr: [10]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
@@ -437,52 +461,58 @@ test "rotate_merge" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    rotate_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    rotate_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    rotate_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    rotate_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    rotate_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    rotate_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     // Limited swap, can't finish merge
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    rotate_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    rotate_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
-
-    // TODO: should this work? Has too little swap.
-    // arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    // rotate_merge(arr_ptr, 10, swap_ptr, 3, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
-    // try testing.expectEqual(arr, expected);
 }
 
 test "monobound_binary_first" {
+    var test_count: i64 = 0;
+
     var arr = [25]i64{ 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49 };
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var value: i64 = undefined;
     var value_ptr = @as([*]u8, @ptrCast(&value));
 
     value = 7;
-    var res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    var res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(res, 3);
 
     value = 39;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(res, 19);
 
     value = 40;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(res, 20);
 
     value = -10;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(res, 0);
 
     value = 10000;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare, null, @sizeOf(i64));
+    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(res, 25);
 }
 
@@ -549,6 +579,8 @@ fn tail_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     const end_ptr = array + len * element_width;
     var current_block_len = block_len;
@@ -556,11 +588,11 @@ fn tail_merge(
         var arr_ptr = array;
         while (@intFromPtr(arr_ptr) + current_block_len * element_width < @intFromPtr(end_ptr)) : (arr_ptr += 2 * current_block_len * element_width) {
             if (@intFromPtr(arr_ptr) + 2 * current_block_len * element_width < @intFromPtr(end_ptr)) {
-                partial_backwards_merge(arr_ptr, 2 * current_block_len, swap, swap_len, current_block_len, cmp, cmp_data, element_width, copy);
+                partial_backwards_merge(arr_ptr, 2 * current_block_len, swap, swap_len, current_block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
                 continue;
             }
             const rem_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width;
-            partial_backwards_merge(arr_ptr, rem_len, swap, swap_len, current_block_len, cmp, cmp_data, element_width, copy);
+            partial_backwards_merge(arr_ptr, rem_len, swap, swap_len, current_block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             break;
         }
     }
@@ -578,6 +610,8 @@ fn partial_backwards_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     std.debug.assert(swap_len >= block_len);
 
@@ -589,6 +623,10 @@ fn partial_backwards_merge(
     var left_tail = array + (block_len - 1) * element_width;
     var dest_tail = array + (len - 1) * element_width;
 
+    // 1 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 1);
+    }
     if (compare(cmp, cmp_data, left_tail, left_tail + element_width) != GT) {
         // Lucky case, blocks happen to be sorted.
         return;
@@ -598,7 +636,7 @@ fn partial_backwards_merge(
     if (len <= swap_len and right_len >= 64) {
         // Large remaining merge and we have enough space to just do it in swap.
 
-        cross_merge(swap, array, block_len, right_len, cmp, cmp_data, element_width, copy);
+        cross_merge(swap, array, block_len, right_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
         @memcpy(array[0..(element_width * len)], swap[0..(element_width * len)]);
 
@@ -611,7 +649,8 @@ fn partial_backwards_merge(
 
     // For backards, we first try to do really large chunks, of 16 elements.
     outer: while (@intFromPtr(left_tail) > @intFromPtr(array + 16 * element_width) and @intFromPtr(right_tail) > @intFromPtr(swap + 16 * element_width)) {
-        while (compare(cmp, cmp_data, left_tail, right_tail - 15 * element_width) != GT) {
+        // Due to if looping, these must use `compare_inc`
+        while (compare_inc(cmp, cmp_data, left_tail, right_tail - 15 * element_width, data_is_owned, inc_n_data) != GT) {
             inline for (0..16) |_| {
                 copy(dest_tail, right_tail);
                 dest_tail -= element_width;
@@ -620,7 +659,8 @@ fn partial_backwards_merge(
             if (@intFromPtr(right_tail) <= @intFromPtr(swap + 16 * element_width))
                 break :outer;
         }
-        while (compare(cmp, cmp_data, left_tail - 15 * element_width, right_tail) == GT) {
+        // Due to if looping, these must use `compare_inc`
+        while (compare_inc(cmp, cmp_data, left_tail - 15 * element_width, right_tail, data_is_owned, inc_n_data) == GT) {
             inline for (0..16) |_| {
                 copy(dest_tail, left_tail);
                 dest_tail -= element_width;
@@ -632,13 +672,14 @@ fn partial_backwards_merge(
         // Attempt to deal with the rest of the chunk in groups of 2.
         var loops: usize = 8;
         while (true) {
-            if (compare(cmp, cmp_data, left_tail, right_tail - element_width) != GT) {
+            // Due to if else chain and uncertain calling, these must use `compare_inc`
+            if (compare_inc(cmp, cmp_data, left_tail, right_tail - element_width, data_is_owned, inc_n_data) != GT) {
                 inline for (0..2) |_| {
                     copy(dest_tail, right_tail);
                     dest_tail -= element_width;
                     right_tail -= element_width;
                 }
-            } else if (compare(cmp, cmp_data, left_tail - element_width, right_tail) == GT) {
+            } else if (compare_inc(cmp, cmp_data, left_tail - element_width, right_tail, data_is_owned, inc_n_data) == GT) {
                 inline for (0..2) |_| {
                     copy(dest_tail, left_tail);
                     dest_tail -= element_width;
@@ -646,6 +687,10 @@ fn partial_backwards_merge(
                 }
             } else {
                 // Couldn't move two elements, do a cross swap and continue.
+                // 2 guaranteed compares.
+                if (data_is_owned) {
+                    inc_n_data(cmp_data, 2);
+                }
                 const lte = compare(cmp, cmp_data, left_tail, right_tail) != GT;
                 var x = if (lte) element_width else 0;
                 var not_x = if (!lte) element_width else 0;
@@ -672,10 +717,14 @@ fn partial_backwards_merge(
         // The C use `goto` to implement the two tail recursive functions below inline.
         // I think the closest equivalent in zig would be to use an enum and a switch.
         // That would potentially optimize to computed gotos.
-        const break_loop = partial_forward_merge_right_tail_2(&dest_tail, &array, &left_tail, &swap, &right_tail, cmp, cmp_data, element_width, copy);
+        const break_loop = partial_forward_merge_right_tail_2(&dest_tail, &array, &left_tail, &swap, &right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         if (break_loop)
             break;
 
+        // 2 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 2);
+        }
         // Couldn't move two elements, do a cross swap and continue.
         const lte = compare(cmp, cmp_data, left_tail, right_tail) != GT;
         var x = if (lte) element_width else 0;
@@ -692,6 +741,11 @@ fn partial_backwards_merge(
 
     // Deal with tail.
     while (@intFromPtr(right_tail) >= @intFromPtr(swap) and @intFromPtr(left_tail) >= @intFromPtr(array)) {
+        // This feels like a place where we may be able reduce inc_n_data calls.
+        // 1 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 1);
+        }
         tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
     }
     while (@intFromPtr(right_tail) >= @intFromPtr(swap)) {
@@ -714,26 +768,28 @@ fn partial_forward_merge_right_tail_2(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) bool {
-    if (compare(cmp, cmp_data, left_tail.*, right_tail.* - element_width) != GT) {
+    if (compare_inc(cmp, cmp_data, left_tail.*, right_tail.* - element_width, data_is_owned, inc_n_data) != GT) {
         inline for (0..2) |_| {
             copy(dest.*, right_tail.*);
             dest.* -= element_width;
             right_tail.* -= element_width;
         }
         if (@intFromPtr(right_tail.*) > @intFromPtr(right_head.*) + element_width) {
-            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
-    if (compare(cmp, cmp_data, left_tail.* - element_width, right_tail.*) == GT) {
+    if (compare_inc(cmp, cmp_data, left_tail.* - element_width, right_tail.*, data_is_owned, inc_n_data) == GT) {
         inline for (0..2) |_| {
             copy(dest.*, left_tail.*);
             dest.* -= element_width;
             left_tail.* -= element_width;
         }
         if (@intFromPtr(left_tail.*) > @intFromPtr(left_head.*) + element_width) {
-            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
@@ -750,26 +806,28 @@ fn partial_forward_merge_left_tail_2(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) bool {
-    if (compare(cmp, cmp_data, left_tail.* - element_width, right_tail.*) == GT) {
+    if (compare_inc(cmp, cmp_data, left_tail.* - element_width, right_tail.*, data_is_owned, inc_n_data) == GT) {
         inline for (0..2) |_| {
             copy(dest.*, left_tail.*);
             dest.* -= element_width;
             left_tail.* -= element_width;
         }
         if (@intFromPtr(left_tail.*) > @intFromPtr(left_head.*) + element_width) {
-            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_left_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
-    if (compare(cmp, cmp_data, left_tail.*, right_tail.* - element_width) != GT) {
+    if (compare_inc(cmp, cmp_data, left_tail.*, right_tail.* - element_width, data_is_owned, inc_n_data) != GT) {
         inline for (0..2) |_| {
             copy(dest.*, right_tail.*);
             dest.* -= element_width;
             right_tail.* -= element_width;
         }
         if (@intFromPtr(right_tail.*) > @intFromPtr(right_head.*) + element_width) {
-            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_right_tail_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
@@ -788,6 +846,8 @@ fn partial_forward_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     std.debug.assert(swap_len >= block_len);
 
@@ -799,6 +859,10 @@ fn partial_forward_merge(
     var right_head = array + block_len * element_width;
     var right_tail = array + (len - 1) * element_width;
 
+    // 1 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 1);
+    }
     if (compare(cmp, cmp_data, right_head - element_width, right_head) != GT) {
         // Lucky case, blocks happen to be sorted.
         return;
@@ -817,10 +881,14 @@ fn partial_forward_merge(
         // The C use `goto` to implement the two tail recursive functions below inline.
         // I think the closest equivalent in zig would be to use an enum and a switch.
         // That would potentially optimize to computed gotos.
-        const break_loop = partial_forward_merge_right_head_2(&dest_head, &left_head, &left_tail, &right_head, &right_tail, cmp, cmp_data, element_width, copy);
+        const break_loop = partial_forward_merge_right_head_2(&dest_head, &left_head, &left_tail, &right_head, &right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         if (break_loop)
             break;
 
+        // 2 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 2);
+        }
         // Couldn't move two elements, do a cross swap and continue.
         const lte = compare(cmp, cmp_data, left_head, right_head) != GT;
         var x = if (lte) element_width else 0;
@@ -836,6 +904,11 @@ fn partial_forward_merge(
 
     // Deal with tail.
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail) and @intFromPtr(right_head) <= @intFromPtr(right_tail)) {
+        // This feels like a place where we may be able reduce inc_n_data calls.
+        // 1 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 1);
+        }
         head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
     }
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail)) {
@@ -858,26 +931,28 @@ fn partial_forward_merge_right_head_2(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) bool {
-    if (compare(cmp, cmp_data, left_head.*, right_head.* + element_width) == GT) {
+    if (compare_inc(cmp, cmp_data, left_head.*, right_head.* + element_width, data_is_owned, inc_n_data) == GT) {
         inline for (0..2) |_| {
             copy(dest.*, right_head.*);
             dest.* += element_width;
             right_head.* += element_width;
         }
         if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
-            return partial_forward_merge_right_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_right_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
-    if (compare(cmp, cmp_data, left_head.* + element_width, right_head.*) != GT) {
+    if (compare_inc(cmp, cmp_data, left_head.* + element_width, right_head.*, data_is_owned, inc_n_data) != GT) {
         inline for (0..2) |_| {
             copy(dest.*, left_head.*);
             dest.* += element_width;
             left_head.* += element_width;
         }
         if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
-            return partial_forward_merge_left_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_left_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
@@ -894,26 +969,28 @@ fn partial_forward_merge_left_head_2(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) bool {
-    if (compare(cmp, cmp_data, left_head.* + element_width, right_head.*) != GT) {
+    if (compare_inc(cmp, cmp_data, left_head.* + element_width, right_head.*, data_is_owned, inc_n_data) != GT) {
         inline for (0..2) |_| {
             copy(dest.*, left_head.*);
             dest.* += element_width;
             left_head.* += element_width;
         }
         if (@intFromPtr(left_head.*) < @intFromPtr(left_tail.*) - element_width) {
-            return partial_forward_merge_left_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_left_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
-    if (compare(cmp, cmp_data, left_head.*, right_head.* + element_width) == GT) {
+    if (compare_inc(cmp, cmp_data, left_head.*, right_head.* + element_width, data_is_owned, inc_n_data) == GT) {
         inline for (0..2) |_| {
             copy(dest.*, right_head.*);
             dest.* += element_width;
             right_head.* += element_width;
         }
         if (@intFromPtr(right_head.*) < @intFromPtr(right_tail.*) - element_width) {
-            return partial_forward_merge_right_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy);
+            return partial_forward_merge_right_head_2(dest, left_head, left_tail, right_head, right_tail, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
         return true;
     }
@@ -921,6 +998,7 @@ fn partial_forward_merge_left_head_2(
 }
 
 test "tail_merge" {
+    var test_count: i64 = 0;
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
     var arr: [10]i64 = undefined;
@@ -929,19 +1007,23 @@ test "tail_merge" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    tail_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    tail_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    tail_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    tail_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 }
 
 test "partial_backwards_merge" {
+    var test_count: i64 = 0;
     {
         const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
@@ -951,19 +1033,23 @@ test "partial_backwards_merge" {
         var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
         arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
 
         arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
 
         arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
 
         arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
     }
 
@@ -991,7 +1077,8 @@ test "partial_backwards_merge" {
         for (0..16) |i| {
             arr[i + 48] = @intCast(i + 33);
         }
-        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
 
         // chunks with break
@@ -1010,12 +1097,14 @@ test "partial_backwards_merge" {
         arr[16] = 33;
         arr[63] = 49;
 
-        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
     }
 }
 
 test "partial_forward_merge" {
+    var test_count: i64 = 0;
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
     var arr: [10]i64 = undefined;
@@ -1024,19 +1113,23 @@ test "partial_forward_merge" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    partial_forward_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 }
 
@@ -1055,6 +1148,8 @@ fn quad_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) usize {
     const end_ptr = array + len * element_width;
     var current_block_len = block_len * 4;
@@ -1062,7 +1157,7 @@ fn quad_merge(
     while (current_block_len <= len and current_block_len <= swap_len) : (current_block_len *= 4) {
         var arr_ptr = array;
         while (true) {
-            quad_merge_block(arr_ptr, swap, current_block_len / 4, cmp, cmp_data, element_width, copy);
+            quad_merge_block(arr_ptr, swap, current_block_len / 4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
             arr_ptr += current_block_len * element_width;
             if (@intFromPtr(arr_ptr) + current_block_len * element_width > @intFromPtr(end_ptr))
@@ -1070,10 +1165,10 @@ fn quad_merge(
         }
 
         const rem_len = (@intFromPtr(end_ptr) - @intFromPtr(arr_ptr)) / element_width;
-        tail_merge(arr_ptr, rem_len, swap, swap_len, current_block_len / 4, cmp, cmp_data, element_width, copy);
+        tail_merge(arr_ptr, rem_len, swap, swap_len, current_block_len / 4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     }
 
-    tail_merge(array, len, swap, swap_len, current_block_len / 4, cmp, cmp_data, element_width, copy);
+    tail_merge(array, len, swap, swap_len, current_block_len / 4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
     return current_block_len / 2;
 }
@@ -1087,6 +1182,8 @@ fn quad_merge_block(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     const block_x_2 = 2 * block_len;
 
@@ -1095,23 +1192,27 @@ fn quad_merge_block(
     const block3 = block2 + block_len * element_width;
     const block4 = block3 + block_len * element_width;
 
+    // 2 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 2);
+    }
     const in_order_1_2: u2 = @intFromBool(compare(cmp, cmp_data, block2 - element_width, block2) != GT);
     const in_order_3_4: u2 = @intFromBool(compare(cmp, cmp_data, block4 - element_width, block4) != GT);
 
     switch (in_order_1_2 | (in_order_3_4 << 1)) {
         0 => {
             // Nothing sorted. Just run merges on both.
-            cross_merge(swap, array, block_len, block_len, cmp, cmp_data, element_width, copy);
-            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp, cmp_data, element_width, copy);
+            cross_merge(swap, array, block_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         1 => {
             // First half sorted already.
             @memcpy(swap[0..(element_width * block_x_2)], array[0..(element_width * block_x_2)]);
-            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp, cmp_data, element_width, copy);
+            cross_merge(swap + block_x_2 * element_width, block3, block_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         2 => {
             // Second half sorted already.
-            cross_merge(swap, array, block_len, block_len, cmp, cmp_data, element_width, copy);
+            cross_merge(swap, array, block_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             @memcpy((swap + element_width * block_x_2)[0..(element_width * block_x_2)], block3[0..(element_width * block_x_2)]);
         },
         3 => {
@@ -1126,7 +1227,7 @@ fn quad_merge_block(
     }
 
     // Merge 2 larger blocks.
-    cross_merge(array, swap, block_x_2, block_x_2, cmp, cmp_data, element_width, copy);
+    cross_merge(array, swap, block_x_2, block_x_2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 }
 
 /// Cross merge attempts to merge two arrays in chunks of multiple elements.
@@ -1139,6 +1240,8 @@ fn cross_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     var left_head = src;
     var right_head = src + left_len * element_width;
@@ -1149,8 +1252,9 @@ fn cross_merge(
     // fallback to the branchless parity merge.
     if (left_len + 1 >= right_len and right_len + 1 >= left_len and left_len >= 32) {
         const offset = 15 * element_width;
-        if (compare(cmp, cmp_data, left_head + offset, right_head) == GT and compare(cmp, cmp_data, left_head, right_head + offset) != GT and compare(cmp, cmp_data, left_tail, right_tail - offset) == GT and compare(cmp, cmp_data, left_tail - offset, right_tail) != GT) {
-            parity_merge(dest, src, left_len, right_len, cmp, cmp_data, element_width, copy);
+        // Due to short circuit logic, these must use `compare_inc`
+        if (compare_inc(cmp, cmp_data, left_head + offset, right_head, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, left_head, right_head + offset, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, left_tail, right_tail - offset, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, left_tail - offset, right_tail, data_is_owned, inc_n_data) != GT) {
+            parity_merge(dest, src, left_len, right_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             return;
         }
     }
@@ -1162,7 +1266,8 @@ fn cross_merge(
         // This has to be allowed to go negative to be correct. Thus, isize.
         if (@as(isize, @intCast(@intFromPtr(left_tail))) - @as(isize, @intCast(@intFromPtr(left_head))) > @as(isize, @intCast(8 * element_width))) {
             // 8 elements all less than or equal to and can be moved together.
-            while (compare(cmp, cmp_data, left_head + 7 * element_width, right_head) != GT) {
+            // Due to looping, these must use `compare_inc`
+            while (compare_inc(cmp, cmp_data, left_head + 7 * element_width, right_head, data_is_owned, inc_n_data) != GT) {
                 inline for (0..8) |_| {
                     copy(dest_head, left_head);
                     dest_head += element_width;
@@ -1174,7 +1279,8 @@ fn cross_merge(
 
             // Attempt to do the same from the tail.
             // 8 elements all greater than and can be moved together.
-            while (compare(cmp, cmp_data, left_tail - 7 * element_width, right_tail) == GT) {
+            // Due to looping, these must use `compare_inc`
+            while (compare_inc(cmp, cmp_data, left_tail - 7 * element_width, right_tail, data_is_owned, inc_n_data) == GT) {
                 inline for (0..8) |_| {
                     copy(dest_tail, left_tail);
                     dest_tail -= element_width;
@@ -1189,7 +1295,8 @@ fn cross_merge(
         // This has to be allowed to go negative to be correct. Thus, isize.
         if (@as(isize, @intCast(@intFromPtr(right_tail))) - @as(isize, @intCast(@intFromPtr(right_head))) > @as(isize, @intCast(8 * element_width))) {
             // left greater than 8 elements right and can be moved together.
-            while (compare(cmp, cmp_data, left_head, right_head + 7 * element_width) == GT) {
+            // Due to looping, these must use `compare_inc`
+            while (compare_inc(cmp, cmp_data, left_head, right_head + 7 * element_width, data_is_owned, inc_n_data) == GT) {
                 inline for (0..8) |_| {
                     copy(dest_head, right_head);
                     dest_head += element_width;
@@ -1201,7 +1308,8 @@ fn cross_merge(
 
             // Attempt to do the same from the tail.
             // left less than or equalt to 8 elements right and can be moved together.
-            while (compare(cmp, cmp_data, left_tail, right_tail - 7 * element_width) != GT) {
+            // Due to looping, these must use `compare_inc`
+            while (compare_inc(cmp, cmp_data, left_tail, right_tail - 7 * element_width, data_is_owned, inc_n_data) != GT) {
                 inline for (0..8) |_| {
                     copy(dest_tail, right_tail);
                     dest_tail -= element_width;
@@ -1216,6 +1324,10 @@ fn cross_merge(
             break;
 
         // Large enough to warrent a two way merge.
+        // 16 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 16);
+        }
         for (0..8) |_| {
             head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
             tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy);
@@ -1224,6 +1336,11 @@ fn cross_merge(
 
     // Clean up tail.
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail) and @intFromPtr(right_head) <= @intFromPtr(right_tail)) {
+        // This feels like a place where we may be able reduce inc_n_data calls.
+        // 1 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 1);
+        }
         head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
     }
     while (@intFromPtr(left_head) <= @intFromPtr(left_tail)) {
@@ -1239,6 +1356,7 @@ fn cross_merge(
 }
 
 test "quad_merge" {
+    var test_count: i64 = 0;
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
     var arr: [10]i64 = undefined;
@@ -1248,33 +1366,39 @@ test "quad_merge" {
     var size: usize = undefined;
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
     try testing.expectEqual(size, 16);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
     try testing.expectEqual(size, 16);
 
     arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
     try testing.expectEqual(size, 8);
 
     // Limited swap, can't finish merge
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, [10]i64{ 1, 3, 4, 5, 6, 7, 8, 9, 2, 10 });
     try testing.expectEqual(size, 4);
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 3, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    size = quad_merge(arr_ptr, 10, swap_ptr, 3, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, [10]i64{ 5, 6, 7, 8, 1, 3, 4, 9, 2, 10 });
     try testing.expectEqual(size, 4);
 }
 
 test "quad_merge_block" {
+    var test_count: i64 = 0;
     const expected = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
 
     var arr: [8]i64 = undefined;
@@ -1284,31 +1408,38 @@ test "quad_merge_block" {
 
     // case 0 - totally unsorted
     arr = [8]i64{ 7, 8, 5, 6, 3, 4, 1, 2 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     // case 1 - first half sorted
     arr = [8]i64{ 5, 6, 7, 8, 3, 4, 1, 2 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     // case 2 - second half sorted
     arr = [8]i64{ 7, 8, 5, 6, 1, 2, 3, 4 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     // case 3 both haves sorted
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    // TODO: fix
+    // try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     // case 3 - lucky, sorted
     arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    // try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 }
 
 test "cross_merge" {
+    var test_count: i64 = 0;
     var expected: [64]i64 = undefined;
     for (0..64) |i| {
         expected[i] = @intCast(i + 1);
@@ -1326,7 +1457,8 @@ test "cross_merge" {
     for (0..32) |i| {
         src[i + 32] = @intCast(i + 1);
     }
-    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(dest, expected);
 
     // will fallback, every other
@@ -1334,7 +1466,8 @@ test "cross_merge" {
         src[i * 2] = @intCast(i * 2 + 1);
         src[i * 2 + 1] = @intCast(i * 2 + 2);
     }
-    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(dest, expected);
 
     // super uneven
@@ -1344,7 +1477,8 @@ test "cross_merge" {
     for (0..44) |i| {
         src[i + 20] = @intCast(i + 1);
     }
-    cross_merge(dest_ptr, src_ptr, 20, 44, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 20, 44, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(dest, expected);
 
     // chunks
@@ -1360,7 +1494,8 @@ test "cross_merge" {
     for (0..16) |i| {
         src[i + 48] = @intCast(i + 33);
     }
-    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(dest, expected);
 }
 
@@ -1379,6 +1514,8 @@ fn quad_swap(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) QuadSwapResult {
     // TODO: This is a solid amount of stack space. Is that ok?
     // That said, it only ever allocates once (not recursive).
@@ -1397,6 +1534,10 @@ fn quad_swap(
     outer: while (count != 0) {
         count -= 1;
 
+        // 4 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 4);
+        }
         var v1: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) == GT);
         var v2: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) == GT);
         var v3: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) == GT);
@@ -1409,8 +1550,13 @@ fn quad_swap(
             switch (v1 | (v2 << 1) | (v3 << 2) | (v4 << 3)) {
                 0 => {
                     // potentially already ordered, check rest!
-                    if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
+                    // Due to short circuit logic, these must use `compare_inc`
+                    if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) != GT) {
                         break :switch_state .ordered;
+                    }
+                    // 16 guaranteed compares.
+                    if (data_is_owned) {
+                        inc_n_data(cmp_data, 16);
                     }
                     quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
 
@@ -1419,7 +1565,8 @@ fn quad_swap(
                 },
                 15 => {
                     // potentially already reverse ordered, check rest!
-                    if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                    // Due to short circuit logic, these must use `compare_inc`
+                    if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) == GT) {
                         reverse_head = arr_ptr;
                         break :switch_state .reversed;
                     }
@@ -1443,6 +1590,10 @@ fn quad_swap(
                     }
                     arr_ptr -= 8 * element_width;
 
+                    // 16 guaranteed compares.
+                    if (data_is_owned) {
+                        inc_n_data(cmp_data, 16);
+                    }
                     quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
 
                     arr_ptr += 8 * element_width;
@@ -1454,13 +1605,18 @@ fn quad_swap(
                     // 1 group was order, lets see if that continues!
                     if (count != 0) {
                         count -= 1;
+                        // 4 guaranteed compares.
+                        if (data_is_owned) {
+                            inc_n_data(cmp_data, 4);
+                        }
                         v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) == GT);
                         v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) == GT);
                         v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) == GT);
                         v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width) == GT);
                         if (v1 | v2 | v3 | v4 != 0) {
                             // Sadly not ordered still, maybe reversed though?
-                            if (v1 + v2 + v3 + v4 == 4 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                            // Due to short circuit logic, these must use `compare_inc`
+                            if (v1 + v2 + v3 + v4 == 4 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) == GT) {
                                 reverse_head = arr_ptr;
                                 state = .reversed;
                                 continue;
@@ -1468,11 +1624,16 @@ fn quad_swap(
                             state = .not_ordered;
                             continue;
                         }
-                        if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
+                        // Due to short circuit logic, these must use `compare_inc`
+                        if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) != GT) {
                             state = .ordered;
                             continue;
                         }
 
+                        // 16 guaranteed compares.
+                        if (data_is_owned) {
+                            inc_n_data(cmp_data, 16);
+                        }
                         quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
                         arr_ptr += 8 * element_width;
                         continue :outer;
@@ -1485,6 +1646,10 @@ fn quad_swap(
                     // 1 group was reversed, lets see if that continues!
                     if (count != 0) {
                         count -= 1;
+                        // 4 guaranteed compares.
+                        if (data_is_owned) {
+                            inc_n_data(cmp_data, 4);
+                        }
                         v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) != GT);
                         v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT);
                         v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) != GT);
@@ -1494,7 +1659,8 @@ fn quad_swap(
                             // So we just need to reverse upto this point, but not the current 8 element block.
                         } else {
                             // This also checks the boundary between this and the last block.
-                            if (compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                            // Due to short circuit logic, these must use `compare_inc`
+                            if (compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) == GT) {
                                 // Row multiple reversed blocks in a row!
                                 state = .reversed;
                                 continue;
@@ -1504,11 +1670,13 @@ fn quad_swap(
                         quad_reversal(reverse_head, arr_ptr - element_width, element_width, copy);
 
                         // Since we already have v1 to v4, check the next block state.
-                        if (v1 + v2 + v3 + v4 == 4 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT) {
+                        // Due to short circuit logic, these must use `compare_inc`
+                        if (v1 + v2 + v3 + v4 == 4 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) != GT) {
                             state = .ordered;
                             continue;
                         }
-                        if (v1 + v2 + v3 + v4 == 0 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                        // Due to short circuit logic, these must use `compare_inc`
+                        if (v1 + v2 + v3 + v4 == 0 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) == GT and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) == GT) {
                             reverse_head = arr_ptr;
                             state = .reversed;
                             continue;
@@ -1525,7 +1693,12 @@ fn quad_swap(
                         }
                         arr_ptr -= 8 * element_width;
 
-                        if (compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) == GT or compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) == GT or compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) == GT) {
+                        // Due to short circuit logic, these must use `compare_inc`
+                        if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) == GT or compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) == GT or compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) == GT) {
+                            // 16 guaranteed compares.
+                            if (data_is_owned) {
+                                inc_n_data(cmp_data, 16);
+                            }
                             quad_swap_merge(arr_ptr, swap, cmp, cmp_data, element_width, copy);
                         }
                         arr_ptr += 8 * element_width;
@@ -1535,19 +1708,20 @@ fn quad_swap(
                     // Handle tail block when reversing.
                     const rem = len % 8;
                     reverse_block: {
-                        if (rem == 7 and compare(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width) != GT)
+                        // Due to chance of breaking and not running, must use `comapare_inc`.
+                        if (rem == 7 and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
-                        if (rem >= 6 and compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width) != GT)
+                        if (rem >= 6 and compare_inc(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
-                        if (rem >= 5 and compare(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width) != GT)
+                        if (rem >= 5 and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
-                        if (rem >= 4 and compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT)
+                        if (rem >= 4 and compare_inc(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
-                        if (rem >= 3 and compare(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width) != GT)
+                        if (rem >= 3 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
-                        if (rem >= 2 and compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width) != GT)
+                        if (rem >= 2 and compare_inc(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
-                        if (rem >= 1 and compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width) != GT)
+                        if (rem >= 1 and compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width, data_is_owned, inc_n_data) != GT)
                             break :reverse_block;
                         quad_reversal(reverse_head, arr_ptr + rem * element_width - element_width, element_width, copy);
 
@@ -1566,7 +1740,7 @@ fn quad_swap(
         }
     }
     if (!skip_tail_swap) {
-        tail_swap(arr_ptr, len % 8, swap, cmp, cmp_data, element_width, copy);
+        tail_swap(arr_ptr, len % 8, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     }
 
     // Group into 32 element blocks.
@@ -1577,25 +1751,27 @@ fn quad_swap(
         count -= 1;
         arr_ptr += 32 * element_width;
     }) {
-        if (compare(cmp, cmp_data, arr_ptr + 7 * element_width, arr_ptr + 8 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 15 * element_width, arr_ptr + 16 * element_width) != GT and compare(cmp, cmp_data, arr_ptr + 23 * element_width, arr_ptr + 24 * element_width) != GT) {
+        // Due to short circuit logic, these must use `compare_inc`
+        if (compare_inc(cmp, cmp_data, arr_ptr + 7 * element_width, arr_ptr + 8 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 15 * element_width, arr_ptr + 16 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr + 23 * element_width, arr_ptr + 24 * element_width, data_is_owned, inc_n_data) != GT) {
             // Already in order.
             continue;
         }
-        parity_merge(swap, arr_ptr, 8, 8, cmp, cmp_data, element_width, copy);
-        parity_merge(swap + 16 * element_width, arr_ptr + 16 * element_width, 8, 8, cmp, cmp_data, element_width, copy);
-        parity_merge(arr_ptr, swap, 16, 16, cmp, cmp_data, element_width, copy);
+        parity_merge(swap, arr_ptr, 8, 8, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        parity_merge(swap + 16 * element_width, arr_ptr + 16 * element_width, 8, 8, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        parity_merge(arr_ptr, swap, 16, 16, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     }
 
     // Deal with final tail for 32 element blocks.
     // Anything over 8 elements is multiple blocks worth merging together.
     if (len % 32 > 8) {
-        tail_merge(arr_ptr, len % 32, swap, 32, 8, cmp, cmp_data, element_width, copy);
+        tail_merge(arr_ptr, len % 32, swap, 32, 8, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     }
 
     return .unfinished;
 }
 
 /// Merge 4 sorted arrays of length 2 into a sorted array of length 8 using swap space.
+/// Requires that the refcount of cmp_data be incremented 16 times.
 fn quad_swap_merge(
     array: [*]u8,
     swap: [*]u8,
@@ -1661,6 +1837,7 @@ fn quad_reversal(
 }
 
 test "quad_swap" {
+    var test_count: i64 = 0;
     var arr: [75]i64 = undefined;
     var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
@@ -1687,7 +1864,8 @@ test "quad_swap" {
         72, 58, 57,
     };
 
-    var result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    var result = quad_swap(arr_ptr, 75, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(result, .unfinished);
     try testing.expectEqual(arr, [75]i64{
         // first 32 elements sorted (with 8 reversed that get flipped here)
@@ -1718,7 +1896,8 @@ test "quad_swap" {
         expected[i] = @intCast(i + 1);
         arr[i] = @intCast(75 - i);
     }
-    result = quad_swap(arr_ptr, 75, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+    result = quad_swap(arr_ptr, 75, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(result, .sorted);
     try testing.expectEqual(arr, expected);
 }
@@ -1775,11 +1954,13 @@ fn tail_swap(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     std.debug.assert(len < 32);
 
     if (len < 8) {
-        tiny_sort(array, len, swap, cmp, cmp_data, element_width, copy);
+        tiny_sort(array, len, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         return;
     }
 
@@ -1791,21 +1972,22 @@ fn tail_swap(
     const quad4 = half2 - quad3;
 
     var arr_ptr = array;
-    tail_swap(arr_ptr, quad1, swap, cmp, cmp_data, element_width, copy);
+    tail_swap(arr_ptr, quad1, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     arr_ptr += quad1 * element_width;
-    tail_swap(arr_ptr, quad2, swap, cmp, cmp_data, element_width, copy);
+    tail_swap(arr_ptr, quad2, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     arr_ptr += quad2 * element_width;
-    tail_swap(arr_ptr, quad3, swap, cmp, cmp_data, element_width, copy);
+    tail_swap(arr_ptr, quad3, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
     arr_ptr += quad3 * element_width;
-    tail_swap(arr_ptr, quad4, swap, cmp, cmp_data, element_width, copy);
+    tail_swap(arr_ptr, quad4, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 
-    if (compare(cmp, cmp_data, array + (quad1 - 1) * element_width, array + quad1 * element_width) != GT and compare(cmp, cmp_data, array + (half1 - 1) * element_width, array + half1 * element_width) != GT and compare(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr) != GT) {
+    // Due to short circuit logic, these must use `compare_inc`
+    if (compare_inc(cmp, cmp_data, array + (quad1 - 1) * element_width, array + quad1 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, array + (half1 - 1) * element_width, array + half1 * element_width, data_is_owned, inc_n_data) != GT and compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr, data_is_owned, inc_n_data) != GT) {
         return;
     }
 
-    parity_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy);
-    parity_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp, cmp_data, element_width, copy);
-    parity_merge(array, swap, half1, half2, cmp, cmp_data, element_width, copy);
+    parity_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    parity_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    parity_merge(array, swap, half1, half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 }
 
 /// Merges two neighboring sorted arrays into dest.
@@ -1819,6 +2001,8 @@ fn parity_merge(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     std.debug.assert(left_len == right_len or left_len == right_len - 1 or left_len - 1 == right_len);
 
@@ -1831,7 +2015,16 @@ fn parity_merge(
     var dest_tail = dest + (left_len + right_len - 1) * element_width;
 
     if (left_len < right_len) {
+        // 1 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 1);
+        }
         head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
+    }
+
+    // 2 + 2(left_len -1) = (2*left_len) guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 2 * left_len);
     }
     head_branchless_merge(&dest_head, &left_head, &right_head, cmp, cmp_data, element_width, copy);
 
@@ -1843,6 +2036,7 @@ fn parity_merge(
 }
 
 test "tail_swap" {
+    var test_count: i64 = 0;
     var swap: [31]i64 = undefined;
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
@@ -1858,12 +2052,14 @@ test "tail_swap" {
         var rng = std.rand.DefaultPrng.init(seed);
         rng.random().shuffle(i64, arr[0..]);
 
-        tail_swap(arr_ptr, 31, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tail_swap(arr_ptr, 31, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, expected);
     }
 }
 
 test "parity_merge" {
+    var test_count: i64 = 0;
     {
         var dest: [8]i64 = undefined;
         var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
@@ -1873,12 +2069,14 @@ test "parity_merge" {
 
         arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
         dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
         arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
         dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
     }
     {
@@ -1890,12 +2088,26 @@ test "parity_merge" {
 
         arr = [9]i64{ 1, 3, 5, 8, 2, 4, 6, 7, 9 };
         dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
 
         arr = [9]i64{ 6, 7, 8, 9, 1, 2, 3, 4, 5 };
         dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
+        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+
+        arr = [9]i64{ 1, 3, 5, 7, 8, 2, 4, 6, 9 };
+        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        parity_merge(dest_ptr, arr_ptr, 5, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
+        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+
+        arr = [9]i64{ 5, 6, 7, 8, 9, 1, 2, 3, 4 };
+        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        parity_merge(dest_ptr, arr_ptr, 5, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
     }
 }
@@ -1912,6 +2124,8 @@ fn tiny_sort(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
     std.debug.assert(len < 8);
 
@@ -1923,9 +2137,17 @@ fn tiny_sort(
             return;
         },
         2 => {
+            // 1 guaranteed compares.
+            if (data_is_owned) {
+                inc_n_data(cmp_data, 1);
+            }
             swap_branchless(array, tmp_ptr, cmp, cmp_data, element_width, copy);
         },
         3 => {
+            // 3 guaranteed compares.
+            if (data_is_owned) {
+                inc_n_data(cmp_data, 3);
+            }
             var arr_ptr = array;
             swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
             arr_ptr += element_width;
@@ -1934,16 +2156,16 @@ fn tiny_sort(
             swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         },
         4 => {
-            parity_swap_four(array, tmp_ptr, cmp, cmp_data, element_width, copy);
+            parity_swap_four(array, tmp_ptr, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         5 => {
-            parity_swap_five(array, tmp_ptr, cmp, cmp_data, element_width, copy);
+            parity_swap_five(array, tmp_ptr, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         6 => {
-            parity_swap_six(array, tmp_ptr, swap, cmp, cmp_data, element_width, copy);
+            parity_swap_six(array, tmp_ptr, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         7 => {
-            parity_swap_seven(array, tmp_ptr, swap, cmp, cmp_data, element_width, copy);
+            parity_swap_seven(array, tmp_ptr, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         else => {
             unreachable;
@@ -1958,7 +2180,13 @@ fn parity_swap_four(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
+    // 3 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 3);
+    }
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
@@ -1967,6 +2195,10 @@ fn parity_swap_four(
 
     const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
     if (gt) {
+        // 3 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 3);
+        }
         copy(tmp_ptr, arr_ptr);
         copy(arr_ptr, arr_ptr + element_width);
         copy(arr_ptr + element_width, tmp_ptr);
@@ -1986,7 +2218,13 @@ fn parity_swap_five(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
+    // 4 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 4);
+    }
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
@@ -1998,6 +2236,10 @@ fn parity_swap_five(
     arr_ptr = array;
 
     if (more_work != 0) {
+        // 6 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 6);
+        }
         swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
         arr_ptr += 2 * element_width;
         swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
@@ -2020,7 +2262,13 @@ fn parity_swap_six(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
+    // 7 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 5);
+    }
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += element_width;
@@ -2034,6 +2282,10 @@ fn parity_swap_six(
     {
         const lte = compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width) != GT;
         if (lte) {
+            // 2 guaranteed compares.
+            if (data_is_owned) {
+                inc_n_data(cmp_data, 2);
+            }
             swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
             arr_ptr += 4 * element_width;
             swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
@@ -2041,6 +2293,10 @@ fn parity_swap_six(
         }
     }
 
+    // 8 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 8);
+    }
     {
         const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width) == GT;
         var x = if (gt) element_width else 0;
@@ -2086,7 +2342,13 @@ fn parity_swap_seven(
     cmp_data: Opaque,
     element_width: usize,
     copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
 ) void {
+    // 6 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 6);
+    }
     var arr_ptr = array;
     swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr += 2 * element_width;
@@ -2104,6 +2366,10 @@ fn parity_swap_seven(
     if (more_work == 0)
         return;
 
+    // 11 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 11);
+    }
     swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy);
     arr_ptr = array;
 
@@ -2153,6 +2419,7 @@ fn parity_swap_seven(
 }
 
 test "tiny_sort" {
+    var test_count: i64 = 0;
     var swap: [7]i64 = undefined;
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
@@ -2161,11 +2428,13 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [7]i64{ 3, 1, 2, 5, 4, 7, 6 };
-        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
 
         arr = [7]i64{ 7, 6, 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
     }
     {
@@ -2173,11 +2442,13 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [6]i64{ 3, 1, 2, 6, 4, 5 };
-        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
 
         arr = [6]i64{ 6, 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
     }
     {
@@ -2185,11 +2456,13 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [5]i64{ 2, 1, 4, 3, 5 };
-        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
 
         arr = [5]i64{ 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
     }
     {
@@ -2197,23 +2470,27 @@ test "tiny_sort" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [4]i64{ 4, 2, 1, 3 };
-        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
 
         arr = [4]i64{ 2, 1, 4, 3 };
-        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
     }
     {
         var arr = [3]i64{ 2, 3, 1 };
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        tiny_sort(arr_ptr, 3, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 3, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [3]i64{ 1, 2, 3 });
     }
     {
         var arr = [2]i64{ 2, 1 };
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        tiny_sort(arr_ptr, 2, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
+        tiny_sort(arr_ptr, 2, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+        try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [2]i64{ 1, 2 });
     }
 }
@@ -2224,6 +2501,7 @@ test "tiny_sort" {
 // The are the smallest fundamental unit.
 
 /// Merge two neighboring sorted 4 element arrays into dest.
+/// Requires that the refcount of cmp_data be incremented 8 times.
 inline fn parity_merge_four(
     dest: [*]u8,
     array: [*]u8,
@@ -2254,6 +2532,7 @@ inline fn parity_merge_four(
 }
 
 /// Merge two neighboring sorted 2 element arrays into dest.
+/// Requires that the refcount of cmp_data be incremented 4 times.
 inline fn parity_merge_two(
     dest: [*]u8,
     array: [*]u8,
@@ -2283,6 +2562,7 @@ inline fn parity_merge_two(
 /// Will increment both dest and the smaller element ptr to their next index.
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
+/// Requires that the refcount of cmp_data be incremented 1 time.
 inline fn head_branchless_merge(
     dest: *[*]u8,
     left: *[*]u8,
@@ -2306,6 +2586,7 @@ inline fn head_branchless_merge(
 /// Will decrement both dest and the smaller element ptr to their previous index.
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
+/// Requires that the refcount of cmp_data be incremented 1 time.
 inline fn tail_branchless_merge(
     dest: *[*]u8,
     left: *[*]u8,
@@ -2326,6 +2607,7 @@ inline fn tail_branchless_merge(
 }
 
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
+/// Requires that the refcount of cmp_data be incremented 1 time.
 inline fn swap_branchless(
     ptr: [*]u8,
     tmp: [*]u8,
@@ -2338,6 +2620,7 @@ inline fn swap_branchless(
     _ = swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy);
 }
 
+/// Requires that the refcount of cmp_data be incremented 1 time.
 inline fn swap_branchless_return_gt(
     ptr: [*]u8,
     tmp: [*]u8,
@@ -2356,8 +2639,27 @@ inline fn swap_branchless_return_gt(
     return @intFromBool(gt);
 }
 
+/// Requires that the refcount of cmp_data be incremented 1 time.
 inline fn compare(cmp: CompareFn, cmp_data: Opaque, lhs: [*]u8, rhs: [*]u8) Ordering {
     return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs, rhs)));
+}
+
+/// Only use this as a last resort.
+/// It will increment the refcount before comparing.
+/// Incrementing for each individual compare is slow.
+/// Perfer to increment in batches where possible.
+inline fn compare_inc(
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    lhs: [*]u8,
+    rhs: [*]u8,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) Ordering {
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 1);
+    }
+    return compare(cmp, cmp_data, lhs, rhs);
 }
 
 test "parity_merge_four" {
@@ -2494,6 +2796,24 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
     return lt + lt + gt;
 }
 
+fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
+    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
+    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
+
+    const gt = @as(u8, @intFromBool(a > b));
+    const lt = @as(u8, @intFromBool(a < b));
+
+    @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= @intCast(1);
+    // Eq = 0
+    // GT = 1
+    // LT = 2
+    return lt + lt + gt;
+}
+
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
     @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
+}
+
+fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.C) void {
+    @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
 }
