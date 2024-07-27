@@ -6232,50 +6232,43 @@ mod test_fmt {
 
     #[test]
     fn preserve_annotated_body() {
-        expr_formats_same(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 x : i32
                 x = 1
                 x
                 "
-            )
-        );
+        ));
     }
 
     #[test]
     fn preserve_annotated_body_comment() {
-        expr_formats_same(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 x : i32 # comment
                 x = 1
                 x
                 "
-            )
-        );
+        ));
     }
 
     #[test]
     fn preserve_annotated_body_comments() {
-        expr_formats_same(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 x : i32
                 # comment
                 # comment 2
                 x = 1
                 x
                 "
-            )
-        );
+        ));
     }
 
     #[test]
     fn preserve_annotated_body_comments_with_newlines() {
-        expr_formats_same(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 x : i32
 
                 # comment
@@ -6285,36 +6278,31 @@ mod test_fmt {
                 x = 1
                 x
                 "
-            )
-        );
+        ));
     }
 
     #[test]
     fn preserve_annotated_body_blank_comment() {
-        expr_formats_same(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 x : i32
                 #
                 x = 1
                 x
                 "
-            )
-        );
+        ));
     }
 
     #[test]
     fn preserve_annotated_body_with_newlines() {
-        expr_formats_same(
-            indoc!(
-                r"
+        expr_formats_same(indoc!(
+            r"
                 x : i32
 
                 x = 1
                 x
                 "
-            )
-        );
+        ));
     }
 
     // this is a parse error atm
