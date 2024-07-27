@@ -36,8 +36,7 @@ tmux new-window "$BASE_CMD -S fuzzer05 -Z -p coe ./fuzz-cmpcov"
 tmux split-window -h "$BASE_CMD -S fuzzer06 -P exploit ./fuzz"
 tmux split-window -v -t 1.0 "AFL_DISABLE_TRIM=1 $BASE_CMD -S fuzzer07 -p explore ./fuzz"
 tmux split-window -v -t 1.2 "htop"
-tmux new-window
-tmux send-keys "afl-whatsup -d $OUTPUT_DIR"
+tmux new-window "watch -c -n 30 afl-whatsup -s .fuzz_data/output"
 tmux select-window -t 1
 tmux select-window -t 0
 tmux -2 a -t "fuzz"
