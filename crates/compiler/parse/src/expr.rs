@@ -1275,9 +1275,7 @@ macro_rules! join_ann_to_body {
         let value_def = ValueDef::AnnotatedBody {
             ann_pattern: $arena.alloc(*$ann_pattern),
             ann_type: $arena.alloc(*$ann_type),
-            comment: $spaces_before_current
-                .first()
-                .and_then($crate::ast::CommentOrNewline::comment_str),
+            comment: $spaces_before_current,
             body_pattern: $arena.alloc($loc_pattern),
             body_expr: *$arena.alloc($loc_def_expr),
         };
@@ -1311,9 +1309,7 @@ macro_rules! join_alias_to_body {
         let value_def = ValueDef::AnnotatedBody {
             ann_pattern: $arena.alloc(loc_ann_pattern),
             ann_type: $arena.alloc(*$ann_type),
-            comment: $spaces_before_current
-                .first()
-                .and_then($crate::ast::CommentOrNewline::comment_str),
+            comment: $spaces_before_current,
             body_pattern: $arena.alloc($loc_pattern),
             body_expr: *$arena.alloc($loc_def_expr),
         };

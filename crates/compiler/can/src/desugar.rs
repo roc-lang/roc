@@ -170,7 +170,7 @@ fn desugar_value_def<'a>(
                         ext: None,
                     },
                 )),
-                comment: None,
+                comment: &[],
                 body_pattern: new_pat,
                 body_expr: desugar_expr(arena, stmt_expr, src, line_info, module_path),
             }

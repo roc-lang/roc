@@ -456,11 +456,7 @@ impl<'a> Formattable for ValueDef<'a> {
             } => {
                 fmt_general_def(ann_pattern, buf, indent, ":", &ann_type.value, newlines);
 
-                if let Some(comment_str) = comment {
-                    buf.push_str(" #");
-                    buf.spaces(1);
-                    buf.push_str(comment_str.trim());
-                }
+                fmt_annotated_body_comment(buf, indent, comment);
 
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
@@ -584,6 +580,51 @@ pub fn fmt_type_def(buf: &mut Buf, def: &roc_parse::ast::TypeDef, indent: u16) {
 
 pub fn fmt_defs(buf: &mut Buf, defs: &Defs, indent: u16) {
     defs.format(buf, indent);
+}
+
+pub fn fmt_annotated_body_comment<'a>(
+    buf: &mut Buf,
+    indent: u16,
+    comment: &'a [roc_parse::ast::CommentOrNewline<'a>],
+) {
+    let mut comment_iter = comment.iter();
+    if let Some(comment_first) = comment_iter.next() {
+        match comment_first {
+            roc_parse::ast::CommentOrNewline::Newline => {
+                buf.newline();
+            }
+            roc_parse::ast::CommentOrNewline::DocComment(comment_str) => {
+                buf.push_str(" # #");
+                buf.spaces(1);
+                buf.push_str(comment_str.trim());
+            }
+            roc_parse::ast::CommentOrNewline::LineComment(comment_str) => {
+                buf.push_str(" #");
+                buf.spaces(1);
+                buf.push_str(comment_str.trim());
+            }
+        }
+
+        for comment_or_newline in comment_iter {
+            match comment_or_newline {
+                roc_parse::ast::CommentOrNewline::Newline => {
+                    buf.newline();
+                }
+                roc_parse::ast::CommentOrNewline::DocComment(comment_str) => {
+                    buf.indent(indent);
+                    buf.push_str("# #");
+                    buf.spaces(1);
+                    buf.push_str(comment_str.trim());
+                }
+                roc_parse::ast::CommentOrNewline::LineComment(comment_str) => {
+                    buf.indent(indent);
+                    buf.push_str("#");
+                    buf.spaces(1);
+                    buf.push_str(comment_str.trim());
+                }
+            }
+        }
+    }
 }
 
 pub fn fmt_body<'a>(buf: &mut Buf, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
