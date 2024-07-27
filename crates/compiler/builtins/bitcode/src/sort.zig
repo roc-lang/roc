@@ -1780,7 +1780,7 @@ fn tail_swap(
 }
 
 /// Merges two neighboring sorted arrays into dest.
-/// Left must be equal to or 1 smaller than right.
+/// Left and right length mus be same or within 1 element.
 fn parity_merge(
     dest: [*]u8,
     src: [*]u8,
@@ -1791,7 +1791,7 @@ fn parity_merge(
     element_width: usize,
     copy: CopyFn,
 ) void {
-    std.debug.assert(left_len == right_len or left_len == right_len - 1);
+    std.debug.assert(left_len == right_len or left_len == right_len - 1 or left_len - 1 == right_len);
 
     var left_head = src;
     var right_head = src + left_len * element_width;

@@ -38,5 +38,6 @@ tmux split-window -v -t 1.0 "AFL_DISABLE_TRIM=1 $BASE_CMD -S fuzzer07 -p explore
 tmux split-window -v -t 1.2 "htop"
 tmux new-window
 tmux send-keys "afl-whatsup -d $OUTPUT_DIR"
+tmux select-window -t 1
 tmux select-window -t 0
 tmux -2 a -t "fuzz"
