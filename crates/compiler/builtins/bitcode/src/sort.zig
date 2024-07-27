@@ -64,10 +64,9 @@ pub fn quadsort(
             // Sort.
             quadsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, data_is_owned, inc_n_data, @sizeOf(usize), @alignOf(usize), &pointer_copy);
 
-            if (utils.alloc(len * element_width, alignment)) |collect_alloc_ptr| {
+            if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
-                var collect_ptr = collect_alloc_ptr;
-                defer utils.dealloc(collect_alloc_ptr, alignment);
+                defer utils.dealloc(collect_ptr, alignment);
                 for (0..len) |i| {
                     copy(collect_ptr + i * element_width, arr_ptr[i]);
                 }
