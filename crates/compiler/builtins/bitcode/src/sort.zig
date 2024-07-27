@@ -51,55 +51,29 @@ pub fn quadsort(
     } else {
         if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
-            if (@import("builtin").target.cpu.arch != .wasm32) {
-                std.debug.print("Allocated! filling array.\n", .{});
-            }
             var arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
             defer utils.dealloc(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = source_ptr + i * element_width;
             }
 
-            // Create indirect compare function.
-            if (@import("builtin").target.cpu.arch != .wasm32) {
-                std.debug.print("Creating indirect sort!\n", .{});
-            }
-            const IndirectSort = struct {
-                compare: CompareFn,
-                pub fn indirect_compare(compare_data: Opaque, lhs_ptr: Opaque, rhs_ptr: Opaque) callconv(.C) u8 {
-                    const lhs = @as(*Opaque, @ptrCast(@alignCast(lhs_ptr))).*;
-                    const rhs = @as(*Opaque, @ptrCast(@alignCast(rhs_ptr))).*;
-                    return compare(compare_data, lhs, rhs);
-                }
-            };
-            const indirect_sort = IndirectSort{ .compare = cmp };
+            // Setup for indirect comparison.
+            inner_cmp = cmp;
+            defer inner_cmp = null;
 
             // Sort.
-            if (@import("builtin").target.cpu.arch != .wasm32) {
-                std.debug.print("Sorting!\n", .{});
-            }
-            quadsort_direct(@ptrCast(arr_ptr), len, indirect_sort.compare, cmp_data, data_is_owned, inc_n_data, @sizeOf(usize), @alignOf(usize), &pointer_copy);
+            quadsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, data_is_owned, inc_n_data, @sizeOf(usize), @alignOf(usize), &pointer_copy);
 
             if (utils.alloc(len * element_width, alignment)) |collect_alloc_ptr| {
-                if (@import("builtin").target.cpu.arch != .wasm32) {
-                    std.debug.print("Allocated2! Collecting\n", .{});
-                }
                 // Collect sorted pointers into correct order.
                 var collect_ptr = collect_alloc_ptr;
                 defer utils.dealloc(collect_alloc_ptr, alignment);
                 for (0..len) |i| {
-                    copy(collect_ptr, arr_ptr[i]);
-                    collect_ptr += element_width;
+                    copy(collect_ptr + i * element_width, arr_ptr[i]);
                 }
 
                 // Copy to original array as sorted.
-                if (@import("builtin").target.cpu.arch != .wasm32) {
-                    std.debug.print("Copy out!\n", .{});
-                }
                 @memcpy(source_ptr[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
-                if (@import("builtin").target.cpu.arch != .wasm32) {
-                    std.debug.print("Sorted:[{d}]{d}\nAll done!\n", .{ len, @as([*]i64, @ptrCast(@alignCast(source_ptr)))[0..len] });
-                }
             } else {
                 roc_panic("Out of memory while trying to allocate for sorting", 0);
             }
@@ -2494,6 +2468,14 @@ test "swap" {
     arr = [2]i64{ -22, -22 };
     swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy);
     try testing.expectEqual(arr, [2]i64{ -22, -22 });
+}
+
+// While I think it is technically safe, I'm not a fan of using a threadlocal for this.
+threadlocal var inner_cmp: ?CompareFn = null;
+pub fn indirect_compare(compare_data: Opaque, lhs_ptr: Opaque, rhs_ptr: Opaque) callconv(.C) u8 {
+    const lhs = @as(*[*]u8, @ptrCast(@alignCast(lhs_ptr))).*;
+    const rhs = @as(*[*]u8, @ptrCast(@alignCast(rhs_ptr))).*;
+    return (inner_cmp orelse unreachable)(compare_data, lhs, rhs);
 }
 
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
