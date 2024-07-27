@@ -6223,8 +6223,30 @@ mod test_fmt {
                     [first as last]
                     | [first, last] ->
                         first
-                
+
                     _ -> Not
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn issue_6896() {
+        expr_formats_to(
+            indoc!(
+                r"
+                x : i32
+                # comment
+                x = 1
+                x
+                "
+            ),
+            indoc!(
+                r"
+                x : i32
+                # comment
+                x = 1
+                x
                 "
             ),
         );
