@@ -46,7 +46,7 @@ pub fn quadsort(
     // Then have our builtin dispatch to the correct version.
     // llvm garbage collection would remove all other variants.
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
-    if (element_width <= MAX_ELEMENT_BUFFER_SIZE and false) {
+    if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         quadsort_direct(source_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, alignment, copy);
     } else {
         if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
