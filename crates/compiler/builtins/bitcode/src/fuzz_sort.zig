@@ -1,10 +1,3 @@
-/// Sort Fuzzer!
-/// To fuzz: On linux, first install afl++.
-/// Then build this with:
-///   zig build-lib -static -fcompiler-rt -flto -fPIC src/fuzz_sort.zig
-///   afl-clang-lto -o fuzz libfuzz_sort.a
-/// Finally, run with afl
-///   afl-fuzz -i input -o output -- ./fuzz
 const std = @import("std");
 const sort = @import("sort.zig");
 
@@ -18,6 +11,8 @@ fn cMain() callconv(.C) void {
 comptime {
     @export(cMain, .{ .name = "main", .linkage = .Strong });
 }
+
+const DEBUG = false;
 
 var allocator: std.mem.Allocator = undefined;
 
@@ -36,9 +31,17 @@ pub fn fuzz_main() !void {
     const size = data.len / @sizeOf(i64);
     const arr_ptr: [*]i64 = @alignCast(@ptrCast(data.ptr));
 
+    if (DEBUG) {
+        std.debug.print("Input: [{d}]{d}\n", .{ size, arr_ptr[0..size] });
+    }
+
     sort.quadsort(@ptrCast(arr_ptr), size, &test_i64_compare, null, false, &test_i64_inc_n, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
 
-    std.debug.assert(std.sort.isSorted(i64, arr_ptr[0..size], {}, std.sort.asc(i64)));
+    const sorted = std.sort.isSorted(i64, arr_ptr[0..size], {}, std.sort.asc(i64));
+    if (DEBUG) {
+        std.debug.print("Output: [{d}]{d}\nSorted: {}\n", .{ size, arr_ptr[0..size], sorted });
+    }
+    std.debug.assert(sorted);
 }
 
 const Opaque = ?[*]u8;
