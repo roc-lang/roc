@@ -38,7 +38,9 @@ Defs(
                         },
                     ],
                 },
-                comment: None,
+                comment: [
+                    Newline,
+                ],
                 body_pattern: @28-31 Identifier {
                     ident: "foo",
                 },

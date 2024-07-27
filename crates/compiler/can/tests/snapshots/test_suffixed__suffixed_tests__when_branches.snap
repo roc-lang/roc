@@ -88,7 +88,7 @@ Defs {
                                                                     @54-65 Inferred,
                                                                 ],
                                                             ),
-                                                            comment: None,
+                                                            comment: [],
                                                             body_pattern: @54-65 Identifier {
                                                                 ident: "#!1_stmt",
                                                             },

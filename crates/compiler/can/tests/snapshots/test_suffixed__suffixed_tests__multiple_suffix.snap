@@ -67,7 +67,7 @@ Defs {
                                             @11-16 Inferred,
                                         ],
                                     ),
-                                    comment: None,
+                                    comment: [],
                                     body_pattern: @11-16 Identifier {
                                         ident: "#!1_stmt",
                                     },

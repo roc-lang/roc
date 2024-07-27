@@ -76,7 +76,9 @@ Defs {
                                     ],
                                 ),
                             ),
-                            comment: None,
+                            comment: [
+                                Newline,
+                            ],
                             body_pattern: @50-53 Identifier {
                                 ident: "foo",
                             },
@@ -130,7 +132,7 @@ Defs {
                                                                 @76-83 Inferred,
                                                             ],
                                                         ),
-                                                        comment: None,
+                                                        comment: [],
                                                         body_pattern: @76-83 Identifier {
                                                             ident: "#!1_stmt",
                                                         },
@@ -199,7 +201,7 @@ Defs {
                                                                             @92-99 Inferred,
                                                                         ],
                                                                     ),
-                                                                    comment: None,
+                                                                    comment: [],
                                                                     body_pattern: @92-99 Identifier {
                                                                         ident: "#!0_stmt",
                                                                     },

@@ -43,7 +43,9 @@ Defs(
                         ext: None,
                     },
                 ),
-                comment: None,
+                comment: [
+                    Newline,
+                ],
                 body_pattern: @22-23 Identifier {
                     ident: "f",
                 },

@@ -60,7 +60,9 @@ Defs {
                                     ],
                                 ),
                             ),
-                            comment: None,
+                            comment: [
+                                Newline,
+                            ],
                             body_pattern: @35-36 Identifier {
                                 ident: "x",
                             },
@@ -109,7 +111,7 @@ Defs {
                                                         @60-69 Inferred,
                                                     ],
                                                 ),
-                                                comment: None,
+                                                comment: [],
                                                 body_pattern: @78-79 Identifier {
                                                     ident: "#!0_expr",
                                                 },

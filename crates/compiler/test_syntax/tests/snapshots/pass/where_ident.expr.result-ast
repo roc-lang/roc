@@ -33,7 +33,9 @@ Defs(
                     ],
                     ext: None,
                 },
-                comment: None,
+                comment: [
+                    Newline,
+                ],
                 body_pattern: @21-26 Identifier {
                     ident: "where",
                 },

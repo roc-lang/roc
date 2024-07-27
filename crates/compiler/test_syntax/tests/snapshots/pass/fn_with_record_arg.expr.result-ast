@@ -52,7 +52,9 @@ Defs(
                         [],
                     ),
                 ),
-                comment: None,
+                comment: [
+                    Newline,
+                ],
                 body_pattern: @45-50 Identifier {
                     ident: "table",
                 },

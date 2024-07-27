@@ -24,7 +24,9 @@ Defs(
                     "Int",
                     [],
                 ),
-                comment: None,
+                comment: [
+                    Newline,
+                ],
                 body_pattern: @10-13 Identifier {
                     ident: "foo",
                 },

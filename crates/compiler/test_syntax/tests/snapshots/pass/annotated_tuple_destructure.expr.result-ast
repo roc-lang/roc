@@ -31,7 +31,9 @@ Defs(
                     "Foo",
                     [],
                 ),
-                comment: None,
+                comment: [
+                    Newline,
+                ],
                 body_pattern: @15-23 Tuple(
                     [
                         @17-18 Identifier {
