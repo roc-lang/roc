@@ -590,9 +590,7 @@ pub fn fmt_annotated_body_comment<'a>(
     let mut comment_iter = comment.iter();
     if let Some(comment_first) = comment_iter.next() {
         match comment_first {
-            roc_parse::ast::CommentOrNewline::Newline => {
-                buf.newline();
-            }
+            roc_parse::ast::CommentOrNewline::Newline => (),
             roc_parse::ast::CommentOrNewline::DocComment(comment_str) => {
                 buf.push_str(" # #");
                 buf.spaces(1);
@@ -606,10 +604,9 @@ pub fn fmt_annotated_body_comment<'a>(
         }
 
         for comment_or_newline in comment_iter {
+            buf.newline();
             match comment_or_newline {
-                roc_parse::ast::CommentOrNewline::Newline => {
-                    buf.newline();
-                }
+                roc_parse::ast::CommentOrNewline::Newline => (),
                 roc_parse::ast::CommentOrNewline::DocComment(comment_str) => {
                     buf.indent(indent);
                     buf.push_str("# #");

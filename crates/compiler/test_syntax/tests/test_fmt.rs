@@ -6231,24 +6231,17 @@ mod test_fmt {
     }
 
     #[test]
-    fn issue_6896() {
-        expr_formats_to(
+    fn preserve_annotated_body_comments() {
+        expr_formats_same(
             indoc!(
                 r"
                 x : i32
                 # comment
+                # comment 2
                 x = 1
                 x
                 "
-            ),
-            indoc!(
-                r"
-                x : i32
-                # comment
-                x = 1
-                x
-                "
-            ),
+            )
         );
     }
 
