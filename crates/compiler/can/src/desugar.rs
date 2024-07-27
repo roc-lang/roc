@@ -92,7 +92,7 @@ fn desugar_value_def<'a>(
         } => AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment: *comment,
+            comment,
             body_pattern: desugar_loc_pattern(arena, body_pattern, src, line_info, module_path),
             body_expr: desugar_expr(arena, body_expr, src, line_info, module_path),
         },
