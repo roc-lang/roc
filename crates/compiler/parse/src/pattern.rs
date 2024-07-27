@@ -37,7 +37,7 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
         loc_record_pattern_help(),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
-        specialize_err(EPattern::PInParens, loc_pattern_in_parens_help())
+        loc_pattern_in_parens_help()
     )
 }
 
@@ -80,7 +80,7 @@ fn loc_pattern_help_help<'a>(
     can_have_arguments: bool,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
-        specialize_err(EPattern::PInParens, loc_pattern_in_parens_help()),
+        loc_pattern_in_parens_help(),
         loc_underscore_pattern_help(),
         loc_ident_pattern_help(can_have_arguments),
         loc_record_pattern_help(),
@@ -188,35 +188,35 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
     )
 }
 
-fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
-    then(
-        loc(collection_trailing_sep_e(
+fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    (move |arena, state: State<'a>, min_indent| {
+        let parser = collection_trailing_sep_e(
             byte(b'(', PInParens::Open),
             specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
             byte(b',', PInParens::End),
             byte(b')', PInParens::End),
             Pattern::SpaceBefore,
-        )),
-        move |_arena, state, _, loc_elements| {
-            let elements = loc_elements.value;
-            let region = loc_elements.region;
+        );
 
-            if elements.len() > 1 {
-                Ok((
-                    MadeProgress,
-                    Loc::at(region, Pattern::Tuple(elements)),
-                    state,
-                ))
-            } else if elements.is_empty() {
-                Err((NoProgress, PInParens::Empty(state.pos())))
-            } else {
-                // TODO: don't discard comments before/after
-                // (stored in the Collection)
-                // TODO: add Pattern::ParensAround to faithfully represent the input
-                Ok((MadeProgress, elements.items[0], state))
+        let start = state.pos();
+        match parser.parse(arena, state, min_indent) {
+            Ok((_, elements, state)) => {
+                if elements.len() > 1 {
+                    let elements = Loc::pos(start, state.pos(), Pattern::Tuple(elements));
+                    Ok((MadeProgress, elements, state))
+                } else if elements.is_empty() {
+                    let fail = PInParens::Empty(state.pos());
+                    Err((NoProgress, EPattern::PInParens(fail, start)))
+                } else {
+                    // TODO: don't discard comments before/after
+                    // (stored in the Collection)
+                    // TODO: add Pattern::ParensAround to faithfully represent the input
+                    Ok((MadeProgress, elements.items[0], state))
+                }
             }
-        },
-    )
+            Err((p, fail)) => Err((p, EPattern::PInParens(fail, start))),
+        }
+    })
     .trace("pat_in_parens")
 }
 
