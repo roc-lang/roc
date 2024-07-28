@@ -5442,7 +5442,7 @@ mod test_reporting {
 
     Looks like you are trying to define a function. 
 
-    In roc, functions are always written as a lambda, like 
+    In Roc, functions are always written as a lambda, like 
 
         increment = \n -> n + 1
     "###
