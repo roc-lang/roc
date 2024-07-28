@@ -3017,7 +3017,7 @@ test "quad_reversal" {
 // Below are functions for sorting under 32 element arrays.
 
 /// Uses swap space to sort the tail of an array.
-/// The array should be under 32 elements in length.
+/// The array should generally be under 32 elements in length.
 fn tail_swap(
     array: [*]u8,
     len: usize,
@@ -3029,8 +3029,6 @@ fn tail_swap(
     comptime data_is_owned: bool,
     inc_n_data: IncN,
 ) void {
-    std.debug.assert(len < 32);
-
     if (len < 8) {
         tiny_sort(array, len, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         return;
