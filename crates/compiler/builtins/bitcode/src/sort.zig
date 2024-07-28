@@ -518,9 +518,14 @@ fn flux_partition(
 
 // Improve generic data handling by mimickind dual pivot quicksort.
 
-/// Partition x into array and swap.
-/// Finally, copy from swap into array and finish sorting.
-/// This is reverse cause it copies elements less than or equal to the pivot into the array.
+/// Partition x into array and swap (less than or equal to pivot).
+/// Finally, copy from swap into array and potentially finish sorting.
+/// Will return early if the array is highly unordered (allows for more quicksort).
+/// Will return early if all elements went before the pivot (maybe all elements are same and can reverse parition next?).
+/// Othewise, will complete the sort with quadsort.
+///
+/// Warning, on early return, the paritions of the array will be split over array and swap.
+/// The returned size is the number of elements in the array.
 fn flux_default_partition(
     array: [*]u8,
     swap: [*]u8,
@@ -547,7 +552,7 @@ fn flux_default_partition(
     var a: usize = 8;
     while (a <= len) : (a += 8) {
         inline for (0..8) |_| {
-            const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr) != GT) &arr_ptr else &swap_ptr;
+            const from = if (compare(cmp, cmp_data, x_ptr, pivot_ptr) != GT) &arr_ptr else &swap_ptr;
             copy(from.*, x_ptr);
             from.* += element_width;
             x_ptr += element_width;
@@ -557,7 +562,7 @@ fn flux_default_partition(
             run = a;
     }
     for (0..(len % 8)) |_| {
-        const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr) != GT) &arr_ptr else &swap_ptr;
+        const from = if (compare(cmp, cmp_data, x_ptr, pivot_ptr) != GT) &arr_ptr else &swap_ptr;
         copy(from.*, x_ptr);
         from.* += element_width;
         x_ptr += element_width;
@@ -565,14 +570,17 @@ fn flux_default_partition(
 
     const m = (@intFromPtr(arr_ptr) - @intFromPtr(array)) / element_width;
 
+    // Not very sorted, early return and allow for more quicksort.
     if (run <= len / 4) {
         return m;
     }
 
+    // Bad pivot? All elements went before it.
     if (m == len) {
         return m;
     }
 
+    // Significantly sorted, finish with quadsort.
     a = len - m;
     @memcpy((array + m * element_width)[0..(a * element_width)], swap[0..(a * element_width)]);
 
@@ -636,12 +644,7 @@ fn flux_reverse_partition(
 }
 
 test "flux_default_partition" {
-    const expected = [32]i64{
-        //
-        1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,
-        //
-        17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
-    };
+    var expected: [32]i64 = undefined;
     var test_count: i64 = 0;
     var pivot: i64 = 0;
 
@@ -651,33 +654,82 @@ test "flux_default_partition" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [32]i64{
-        //
-        1, 3, 5, 7, 9,  11, 13, 15, 17, 17, 17, 17, 17, 17, 17, 17,
-        //
-        2, 4, 6, 8, 10, 12, 14, 16, 17, 17, 17, 17, 17, 17, 17, 17,
+        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
+        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
+    };
+    expected = [32]i64{
+        // <= pivot first half
+        1,  3,  5,  7,  9,  11, 13, 15,
+        // <= pivot second half
+        2,  4,  6,  8,  10, 12, 14, 16,
+        // > pivot first half
+        17, 19, 21, 23, 25, 27, 29, 31,
+        // > pivot second half
+        18, 20, 22, 24, 26, 28, 30, 32,
     };
     pivot = 16;
-    _ = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    var arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
     try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
+    try testing.expectEqual(arr_len, 16);
+    try testing.expectEqualSlices(i64, arr[0..16], expected[0..16]);
+    try testing.expectEqualSlices(i64, swap[0..16], expected[16..32]);
 
     arr = [32]i64{
-        //
-        1,  17, 3,  17, 5,  17, 7,  17, 9,  17, 11, 17, 13, 17, 15, 17,
-        //
-        17, 2,  17, 4,  17, 6,  17, 8,  17, 10, 17, 12, 17, 14, 17, 16,
+        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
+        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
     };
-    pivot = 16;
-    _ = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    expected = [32]i64{
+        // <= pivot first half
+        1,  3,  5,  7,  9,  11, 13, 15, 17, 19, 21, 23,
+        // <= pivot second half
+        2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24,
+        // > pivot first half
+        25, 27, 29, 31,
+        // > pivot second half
+        26, 28, 30, 32,
+    };
+    pivot = 24;
+    arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
     try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
+    try testing.expectEqual(arr_len, 24);
+    try testing.expectEqualSlices(i64, arr[0..24], expected[0..24]);
+    try testing.expectEqualSlices(i64, swap[0..8], expected[24..32]);
+
+    arr = [32]i64{
+        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
+        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
+    };
+    expected = [32]i64{
+        // <= pivot first half
+        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
+        // <= pivot second half
+        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
+    };
+    pivot = 32;
+    arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr_len, 32);
+    try testing.expectEqualSlices(i64, arr[0..32], expected[0..32]);
+
+    arr = [32]i64{
+        1,  3,  5,  7,  9,  11, 13, 15,
+        2,  4,  6,  8,  10, 12, 14, 16,
+        18, 20, 22, 24, 26, 28, 30, 32,
+        17, 19, 21, 23, 25, 27, 29, 31,
+    };
+    for (0..31) |i| {
+        expected[i] = @intCast(i + 1);
+    }
+    pivot = 16;
+    arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr_len, 0);
+    try testing.expectEqualSlices(i64, arr[0..32], expected[0..32]);
 }
 
 test "flux_reverse_partition" {
     const expected = [32]i64{
-        //
         1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,
-        //
         17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
     };
     var test_count: i64 = 0;
@@ -689,9 +741,7 @@ test "flux_reverse_partition" {
     var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [32]i64{
-        //
         1, 3, 5, 7, 9,  11, 13, 15, 17, 17, 17, 17, 17, 17, 17, 17,
-        //
         2, 4, 6, 8, 10, 12, 14, 16, 17, 17, 17, 17, 17, 17, 17, 17,
     };
     pivot = 17;
@@ -700,10 +750,17 @@ test "flux_reverse_partition" {
     try testing.expectEqual(arr, expected);
 
     arr = [32]i64{
-        //
         1,  17, 3,  17, 5,  17, 7,  17, 9,  17, 11, 17, 13, 17, 15, 17,
-        //
         17, 2,  17, 4,  17, 6,  17, 8,  17, 10, 17, 12, 17, 14, 17, 16,
+    };
+    pivot = 17;
+    flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr, expected);
+
+    arr = [32]i64{
+        15, 17, 13, 17, 11, 17, 9,  17, 7,  17, 5,  17, 3,  17, 1,  17,
+        17, 16, 17, 14, 17, 12, 17, 10, 17, 8,  17, 6,  17, 4,  17, 2,
     };
     pivot = 17;
     flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
@@ -896,9 +953,7 @@ test "median_of_cube_root" {
         var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [32]i64{
-            //
             1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-            //
             2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
         };
         median_of_cube_root(arr_ptr, swap_ptr, arr_ptr, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&generic), @ptrCast(&out));
@@ -2862,13 +2917,11 @@ test "quad_swap" {
     arr = [75]i64{
         // multiple ordered chunks
         1,  3,  5,  7,  9,  11, 13, 15,
-        //
         33, 34, 35, 36, 37, 38, 39, 40,
         // partially ordered
         41, 42, 45, 46, 43, 44, 47, 48,
         // multiple reverse chunks
         70, 69, 68, 67, 66, 65, 64, 63,
-        //
         16, 14, 12, 10, 8,  6,  4,  2,
         // another ordered
         49, 50, 51, 52, 53, 54, 55, 56,
@@ -2878,7 +2931,6 @@ test "quad_swap" {
         32, 31, 28, 27, 30, 29, 26, 25,
         // awkward tail
         62, 59, 61, 60, 71, 73, 75, 74,
-        //
         72, 58, 57,
     };
 
@@ -2888,23 +2940,16 @@ test "quad_swap" {
     try testing.expectEqual(arr, [75]i64{
         // first 32 elements sorted (with 8 reversed that get flipped here)
         1,  2,  3,  4,  5,  6,  7,  8,
-        //
         9,  10, 11, 12, 13, 14, 15, 16,
-        //
         33, 34, 35, 36, 37, 38, 39, 40,
-        //
         41, 42, 43, 44, 45, 46, 47, 48,
         // second 32 elements sorted (with 8 reversed that get flipped here)
         17, 18, 19, 20, 21, 22, 23, 24,
-        //
         25, 26, 27, 28, 29, 30, 31, 32,
-        //
         49, 50, 51, 52, 53, 54, 55, 56,
-        //
         63, 64, 65, 66, 67, 68, 69, 70,
         // awkward tail
         57, 58, 59, 60, 61, 62, 71, 72,
-        //
         73, 74, 75,
     });
 
