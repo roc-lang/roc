@@ -29,19 +29,19 @@ pub fn fuzz_main() !void {
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
-    const size = data.len / @sizeOf(i64);
+    const len = data.len / @sizeOf(i64);
     const arr_ptr: [*]i64 = @alignCast(@ptrCast(data.ptr));
 
     if (DEBUG) {
-        std.debug.print("Input: [{d}]{d}\n", .{ size, arr_ptr[0..size] });
+        std.debug.print("Input: [{d}]{d}\n", .{ len, arr_ptr[0..len] });
     }
 
     var test_count: i64 = 0;
-    sort.fluxsort(@ptrCast(arr_ptr), size, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
+    sort.fluxsort(@ptrCast(arr_ptr), len, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
 
-    const sorted = std.sort.isSorted(i64, arr_ptr[0..size], {}, std.sort.asc(i64));
+    const sorted = std.sort.isSorted(i64, arr_ptr[0..len], {}, std.sort.asc(i64));
     if (DEBUG) {
-        std.debug.print("Output: [{d}]{d}\nSorted: {}\nFinal RC: {}\n", .{ size, arr_ptr[0..size], sorted, test_count });
+        std.debug.print("Output: [{d}]{d}\nSorted: {}\nFinal RC: {}\n", .{ len, arr_ptr[0..len], sorted, test_count });
     }
     std.debug.assert(sorted);
     std.debug.assert(test_count == 0);
@@ -55,6 +55,7 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
 
+    std.debug.assert(@as(*isize, @ptrCast(@alignCast(count_ptr))).* > 0);
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
     // Eq = 0
     // GT = 1

@@ -52,8 +52,7 @@ pub fn fluxsort(
     if (len < 132) {
         // Just quadsort it.
         quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy);
-    }
-    if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
+    } else if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
             fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data);
         } else {
