@@ -4,8 +4,9 @@ const sort = @import("sort.zig");
 extern fn malloc(size: usize) callconv(.C) ?*anyopaque;
 extern fn free(c_ptr: *anyopaque) callconv(.C) void;
 
-fn cMain() callconv(.C) void {
+fn cMain() callconv(.C) i32 {
     fuzz_main() catch unreachable;
+    return 0;
 }
 
 comptime {
@@ -35,23 +36,26 @@ pub fn fuzz_main() !void {
         std.debug.print("Input: [{d}]{d}\n", .{ size, arr_ptr[0..size] });
     }
 
-    sort.quadsort(@ptrCast(arr_ptr), size, &test_i64_compare, null, false, &test_i64_inc_n, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
+    var test_count: i64 = 0;
+    sort.quadsort(@ptrCast(arr_ptr), size, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
 
     const sorted = std.sort.isSorted(i64, arr_ptr[0..size], {}, std.sort.asc(i64));
     if (DEBUG) {
-        std.debug.print("Output: [{d}]{d}\nSorted: {}\n", .{ size, arr_ptr[0..size], sorted });
+        std.debug.print("Output: [{d}]{d}\nSorted: {}\nFinal RC: {}\n", .{ size, arr_ptr[0..size], sorted, test_count });
     }
     std.debug.assert(sorted);
+    std.debug.assert(test_count == 0);
 }
 
 const Opaque = ?[*]u8;
-fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
+fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
     const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
     const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
 
+    @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
     // Eq = 0
     // GT = 1
     // LT = 2
@@ -62,7 +66,9 @@ fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
     @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
 }
 
-fn test_i64_inc_n(_: ?[*]u8, _: usize) callconv(.C) void {}
+fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.C) void {
+    @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
+}
 
 comptime {
     @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });

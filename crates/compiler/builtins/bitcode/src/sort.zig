@@ -1216,6 +1216,10 @@ fn quad_merge_block(
             @memcpy((swap + element_width * block_x_2)[0..(element_width * block_x_2)], block3[0..(element_width * block_x_2)]);
         },
         3 => {
+            // 1 guaranteed compares.
+            if (data_is_owned) {
+                inc_n_data(cmp_data, 1);
+            }
             const in_order_2_3 = compare(cmp, cmp_data, block3 - element_width, block3) != GT;
             if (in_order_2_3)
                 // Lucky, all sorted.
@@ -2803,7 +2807,7 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
 
-    @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= @intCast(1);
+    @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
     // Eq = 0
     // GT = 1
     // LT = 2
