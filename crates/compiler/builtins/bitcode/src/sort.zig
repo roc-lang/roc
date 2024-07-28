@@ -518,6 +518,9 @@ fn flux_partition(
 
 // Improve generic data handling by mimickind dual pivot quicksort.
 
+/// Partition x into array and swap.
+/// Finally, copy from swap into array and finish sorting.
+/// This is reverse cause it copies elements less than or equal to the pivot into the array.
 fn flux_default_partition(
     array: [*]u8,
     swap: [*]u8,
@@ -579,6 +582,10 @@ fn flux_default_partition(
     return 0;
 }
 
+/// Partition x into array and swap.
+/// Finally, copy from swap into array and finish sorting the part of the array less than pivot.
+/// This is reverse cause it copies elements greater than the pivot into the array.
+/// Elements are expected to at most be the same size as the pivot.
 fn flux_reverse_partition(
     array: [*]u8,
     swap: [*]u8,
@@ -616,15 +623,92 @@ fn flux_reverse_partition(
         x_ptr += element_width;
     }
 
-    const arr_len = (@intFromPtr(arr_ptr) - @intFromPtr(array));
-    const swap_len = (@intFromPtr(swap_ptr) - @intFromPtr(swap));
+    const arr_len = (@intFromPtr(arr_ptr) - @intFromPtr(array)) / element_width;
+    const swap_len = (@intFromPtr(swap_ptr) - @intFromPtr(swap)) / element_width;
 
-    @memcpy((array + arr_len)[0..swap_len], swap[0..swap_len]);
+    @memcpy((array + arr_len * element_width)[0..(swap_len * element_width)], swap[0..(swap_len * element_width)]);
 
-    if (swap_len <= arr_len / 16 or arr_len <= FLUX_OUT * element_width) {
+    if (swap_len <= arr_len / 16 or arr_len <= FLUX_OUT) {
         quadsort_swap(array, arr_len, swap, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        return;
     }
     flux_partition(array, swap, array, pivot, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+}
+
+test "flux_default_partition" {
+    const expected = [32]i64{
+        //
+        1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,
+        //
+        17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    };
+    var test_count: i64 = 0;
+    var pivot: i64 = 0;
+
+    var arr: [32]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [32]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    arr = [32]i64{
+        //
+        1, 3, 5, 7, 9,  11, 13, 15, 17, 17, 17, 17, 17, 17, 17, 17,
+        //
+        2, 4, 6, 8, 10, 12, 14, 16, 17, 17, 17, 17, 17, 17, 17, 17,
+    };
+    pivot = 16;
+    _ = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr, expected);
+
+    arr = [32]i64{
+        //
+        1,  17, 3,  17, 5,  17, 7,  17, 9,  17, 11, 17, 13, 17, 15, 17,
+        //
+        17, 2,  17, 4,  17, 6,  17, 8,  17, 10, 17, 12, 17, 14, 17, 16,
+    };
+    pivot = 16;
+    _ = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr, expected);
+}
+
+test "flux_reverse_partition" {
+    const expected = [32]i64{
+        //
+        1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,
+        //
+        17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    };
+    var test_count: i64 = 0;
+    var pivot: i64 = 0;
+
+    var arr: [32]i64 = undefined;
+    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    var swap: [32]i64 = undefined;
+    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+
+    arr = [32]i64{
+        //
+        1, 3, 5, 7, 9,  11, 13, 15, 17, 17, 17, 17, 17, 17, 17, 17,
+        //
+        2, 4, 6, 8, 10, 12, 14, 16, 17, 17, 17, 17, 17, 17, 17, 17,
+    };
+    pivot = 17;
+    flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr, expected);
+
+    arr = [32]i64{
+        //
+        1,  17, 3,  17, 5,  17, 7,  17, 9,  17, 11, 17, 13, 17, 15, 17,
+        //
+        17, 2,  17, 4,  17, 6,  17, 8,  17, 10, 17, 12, 17, 14, 17, 16,
+    };
+    pivot = 17;
+    flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data);
+    try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(arr, expected);
 }
 
 // ================ Pivot Selection ===========================================
