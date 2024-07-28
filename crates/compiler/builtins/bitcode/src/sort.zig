@@ -191,6 +191,10 @@ fn flux_analyze(
         if (data_is_owned) {
             inc_n_data(cmp_data, 32 * 4);
         }
+        sum_a = 0;
+        sum_b = 0;
+        sum_c = 0;
+        sum_d = 0;
         for (0..32) |_| {
             sum_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
             ptr_a += element_width;
@@ -254,16 +258,20 @@ fn flux_analyze(
     }
 
     // Not fully sorted, too bad.
-    sum_a = if (quad1 - balance_a == 1) 0 else 1;
-    sum_b = if (quad2 - balance_b == 1) 0 else 1;
-    sum_c = if (quad3 - balance_c == 1) 0 else 1;
-    sum_d = if (quad4 - balance_d == 1) 0 else 1;
+    sum_a = @intFromBool(quad1 - balance_a == 1);
+    sum_b = @intFromBool(quad2 - balance_b == 1);
+    sum_c = @intFromBool(quad3 - balance_c == 1);
+    sum_d = @intFromBool(quad4 - balance_d == 1);
 
     if (sum_a | sum_b | sum_c | sum_d != 0) {
+        // 3 compares guaranteed.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 3);
+        }
         // Any sum variable that is set is a reversed chunk of data.
-        const span1: u3 = @intFromBool((sum_a != 0 and sum_b != 0) and compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_data) == GT);
-        const span2: u3 = @intFromBool((sum_b != 0 and sum_c != 0) and compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_data) == GT);
-        const span3: u3 = @intFromBool((sum_c != 0 and sum_d != 0) and compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) == GT);
+        const span1: u3 = @intFromBool(sum_a != 0 and sum_b != 0) * @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
+        const span2: u3 = @intFromBool(sum_b != 0 and sum_c != 0) * @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width) == GT);
+        const span3: u3 = @intFromBool(sum_c != 0 and sum_d != 0) * @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width) == GT);
 
         switch (span1 | (span2 << 1) | (span3 << 2)) {
             0 => {},
