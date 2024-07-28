@@ -3374,7 +3374,7 @@ mod test_reporting {
             f x y = x
             "
         ),
-        @r#"
+        @r###"
     ── ARGUMENTS BEFORE EQUALS in tmp/elm_function_syntax/Test.roc ─────────────────
 
     I am partway through parsing a definition, but I got stuck here:
@@ -3385,9 +3385,9 @@ mod test_reporting {
     4│      f x y = x
               ^^^
 
-    Looks like you are trying to define a function. In roc, functions are
+    Looks like you are trying to define a function. In Roc, functions are
     always written as a lambda, like increment = \n -> n + 1.
-    "#
+    "###
     );
 
     test_report!(
@@ -5030,7 +5030,7 @@ mod test_reporting {
     4│      import svg.Path a
                            ^
 
-    I was expecting to see the `as` keyword, like:
+    I was expecting to see the `as` keyword next, like:
 
         import svg.Path as SvgPath
 

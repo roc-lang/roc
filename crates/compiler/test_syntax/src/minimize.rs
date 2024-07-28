@@ -1,3 +1,10 @@
+//! Generate a minimized version of a given input, by removing parts of it.
+//! This is useful for debugging, when you have a large input that causes a failure,
+//! and you want to find the smallest input that still causes the failure.
+//!
+//! Most users will want to use the binary instead of this module directly.
+//! e.g. `cargo run --release --bin minimize -- full <file_that_triggers_parsing_bug>`
+
 use crate::test_helpers::{Input, InputKind};
 use bumpalo::Bump;
 use roc_parse::{ast::Malformed, remove_spaces::RemoveSpaces};
@@ -79,7 +86,7 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
                 "Initial parse failed: {:?}",
                 e.remove_spaces(&arena)
             ))
-        } // todo: strip pos info, use the error
+        }
     };
 
     if actual.is_malformed() {

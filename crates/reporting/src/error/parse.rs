@@ -203,7 +203,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
-                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.reflow("In Roc, functions are always written as a lambda, like "),
                     alloc.parser_suggestion("increment = \\n -> n + 1"),
                     alloc.reflow("."),
                 ]),
@@ -257,7 +257,7 @@ fn to_expr_report<'a>(
                     Context::InDef(_pos) => {
                         vec![alloc.stack([
                             alloc.reflow("Looks like you are trying to define a function. "),
-                            alloc.reflow("In roc, functions are always written as a lambda, like "),
+                            alloc.reflow("In Roc, functions are always written as a lambda, like "),
                             alloc
                                 .parser_suggestion("increment = \\n -> n + 1")
                                 .indent(4),
@@ -509,7 +509,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
-                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.reflow("In Roc, functions are always written as a lambda, like "),
                     alloc.parser_suggestion("increment = \\n -> n + 1"),
                     alloc.reflow("."),
                 ]),
@@ -1541,7 +1541,7 @@ fn to_import_report<'a>(
                 alloc.concat([
                     alloc.reflow("I was expecting to see the "),
                     alloc.keyword("as"),
-                    alloc.reflow(" keyword, like:"),
+                    alloc.reflow(" keyword next, like:"),
                 ]),
                 alloc
                     .parser_suggestion("import svg.Path as SvgPath")

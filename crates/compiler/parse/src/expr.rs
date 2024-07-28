@@ -339,6 +339,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     }
 }
 
+/// Entry point for parsing an expression.
 fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of![
         loc(specialize_err(EExpr::If, if_expr_help(options))),
@@ -350,6 +351,7 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
     .trace("expr_start")
 }
 
+/// Parse a chain of expressions separated by operators. Also handles function application.
 fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     (move |arena, state: State<'a>, min_indent: u32| {
         parse_expr_operator_chain(arena, state, min_indent, options)
@@ -431,6 +433,9 @@ fn parse_expr_operator_chain<'a>(
     }
 }
 
+/// We're part way thru parsing an expression, e.g. `bar foo `.
+/// We just tried parsing an argument and determined we couldn't -
+/// so we're going to try parsing an operator.
 #[allow(clippy::too_many_arguments)]
 fn parse_expr_after_apply<'a>(
     arena: &'a Bump,
@@ -1090,6 +1095,7 @@ fn extract_tag_and_spaces<'a>(arena: &'a Bump, expr: Expr<'a>) -> Option<Spaces<
     }
 }
 
+/// We just saw a ':' or ':=', and we're trying to parse an alias or opaque type definition.
 #[allow(clippy::too_many_arguments)]
 fn parse_stmt_alias_or_opaque<'a>(
     arena: &'a Bump,
@@ -1331,6 +1337,7 @@ mod ability {
     }
 }
 
+/// Parse the series of "demands" (e.g. similar to methods in a rust trait), for an ability definition.
 fn finish_parsing_ability_def_help<'a>(
     call_min_indent: u32,
     name: Loc<&'a str>,
@@ -1379,6 +1386,16 @@ fn finish_parsing_ability_def_help<'a>(
     Ok((MadeProgress, (type_def, def_region), state))
 }
 
+/// A Stmt is an intermediate representation used only during parsing.
+/// It consists of a fragment of code that hasn't been fully stitched together yet.
+/// For example, each of the following lines is a Stmt:
+/// - `foo bar` (Expr)
+/// - `foo, bar <- baz` (Backpassing)
+/// - `Foo : [A, B, C]` (TypeDef)
+/// - `foo = \x -> x + 1` (ValueDef)
+///
+/// Note in particular that the Backpassing Stmt doesn't make any sense on its own;
+/// we need to link it up with the following stmts to make a complete expression.
 #[derive(Debug, Clone, Copy)]
 pub enum Stmt<'a> {
     Expr(Expr<'a>),
@@ -1387,6 +1404,11 @@ pub enum Stmt<'a> {
     ValueDef(ValueDef<'a>),
 }
 
+/// Having just parsed an operator, we need to dispatch to the appropriate
+/// parsing function based on the operator.
+///
+/// Note, this function is very similar to `parse_expr_operator`, but it
+/// handles additional cases to allow assignments / type annotations / etc.
 #[allow(clippy::too_many_arguments)]
 fn parse_stmt_operator<'a>(
     arena: &'a Bump,
@@ -1462,6 +1484,8 @@ fn parse_stmt_operator<'a>(
     }
 }
 
+/// We just parsed an operator. Parse the expression that follows, taking special care
+/// that this might be a negated term. (`-x` is a negated term, not a binary operation)
 #[allow(clippy::too_many_arguments)]
 fn parse_expr_operator<'a>(
     arena: &'a Bump,
@@ -1508,6 +1532,7 @@ fn parse_expr_operator<'a>(
     }
 }
 
+/// Continue parsing terms after we just parsed a binary operator
 #[allow(clippy::too_many_arguments)]
 fn parse_after_binop<'a>(
     arena: &'a Bump,
@@ -1581,6 +1606,7 @@ fn parse_after_binop<'a>(
     }
 }
 
+/// Parse the rest of a backpassing statement, after the <- operator
 fn parse_stmt_backpassing<'a>(
     arena: &'a Bump,
     state: State<'a>,
@@ -1590,8 +1616,6 @@ fn parse_stmt_backpassing<'a>(
     options: ExprParseOptions,
     spaces_after_operator: &'a [CommentOrNewline],
 ) -> ParseResult<'a, Stmt<'a>, EExpr<'a>> {
-    // called after parsing the <- operator
-
     let expr_region = expr_state.expr.region;
 
     let call = expr_state
@@ -1627,6 +1651,8 @@ fn parse_stmt_backpassing<'a>(
     Ok((MadeProgress, ret, state))
 }
 
+/// We just saw a `,` that we think is part of a backpassing statement.
+/// Parse the rest of the statement.
 fn parse_stmt_multi_backpassing<'a>(
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
@@ -1689,6 +1715,7 @@ fn parse_stmt_multi_backpassing<'a>(
     }
 }
 
+/// We just saw the '=' operator of an assignment stmt. Continue parsing from there.
 fn parse_stmt_assignment<'a>(
     arena: &'a Bump,
     state: State<'a>,
@@ -1733,6 +1760,7 @@ fn parse_stmt_assignment<'a>(
     Ok((MadeProgress, Stmt::ValueDef(value_def), state))
 }
 
+/// We just saw a unary negation operator, and now we need to parse the expression.
 #[allow(clippy::too_many_arguments)]
 fn parse_negated_term<'a>(
     arena: &'a Bump,
@@ -1779,6 +1807,8 @@ fn parse_negated_term<'a>(
     )
 }
 
+/// Parse an expression, not allowing `if`/`when`/etc.
+/// TODO: this should probably be subsumed into `parse_expr_operator_chain`
 #[allow(clippy::too_many_arguments)]
 fn parse_expr_end<'a>(
     arena: &'a Bump,
@@ -1837,6 +1867,13 @@ fn parse_expr_end<'a>(
     }
 }
 
+/// We're part way thru parsing an expression, e.g. `bar foo `.
+/// We just tried parsing an argument and determined we couldn't -
+/// so we're going to try parsing an operator.
+///
+/// Note that this looks a lot like `parse_expr_after_apply`, except
+/// we handle the additional case of backpassing, which is valid
+/// at the statement level but not at the expression level.
 fn parse_stmt_after_apply<'a>(
     arena: &'a Bump,
     state: State<'a>,
@@ -2679,6 +2716,7 @@ fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<
     }
 }
 
+/// Parse a block of statements (parser combinator version of `parse_block`)
 fn block<'a, E>(
     options: ExprParseOptions,
     require_indent: bool,
@@ -2701,6 +2739,11 @@ where
     .trace("block")
 }
 
+/// Parse a block of statements.
+/// For example, the then and else branches of an `if` expression are both blocks.
+/// There are two cases here:
+/// 1. If there is a preceding newline, then the block must be indented and is allowed to have definitions.
+/// 2. If there is no preceding newline, then the block must consist of a single expression (no definitions).
 fn parse_block<'a, E>(
     options: ExprParseOptions,
     arena: &'a Bump,
@@ -2735,6 +2778,9 @@ where
     )
 }
 
+/// Parse a block of statements, and process that into an Expr.
+/// Assumes the caller has already parsed the optional first "space" (newline),
+/// and decided whether to allow definitions.
 #[allow(clippy::too_many_arguments)]
 fn parse_block_inner<'a, E>(
     options: ExprParseOptions,
@@ -2797,6 +2843,15 @@ where
     }
 }
 
+/// Parse a sequence of statements, which we'll later process into an expression.
+/// Statements can include:
+/// - assignments
+/// - type annotations
+/// - expressions
+/// - [multi]backpassing
+///
+/// This function doesn't care about whether the order of those statements makes any sense.
+/// e.g. it will happily parse two expressions in a row, or backpassing with nothing following it.
 fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
     arena: &'a Bump,
     mut state: State<'a>,
@@ -2868,6 +2923,7 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
     Ok((MadeProgress, stmts, state))
 }
 
+/// Check if the current byte is a terminator for a sequence of statements
 fn at_terminator(state: &State<'_>) -> bool {
     matches!(
         state.bytes().first(),
@@ -2875,6 +2931,8 @@ fn at_terminator(state: &State<'_>) -> bool {
     )
 }
 
+/// Convert a sequence of statements into a `Expr::Defs` expression
+/// (which is itself a Defs struct and final expr)
 fn stmts_to_expr<'a>(
     stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
     arena: &'a Bump,
@@ -2940,6 +2998,9 @@ fn stmts_to_expr<'a>(
     }
 }
 
+/// Convert a sequence of `Stmt` into a Defs and an optional final expression.
+/// Future refactoring opportunity: push this logic directly into where we're
+/// parsing the statements.
 fn stmts_to_defs<'a>(
     stmts: &[SpacesBefore<'a, Loc<Stmt<'a>>>],
     mut defs: Defs<'a>,
@@ -3133,6 +3194,7 @@ fn stmts_to_defs<'a>(
     Ok((defs, last_expr))
 }
 
+/// Given a type alias and a value definition, join them into a AnnotatedBody
 pub fn join_alias_to_body<'a>(
     arena: &'a Bump,
     header: TypeHeader<'a>,
