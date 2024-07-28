@@ -16,9 +16,9 @@ fn roc_dbg(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.C) void {
 }
 
 comptime {
-    @export(roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
-    @export(roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
-    @export(roc_dbg, .{ .name = "roc_dbg", .linkage = .Strong });
+    @export(roc_alloc, .{ .name = "roc_alloc", .linkage = .strong });
+    @export(roc_panic, .{ .name = "roc_panic", .linkage = .strong });
+    @export(roc_dbg, .{ .name = "roc_dbg", .linkage = .strong });
 }
 
 var timer: Timer = undefined;

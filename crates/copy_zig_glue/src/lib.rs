@@ -23,6 +23,10 @@ pub fn copy_zig_glue() {
         workspace_dir.join("crates/cli/tests/fixtures/multi-dep-str/platform/glue"),
         workspace_dir.join("crates/cli/tests/fixtures/multi-dep-thunk/platform/glue"),
         workspace_dir.join("crates/cli/tests/fixtures/packages/platform/glue"),
+        workspace_dir.join("crates/valgrind/zig-platform/glue"),
+        workspace_dir.join("examples/cli/effects-platform/glue"),
+        workspace_dir.join("examples/cli/tui-platform/glue"),
+        workspace_dir.join("examples/platform-switching/zig-platform/glue"),
     ];
 
     for target_dir in zig_test_platforms_dirs {
