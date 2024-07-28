@@ -652,7 +652,7 @@ pub fn listDropAt(
         }
 
         if (list.isUnique()) {
-            var i = drop_index;
+            const i = drop_index;
             const copy_target = source_ptr;
             const copy_source = copy_target + element_width;
             std.mem.copyForwards(u8, copy_target[i..size], copy_source[i..size]);
@@ -982,7 +982,7 @@ inline fn listReplaceInPlaceHelp(
     copy: CopyFn,
 ) RocList {
     // the element we will replace
-    var element_at_index = (list.bytes orelse unreachable) + (index * element_width);
+    const element_at_index = (list.bytes orelse unreachable) + (index * element_width);
 
     // copy out the old element
     copy((out_element orelse unreachable), element_at_index);
