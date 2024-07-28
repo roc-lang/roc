@@ -29,8 +29,803 @@ comptime {
     std.debug.assert(MAX_ELEMENT_BUFFER_SIZE % BufferAlign == 0);
 }
 
+// ================ Fluxsort ==================================================
+// The high level fluxsort functions.
+
+pub fn fluxsort(
+    array: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    data_is_owned_runtime: bool,
+    inc_n_data: IncN,
+    element_width: usize,
+    alignment: u32,
+    copy: CopyFn,
+) void {
+    // Note, knowing constant versions of element_width and copy could have huge perf gains.
+    // Hopefully llvm will essentially always do it via constant argument propagation and inlining.
+    // If not, we may want to generate `n` different version of this function with comptime.
+    // Then have our builtin dispatch to the correct version.
+    // llvm garbage collection would remove all other variants.
+    // Also, for numeric types, inlining the compare function can be a 2x perf gain.
+    if (len < 132) {
+        // Just quadsort it.
+        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy);
+    }
+    if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
+        if (data_is_owned_runtime) {
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data);
+        } else {
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data);
+        }
+    } else {
+        if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
+            // Build list of pointers to sort.
+            var arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
+            defer utils.dealloc(alloc_ptr, @alignOf(usize));
+            for (0..len) |i| {
+                arr_ptr[i] = array + i * element_width;
+            }
+
+            // Setup for indirect comparison.
+            inner_cmp = cmp;
+            defer inner_cmp = null;
+
+            // Sort.
+            if (data_is_owned_runtime) {
+                fluxsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data);
+            } else {
+                fluxsort_direct(@ptrCast(arr_ptr), len, indirect_compare, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data);
+            }
+
+            if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
+                // Collect sorted pointers into correct order.
+                defer utils.dealloc(collect_ptr, alignment);
+                for (0..len) |i| {
+                    copy(collect_ptr + i * element_width, arr_ptr[i]);
+                }
+
+                // Copy to original array as sorted.
+                @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
+            } else {
+                roc_panic("Out of memory while trying to allocate for sorting", 0);
+            }
+        } else {
+            roc_panic("Out of memory while trying to allocate for sorting", 0);
+        }
+    }
+}
+
+fn fluxsort_direct(
+    array: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    alignment: u32,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) void {
+    if (utils.alloc(len * element_width, alignment)) |swap| {
+        flux_analyze(array, len, swap, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+
+        utils.dealloc(swap, alignment);
+    } else {
+        // Fallback to quadsort. It has ways to use less memory.
+        quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, data_is_owned, inc_n_data);
+    }
+}
+
+/// This value is used to help stay within l3 cache when sorting.
+/// It technically should be tuned based on l3 cache size.
+/// This is important for large arrays with pointers to other data.
+/// 262144 is tude for a 6MB L3 cache.
+/// For primitives and other small inline values, making this essentially infinite is better.
+const QUAD_CACHE = 262144;
+
+// When to stop using flux partition and switch to quadsort.
+const FLUX_OUT = 96;
+
+/// Determine whether to use mergesort or quicksort.
+fn flux_analyze(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    swap_len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) void {
+    const half1 = len / 2;
+    const quad1 = half1 / 2;
+    const quad2 = half1 - quad1;
+    const half2 = len - half1;
+    const quad3 = half2 / 2;
+    const quad4 = half2 - quad3;
+
+    var ptr_a = array;
+    var ptr_b = array + quad1 * element_width;
+    var ptr_c = array + half1 * element_width;
+    var ptr_d = array + (half1 + quad3) * element_width;
+
+    var streaks_a: u32 = 0;
+    var streaks_b: u32 = 0;
+    var streaks_c: u32 = 0;
+    var streaks_d: u32 = 0;
+
+    var balance_a: usize = 0;
+    var balance_b: usize = 0;
+    var balance_c: usize = 0;
+    var balance_d: usize = 0;
+
+    if (quad1 < quad2) {
+        // Must inc here, due to being in a branch.
+        const gt = compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_data) == GT;
+        balance_b += @intFromBool(gt);
+        ptr_b += element_width;
+    }
+    if (quad2 < quad3) {
+        // Must inc here, due to being in a branch.
+        const gt = compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) == GT;
+        balance_c += @intFromBool(gt);
+        ptr_c += element_width;
+    }
+    if (quad3 < quad3) {
+        // Must inc here, due to being in a branch.
+        balance_d += @intFromBool(compare_inc(cmp, cmp_data, ptr_d, ptr_d + element_width, data_is_owned, inc_n_data) == GT);
+        ptr_d += element_width;
+    }
+
+    var sum_a: u8 = 0;
+    var sum_b: u8 = 0;
+    var sum_c: u8 = 0;
+    var sum_d: u8 = 0;
+    var count = len;
+    while (count > 132) : (count -= 128) {
+        // 32*4 guaranteed compares.
+        if (data_is_owned) {
+            inc_n_data(cmp_data, 32 * 4);
+        }
+        for (0..32) |_| {
+            sum_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
+            ptr_a += element_width;
+            sum_b += @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width) == GT);
+            ptr_b += element_width;
+            sum_c += @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width) == GT);
+            ptr_c += element_width;
+            sum_d += @intFromBool(compare(cmp, cmp_data, ptr_d, ptr_d + element_width) == GT);
+            ptr_d += element_width;
+        }
+        balance_a += sum_a;
+        sum_a = @intFromBool((sum_a == 0) or (sum_a == 32));
+        streaks_a += sum_a;
+        balance_b += sum_b;
+        sum_b = @intFromBool((sum_b == 0) or (sum_b == 32));
+        streaks_b += sum_b;
+        balance_c += sum_c;
+        sum_c = @intFromBool((sum_c == 0) or (sum_c == 32));
+        streaks_c += sum_c;
+        balance_d += sum_d;
+        sum_d = @intFromBool((sum_d == 0) or (sum_d == 32));
+        streaks_d += sum_d;
+
+        if (count > 516 and sum_a + sum_b + sum_c + sum_d == 0) {
+            balance_a += 48;
+            ptr_a += 96 * element_width;
+            balance_b += 48;
+            ptr_b += 96 * element_width;
+            balance_c += 48;
+            ptr_c += 96 * element_width;
+            balance_d += 48;
+            ptr_d += 96 * element_width;
+            count -= 384;
+        }
+    }
+
+    // 4*divCeil(count-7, 4) guaranteed compares.
+    if (data_is_owned) {
+        const n: usize = std.math.divCeil(usize, count - 7, 4) catch unreachable;
+        inc_n_data(cmp_data, 4 * (n));
+    }
+    while (count > 7) : (count -= 4) {
+        balance_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
+        ptr_a += element_width;
+        balance_b += @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width) == GT);
+        ptr_b += element_width;
+        balance_c += @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width) == GT);
+        ptr_c += element_width;
+        balance_d += @intFromBool(compare(cmp, cmp_data, ptr_d, ptr_d + element_width) == GT);
+        ptr_d += element_width;
+    }
+
+    count = balance_a + balance_b + balance_c + balance_d;
+
+    if (count == 0) {
+        // The whole list may be ordered. Cool!
+        if (compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_data) != GT and
+            compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_data) != GT and
+            compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) != GT)
+            return;
+    }
+
+    // Not fully sorted, too bad.
+    sum_a = if (quad1 - balance_a == 1) 0 else 1;
+    sum_b = if (quad2 - balance_b == 1) 0 else 1;
+    sum_c = if (quad3 - balance_c == 1) 0 else 1;
+    sum_d = if (quad4 - balance_d == 1) 0 else 1;
+
+    if (sum_a | sum_b | sum_c | sum_d != 0) {
+        // Any sum variable that is set is a reversed chunk of data.
+        const span1: u3 = @intFromBool((sum_a != 0 and sum_b != 0) and compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_data) == GT);
+        const span2: u3 = @intFromBool((sum_b != 0 and sum_c != 0) and compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_data) == GT);
+        const span3: u3 = @intFromBool((sum_c != 0 and sum_d != 0) and compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) == GT);
+
+        switch (span1 | (span2 << 1) | (span3 << 2)) {
+            0 => {},
+            1 => {
+                quad_reversal(array, ptr_b, element_width, copy);
+                balance_a = 0;
+                balance_b = 0;
+            },
+            2 => {
+                quad_reversal(ptr_a + 1, ptr_c, element_width, copy);
+                balance_b = 0;
+                balance_c = 0;
+            },
+            3 => {
+                quad_reversal(array, ptr_c, element_width, copy);
+                balance_a = 0;
+                balance_b = 0;
+                balance_c = 0;
+            },
+            4 => {
+                quad_reversal(ptr_b + 1, ptr_d, element_width, copy);
+                balance_c = 0;
+                balance_d = 0;
+            },
+            5 => {
+                quad_reversal(array, ptr_b, element_width, copy);
+                balance_a = 0;
+                balance_b = 0;
+                quad_reversal(ptr_b + 1, ptr_d, element_width, copy);
+                balance_c = 0;
+                balance_d = 0;
+            },
+            6 => {
+                quad_reversal(ptr_a + 1, ptr_d, element_width, copy);
+                balance_b = 0;
+                balance_c = 0;
+                balance_d = 0;
+            },
+            7 => {
+                quad_reversal(array, ptr_d, element_width, copy);
+                return;
+            },
+        }
+        // Indivial chunks that are reversed.
+        if (sum_a != 0 and balance_a != 0) {
+            quad_reversal(array, ptr_a, element_width, copy);
+            balance_a = 0;
+        }
+        if (sum_b != 0 and balance_b != 0) {
+            quad_reversal(ptr_a + element_width, ptr_b, element_width, copy);
+            balance_b = 0;
+        }
+        if (sum_c != 0 and balance_c != 0) {
+            quad_reversal(ptr_b + element_width, ptr_c, element_width, copy);
+            balance_c = 0;
+        }
+        if (sum_d != 0 and balance_d != 0) {
+            quad_reversal(ptr_c + element_width, ptr_d, element_width, copy);
+            balance_d = 0;
+        }
+    }
+
+    // Switch to quadsort if at least 25% ordered.
+    count = len / 512;
+
+    sum_a = @intFromBool(streaks_a > count);
+    sum_b = @intFromBool(streaks_b > count);
+    sum_c = @intFromBool(streaks_c > count);
+    sum_d = @intFromBool(streaks_d > count);
+
+    // Always use quadsort if memory pressure is bad.
+    if (quad1 > QUAD_CACHE) {
+        sum_a = 1;
+        sum_b = 1;
+        sum_c = 1;
+        sum_d = 1;
+    }
+    switch (@as(u4, @intCast(sum_a | (sum_b << 1) | (sum_c << 2) | (sum_d << 3)))) {
+        0 => {
+            flux_partition(array, swap, array, swap + len * element_width, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            return;
+        },
+        1 => {
+            if (balance_a != 0)
+                quadsort_swap(array, quad1, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            flux_partition(ptr_a + element_width, swap, ptr_a + element_width, swap + (quad2 + half2) * element_width, quad2 + half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        2 => {
+            flux_partition(array, swap, array, swap + quad1 * element_width, quad1, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_b != 0)
+                quadsort_swap(ptr_a + element_width, quad2, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            flux_partition(ptr_b + element_width, swap, ptr_b + element_width, swap + half2 * element_width, half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        3 => {
+            if (balance_a != 0)
+                quadsort_swap(array, quad1, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_b != 0)
+                quadsort_swap(ptr_a + element_width, quad2, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            flux_partition(ptr_b + element_width, swap, ptr_b + element_width, swap + half2 * element_width, half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        4 => {
+            flux_partition(array, swap, array, swap + half1 * element_width, half1, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_c != 0)
+                quadsort_swap(ptr_b + element_width, quad3, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            flux_partition(ptr_c + element_width, swap, ptr_c + element_width, swap + quad3 * element_width, quad3, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        8 => {
+            flux_partition(array, swap, array, swap + (half1 + quad3) * element_width, (half1 + quad3), cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_d != 0)
+                quadsort_swap(ptr_c + element_width, quad4, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        9 => {
+            if (balance_a != 0)
+                quadsort_swap(array, quad1, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            flux_partition(ptr_a + element_width, swap, ptr_a + element_width, swap + (quad2 + quad3) * element_width, quad2 + quad3, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_d != 0)
+                quadsort_swap(ptr_c + element_width, quad4, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        12 => {
+            flux_partition(array, swap, array, swap + half1 * element_width, half1, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_c != 0)
+                quadsort_swap(ptr_b + element_width, quad3, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            if (balance_d != 0)
+                quadsort_swap(ptr_c + element_width, quad4, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        },
+        5, 6, 7, 10, 11, 13, 14, 15 => {
+            if (sum_a != 0) {
+                if (balance_a != 0)
+                    quadsort_swap(array, quad1, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            } else {
+                flux_partition(array, swap, array, swap + quad1 * element_width, quad1, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            }
+            if (sum_b != 0) {
+                if (balance_b != 0)
+                    quadsort_swap(ptr_a + element_width, quad2, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            } else {
+                flux_partition(ptr_a + element_width, swap, ptr_a + element_width, swap + quad2 * element_width, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            }
+            if (sum_c != 0) {
+                if (balance_c != 0)
+                    quadsort_swap(ptr_b + element_width, quad3, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            } else {
+                flux_partition(ptr_b + element_width, swap, ptr_b + element_width, swap + quad3 * element_width, quad3, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            }
+            if (sum_d != 0) {
+                if (balance_d != 0)
+                    quadsort_swap(ptr_c + element_width, quad4, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            } else {
+                flux_partition(ptr_c + element_width, swap, ptr_c + element_width, swap + quad4 * element_width, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            }
+        },
+    }
+    // Final Merging of sorted partitions.
+    if (compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_data) != GT) {
+        if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) != GT) {
+            if (compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_data) != GT) {
+                // Lucky us, everything sorted.
+                return;
+            }
+            @memcpy(swap[0..(len * element_width)], array[0..(len * element_width)]);
+        } else {
+            // First half sorted, second half needs merge.
+            cross_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            @memcpy(swap[0..(half1 * element_width)], array[0..(half1 * element_width)]);
+        }
+    } else {
+        if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) != GT) {
+            // First half needs merge, second half sorted.
+            @memcpy((swap + half2 * element_width)[0..(half2 * element_width)], (array + half2 * element_width)[0..(half2 * element_width)]);
+            cross_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        } else {
+            // Both halves need merge.
+            cross_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            cross_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        }
+    }
+    // Merge bach to original list.
+    cross_merge(swap, array, half1, half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+}
+
+fn flux_partition(
+    array: [*]u8,
+    swap: [*]u8,
+    x: [*]u8,
+    pivot: [*]u8,
+    initial_len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) void {
+    var generic: i32 = 0;
+
+    var pivot_ptr = pivot;
+    var x_ptr = x;
+
+    var len = initial_len;
+    var arr_len: usize = 0;
+    var swap_len: usize = 0;
+
+    while (true) {
+        pivot_ptr -= element_width;
+
+        if (len <= 2048) {
+            median_of_nine(x_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, pivot_ptr);
+        } else {
+            median_of_cbrt(array, swap, x_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, &generic, pivot_ptr);
+
+            if (generic != 0) {
+                if (x_ptr == swap) {
+                    @memcpy(array[0..(len * element_width)], swap[0..(len * element_width)]);
+                }
+                quadsort_swap(array, len, swap, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+                return;
+            }
+        }
+
+        if (arr_len != 0 and compare_inc(cmp, cmp_data, pivot_ptr + element_width, pivot_ptr, data_is_owned, inc_n_data) != GT) {
+            flux_reverse_partition(array, swap, array, pivot_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            return;
+        }
+        arr_len = flux_default_partition(array, swap, array, pivot_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        swap_len = len - arr_len;
+
+        if (arr_len <= swap_len / 32 or swap_len <= FLUX_OUT) {
+            if (arr_len == 0)
+                return;
+            if (swap_len == 0) {
+                flux_reverse_partition(array, swap, array, pivot_ptr, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+                return;
+            }
+            @memcpy((array + arr_len * element_width)[0..(swap_len * element_width)], swap[0..(swap_len * element_width)]);
+            quadsort_swap(array + arr_len * element_width, swap_len, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        } else {
+            flux_partition(array + arr_len * element_width, swap, swap, pivot_ptr, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        }
+
+        if (swap_len <= arr_len / 32 or arr_len <= FLUX_OUT) {
+            if (arr_len <= FLUX_OUT) {
+                quadsort_swap(array, arr_len, swap, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            } else {
+                flux_reverse_partition(array, swap, array, pivot_ptr, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            }
+            return;
+        }
+        len = arr_len;
+        x_ptr = array;
+    }
+}
+
+// Improve generic data handling by mimickind dual pivot quicksort.
+
+fn flux_default_partition(
+    array: [*]u8,
+    swap: [*]u8,
+    x: [*]u8,
+    pivot: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) usize {
+    var arr_ptr = array;
+    var swap_ptr = swap;
+    var pivot_ptr = pivot;
+    var x_ptr = x;
+
+    // len guaranteed compares
+    if (data_is_owned) {
+        inc_n_data(cmp_data, len);
+    }
+    var run: usize = 0;
+    var a: usize = 8;
+    while (a <= len) : (a += 8) {
+        inline for (0..8) |_| {
+            const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr) != GT) &arr_ptr else &swap_ptr;
+            copy(from.*, x_ptr);
+            from.* += element_width;
+            x_ptr += element_width;
+        }
+
+        if (arr_ptr == array or swap_ptr == swap)
+            run = a;
+    }
+    for (0..(len % 8)) |_| {
+        const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr) != GT) &arr_ptr else &swap_ptr;
+        copy(from.*, x_ptr);
+        from.* += element_width;
+        x_ptr += element_width;
+    }
+
+    const m = (@intFromPtr(arr_ptr) - @intFromPtr(array)) / element_width;
+
+    if (run <= len / 4) {
+        return m;
+    }
+
+    if (m == len) {
+        return m;
+    }
+
+    a = len - m;
+    @memcpy((array + m * element_width)[0..(a * element_width)], swap[0..(a * element_width)]);
+
+    quadsort_swap(array + m * element_width, a, swap, a, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    quadsort_swap(array, m, swap, m, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+
+    return 0;
+}
+
+fn flux_reverse_partition(
+    array: [*]u8,
+    swap: [*]u8,
+    x: [*]u8,
+    pivot: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) void {
+    var arr_ptr = array;
+    var swap_ptr = swap;
+    var pivot_ptr = pivot;
+    var x_ptr = x;
+
+    // len guaranteed compares
+    if (data_is_owned) {
+        inc_n_data(cmp_data, len);
+    }
+    for (0..(len / 8)) |_| {
+        inline for (0..8) |_| {
+            const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr) == GT) &arr_ptr else &swap_ptr;
+            copy(from.*, x_ptr);
+            from.* += element_width;
+            x_ptr += element_width;
+        }
+    }
+    for (0..(len % 8)) |_| {
+        const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr) == GT) &arr_ptr else &swap_ptr;
+        copy(from.*, x_ptr);
+        from.* += element_width;
+        x_ptr += element_width;
+    }
+
+    const arr_len = (@intFromPtr(arr_ptr) - @intFromPtr(array));
+    const swap_len = (@intFromPtr(swap_ptr) - @intFromPtr(swap));
+
+    @memcpy((array + arr_len)[0..swap_len], swap[0..swap_len]);
+
+    if (swap_len <= arr_len / 16 or arr_len <= FLUX_OUT * element_width) {
+        quadsort_swap(array, arr_len, swap, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    }
+    flux_partition(array, swap, array, pivot, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+}
+
+// ================ Pivot Selection ===========================================
+// Used for selecting the quicksort pivot for various sized arrays.
+
+fn median_of_cbrt(
+    array: [*]u8,
+    swap: [*]u8,
+    x_ptr: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+    generic: *i32,
+    out: [*]u8,
+) void {
+    var cbrt: usize = 32;
+    while (len > cbrt * cbrt * cbrt) : (cbrt *= 2) {}
+
+    const div = len / cbrt;
+
+    // I assume using the pointer as an int is to add randomness here?
+    var arr_ptr = x_ptr + @intFromPtr(&div) / 16 % div;
+    var swap_ptr = if (x_ptr == array) swap else array;
+
+    for (0..cbrt) |cnt| {
+        copy(swap_ptr + cnt * element_width, arr_ptr);
+        arr_ptr += div;
+    }
+    cbrt /= 2;
+
+    quadsort_swap(swap_ptr, cbrt, swap_ptr + cbrt * 2 * element_width, cbrt, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    quadsort_swap(swap_ptr + cbrt * element_width, cbrt, swap_ptr + cbrt * 2 * element_width, cbrt, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+
+    // 2 guaranteed compares
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 2);
+    }
+    generic.* = @intFromBool(compare(cmp, cmp_data, swap_ptr + (cbrt * 2 - 1) * element_width, swap_ptr) != GT and compare(cmp, cmp_data, swap_ptr + (cbrt - 1) * element_width, swap_ptr) != GT);
+
+    binary_median(swap_ptr, swap_ptr + cbrt * element_width, cbrt, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, out);
+}
+
+fn median_of_nine(
+    array: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+    out: [*]u8,
+) void {
+    var buffer: [9 * MAX_ELEMENT_BUFFER_SIZE]u8 align(BufferAlign) = undefined;
+    const swap_ptr = @as([*]u8, @ptrCast(&buffer[0]));
+
+    var arr_ptr = array;
+
+    const offset = (len / 9) * element_width;
+    for (0..9) |x| {
+        copy(swap_ptr + x * element_width, arr_ptr);
+        arr_ptr += offset;
+    }
+
+    trim_four(swap_ptr, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    trim_four(swap_ptr + 4 * element_width, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+
+    copy(swap_ptr, swap_ptr + 5 * element_width);
+    copy(swap_ptr + 3 * element_width, swap_ptr + 8 * element_width);
+
+    trim_four(swap_ptr, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+
+    copy(swap_ptr, swap_ptr + 6 * element_width);
+
+    // 3 guaranteed compares
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 3);
+    }
+    const x = compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 1 * element_width) == GT;
+    const y = compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 2 * element_width) == GT;
+    const z = compare(cmp, cmp_data, swap_ptr + 1 * element_width, swap_ptr + 2 * element_width) == GT;
+
+    const index: usize = @intFromBool(x == y) + (@intFromBool(y) ^ @intFromBool(z));
+    copy(out, swap_ptr + index * element_width);
+}
+
+fn trim_four(
+    initial_ptr_a: [*]u8,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) void {
+    var buffer: BufferType align(BufferAlign) = undefined;
+    const tmp_ptr = @as([*]u8, @ptrCast(&buffer[0]));
+
+    // 4 guaranteed compares.
+    if (data_is_owned) {
+        inc_n_data(cmp_data, 4);
+    }
+    var ptr_a = initial_ptr_a;
+    {
+        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
+        copy(tmp_ptr, ptr_a + not_x);
+        copy(ptr_a, ptr_a + x);
+        copy(ptr_a + element_width, tmp_ptr);
+        ptr_a += 2 * element_width;
+    }
+    {
+        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
+        copy(tmp_ptr, ptr_a + not_x);
+        copy(ptr_a, ptr_a + x);
+        copy(ptr_a + element_width, tmp_ptr);
+        ptr_a -= 2 * element_width;
+    }
+    {
+        const lte = compare(cmp, cmp_data, ptr_a, ptr_a + 2 * element_width) != GT;
+        const x = if (lte) element_width else 0;
+        copy(ptr_a + 2 * element_width, ptr_a + x);
+        ptr_a += 1;
+    }
+    {
+        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + 2 * element_width) == GT;
+        const x = if (gt) element_width else 0;
+        copy(ptr_a, ptr_a + x);
+    }
+}
+
+fn binary_median(
+    initial_ptr_a: [*]u8,
+    initial_ptr_b: [*]u8,
+    initial_len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+    out: [*]u8,
+) void {
+    var len = initial_len;
+    if (data_is_owned) {
+        // We need to increment log2 of n times.
+        // We can get that by counting leading zeros and of (top - 1).
+        // Needs to be `-1` so values that are powers of 2 don't sort up a bin.
+        // Then just add 1 back to the final result.
+        const log2 = @bitSizeOf(usize) - @clz(len - 1) + 1;
+        inc_n_data(cmp_data, log2);
+    }
+    var ptr_a = initial_ptr_a;
+    var ptr_b = initial_ptr_b;
+    while (len / 2 != 0) : (len /= 2) {
+        if (compare(cmp, cmp_data, ptr_a, ptr_b) != GT) {
+            ptr_a += len * element_width;
+        } else {
+            ptr_b += len * element_width;
+        }
+    }
+    var from = if (compare(cmp, cmp_data, ptr_a, ptr_b) == GT) ptr_a else ptr_b;
+    copy(out, from);
+}
+
+// ================ Quadsort ==================================================
+// The high level quadsort functions.
+
+/// A version of quadsort given pre-allocated swap memory.
+/// This is a primitive needed fro fluxsort.
+/// Will not allocate.
+pub fn quadsort_swap(
+    array: [*]u8,
+    len: usize,
+    swap: [*]u8,
+    swap_len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    element_width: usize,
+    copy: CopyFn,
+    comptime data_is_owned: bool,
+    inc_n_data: IncN,
+) void {
+    if (len < 96) {
+        tail_swap(array, len, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    } else if (quad_swap(array, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data) != .sorted) {
+        const block_len = quad_merge(array, len, swap, swap_len, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+
+        rotate_merge(array, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    }
+}
+
 pub fn quadsort(
-    source_ptr: [*]u8,
+    array: [*]u8,
     len: usize,
     cmp: CompareFn,
     cmp_data: Opaque,
@@ -48,9 +843,9 @@ pub fn quadsort(
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            quadsort_direct(source_ptr, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data);
+            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data);
         } else {
-            quadsort_direct(source_ptr, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data);
+            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data);
         }
     } else {
         if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
@@ -58,7 +853,7 @@ pub fn quadsort(
             var arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
             defer utils.dealloc(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
-                arr_ptr[i] = source_ptr + i * element_width;
+                arr_ptr[i] = array + i * element_width;
             }
 
             // Setup for indirect comparison.
@@ -80,7 +875,7 @@ pub fn quadsort(
                 }
 
                 // Copy to original array as sorted.
-                @memcpy(source_ptr[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
+                @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
             } else {
                 roc_panic("Out of memory while trying to allocate for sorting", 0);
             }
@@ -2780,7 +3575,7 @@ threadlocal var inner_cmp: ?CompareFn = null;
 pub fn indirect_compare(compare_data: Opaque, lhs_ptr: Opaque, rhs_ptr: Opaque) callconv(.C) u8 {
     const lhs = @as(*[*]u8, @ptrCast(@alignCast(lhs_ptr))).*;
     const rhs = @as(*[*]u8, @ptrCast(@alignCast(rhs_ptr))).*;
-    return (inner_cmp orelse unreachable)(compare_data, lhs, rhs);
+    return (inner_cmp.?)(compare_data, lhs, rhs);
 }
 
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {

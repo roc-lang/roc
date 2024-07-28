@@ -710,7 +710,7 @@ pub fn listSortWith(
     var list = input.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
 
     if (list.bytes) |source_ptr| {
-        sort.quadsort(source_ptr, list.len(), cmp, cmp_data, data_is_owned, inc_n_data, element_width, alignment, copy);
+        sort.fluxsort(source_ptr, list.len(), cmp, cmp_data, data_is_owned, inc_n_data, element_width, alignment, copy);
     }
 
     return list;
