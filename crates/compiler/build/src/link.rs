@@ -171,10 +171,6 @@ pub fn build_zig_host_native(
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={emit_bin}"),
-        "--mod",
-        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-        "--deps",
-        "glue",
         // include libc
         "-lc",
         // cross-compile?
@@ -243,10 +239,6 @@ pub fn build_zig_host_native(
     zig_cmd.args(&[
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
-        "--mod",
-        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-        "--deps",
-        "glue",
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
