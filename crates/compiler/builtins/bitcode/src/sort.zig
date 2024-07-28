@@ -181,20 +181,16 @@ fn flux_analyze(
         ptr_d += element_width;
     }
 
-    var sum_a: u8 = 0;
-    var sum_b: u8 = 0;
-    var sum_c: u8 = 0;
-    var sum_d: u8 = 0;
     var count = len;
     while (count > 132) : (count -= 128) {
         // 32*4 guaranteed compares.
         if (data_is_owned) {
             inc_n_data(cmp_data, 32 * 4);
         }
-        sum_a = 0;
-        sum_b = 0;
-        sum_c = 0;
-        sum_d = 0;
+        var sum_a: u8 = 0;
+        var sum_b: u8 = 0;
+        var sum_c: u8 = 0;
+        var sum_d: u8 = 0;
         for (0..32) |_| {
             sum_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
             ptr_a += element_width;
@@ -258,20 +254,20 @@ fn flux_analyze(
     }
 
     // Not fully sorted, too bad.
-    sum_a = @intFromBool(quad1 - balance_a == 1);
-    sum_b = @intFromBool(quad2 - balance_b == 1);
-    sum_c = @intFromBool(quad3 - balance_c == 1);
-    sum_d = @intFromBool(quad4 - balance_d == 1);
+    const reversed_a = quad1 - balance_a == 1;
+    const reversed_b = quad2 - balance_b == 1;
+    const reversed_c = quad3 - balance_c == 1;
+    const reversed_d = quad4 - balance_d == 1;
 
-    if (sum_a | sum_b | sum_c | sum_d != 0) {
+    const reversed_any = reversed_a or reversed_b or reversed_c or reversed_d;
+    if (reversed_any) {
         // 3 compares guaranteed.
         if (data_is_owned) {
             inc_n_data(cmp_data, 3);
         }
-        // Any sum variable that is set is a reversed chunk of data.
-        const span1: u3 = @intFromBool(sum_a != 0 and sum_b != 0) * @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
-        const span2: u3 = @intFromBool(sum_b != 0 and sum_c != 0) * @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width) == GT);
-        const span3: u3 = @intFromBool(sum_c != 0 and sum_d != 0) * @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width) == GT);
+        const span1: u3 = @intFromBool(reversed_a and reversed_b) * @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
+        const span2: u3 = @intFromBool(reversed_b and reversed_c) * @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width) == GT);
+        const span3: u3 = @intFromBool(reversed_c and reversed_d) * @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width) == GT);
 
         switch (span1 | (span2 << 1) | (span3 << 2)) {
             0 => {},
@@ -316,19 +312,19 @@ fn flux_analyze(
             },
         }
         // Indivial chunks that are reversed.
-        if (sum_a != 0 and balance_a != 0) {
+        if (reversed_a and balance_a != 0) {
             quad_reversal(array, ptr_a, element_width, copy);
             balance_a = 0;
         }
-        if (sum_b != 0 and balance_b != 0) {
+        if (reversed_b and balance_b != 0) {
             quad_reversal(ptr_a + element_width, ptr_b, element_width, copy);
             balance_b = 0;
         }
-        if (sum_c != 0 and balance_c != 0) {
+        if (reversed_c and balance_c != 0) {
             quad_reversal(ptr_b + element_width, ptr_c, element_width, copy);
             balance_c = 0;
         }
-        if (sum_d != 0 and balance_d != 0) {
+        if (reversed_d and balance_d != 0) {
             quad_reversal(ptr_c + element_width, ptr_d, element_width, copy);
             balance_d = 0;
         }
@@ -337,19 +333,19 @@ fn flux_analyze(
     // Switch to quadsort if at least 25% ordered.
     count = len / 512;
 
-    sum_a = @intFromBool(streaks_a > count);
-    sum_b = @intFromBool(streaks_b > count);
-    sum_c = @intFromBool(streaks_c > count);
-    sum_d = @intFromBool(streaks_d > count);
+    var ordered_a: u4 = @intFromBool(streaks_a > count);
+    var ordered_b: u4 = @intFromBool(streaks_b > count);
+    var ordered_c: u4 = @intFromBool(streaks_c > count);
+    var ordered_d: u4 = @intFromBool(streaks_d > count);
 
     // Always use quadsort if memory pressure is bad.
     if (quad1 > QUAD_CACHE) {
-        sum_a = 1;
-        sum_b = 1;
-        sum_c = 1;
-        sum_d = 1;
+        ordered_a = 1;
+        ordered_b = 1;
+        ordered_c = 1;
+        ordered_d = 1;
     }
-    switch (@as(u4, @intCast(sum_a | (sum_b << 1) | (sum_c << 2) | (sum_d << 3)))) {
+    switch (ordered_a | (ordered_b << 1) | (ordered_c << 2) | (ordered_d << 3)) {
         0 => {
             flux_partition(array, swap, array, swap + len * element_width, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             return;
@@ -398,25 +394,25 @@ fn flux_analyze(
                 quadsort_swap(ptr_c + element_width, quad4, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         5, 6, 7, 10, 11, 13, 14, 15 => {
-            if (sum_a != 0) {
+            if (ordered_a != 0) {
                 if (balance_a != 0)
                     quadsort_swap(array, quad1, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             } else {
                 flux_partition(array, swap, array, swap + quad1 * element_width, quad1, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             }
-            if (sum_b != 0) {
+            if (ordered_b != 0) {
                 if (balance_b != 0)
                     quadsort_swap(ptr_a + element_width, quad2, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             } else {
                 flux_partition(ptr_a + element_width, swap, ptr_a + element_width, swap + quad2 * element_width, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             }
-            if (sum_c != 0) {
+            if (ordered_c != 0) {
                 if (balance_c != 0)
                     quadsort_swap(ptr_b + element_width, quad3, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             } else {
                 flux_partition(ptr_b + element_width, swap, ptr_b + element_width, swap + quad3 * element_width, quad3, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             }
-            if (sum_d != 0) {
+            if (ordered_d != 0) {
                 if (balance_d != 0)
                     quadsort_swap(ptr_c + element_width, quad4, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             } else {
@@ -483,6 +479,7 @@ fn flux_partition(
             median_of_cube_root(array, swap, x_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, &generic, pivot_ptr);
 
             if (generic) {
+                // Tons of identical elements, quadsort.
                 if (x_ptr == swap) {
                     @memcpy(array[0..(len * element_width)], swap[0..(len * element_width)]);
                 }
@@ -492,12 +489,16 @@ fn flux_partition(
         }
 
         if (arr_len != 0 and compare_inc(cmp, cmp_data, pivot_ptr + element_width, pivot_ptr, data_is_owned, inc_n_data) != GT) {
+            // pivot equals the last pivot, reverse partition and everything is done.
             flux_reverse_partition(array, swap, array, pivot_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             return;
         }
-        arr_len = flux_default_partition(array, swap, array, pivot_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+        // arr_len is elements <= pivot.
+        // swap_len is elements > pivot.
+        arr_len = flux_default_partition(array, swap, x_ptr, pivot_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         swap_len = len - arr_len;
 
+        // If highly imbalanced try a different strategy.
         if (arr_len <= swap_len / 32 or swap_len <= FLUX_OUT) {
             if (arr_len == 0)
                 return;
@@ -511,6 +512,7 @@ fn flux_partition(
             flux_partition(array + arr_len * element_width, swap, swap, pivot_ptr, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
 
+        // If highly imbalanced try a different strategy
         if (swap_len <= arr_len / 32 or arr_len <= FLUX_OUT) {
             if (arr_len <= FLUX_OUT) {
                 quadsort_swap(array, arr_len, swap, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
@@ -782,7 +784,7 @@ test "flux_reverse_partition" {
 /// Returns the median of an array taking roughly cube root samples.
 /// Only used for super large arrays, assumes the minimum cube root is 32.
 /// Out is set to the median.
-/// Generic is set to true if all elements are the same.
+/// Generic is set to true if all elements selected for the median are the same.
 fn median_of_cube_root(
     array: [*]u8,
     swap: [*]u8,
@@ -802,8 +804,8 @@ fn median_of_cube_root(
 
     const div = len / cbrt;
 
-    // Using a pointer to div as an int is to get a radom offset from 0 to div.
-    var arr_ptr = x_ptr + @intFromPtr(&div) / 16 % div;
+    // Using a pointer to div as an int is to get a random offset from 0 to div.
+    var arr_ptr = x_ptr + (@intFromPtr(&div) / 16 % div) * element_width;
     var swap_ptr = if (x_ptr == array) swap else array;
 
     for (0..cbrt) |cnt| {
@@ -857,11 +859,11 @@ fn median_of_nine(
     if (data_is_owned) {
         inc_n_data(cmp_data, 3);
     }
-    const x = compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 1 * element_width) == GT;
-    const y = compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 2 * element_width) == GT;
-    const z = compare(cmp, cmp_data, swap_ptr + 1 * element_width, swap_ptr + 2 * element_width) == GT;
+    const x: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 1 * element_width) == GT);
+    const y: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 2 * element_width) == GT);
+    const z: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 1 * element_width, swap_ptr + 2 * element_width) == GT);
 
-    const index: usize = @as(usize, @intFromBool(x == y)) + (@intFromBool(y) ^ @intFromBool(z));
+    const index = @intFromBool(x == y) + (x ^ z);
     copy(out, swap_ptr + index * element_width);
 }
 
