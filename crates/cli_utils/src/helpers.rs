@@ -14,7 +14,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Mutex;
+use std::sync::Once;
 use tempfile::NamedTempFile;
+
+static ZIG_PLATFORM_COPY_GLUE_ONCE: Once = Once::new();
 
 #[derive(Debug)]
 pub struct Out {
@@ -121,6 +124,8 @@ where
     for arg in args {
         roc_cmd.arg(arg);
     }
+
+    initialize_zig_test_platforms();
 
     for (k, v) in extra_env {
         roc_cmd.env(k, v);
@@ -472,4 +477,13 @@ pub fn known_bad_file(file_name: &str) -> PathBuf {
     path.push(file_name);
 
     path
+}
+
+/// Copies the glue source files for zig platforms from the roc builtins
+/// this is only temporary, see comments in crates/copy_zig_glue/src/main.rs
+fn initialize_zig_test_platforms() {
+    ZIG_PLATFORM_COPY_GLUE_ONCE.call_once(|| {
+        // initialization code here
+        copy_zig_glue::copy_zig_glue();
+    });
 }
