@@ -71,7 +71,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
 
     // workaround for github.com/ziglang/zig/issues/9711
     #[cfg(target_os = "macos")]
-    let _ = fs::remove_dir_all("./zig-cache");
+    let _ = fs::remove_dir_all("./.zig-cache");
 
     let mut zig_cmd = zig();
 
@@ -137,7 +137,7 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
             let entry = entry?;
             let path_buf = entry.path();
             if path_buf.is_dir() {
-                if !path_buf.ends_with("zig-cache") {
+                if !path_buf.ends_with(".zig-cache") {
                     get_zig_files(&path_buf, cb).unwrap();
                 }
             } else {
