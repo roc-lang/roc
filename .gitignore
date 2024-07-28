@@ -120,4 +120,4 @@ crates/glue/tests/fixtures/*/host.c
 crates/glue/tests/fixtures/*/src/main.rs
 crates/glue/tests/fixtures/*/test_glue/
 
-**/platform/glue
+**/*platform/glue
