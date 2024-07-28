@@ -37,7 +37,7 @@ pub fn fuzz_main() !void {
     }
 
     var test_count: i64 = 0;
-    sort.quadsort(@ptrCast(arr_ptr), size, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
+    sort.fluxsort(@ptrCast(arr_ptr), size, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
 
     const sorted = std.sort.isSorted(i64, arr_ptr[0..size], {}, std.sort.asc(i64));
     if (DEBUG) {
