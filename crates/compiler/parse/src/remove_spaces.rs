@@ -13,19 +13,18 @@ use crate::{
         WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-        ImportsKeyword, KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry,
-        PackageHeader, PackageKeyword, PackageName, PackagesKeyword, PlatformHeader,
-        PlatformKeyword, PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To,
-        ToKeyword, TypedIdent, WithKeyword,
+        AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
+        KeywordItem, ModuleHeader, ModuleName, ModuleParams, PackageEntry, PackageHeader,
+        PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformKeyword,
+        PlatformRequires, ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent,
     },
     ident::{BadIdent, UppercaseIdent},
     parser::{
-        EAbility, EClosure, EExpect, EExposes, EExpr, EGenerates, EGeneratesWith, EHeader, EIf,
-        EImport, EImportParams, EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages,
-        EParams, EPattern, EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl,
-        ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent,
-        EWhen, PInParens, PList, PRecord, SyntaxError,
+        EAbility, EClosure, EExpect, EExposes, EExpr, EHeader, EIf, EImport, EImportParams,
+        EImports, EInParens, EList, EPackageEntry, EPackageName, EPackages, EParams, EPattern,
+        EProvides, ERecord, ERequires, EString, EType, ETypeAbilityImpl, ETypeApply, ETypeInParens,
+        ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ETypedIdent, EWhen, PInParens, PList,
+        PRecord, SyntaxError,
     },
 };
 
@@ -58,8 +57,6 @@ macro_rules! keywords {
 keywords! {
     ExposesKeyword,
     ImportsKeyword,
-    WithKeyword,
-    GeneratesKeyword,
     PackageKeyword,
     PackagesKeyword,
     RequiresKeyword,
@@ -162,8 +159,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 name: header.name.remove_spaces(arena),
                 exposes: header.exposes.remove_spaces(arena),
                 imports: header.imports.remove_spaces(arena),
-                generates: header.generates.remove_spaces(arena),
-                generates_with: header.generates_with.remove_spaces(arena),
             }),
         };
         Module {
@@ -1487,38 +1482,6 @@ impl<'a> RemoveSpaces<'a> for EAbility<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for EGeneratesWith {
-    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
-        match self {
-            EGeneratesWith::Open(_) => EGeneratesWith::Open(Position::zero()),
-            EGeneratesWith::With(_) => EGeneratesWith::With(Position::zero()),
-            EGeneratesWith::IndentWith(_) => EGeneratesWith::IndentWith(Position::zero()),
-            EGeneratesWith::IndentListStart(_) => EGeneratesWith::IndentListStart(Position::zero()),
-            EGeneratesWith::IndentListEnd(_) => EGeneratesWith::IndentListEnd(Position::zero()),
-            EGeneratesWith::ListStart(_) => EGeneratesWith::ListStart(Position::zero()),
-            EGeneratesWith::ListEnd(_) => EGeneratesWith::ListEnd(Position::zero()),
-            EGeneratesWith::Identifier(_) => EGeneratesWith::Identifier(Position::zero()),
-            EGeneratesWith::Space(inner_err, _) => {
-                EGeneratesWith::Space(*inner_err, Position::zero())
-            }
-        }
-    }
-}
-
-impl<'a> RemoveSpaces<'a> for EGenerates {
-    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
-        match self {
-            EGenerates::Open(_) => EGenerates::Open(Position::zero()),
-            EGenerates::Generates(_) => EGenerates::Generates(Position::zero()),
-            EGenerates::IndentGenerates(_) => EGenerates::IndentGenerates(Position::zero()),
-            EGenerates::Identifier(_) => EGenerates::Identifier(Position::zero()),
-            EGenerates::Space(inner_err, _) => EGenerates::Space(*inner_err, Position::zero()),
-            EGenerates::IndentTypeStart(_) => EGenerates::IndentTypeStart(Position::zero()),
-            EGenerates::IndentTypeEnd(_) => EGenerates::IndentTypeEnd(Position::zero()),
-        }
-    }
-}
-
 impl<'a> RemoveSpaces<'a> for EPackages<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match self {
@@ -1557,12 +1520,6 @@ impl<'a> RemoveSpaces<'a> for EHeader<'a> {
             }
             EHeader::Packages(inner_err, _) => {
                 EHeader::Packages(inner_err.remove_spaces(arena), Position::zero())
-            }
-            EHeader::Generates(inner_err, _) => {
-                EHeader::Generates(inner_err.remove_spaces(arena), Position::zero())
-            }
-            EHeader::GeneratesWith(inner_err, _) => {
-                EHeader::GeneratesWith(inner_err.remove_spaces(arena), Position::zero())
             }
             EHeader::Space(inner_err, _) => EHeader::Space(*inner_err, Position::zero()),
             EHeader::Start(_) => EHeader::Start(Position::zero()),
