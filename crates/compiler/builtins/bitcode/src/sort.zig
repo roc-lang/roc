@@ -437,7 +437,7 @@ fn flux_analyze(
     } else {
         if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) != GT) {
             // First half needs merge, second half sorted.
-            @memcpy((swap + half2 * element_width)[0..(half2 * element_width)], (array + half2 * element_width)[0..(half2 * element_width)]);
+            @memcpy((swap + half1 * element_width)[0..(half2 * element_width)], (array + half1 * element_width)[0..(half2 * element_width)]);
             cross_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         } else {
             // Both halves need merge.
