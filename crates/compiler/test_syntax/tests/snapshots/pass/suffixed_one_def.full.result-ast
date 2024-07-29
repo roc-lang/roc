@@ -46,13 +46,15 @@ Full {
         ],
         space_before: [
             Slice(start = 0, length = 2),
-            Slice(start = 4, length = 0),
+            Slice(start = 2, length = 2),
         ],
         space_after: [
-            Slice(start = 2, length = 2),
-            Slice(start = 4, length = 0),
+            Slice(start = 2, length = 0),
+            Slice(start = 4, length = 2),
         ],
         spaces: [
+            Newline,
+            Newline,
             Newline,
             Newline,
             Newline,
@@ -88,22 +90,28 @@ Full {
                                 Index(2147483649),
                             ],
                             regions: [
-                                @120-132,
+                                @120-133,
                                 @162-205,
                             ],
                             space_before: [
                                 Slice(start = 0, length = 0),
-                                Slice(start = 0, length = 0),
+                                Slice(start = 0, length = 3),
                             ],
                             space_after: [
                                 Slice(start = 0, length = 0),
-                                Slice(start = 0, length = 0),
+                                Slice(start = 3, length = 0),
                             ],
-                            spaces: [],
+                            spaces: [
+                                Newline,
+                                Newline,
+                                LineComment(
+                                    " what about this?",
+                                ),
+                            ],
                             type_defs: [],
                             value_defs: [
                                 Stmt(
-                                    @120-132 BinOps(
+                                    @120-133 BinOps(
                                         [
                                             (
                                                 @120-125 Str(
@@ -123,55 +131,46 @@ Full {
                                     ),
                                 ),
                                 Stmt(
-                                    @162-205 SpaceBefore(
-                                        BinOps(
-                                            [
-                                                (
-                                                    @162-167 Str(
-                                                        PlainLine(
-                                                            "Bar",
-                                                        ),
-                                                    ),
-                                                    @168-170 Pizza,
-                                                ),
-                                            ],
-                                            @171-205 Apply(
-                                                @171-174 TaskAwaitBang(
-                                                    Var {
-                                                        module_name: "B",
-                                                        ident: "y",
-                                                    },
-                                                ),
-                                                [
-                                                    @185-205 SpaceBefore(
-                                                        Record(
-                                                            [
-                                                                @187-203 RequiredValue(
-                                                                    @187-193 "config",
-                                                                    [],
-                                                                    @195-203 Str(
-                                                                        PlainLine(
-                                                                            "config",
-                                                                        ),
-                                                                    ),
-                                                                ),
-                                                            ],
-                                                        ),
-                                                        [
-                                                            Newline,
-                                                        ],
-                                                    ),
-                                                ],
-                                                Space,
-                                            ),
-                                        ),
+                                    @162-205 BinOps(
                                         [
-                                            Newline,
-                                            Newline,
-                                            LineComment(
-                                                " what about this?",
+                                            (
+                                                @162-167 Str(
+                                                    PlainLine(
+                                                        "Bar",
+                                                    ),
+                                                ),
+                                                @168-170 Pizza,
                                             ),
                                         ],
+                                        @171-205 Apply(
+                                            @171-174 TaskAwaitBang(
+                                                Var {
+                                                    module_name: "B",
+                                                    ident: "y",
+                                                },
+                                            ),
+                                            [
+                                                @185-205 SpaceBefore(
+                                                    Record(
+                                                        [
+                                                            @187-203 RequiredValue(
+                                                                @187-193 "config",
+                                                                [],
+                                                                @195-203 Str(
+                                                                    PlainLine(
+                                                                        "config",
+                                                                    ),
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    ),
+                                                    [
+                                                        Newline,
+                                                    ],
+                                                ),
+                                            ],
+                                            Space,
+                                        ),
                                     ),
                                 ),
                             ],

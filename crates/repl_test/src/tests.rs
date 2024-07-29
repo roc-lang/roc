@@ -1133,7 +1133,7 @@ fn parse_problem() {
                 4│      add m n = m + n
                             ^^^
 
-                Looks like you are trying to define a function. In roc, functions are
+                Looks like you are trying to define a function. In Roc, functions are
                 always written as a lambda, like increment = \n -> n + 1.
                 "#
         ),
