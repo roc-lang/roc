@@ -61,7 +61,9 @@ Defs(
                         ),
                     },
                 ),
-                comment: None,
+                lines_between: [
+                    Newline,
+                ],
                 body_pattern: @30-31 Identifier {
                     ident: "f",
                 },

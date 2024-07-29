@@ -114,7 +114,9 @@ Defs {
                                     ),
                                 ],
                             ),
-                            comment: None,
+                            lines_between: [
+                                Newline,
+                            ],
                             body_pattern: @95-98 Identifier {
                                 ident: "msg",
                             },
@@ -192,7 +194,7 @@ Defs {
                                                                                     @140-152 Inferred,
                                                                                 ],
                                                                             ),
-                                                                            comment: None,
+                                                                            lines_between: [],
                                                                             body_pattern: @140-152 Identifier {
                                                                                 ident: "#!0_stmt",
                                                                             },
@@ -314,7 +316,7 @@ Defs {
                                                                                                     @227-239 Inferred,
                                                                                                 ],
                                                                                             ),
-                                                                                            comment: None,
+                                                                                            lines_between: [],
                                                                                             body_pattern: @227-239 Identifier {
                                                                                                 ident: "#!2_stmt",
                                                                                             },

@@ -32,7 +32,9 @@ SpaceAfter(
                         "Foo",
                         [],
                     ),
-                    comment: None,
+                    lines_between: [
+                        Newline,
+                    ],
                     body_pattern: @15-23 RecordDestructure(
                         [
                             @17-18 Identifier {

@@ -3166,9 +3166,7 @@ fn stmts_to_defs<'a>(
                         let value_def = ValueDef::AnnotatedBody {
                             ann_pattern: arena.alloc(ann_pattern),
                             ann_type: arena.alloc(ann_type),
-                            comment: spaces_middle
-                                .first() // TODO: Why do we drop all but the first comment????
-                                .and_then(crate::ast::CommentOrNewline::comment_str),
+                            lines_between: spaces_middle,
                             body_pattern: loc_pattern,
                             body_expr: loc_def_expr,
                         };
@@ -3213,9 +3211,7 @@ pub fn join_alias_to_body<'a>(
     ValueDef::AnnotatedBody {
         ann_pattern: arena.alloc(loc_ann_pattern),
         ann_type: arena.alloc(ann_type),
-        comment: spaces_middle
-            .first() // TODO: Why do we drop all but the first comment????
-            .and_then(crate::ast::CommentOrNewline::comment_str),
+        lines_between: spaces_middle,
         body_pattern,
         body_expr,
     }
