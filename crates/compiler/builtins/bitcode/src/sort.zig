@@ -14,7 +14,7 @@ const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
 const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
 
 /// Any size larger than the max element buffer will be sorted indirectly via pointers.
-/// TODO: tune this.
+/// TODO: tune this. I think due to llvm inlining the compare, the value likely should be lower.
 /// I did some basic basic testing on my M1 and x86 machines with the c version of fluxsort.
 /// The best tradeoff point is not the clearest and heavily depends on machine specifics.
 /// Generally speaking, the faster memcpy is and the larger the cache line, the larger this should be.
@@ -2528,8 +2528,7 @@ test "quad_merge_block" {
     // case 3 both haves sorted
     arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
     quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    // TODO: fix
-    // try testing.expectEqual(test_count, 0);
+    try testing.expectEqual(test_count, 0);
     try testing.expectEqual(arr, expected);
 
     // case 3 - lucky, sorted
