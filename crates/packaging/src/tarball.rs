@@ -159,6 +159,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
                     // legacy linker formats
                     Some("o"),
                     Some("a"),
+                    Some("lib"),
                     Some("obj"),
                     Some("wasm"),
                     // optimized wasm builds compile to .zig for now,
