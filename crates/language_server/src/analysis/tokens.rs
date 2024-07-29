@@ -627,7 +627,7 @@ impl IterTokens for ValueDef<'_> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                spaces_middle: _,
                 body_pattern,
                 body_expr,
             } => (ann_pattern.iter_tokens(arena).into_iter())
