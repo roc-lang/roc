@@ -455,22 +455,6 @@ fn loc_ident_pattern_help<'a>(
     }
 }
 
-// fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-//     move |arena, state: State<'a>, min_indent| {
-//         if state.bytes().first() == Some(&b'_') {
-//             let state = state.advance(1);
-//             let original_state = state.clone();
-//             match lowercase_ident().parse(arena, state, min_indent) {
-//                 Ok((_, name, state)) => Ok((MadeProgress, Pattern::Underscore(name), state)),
-//                 Err((NoProgress, _)) => Ok((MadeProgress, Pattern::Underscore(""), original_state)),
-//                 Err(_) => Err((MadeProgress, EPattern::End(original_state.pos()))),
-//             }
-//         } else {
-//             Err((NoProgress, EPattern::Underscore(state.pos())))
-//         }
-//     }
-// }
-
 fn loc_underscore_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state: State<'a>, min_indent| {
         let start = state.pos();
