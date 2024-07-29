@@ -6245,7 +6245,7 @@ mod test_fmt {
                 x : i32
                 x = 1
                 x
-                "
+            "
         ));
     }
 
@@ -6256,7 +6256,7 @@ mod test_fmt {
                 x : i32 # comment
                 x = 1
                 x
-                "
+            "
         ));
     }
 
@@ -6269,24 +6269,35 @@ mod test_fmt {
                 # comment 2
                 x = 1
                 x
-                "
+            "
         ));
     }
 
     #[test]
-    fn preserve_annotated_body_comments_with_newlines() {
-        expr_formats_same(indoc!(
-            r"
-                x : i32
+    fn preserve_annotated_body_comments_without_newlines() {
+        expr_formats_to(
+            indoc!(
+                r"
+                    x : i32
 
-                # comment
+                    # comment
 
-                # comment 2
+                    # comment 2
 
-                x = 1
-                x
+                    x = 1
+                    x
                 "
-        ));
+            ),
+            indoc!(
+                r"
+                    x : i32
+                    # comment
+                    # comment 2
+                    x = 1
+                    x
+                "
+            ),
+        );
     }
 
     #[test]
@@ -6297,20 +6308,29 @@ mod test_fmt {
                 #
                 x = 1
                 x
-                "
+            "
         ));
     }
 
     #[test]
-    fn preserve_annotated_body_with_newlines() {
-        expr_formats_same(indoc!(
-            r"
+    fn preserve_annotated_body_without_newlines() {
+        expr_formats_to(
+            indoc!(
+                r"
                 x : i32
 
                 x = 1
                 x
-                "
-        ));
+            "
+            ),
+            indoc!(
+                r"
+                x : i32
+                x = 1
+                x
+            "
+            ),
+        );
     }
 
     // this is a parse error atm

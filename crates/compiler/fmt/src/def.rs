@@ -604,16 +604,17 @@ pub fn fmt_annotated_body_comment<'a>(
         }
 
         for comment_or_newline in comment_iter {
-            buf.newline();
             match comment_or_newline {
                 roc_parse::ast::CommentOrNewline::Newline => (),
                 roc_parse::ast::CommentOrNewline::DocComment(comment_str) => {
+                    buf.newline();
                     buf.indent(indent);
                     buf.push_str("# #");
                     buf.spaces(1);
                     buf.push_str(comment_str.trim());
                 }
                 roc_parse::ast::CommentOrNewline::LineComment(comment_str) => {
+                    buf.newline();
                     buf.indent(indent);
                     buf.push_str("#");
                     buf.spaces(1);
