@@ -205,7 +205,7 @@ batch = \current -> \next ->
 ##
 seq : List (Task ok err) -> Task (List ok) err
 seq = \tasks ->
-    List.walk tasks (ok []) \state, task ->
+    List.walkBackwards tasks (ok []) \state, task ->
         value <- task |> await
 
         state |> map \values -> List.append values value
