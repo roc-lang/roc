@@ -801,7 +801,7 @@ pub enum ValueDef<'a> {
     AnnotatedBody {
         ann_pattern: &'a Loc<Pattern<'a>>,
         ann_type: &'a Loc<TypeAnnotation<'a>>,
-        spaces_middle: &'a [CommentOrNewline<'a>],
+        lines_between: &'a [CommentOrNewline<'a>],
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
     },
@@ -1044,7 +1044,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                         ValueDef::AnnotatedBody {
                             ann_pattern: _,
                             ann_type: _,
-                            spaces_middle: _,
+                            lines_between: _,
                             body_pattern: _,
                             body_expr,
                         } => self.push_pending_from_expr(&body_expr.value),
@@ -2726,7 +2726,7 @@ impl<'a> Malformed for ValueDef<'a> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                spaces_middle: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => {

@@ -34,7 +34,7 @@ SpaceAfter(
                         ],
                         ext: None,
                     },
-                    spaces_middle: [
+                    lines_between: [
                         Newline,
                     ],
                     body_pattern: @21-26 Identifier {

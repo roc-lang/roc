@@ -42,7 +42,7 @@ SpaceAfter(
                             },
                         ],
                     },
-                    spaces_middle: [
+                    lines_between: [
                         Newline,
                     ],
                     body_pattern: @26-34 Apply(

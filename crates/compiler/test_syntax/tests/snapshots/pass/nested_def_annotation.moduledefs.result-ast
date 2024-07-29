@@ -57,7 +57,7 @@ Defs {
                                         [],
                                     ),
                                 ),
-                                spaces_middle: [
+                                lines_between: [
                                     Newline,
                                 ],
                                 body_pattern: @43-55 Identifier {

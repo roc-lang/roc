@@ -62,7 +62,7 @@ Defs {
                                     ],
                                 ),
                             ),
-                            spaces_middle: [
+                            lines_between: [
                                 Newline,
                             ],
                             body_pattern: @35-36 Identifier {
@@ -113,7 +113,7 @@ Defs {
                                                         @60-69 Inferred,
                                                     ],
                                                 ),
-                                                spaces_middle: [],
+                                                lines_between: [],
                                                 body_pattern: @78-79 Identifier {
                                                     ident: "#!0_expr",
                                                 },

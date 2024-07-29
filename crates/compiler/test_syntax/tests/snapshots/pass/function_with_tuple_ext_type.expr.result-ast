@@ -52,7 +52,7 @@ SpaceAfter(
                             ),
                         },
                     ),
-                    spaces_middle: [
+                    lines_between: [
                         Newline,
                     ],
                     body_pattern: @21-22 Identifier {

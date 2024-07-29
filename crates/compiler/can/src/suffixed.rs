@@ -900,7 +900,7 @@ pub fn apply_task_await<'a>(
                         ]),
                     ),
                 )),
-                spaces_middle: &[],
+                lines_between: &[],
                 body_pattern: arena.alloc(Loc::at(
                     loc_pat.region,
                     Pattern::Identifier { ident: new_ident },

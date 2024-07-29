@@ -38,7 +38,7 @@ Defs(
                         [],
                     ),
                 ),
-                spaces_middle: [
+                lines_between: [
                     Newline,
                 ],
                 body_pattern: @25-28 Identifier {

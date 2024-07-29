@@ -450,13 +450,13 @@ impl<'a> Formattable for ValueDef<'a> {
             AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                spaces_middle,
+                lines_between,
                 body_pattern,
                 body_expr,
             } => {
                 fmt_general_def(ann_pattern, buf, indent, ":", &ann_type.value, newlines);
 
-                fmt_annotated_body_comment(buf, indent, spaces_middle);
+                fmt_annotated_body_comment(buf, indent, lines_between);
 
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
@@ -585,9 +585,9 @@ pub fn fmt_defs(buf: &mut Buf, defs: &Defs, indent: u16) {
 pub fn fmt_annotated_body_comment<'a>(
     buf: &mut Buf,
     indent: u16,
-    spaces_middle: &'a [roc_parse::ast::CommentOrNewline<'a>],
+    lines_between: &'a [roc_parse::ast::CommentOrNewline<'a>],
 ) {
-    let mut comment_iter = spaces_middle.iter();
+    let mut comment_iter = lines_between.iter();
     if let Some(comment_first) = comment_iter.next() {
         match comment_first {
             roc_parse::ast::CommentOrNewline::Newline => (),

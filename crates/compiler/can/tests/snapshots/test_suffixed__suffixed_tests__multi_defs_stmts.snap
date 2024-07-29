@@ -62,7 +62,7 @@ Defs {
                                             @11-23 Inferred,
                                         ],
                                     ),
-                                    spaces_middle: [],
+                                    lines_between: [],
                                     body_pattern: @11-23 Identifier {
                                         ident: "#!0_stmt",
                                     },

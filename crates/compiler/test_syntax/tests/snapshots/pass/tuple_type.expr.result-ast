@@ -53,7 +53,7 @@ Defs(
                         ext: None,
                     },
                 ),
-                spaces_middle: [
+                lines_between: [
                     Newline,
                 ],
                 body_pattern: @28-29 Identifier {
