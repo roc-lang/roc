@@ -22,7 +22,7 @@ pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<Loc<ast::Expr<'a>>, SourceError<'a, SyntaxError<'a>>> {
-    let state = State::new(input.trim().as_bytes());
+    let state = State::new(input.as_bytes());
 
     match crate::expr::test_parse_expr(0, arena, state.clone()) {
         Ok(loc_expr) => Ok(loc_expr),
@@ -31,7 +31,7 @@ pub fn parse_loc_with<'a>(
 }
 
 pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, SyntaxError<'a>> {
-    let state = State::new(input.trim().as_bytes());
+    let state = State::new(input.as_bytes());
 
     parse_module_defs(arena, state, Defs::default())
 }
@@ -40,7 +40,7 @@ pub fn parse_header_with<'a>(
     arena: &'a Bump,
     input: &'a str,
 ) -> Result<ast::Module<'a>, SyntaxError<'a>> {
-    let state = State::new(input.trim().as_bytes());
+    let state = State::new(input.as_bytes());
 
     match crate::module::parse_header(arena, state.clone()) {
         Ok((header, _)) => Ok(header),

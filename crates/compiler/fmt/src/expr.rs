@@ -543,7 +543,7 @@ impl<'a> Formattable for Expr<'a> {
     }
 }
 
-fn is_str_multiline(literal: &StrLiteral) -> bool {
+pub fn is_str_multiline(literal: &StrLiteral) -> bool {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -671,10 +671,6 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
-        called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::IsAliasType => unreachable!(),
-        called_via::BinOp::IsOpaqueType => unreachable!(),
-        called_via::BinOp::Backpassing => unreachable!(),
     }
 }
 
@@ -1708,10 +1704,6 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::And
                     | BinOp::Or
                     | BinOp::Pizza => true,
-                    BinOp::Assignment
-                    | BinOp::IsAliasType
-                    | BinOp::IsOpaqueType
-                    | BinOp::Backpassing => false,
                 })
         }
         Expr::If(_, _) => true,

@@ -38,9 +38,10 @@ Full {
             Slice(start = 0, length = 2),
         ],
         space_after: [
-            Slice(start = 2, length = 0),
+            Slice(start = 2, length = 1),
         ],
         spaces: [
+            Newline,
             Newline,
             Newline,
         ],

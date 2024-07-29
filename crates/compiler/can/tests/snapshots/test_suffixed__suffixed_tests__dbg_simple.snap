@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -38,7 +40,7 @@ Defs {
                                 ident: "foo",
                             },
                         ],
-                        @29-49 LowLevelDbg(
+                        @29-36 LowLevelDbg(
                             (
                                 "test.roc:3",
                                 "   ",

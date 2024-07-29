@@ -2176,8 +2176,8 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
             await : Effect, (Str -> Effect) -> Effect
             await = \fx, cont ->
                 after
-                fx
-                cont
+                    fx
+                    cont
 
             succeed : {} -> Effect
             succeed = \{} -> (\{} -> "success")
