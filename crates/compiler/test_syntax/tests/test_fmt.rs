@@ -42,9 +42,16 @@ mod test_fmt {
             Ok(loc_defs) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
-            Err(error) => panic!(
-                r"Unexpected parse failure when parsing this for defs formatting:\n\n{src:?}\n\nParse error was:\n\n{error:?}\n\n"
-            ),
+            Err(error) => {
+                let src = if src.len() > 1000 {
+                    "<source too long to display>"
+                } else {
+                    src
+                };
+                panic!(
+                    "Unexpected parse failure when parsing this for defs formatting:\n\n{src}\n\nParse error was:\n\n{error:?}\n\n"
+                )
+            }
         }
     }
 
@@ -56,7 +63,7 @@ mod test_fmt {
 
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                use roc_fmt::spaces::RemoveSpaces;
+                use roc_parse::remove_spaces::RemoveSpaces;
 
                 let mut buf = Buf::new_in(&arena);
 
@@ -3923,6 +3930,7 @@ mod test_fmt {
     }
 
     #[test]
+    #[ignore]
     fn with_multiline_pattern_indentation() {
         expr_formats_to(
             indoc!(

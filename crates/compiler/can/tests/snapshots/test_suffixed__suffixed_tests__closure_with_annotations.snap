@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -78,7 +80,7 @@ Defs {
                                             Index(2147483648),
                                         ],
                                         regions: [
-                                            @78-91,
+                                            @82-91,
                                         ],
                                         space_before: [
                                             Slice(start = 0, length = 0),
@@ -115,8 +117,8 @@ Defs {
                                                 body_pattern: @78-79 Identifier {
                                                     ident: "#!0_expr",
                                                 },
-                                                body_expr: @78-91 Apply(
-                                                    @78-91 Var {
+                                                body_expr: @82-91 Apply(
+                                                    @82-91 Var {
                                                         module_name: "",
                                                         ident: "line",
                                                     },
@@ -131,7 +133,7 @@ Defs {
                                             },
                                         ],
                                     },
-                                    @78-91 Var {
+                                    @82-91 Var {
                                         module_name: "",
                                         ident: "#!0_expr",
                                     },

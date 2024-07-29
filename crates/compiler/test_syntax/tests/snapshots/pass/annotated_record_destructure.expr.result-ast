@@ -1,80 +1,85 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-49,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            AnnotatedBody {
-                ann_pattern: @0-8 RecordDestructure(
-                    [
-                        @2-3 Identifier {
-                            ident: "x",
-                        },
-                        @5-7 Identifier {
-                            ident: "y",
-                        },
+SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                Index(2147483648),
+            ],
+            regions: [
+                @0-49,
+            ],
+            space_before: [
+                Slice(start = 0, length = 0),
+            ],
+            space_after: [
+                Slice(start = 0, length = 0),
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                AnnotatedBody {
+                    ann_pattern: @0-8 RecordDestructure(
+                        [
+                            @2-3 Identifier {
+                                ident: "x",
+                            },
+                            @5-7 Identifier {
+                                ident: "y",
+                            },
+                        ],
+                    ),
+                    ann_type: @11-14 Apply(
+                        "",
+                        "Foo",
+                        [],
+                    ),
+                    comment: [
+                        Newline,
                     ],
-                ),
-                ann_type: @11-14 Apply(
-                    "",
-                    "Foo",
-                    [],
-                ),
-                comment: [
-                    Newline,
-                ],
-                body_pattern: @15-23 RecordDestructure(
-                    [
-                        @17-18 Identifier {
-                            ident: "x",
-                        },
-                        @20-21 Identifier {
-                            ident: "y",
-                        },
-                    ],
-                ),
-                body_expr: @26-49 Record(
-                    [
-                        @28-37 RequiredValue(
-                            @28-29 "x",
-                            [],
-                            @32-37 Str(
-                                PlainLine(
-                                    "foo",
+                    body_pattern: @15-23 RecordDestructure(
+                        [
+                            @17-18 Identifier {
+                                ident: "x",
+                            },
+                            @20-22 Identifier {
+                                ident: "y",
+                            },
+                        ],
+                    ),
+                    body_expr: @26-49 Record(
+                        [
+                            @28-37 RequiredValue(
+                                @28-29 "x",
+                                [],
+                                @32-37 Str(
+                                    PlainLine(
+                                        "foo",
+                                    ),
                                 ),
                             ),
-                        ),
-                        @39-47 RequiredValue(
-                            @39-40 "y",
-                            [],
-                            @43-47 Float(
-                                "3.14",
+                            @39-47 RequiredValue(
+                                @39-40 "y",
+                                [],
+                                @43-47 Float(
+                                    "3.14",
+                                ),
                             ),
-                        ),
-                    ],
-                ),
-            },
-        ],
-    },
-    @51-52 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "x",
+                        ],
+                    ),
+                },
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @51-52 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "x",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

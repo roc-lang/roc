@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -73,22 +75,22 @@ Defs {
                                                 type_defs: [],
                                                 value_defs: [
                                                     AnnotatedBody {
-                                                        ann_pattern: @31-42 Identifier {
+                                                        ann_pattern: @31-43 Identifier {
                                                             ident: "#!0_stmt",
                                                         },
-                                                        ann_type: @31-42 Apply(
+                                                        ann_type: @31-43 Apply(
                                                             "",
                                                             "Task",
                                                             [
-                                                                @31-42 Record {
+                                                                @31-43 Record {
                                                                     fields: [],
                                                                     ext: None,
                                                                 },
-                                                                @31-42 Inferred,
+                                                                @31-43 Inferred,
                                                             ],
                                                         ),
                                                         comment: [],
-                                                        body_pattern: @31-42 Identifier {
+                                                        body_pattern: @31-43 Identifier {
                                                             ident: "#!0_stmt",
                                                         },
                                                         body_expr: @31-42 Apply(
@@ -116,7 +118,7 @@ Defs {
                                         ),
                                         @31-42 Closure(
                                             [
-                                                @31-42 Underscore(
+                                                @31-43 Underscore(
                                                     "#!stmt",
                                                 ),
                                             ],
