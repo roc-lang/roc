@@ -1052,7 +1052,6 @@ impl<'a> RemoveSpaces<'a> for EClosure<'a> {
             EClosure::Space(inner_err, _) => EClosure::Space(*inner_err, Position::zero()),
             EClosure::Start(_) => EClosure::Start(Position::zero()),
             EClosure::Arrow(_) => EClosure::Arrow(Position::zero()),
-            EClosure::Comma(_) => EClosure::Comma(Position::zero()),
             EClosure::Arg(_) => EClosure::Arg(Position::zero()),
             EClosure::Pattern(inner_err, _) => {
                 EClosure::Pattern(inner_err.remove_spaces(arena), Position::zero())
