@@ -302,6 +302,7 @@ pub enum EExpr<'a> {
     Start(Position),
     End(Position),
     BadExprEnd(Position),
+    StmtAfterExpr(Position),
     Space(BadInputError, Position),
 
     Dot(Position),
@@ -327,6 +328,8 @@ pub enum EExpr<'a> {
     QualifiedTag(Position),
     BackpassComma(Position),
     BackpassArrow(Position),
+    BackpassContinue(Position),
+    DbgContinue(Position),
 
     When(EWhen<'a>, Position),
     If(EIf<'a>, Position),
@@ -355,6 +358,7 @@ pub enum EExpr<'a> {
     IndentEnd(Position),
 
     UnexpectedComma(Position),
+    UnexpectedTopLevelExpr(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -823,8 +827,9 @@ where
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "{:<5?}: {}{:<50}",
+            "{:<5?}:{:<2} {}{:<50}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -840,8 +845,9 @@ where
         };
 
         println!(
-            "{:<5?}: {}{:<50} {:<15} {:?}",
+            "{:<5?}:{:<2} {}{:<50} {:<15} {:?}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),

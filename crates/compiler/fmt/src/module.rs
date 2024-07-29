@@ -3,10 +3,8 @@ use std::cmp::max;
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
-use crate::spaces::RemoveSpaces;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
-use bumpalo::Bump;
 use roc_parse::ast::{Collection, CommentOrNewline, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword, Keyword,
@@ -55,12 +53,6 @@ macro_rules! keywords {
                 ) {
                     buf.indent(indent);
                     buf.push_str($name::KEYWORD);
-                }
-            }
-
-            impl<'a> RemoveSpaces<'a> for $name {
-                fn remove_spaces(&self, _arena: &'a Bump) -> Self {
-                    *self
                 }
             }
         )*

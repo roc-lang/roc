@@ -485,6 +485,26 @@ trait Backend<'a> {
         element_decrement
     }
 
+    fn copy_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self
+            .interner_mut()
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
+
+        let element_copy = self.debug_symbol("element_copy");
+        let element_copy_symbol = self.build_indirect_copy(layout);
+
+        let element_copy_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_copy_symbol),
+            [box_layout, box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_copy, element_copy_string);
+
+        element_copy
+    }
+
     fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
 
     fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
@@ -1955,8 +1975,9 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
-                let inc_elem_fn = self.increment_fn_pointer(list_argument.element_layout);
-                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
+                let inc_fn_ptr = self.increment_fn_pointer(list_argument.element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(list_argument.element_layout);
+                let copy_fn_ptr = self.copy_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
 
@@ -1969,6 +1990,7 @@ trait Backend<'a> {
                 //    inc: Inc
                 //    dec: Dec
                 //    update_mode: UpdateMode,
+                //    copy: CopyFn
 
                 self.build_fn_call(
                     sym,
@@ -1980,9 +2002,10 @@ trait Backend<'a> {
                         i,
                         j,
                         list_argument.element_refcounted,
-                        inc_elem_fn,
-                        dec_elem_fn,
+                        inc_fn_ptr,
+                        dec_fn_ptr,
                         update_mode,
+                        copy_fn_ptr,
                     ],
                     &[
                         list_layout,
@@ -1994,6 +2017,7 @@ trait Backend<'a> {
                         layout_usize,
                         layout_usize,
                         Layout::U8,
+                        layout_usize,
                     ],
                     ret_layout,
                 );
@@ -2007,8 +2031,8 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
-                let inc_elem_fn = self.increment_fn_pointer(list_argument.element_layout);
-                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
+                let inc_fn_ptr = self.increment_fn_pointer(list_argument.element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
 
@@ -2016,8 +2040,8 @@ trait Backend<'a> {
                 //    alignment: u32,
                 //    element_width: usize,
                 //    element_refcounted: bool,
-                //    inc_elem_fn: Inc,
-                //    dec_elem_fn: Dec,
+                //    inc_fn_ptr: Inc,
+                //    dec_fn_ptr: Dec,
                 //    update_mode: UpdateMode,
 
                 self.build_fn_call(
@@ -2028,8 +2052,8 @@ trait Backend<'a> {
                         list_argument.alignment,
                         list_argument.element_width,
                         list_argument.element_refcounted,
-                        inc_elem_fn,
-                        dec_elem_fn,
+                        inc_fn_ptr,
+                        dec_fn_ptr,
                         update_mode,
                     ],
                     &[
@@ -2082,7 +2106,7 @@ trait Backend<'a> {
                 let list_layout = arg_layouts[0];
                 let list_argument = self.list_argument(list_layout);
 
-                let dec_elem_fn = self.decrement_fn_pointer(list_argument.element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(list_argument.element_layout);
 
                 let layout_usize = Layout::U64;
 
@@ -2090,7 +2114,7 @@ trait Backend<'a> {
                 //    alignment: u32,
                 //    element_width: usize,
                 //    element_refcounted: bool,
-                //    dec_elem_fn: Dec,
+                //    dec_fn_ptr: Dec,
 
                 self.build_fn_call(
                     sym,
@@ -2100,7 +2124,7 @@ trait Backend<'a> {
                         list_argument.alignment,
                         list_argument.element_width,
                         list_argument.element_refcounted,
-                        dec_elem_fn,
+                        dec_fn_ptr,
                     ],
                     &[
                         list_layout,
@@ -2582,6 +2606,7 @@ trait Backend<'a> {
     fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_inc_n(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_copy(&mut self, layout: InLayout<'a>) -> Symbol;
 
     fn build_list_clone(
         &mut self,

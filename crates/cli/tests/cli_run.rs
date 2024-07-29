@@ -543,16 +543,6 @@ mod cli_run {
     }
 
     #[test]
-    fn platform_switching_swift() {
-        test_roc_app_slim(
-            "examples/platform-switching",
-            "rocLovesSwift.roc",
-            "Roc <3 Swift!\n",
-            UseValgrind::Yes,
-        )
-    }
-
-    #[test]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -786,11 +776,6 @@ mod cli_run {
     }
 
     #[test]
-    fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
-    }
-
-    #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
@@ -908,11 +893,6 @@ mod cli_run {
             UseValgrind::Yes,
             TestCliCommands::Many,
         )
-    }
-
-    #[test]
-    fn swift_ui() {
-        test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
     }
 
     #[test]
@@ -1054,11 +1034,6 @@ mod cli_run {
 "#,
             UseValgrind::Yes,
         )
-    }
-
-    #[test]
-    fn inspect_gui() {
-        test_roc_app_slim("examples", "inspect-gui.roc", "", UseValgrind::No)
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

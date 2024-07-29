@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -57,8 +59,8 @@ Defs {
                         ident: "await",
                     },
                     [
-                        @29-41 Apply(
-                            @29-41 Var {
+                        @33-41 Apply(
+                            @33-41 Var {
                                 module_name: "",
                                 ident: "foo",
                             },

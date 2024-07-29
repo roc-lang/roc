@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -45,7 +47,7 @@ Defs {
                     @15-35 Closure(
                         [
                             Identifier {
-                                ident: "#!a0",
+                                ident: "#!0_arg",
                             },
                         ],
                         @15-35 Defs(
@@ -73,7 +75,7 @@ Defs {
                                             @16-26 ParensAround(
                                                 Var {
                                                     module_name: "",
-                                                    ident: "#!a0",
+                                                    ident: "#!0_arg",
                                                 },
                                             ),
                                             [

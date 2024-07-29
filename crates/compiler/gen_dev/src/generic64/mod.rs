@@ -2318,6 +2318,22 @@ impl<
         refcount_proc_name
     }
 
+    fn build_indirect_copy(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) =
+            self.helper_proc_gen
+                .gen_copy_proc(ident_ids, self.layout_interner, layout);
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
     fn build_higher_order_lowlevel(
         &mut self,
         dst: &Symbol,
@@ -2413,8 +2429,9 @@ impl<
                 // Load element_refcounted argument (bool).
                 self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
 
-                let inc_elem_fn = self.increment_fn_pointer(element_layout);
-                let dec_elem_fn = self.decrement_fn_pointer(element_layout);
+                let inc_fn_ptr = self.increment_fn_pointer(element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(element_layout);
+                let copy_fn_ptr = self.copy_fn_pointer(element_layout);
 
                 //    input: RocList,
                 //    caller: CompareFn,
@@ -2426,6 +2443,7 @@ impl<
                 //    element_refcounted: bool,
                 //    inc: Inc,
                 //    dec: Dec,
+                //    copy: CopyFn,
 
                 let arguments = [
                     xs,
@@ -2436,8 +2454,9 @@ impl<
                     alignment,
                     element_width,
                     Symbol::DEV_TMP3,
-                    inc_elem_fn,
-                    dec_elem_fn,
+                    inc_fn_ptr,
+                    dec_fn_ptr,
+                    copy_fn_ptr,
                 ];
 
                 let layouts = [
@@ -2449,6 +2468,7 @@ impl<
                     Layout::U32,
                     usize_,
                     Layout::BOOL,
+                    usize_,
                     usize_,
                     usize_,
                 ];
@@ -2493,8 +2513,8 @@ impl<
         // Load element_refcounted argument (bool).
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
 
-        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
-        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let dec_fn_ptr = self.decrement_fn_pointer(elem_layout);
 
         // Setup the return location.
         let base_offset =
@@ -2510,9 +2530,9 @@ impl<
             // element_refcounted
             Symbol::DEV_TMP3,
             // inc
-            inc_elem_fn,
+            inc_fn_ptr,
             // dec
-            dec_elem_fn,
+            dec_fn_ptr,
         ];
         let usize_layout = Layout::U64;
         let lowlevel_arg_layouts = [
@@ -2564,7 +2584,7 @@ impl<
         // Load element_refcounted argument (bool).
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
 
-        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
 
         // Setup the return location.
         let base_offset =
@@ -2580,7 +2600,7 @@ impl<
             // element_refcounted
             Symbol::DEV_TMP3,
             // Inc element fn
-            inc_elem_fn,
+            inc_fn_ptr,
         ];
         let layout_usize = Layout::U64;
         let lowlevel_arg_layouts = [
@@ -2637,7 +2657,7 @@ impl<
         self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
         self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
 
-        let inc_elem_fn = self.increment_fn_pointer(element_layout);
+        let inc_fn_ptr = self.increment_fn_pointer(element_layout);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
@@ -2664,7 +2684,7 @@ impl<
             // element_refcounted
             Symbol::DEV_TMP3,
             // Inc element fn
-            inc_elem_fn,
+            inc_fn_ptr,
             // update_mode
             Symbol::DEV_TMP4,
          ];
@@ -2733,6 +2753,7 @@ impl<
         let base_offset =
             self.storage_manager
                 .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
+        let copy_fn_ptr = self.copy_fn_pointer(elem_layout);
 
         let lowlevel_args = [
             list,
@@ -2740,8 +2761,11 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // copy
+            copy_fn_ptr,
         ];
-        let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64, usize_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -2844,8 +2868,9 @@ impl<
         // Load element_refcounted argument (bool).
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
 
-        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
-        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let dec_fn_ptr = self.decrement_fn_pointer(elem_layout);
+        let copy_fn_ptr = self.copy_fn_pointer(elem_layout);
 
         // Setup the return location.
         let base_offset =
@@ -2891,9 +2916,10 @@ impl<
             Symbol::DEV_TMP2,
             Symbol::DEV_TMP3,
             Symbol::DEV_TMP4,
-            inc_elem_fn,
-            dec_elem_fn,
+            inc_fn_ptr,
+            dec_fn_ptr,
             Symbol::DEV_TMP5,
+            copy_fn_ptr,
          ];
         let lowlevel_arg_layouts = [
             list_layout,
@@ -2902,6 +2928,7 @@ impl<
             u64_layout,
             u64_layout,
             Layout::BOOL,
+            u64_layout,
             u64_layout,
             u64_layout,
             u64_layout,
@@ -2955,8 +2982,8 @@ impl<
         // Load element_refcounted argument (bool).
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
 
-        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
-        let dec_elem_fn = self.decrement_fn_pointer(elem_layout);
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let dec_fn_ptr = self.decrement_fn_pointer(elem_layout);
 
         // Setup the return location.
         let base_offset =
@@ -2973,8 +3000,8 @@ impl<
             Symbol::DEV_TMP2,
             // element_refcounted
             Symbol::DEV_TMP3,
-            inc_elem_fn,
-            dec_elem_fn,
+            inc_fn_ptr,
+            dec_fn_ptr,
          ];
         let lowlevel_arg_layouts = [
             list_a_layout,
@@ -3042,7 +3069,8 @@ impl<
         // Load element_refcounted argument (bool).
         self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
 
-        let inc_elem_fn = self.increment_fn_pointer(elem_layout);
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let copy_fn_ptr = self.copy_fn_pointer(elem_layout);
 
         // Setup the return location.
         let base_offset =
@@ -3060,7 +3088,9 @@ impl<
             // element_refcounted
             Symbol::DEV_TMP4,
             // inc
-            inc_elem_fn,
+            inc_fn_ptr,
+            // copy
+            copy_fn_ptr,
         ];
         let usize_layout = Layout::U64;
         let lowlevel_arg_layouts = [
@@ -3069,6 +3099,7 @@ impl<
             Layout::U64,
             Layout::U64,
             Layout::BOOL,
+            usize_layout,
             usize_layout,
         ];
 

@@ -1,6 +1,8 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_str_bitcode_fn;
-use crate::llvm::build::{get_tag_id, store_roc_value, tag_pointer_clear_tag_id, Env};
+use crate::llvm::build::{
+    create_entry_block_alloca, get_tag_id, store_roc_value, tag_pointer_clear_tag_id, Env,
+};
 use crate::llvm::build_list::{self, incrementing_elem_loop};
 use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use inkwell::builder::Builder;
@@ -1030,7 +1032,7 @@ fn build_clone_builtin<'a, 'ctx>(
                 );
 
                 // if the element has any pointers, we clone them to this offset
-                let rest_offset = bd.new_build_alloca(env.ptr_int(), "rest_offset");
+                let rest_offset = create_entry_block_alloca(env, env.ptr_int(), "rest_offset");
 
                 let element_stack_size = env
                     .ptr_int()
