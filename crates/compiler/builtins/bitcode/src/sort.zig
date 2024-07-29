@@ -168,13 +168,13 @@ fn flux_analyze(
         balance_b += @intFromBool(gt);
         ptr_b += element_width;
     }
-    if (quad2 < quad3) {
+    if (quad1 < quad3) {
         // Must inc here, due to being in a branch.
         const gt = compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_data) == GT;
         balance_c += @intFromBool(gt);
         ptr_c += element_width;
     }
-    if (quad3 < quad3) {
+    if (quad1 < quad4) {
         // Must inc here, due to being in a branch.
         balance_d += @intFromBool(compare_inc(cmp, cmp_data, ptr_d, ptr_d + element_width, data_is_owned, inc_n_data) == GT);
         ptr_d += element_width;
@@ -226,10 +226,12 @@ fn flux_analyze(
         }
     }
 
-    // 4*divCeil(count-7, 4) guaranteed compares.
     if (data_is_owned) {
-        const n: usize = std.math.divCeil(usize, count - 7, 4) catch unreachable;
-        inc_n_data(cmp_data, 4 * (n));
+        if (count > 7) {
+            // 4*divCeil(count-7, 4) guaranteed compares.
+            const n: usize = std.math.divCeil(usize, count - 7, 4) catch unreachable;
+            inc_n_data(cmp_data, 4 * n);
+        }
     }
     while (count > 7) : (count -= 4) {
         balance_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width) == GT);
@@ -371,7 +373,7 @@ fn flux_analyze(
             flux_partition(array, swap, array, swap + half1 * element_width, half1, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             if (balance_c != 0)
                 quadsort_swap(ptr_b + element_width, quad3, swap, swap_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
-            flux_partition(ptr_c + element_width, swap, ptr_c + element_width, swap + quad3 * element_width, quad3, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            flux_partition(ptr_c + element_width, swap, ptr_c + element_width, swap + quad4 * element_width, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         },
         8 => {
             flux_partition(array, swap, array, swap + (half1 + quad3) * element_width, (half1 + quad3), cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
@@ -439,12 +441,12 @@ fn flux_analyze(
             cross_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         } else {
             // Both halves need merge.
-            cross_merge(swap + half1 * element_width, array + half1 * element_width, quad3, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+            cross_merge(swap + half1 * element_width, ptr_b + element_width, quad3, quad4, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
             cross_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
         }
     }
     // Merge bach to original list.
-    cross_merge(swap, array, half1, half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
+    cross_merge(array, swap, half1, half2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data);
 }
 
 fn flux_partition(
