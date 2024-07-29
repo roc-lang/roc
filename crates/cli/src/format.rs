@@ -6,9 +6,9 @@ use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
 use roc_fmt::module::fmt_module;
-use roc_fmt::spaces::RemoveSpaces;
 use roc_fmt::{Ast, Buf};
 use roc_parse::module::parse_module_defs;
+use roc_parse::remove_spaces::RemoveSpaces;
 use roc_parse::{module, parser::SyntaxError, state::State};
 
 #[derive(Copy, Clone, Debug)]
