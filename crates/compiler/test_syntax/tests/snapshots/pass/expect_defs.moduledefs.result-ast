@@ -62,7 +62,7 @@ Defs {
                                         },
                                     ],
                                 ),
-                                comment: [
+                                spaces_middle: [
                                     Newline,
                                 ],
                                 body_pattern: @30-34 Identifier {
@@ -168,7 +168,7 @@ Defs {
                                     ],
                                     ext: None,
                                 },
-                                comment: [
+                                spaces_middle: [
                                     Newline,
                                 ],
                                 body_pattern: @190-196 Identifier {
@@ -250,7 +250,7 @@ Defs {
                                     ],
                                     ext: None,
                                 },
-                                comment: [
+                                spaces_middle: [
                                     Newline,
                                 ],
                                 body_pattern: @326-334 Identifier {

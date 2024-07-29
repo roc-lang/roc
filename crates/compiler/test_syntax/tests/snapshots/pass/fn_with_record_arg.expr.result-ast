@@ -52,7 +52,7 @@ Defs(
                         [],
                     ),
                 ),
-                comment: [
+                spaces_middle: [
                     Newline,
                 ],
                 body_pattern: @45-50 Identifier {

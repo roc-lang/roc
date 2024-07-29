@@ -32,7 +32,7 @@ SpaceAfter(
                         "Foo",
                         [],
                     ),
-                    comment: [
+                    spaces_middle: [
                         Newline,
                     ],
                     body_pattern: @15-23 Tuple(

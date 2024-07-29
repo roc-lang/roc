@@ -42,7 +42,7 @@ SpaceAfter(
                             },
                         ],
                     },
-                    comment: [
+                    spaces_middle: [
                         Newline,
                     ],
                     body_pattern: @26-34 Apply(

@@ -2969,7 +2969,7 @@ fn to_pending_value_def<'a>(
         AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment: _,
+            spaces_middle: _,
             body_pattern,
             body_expr,
         } => {

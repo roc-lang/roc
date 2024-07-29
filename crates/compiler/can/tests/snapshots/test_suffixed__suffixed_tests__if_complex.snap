@@ -114,7 +114,7 @@ Defs {
                                     ),
                                 ],
                             ),
-                            comment: [
+                            spaces_middle: [
                                 Newline,
                             ],
                             body_pattern: @95-98 Identifier {
@@ -194,7 +194,7 @@ Defs {
                                                                                     @140-152 Inferred,
                                                                                 ],
                                                                             ),
-                                                                            comment: [],
+                                                                            spaces_middle: [],
                                                                             body_pattern: @140-152 Identifier {
                                                                                 ident: "#!0_stmt",
                                                                             },
@@ -316,7 +316,7 @@ Defs {
                                                                                                     @227-239 Inferred,
                                                                                                 ],
                                                                                             ),
-                                                                                            comment: [],
+                                                                                            spaces_middle: [],
                                                                                             body_pattern: @227-239 Identifier {
                                                                                                 ident: "#!2_stmt",
                                                                                             },

@@ -24,7 +24,7 @@ Defs(
                     "Int",
                     [],
                 ),
-                comment: [
+                spaces_middle: [
                     Newline,
                 ],
                 body_pattern: @10-13 Identifier {

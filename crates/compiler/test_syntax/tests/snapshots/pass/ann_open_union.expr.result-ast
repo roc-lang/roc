@@ -40,7 +40,7 @@ Defs(
                         },
                     ],
                 },
-                comment: [
+                spaces_middle: [
                     Newline,
                 ],
                 body_pattern: @29-32 Identifier {
