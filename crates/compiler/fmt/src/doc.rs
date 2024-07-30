@@ -4,11 +4,11 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityImpls, AssignedField, Base, Collection, Defs, EscapedChar, Expr, ExtractSpaces,
-        Header, ImplementsAbilities, ImplementsAbility, ImportAlias, ImportAsKeyword,
-        ImportExposingKeyword, ImportedModuleName, Module, Pattern, SingleQuoteLiteral,
-        SingleQuoteSegment, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
-        TypeHeader, ValueDef,
+        AbilityImpls, AssignedField, Base, Collection, CommentOrNewline, Defs, EscapedChar, Expr,
+        ExtractSpaces, Header, ImplementsAbilities, ImplementsAbility, ImportAlias,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Module, Pattern,
+        SingleQuoteLiteral, SingleQuoteSegment, Spaced, Spaces, StrLiteral, StrSegment, Tag,
+        TypeAnnotation, TypeDef, TypeHeader, ValueDef,
     },
     header::{
         ExposedName, ExposesKeyword, GeneratesKeyword, ImportsEntry, ImportsKeyword, KeywordItem,
@@ -160,21 +160,23 @@ impl<'a> Doc<'a> {
     fn blank_line(&mut self) {
         self.push(Node::BlankLine);
     }
-}
 
-// #[derive(Debug)]
-// pub enum Doc<'a> {
-//     Copy(&'a str),
-//     OptionalNewline,
-//     WhenMultiline(Box<Doc<'a>>),
-//     ForcedNewline,
-//     Space,
-//     Literal(&'static str),
-//     Comment(&'a str),
-//     Concat(Vec<Doc<'a>>),
-//     Group(Vec<Doc<'a>>),
-//     Indent(Box<Doc<'a>>),
-// }
+    fn comment(&mut self, comment: &'a str) {
+        self.push(Node::Comment(comment));
+    }
+
+    fn comments(&mut self, comments: &[CommentOrNewline<'a>]) {
+        for comment in comments {
+            match comment {
+                CommentOrNewline::DocComment(comment) | CommentOrNewline::LineComment(comment) => {
+                    // TODO: differentiate doc comments!
+                    self.comment(comment)
+                }
+                CommentOrNewline::Newline => self.push(Node::OptionalNewline),
+            }
+        }
+    }
+}
 
 enum Prec {
     TaskAwaitBang,
@@ -380,49 +382,6 @@ impl<'a> Docify<'a> for ImportedModuleName<'a> {
 
 impl<'a> Docify<'a> for ImportsEntry<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
-        // old:
-        //
-        // use roc_parse::header::ImportsEntry::*;
-
-        // buf.indent(indent);
-
-        // match entry {
-        //     Module(module, loc_exposes_entries) => {
-        //         buf.push_str(module.as_str());
-
-        //         if !loc_exposes_entries.is_empty() {
-        //             buf.push('.');
-
-        //             fmt_collection(
-        //                 buf,
-        //                 indent,
-        //                 Braces::Curly,
-        //                 *loc_exposes_entries,
-        //                 Newlines::No,
-        //             )
-        //         }
-        //     }
-
-        //     Package(pkg, name, entries) => {
-        //         buf.push_str(pkg);
-        //         buf.push('.');
-        //         buf.push_str(name.as_str());
-
-        //         if !entries.is_empty() {
-        //             buf.push('.');
-
-        //             fmt_collection(buf, indent, Braces::Curly, *entries, Newlines::No)
-        //         }
-        //     }
-
-        //     IngestedFile(file_name, typed_ident) => {
-        //         fmt_str_literal(buf, *file_name, indent);
-        //         buf.push_str_allow_spaces(" as ");
-        //         typed_ident.format(buf, 0);
-        //     }
-        // }
-        //
-
         match self {
             ImportsEntry::Module(module, entries) => {
                 module.docify(doc);
@@ -831,10 +790,15 @@ impl<'a> Docify<'a> for Expr<'a> {
                 }
                 doc.indent_to(begin_indent);
                 doc.push(Node::OptionalNewline);
-                doc.group_to(begin)
+                doc.group_to(begin);
             }
-            Expr::SpaceBefore(expr, _comments) | Expr::SpaceAfter(expr, _comments) => {
-                expr.docify(doc)
+            Expr::SpaceBefore(expr, comments) => {
+                doc.comments(comments);
+                expr.docify(doc);
+            }
+            Expr::SpaceAfter(expr, comments) => {
+                expr.docify(doc);
+                doc.comments(comments);
             }
             Expr::ParensAround(expr) => {
                 group!(doc, {
@@ -954,8 +918,14 @@ impl<'a> Docify<'a> for AbilityImpls<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             AbilityImpls::AbilityImpls(items) => docify_collection(items, Braces::Curly, doc),
-            AbilityImpls::SpaceBefore(_, _) => todo!(),
-            AbilityImpls::SpaceAfter(_, _) => todo!(),
+            AbilityImpls::SpaceBefore(item, comments) => {
+                doc.comments(comments);
+                item.docify(doc);
+            }
+            AbilityImpls::SpaceAfter(item, comments) => {
+                item.docify(doc);
+                doc.comments(comments);
+            }
         }
     }
 }
@@ -970,8 +940,14 @@ impl<'a> Docify<'a> for ImplementsAbility<'a> {
                     impls.value.docify(doc);
                 }
             }
-            ImplementsAbility::SpaceBefore(item, _comments)
-            | ImplementsAbility::SpaceAfter(item, _comments) => item.docify(doc),
+            ImplementsAbility::SpaceBefore(item, comments) => {
+                doc.comments(comments);
+                item.docify(doc);
+            }
+            ImplementsAbility::SpaceAfter(item, comments) => {
+                item.docify(doc);
+                doc.comments(comments);
+            }
         }
     }
 }
@@ -984,8 +960,14 @@ impl<'a> Docify<'a> for ImplementsAbilities<'a> {
                 doc.space();
                 docify_collection(items, Braces::Square, doc)
             }
-            ImplementsAbilities::SpaceBefore(item, _comments)
-            | ImplementsAbilities::SpaceAfter(item, _comments) => item.docify(doc),
+            ImplementsAbilities::SpaceBefore(item, comments) => {
+                doc.comments(comments);
+                item.docify(doc);
+            }
+            ImplementsAbilities::SpaceAfter(item, comments) => {
+                item.docify(doc);
+                doc.comments(comments);
+            }
         }
     }
 }
@@ -1044,7 +1026,14 @@ impl<'a> Docify<'a> for Tag<'a> {
                     }
                 })
             }
-            Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => tag.docify(doc),
+            Tag::SpaceBefore(item, comments) => {
+                doc.comments(comments);
+                item.docify(doc);
+            }
+            Tag::SpaceAfter(item, comments) => {
+                item.docify(doc);
+                doc.comments(comments);
+            }
             Tag::Malformed(_) => todo!(),
         }
     }
@@ -1247,8 +1236,13 @@ impl<'a, T: Docify<'a>> Docify<'a> for Spaced<'a, T> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             Spaced::Item(t) => t.docify(doc),
-            Spaced::SpaceBefore(inner, _comment) | Spaced::SpaceAfter(inner, _comment) => {
-                inner.docify(doc)
+            Spaced::SpaceBefore(item, comments) => {
+                doc.comments(comments);
+                item.docify(doc);
+            }
+            Spaced::SpaceAfter(item, comments) => {
+                item.docify(doc);
+                doc.comments(comments);
             }
         }
     }
@@ -1301,6 +1295,9 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                     });
                 });
                 doc.push(Node::ForcedNewline);
+                if let Some(comment) = comment {
+                    doc.comment(comment);
+                }
                 group!(doc, {
                     body_pattern.value.docify(doc);
                     doc.space();
@@ -1313,7 +1310,7 @@ impl<'a> Docify<'a> for ValueDef<'a> {
             }
             ValueDef::Dbg {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => {
                 group!(doc, {
                     doc.literal("dbg");
@@ -1325,7 +1322,7 @@ impl<'a> Docify<'a> for ValueDef<'a> {
             }
             ValueDef::Expect {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => {
                 group!(doc, {
                     doc.literal("expect");
@@ -1337,7 +1334,7 @@ impl<'a> Docify<'a> for ValueDef<'a> {
             }
             ValueDef::ExpectFx {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => {
                 doc.literal("expect-fx");
                 doc.space();
@@ -1450,24 +1447,31 @@ impl<'a, K: Docify<'a>, T: Docify<'a>> Docify<'a> for KeywordItem<'a, K, T> {
 impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
-            AssignedField::RequiredValue(name, _comments, value) => {
+            AssignedField::RequiredValue(name, comments, value) => {
                 let begin = doc.begin();
                 doc.push(Node::Copy(name.value));
                 doc.literal(":");
                 doc.space();
-                doc.space();
+                doc.comments(comments);
                 value.value.docify(doc);
             }
-            AssignedField::OptionalValue(name, _comments, value) => {
+            AssignedField::OptionalValue(name, comments, value) => {
                 let begin = doc.begin();
                 doc.push(Node::Copy(name.value));
                 doc.literal("?");
                 doc.space();
+                doc.comments(comments);
                 value.value.docify(doc);
             }
             AssignedField::LabelOnly(name) => doc.push(Node::Copy(name.value)),
-            AssignedField::SpaceBefore(item, _comment)
-            | AssignedField::SpaceAfter(item, _comment) => item.docify(doc),
+            AssignedField::SpaceBefore(item, comments) => {
+                doc.comments(comments);
+                item.docify(doc);
+            }
+            AssignedField::SpaceAfter(item, comments) => {
+                item.docify(doc);
+                doc.comments(comments);
+            }
             AssignedField::Malformed(_) => todo!(),
         }
     }
@@ -1589,8 +1593,13 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.space();
                 doc.copy(pat_as.identifier.value);
             }
-            Pattern::SpaceBefore(pat, _comment) | Pattern::SpaceAfter(pat, _comment) => {
-                pat.docify(doc)
+            Pattern::SpaceBefore(pat, comments) => {
+                doc.comments(comments);
+                pat.docify(doc);
+            }
+            Pattern::SpaceAfter(pat, comments) => {
+                pat.docify(doc);
+                doc.comments(comments);
             }
             Pattern::Malformed(_) => todo!(),
             Pattern::MalformedIdent(_, _) => todo!(),
@@ -1772,7 +1781,7 @@ impl<'a> Doc<'a> {
                 Node::Space | Node::OptionalNewline => 1,
                 Node::WhenMultiline(_) => 0,
                 Node::ForcedNewline | Node::BlankLine => 0,
-                Node::Comment(s) => s.len(),
+                Node::Comment(s) => s.len() + 2, // '# ' prefix
                 Node::Group(_) | Node::Indent(_) => 0,
             },
             |a, b| a + b,
@@ -1942,7 +1951,10 @@ impl<'a> Doc<'a> {
                 }
                 Node::Comment(s) => {
                     buf.indent(indent);
-                    buf.push_str(s)
+                    buf.push_str("#");
+                    buf.spaces(1);
+                    buf.push_str(s);
+                    buf.ensure_ends_with_newline();
                 }
                 Node::Group(_) | Node::Indent(_) => {}
             }
