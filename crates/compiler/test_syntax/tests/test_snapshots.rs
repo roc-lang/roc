@@ -304,6 +304,7 @@ mod test_snapshots {
         pass/dbg.expr,
         pass/dbg_multiline.expr,
         pass/defs_suffixed_middle_extra_indents.moduledefs,
+        pass/deprecated_interpolated_string.expr,
         pass/destructure_tag_assignment.expr,
         pass/docs.expr,
         pass/empty_app_header.header,
@@ -438,6 +439,7 @@ mod test_snapshots {
         pass/pattern_as_list_rest.expr,
         pass/pattern_as_spaces.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
+        pass/pizza_bang.moduledefs,
         pass/plus_if.expr,
         pass/plus_when.expr,
         pass/pos_inf_float.expr,

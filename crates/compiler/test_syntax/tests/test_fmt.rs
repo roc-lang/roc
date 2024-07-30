@@ -6266,9 +6266,104 @@ mod test_fmt {
                     [first as last]
                     | [first, last] ->
                         first
-                
+
                     _ -> Not
                 "
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_annotated_body() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_comment() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32 # comment
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_comments() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32
+                # comment
+                # comment 2
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_comments_without_newlines() {
+        expr_formats_to(
+            indoc!(
+                r"
+                    x : i32
+
+                    # comment
+
+                    # comment 2
+
+                    x = 1
+                    x
+                "
+            ),
+            indoc!(
+                r"
+                    x : i32
+                    # comment
+                    # comment 2
+                    x = 1
+                    x
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_annotated_body_blank_comment() {
+        expr_formats_same(indoc!(
+            r"
+                x : i32
+                #
+                x = 1
+                x
+            "
+        ));
+    }
+
+    #[test]
+    fn preserve_annotated_body_without_newlines() {
+        expr_formats_to(
+            indoc!(
+                r"
+                x : i32
+
+                x = 1
+                x
+            "
+            ),
+            indoc!(
+                r"
+                x : i32
+                x = 1
+                x
+            "
             ),
         );
     }

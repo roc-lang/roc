@@ -1,0 +1,17 @@
+SpaceAfter(
+    Str(
+        Line(
+            [
+                DeprecatedInterpolated(
+                    @3-4 Var {
+                        module_name: "",
+                        ident: "e",
+                    },
+                ),
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
