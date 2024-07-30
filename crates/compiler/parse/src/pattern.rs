@@ -28,17 +28,29 @@ pub enum PatternType {
 }
 
 pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    one_of!(
+    move |arena, state: State<'a>, min_indent| {
         // An ident is the most common param, e.g. \foo -> ...
-        loc_ident_pattern_help(true),
+        match loc_ident_pattern_help(true).parse(arena, state.clone(), min_indent) {
+            Ok(ok) => return Ok(ok),
+            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+            Err(_) => {}
+        }
         // Underscore is also common, e.g. \_ -> ...
-        loc_underscore_pattern_help(),
+        match loc_underscore_pattern_help().parse(arena, state.clone(), min_indent) {
+            Ok(ok) => return Ok(ok),
+            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+            Err(_) => {}
+        }
         // You can destructure records in params, e.g. \{ x, y } -> ...
-        loc_record_pattern_help(),
+        match loc_record_pattern_help().parse(arena, state.clone(), min_indent) {
+            Ok(ok) => return Ok(ok),
+            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+            Err(_) => {}
+        }
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
-        loc_pattern_in_parens_help()
-    )
+        loc_pattern_in_parens_help().parse(arena, state.clone(), min_indent)
+    }
 }
 
 pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
