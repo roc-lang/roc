@@ -53,26 +53,7 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
-# NOTE: roc-lang/inkwell is a fork of TheDan64/inkwell which does not change anything.
-#
-# The reason for this fork is that the way Inkwell is designed, you have to use
-# a particular branch (e.g. "llvm8-0") in Cargo.toml. That would be fine, except that
-# breaking changes get pushed directly to that branch, which breaks our build
-# without warning.
-#
-# We tried referencing a specific rev on TheDan64/inkwell directly (instead of branch),
-# but although that worked locally, it did not work on GitHub Actions. (After a few
-# hours of investigation, gave up trying to figure out why.) So this is the workaround:
-# having an immutable tag on the roc-lang/inkwell fork which points to
-# a particular "release" of Inkwell.
-#
-# When we want to update Inkwell, we can sync up roc-lang/inkwell to the latest
-# commit of TheDan64/inkwell, push a new tag which points to the latest commit,
-# change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
-# This way, GitHub Actions works and nobody's builds get broken.
-# TODO: Switch this back to roc-lang/inkwell once it is updated
-inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm18-0"] }
-
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "89e06af", features = ["llvm18-0"] }
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
 backtrace = "0.3.67"
 base64-url = "1.4.13"
