@@ -204,13 +204,15 @@ batch = \current -> \next ->
 ## ```
 ##
 seq : List (Task ok err) -> Task (List ok) err
-seq = \tasks ->
+seq = \taskList ->
+    Task.loop (taskList, List.withCapacity (List.len taskList)) \(tasks, values) ->
+        when tasks is
+            [task, .. as rest] ->
+                value = task!
+                Task.ok (Step (rest, List.append values value))
+            [] ->
+                Task.ok (Done values)
 
-    init = ok (List.withCapacity (List.len tasks))
-
-    List.walkBackwards tasks init \state, task ->
-        await task \value ->
-            map state \values -> List.prepend values value
 
 ## Apply a task repeatedly for each item in a list
 ##
