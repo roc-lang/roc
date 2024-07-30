@@ -13,11 +13,12 @@ mod test_fmt {
     use roc_parse::header::{self, parse_module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::parser::SyntaxError;
+    use roc_parse::remove_spaces::RemoveSpaces;
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
     use test_syntax::minimize::print_minimizations;
-    use test_syntax::test_helpers::Input;
+    use test_syntax::test_helpers::{Input, InputKind};
 
     fn check_formatting(expected: &'_ str) -> impl Fn(Input) + '_ {
         let expected = expected.trim();
@@ -5861,7 +5862,7 @@ mod test_fmt {
 
                 let actual = Input::Full(&src).parse_in(&arena).unwrap_or_else(|err| {
                     eprintln!("Unexpected parse failure when parsing this for formatting\n\nParse error was:\n\n{:?}\n\n", err);
-                    print_minimizations(&src);
+                    print_minimizations(&src, InputKind::Full);
                     panic!();
                 });
 
@@ -5879,7 +5880,7 @@ mod test_fmt {
                         output.as_ref().as_str(),
                         actual
                     );
-                    print_minimizations(&src);
+                    print_minimizations(&src, InputKind::Full);
                     panic!();
                 });
 
@@ -5898,7 +5899,7 @@ mod test_fmt {
                         actual,
                         reparsed_ast_normalized
                     );
-                    print_minimizations(&src);
+                    print_minimizations(&src, InputKind::Full);
                     panic!();
                 }
             }

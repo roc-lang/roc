@@ -634,7 +634,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                 doc.literal(")");
                 doc.group_to(begin)
             }
-            Expr::RecordBuilder(_) => todo!(),
             Expr::Var { module_name, ident } => {
                 if module_name.is_empty() {
                     doc.copy(ident)
@@ -682,7 +681,6 @@ impl<'a> Docify<'a> for Expr<'a> {
                 final_expr.value.docify(doc);
                 doc.group_to(begin)
             }
-            Expr::EmptyDefsFinal => {}
             Expr::Backpassing(pats, call, body) => {
                 for (i, pat) in pats.iter().enumerate() {
                     if i > 0 {
@@ -781,14 +779,18 @@ impl<'a> Docify<'a> for Expr<'a> {
                         cond.value.docify(doc);
                         doc.space();
                         doc.literal("then");
-                        doc.push(Node::OptionalNewline);
-                        then_expr.value.docify(doc);
+                        indent!(doc, {
+                            doc.push(Node::OptionalNewline);
+                            then_expr.value.docify(doc);
+                        });
                     }
 
                     doc.push(Node::OptionalNewline);
                     doc.literal("else");
-                    doc.push(Node::OptionalNewline);
-                    otherwise.value.docify(doc);
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        otherwise.value.docify(doc);
+                    });
                 })
             }
             Expr::When(cond, branches) => {
@@ -849,8 +851,13 @@ impl<'a> Docify<'a> for Expr<'a> {
             Expr::MalformedClosure => todo!(),
             Expr::MalformedSuffixed(_) => todo!(),
             Expr::PrecedenceConflict(_) => todo!(),
-            Expr::MultipleRecordBuilders(_) => todo!(),
-            Expr::UnappliedRecordBuilder(_) => todo!(),
+            Expr::MultipleOldRecordBuilders(_) => todo!(),
+            Expr::UnappliedOldRecordBuilder(_) => todo!(),
+            Expr::OldRecordBuilder(_) => todo!(),
+            Expr::RecordBuilder { mapper, fields } => todo!(),
+            Expr::EmptyRecordBuilder(_) => todo!(),
+            Expr::SingleFieldRecordBuilder(_) => todo!(),
+            Expr::OptionalFieldInRecordBuilder(_, _) => todo!(),
         }
     }
 }
@@ -1011,10 +1018,6 @@ impl<'a> Docify<'a> for BinOp {
             BinOp::GreaterThanOrEq => doc.literal(">="),
             BinOp::And => doc.literal("&&"),
             BinOp::Or => doc.literal("||"),
-            BinOp::Assignment => doc.literal("="),
-            BinOp::IsAliasType => doc.literal("is"),
-            BinOp::IsOpaqueType => doc.literal("is"),
-            BinOp::Backpassing => doc.literal("<-"),
         }
     }
 }

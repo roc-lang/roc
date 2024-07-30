@@ -3,7 +3,8 @@ Full {
         comments: [],
         header: Module(
             ModuleHeader {
-                before_exposes: [],
+                after_keyword: [],
+                params: None,
                 exposes: [],
                 interface_imports: None,
             },
@@ -20,9 +21,10 @@ Full {
             Slice(start = 0, length = 1),
         ],
         space_after: [
-            Slice(start = 1, length = 0),
+            Slice(start = 1, length = 1),
         ],
         spaces: [
+            Newline,
             Newline,
         ],
         type_defs: [],
