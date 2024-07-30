@@ -593,7 +593,7 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
             StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
             StrSegment::Interpolated(t) => StrSegment::Interpolated(t.remove_spaces(arena)),
             StrSegment::DeprecatedInterpolated(t) => {
-                StrSegment::DeprecatedInterpolated(t.remove_spaces(arena))
+                StrSegment::Interpolated(t.remove_spaces(arena))
             }
         }
     }
