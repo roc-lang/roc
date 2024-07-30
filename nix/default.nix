@@ -16,11 +16,16 @@ let
     rust-shell =
       (rustVersion.override { extensions = [ "rust-src" "rust-analyzer" ]; });
 
-    # all rust crates in workspace.members of Cargo.toml
-    roc-full = callPackage ./builder.nix { };
-    roc-lang-server = callPackage ./builder.nix { subPackage = "language_server"; };
+    # contains all rust crates in workspace.members of Cargo.toml
+    roc-full = (callPackage ./builder.nix { }).roc-release;
+    roc-full-debug = (callPackage ./builder.nix { }).roc-debug;
+
+    roc-lang-server = (callPackage ./builder.nix { subPackage = "language_server"; }).roc-release;
+    roc-lang-server-debug = (callPackage ./builder.nix { subPackage = "language_server"; }).roc-debug;
+
     # only the CLI crate = executable provided in nightly releases
-    roc-cli = callPackage ./builder.nix { subPackage = "cli"; };
+    roc-cli = (callPackage ./builder.nix { subPackage = "cli"; }).roc-release;
+    roc-cli-debug = (callPackage ./builder.nix { subPackage = "cli"; }).roc-debug;
   };
 
 in
