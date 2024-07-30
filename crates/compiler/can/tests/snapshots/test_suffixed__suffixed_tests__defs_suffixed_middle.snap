@@ -97,7 +97,7 @@ Defs {
                                                 @25-39 Inferred,
                                             ],
                                         ),
-                                        comment: None,
+                                        lines_between: [],
                                         body_pattern: @25-39 Identifier {
                                             ident: "#!1_stmt",
                                         },

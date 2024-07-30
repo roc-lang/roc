@@ -69,7 +69,7 @@ Defs {
                                                 @18-19 Inferred,
                                             ],
                                         ),
-                                        comment: None,
+                                        lines_between: [],
                                         body_pattern: @24-25 Identifier {
                                             ident: "#!0_expr",
                                         },

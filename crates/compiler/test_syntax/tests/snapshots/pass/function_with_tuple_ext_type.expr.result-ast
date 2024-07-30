@@ -52,7 +52,9 @@ SpaceAfter(
                             ),
                         },
                     ),
-                    comment: None,
+                    lines_between: [
+                        Newline,
+                    ],
                     body_pattern: @21-22 Identifier {
                         ident: "f",
                     },
