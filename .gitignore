@@ -30,6 +30,7 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.a
 *.so
 *.so.*
 *.obj
