@@ -2,13 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=63dacb46bf939521bdc93981b4cbb7ecb58427a0";
-
-    zig-overlay.url = "github:mitchellh/zig-overlay?rev=c7615d701b2a5355a3f3013918b6b945c394e791";
-    zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
-
-    zls-overlay.url = "github:zigtools/zls?rev=a26718049a8657d4da04c331aeced1697bc7652b";
-    zls-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -32,7 +26,7 @@
     };
   };
 
-  outputs = { self, zig-overlay, zls-overlay, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
@@ -42,13 +36,6 @@
     flake-utils.lib.eachSystem supportedSystems (system:
       let
 
-        zig = zig-overlay.packages.${system}."0.13.0";
-        zls = zls-overlay.packages.${system}.zls.overrideAttrs (
-                old: {
-                    nativeBuildInputs = [ zig ];
-                }
-            );
-
         overlays = [ (import rust-overlay) ]
         ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
@@ -56,7 +43,7 @@
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) llvmPkgs llvmVersion
+        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
           llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
         # DevInputs are not necessary to build roc as a user
@@ -88,14 +75,12 @@
           cmake
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           # provides lld
-          llvmPkgs.bintools-unwrapped
+          llvmPkgs.dev
           # provides clang
-          llvmPkgs.libllvm
+          llvmPkgs.lib
           pkg-config
 
-          # roc builtins are implemented in zig, see compiler/builtins/bitcode/
-          zig
-          zls
+          zigPkg # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
           # lib deps
           libffi
@@ -152,7 +137,7 @@
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
           shellHook = ''
-            export LLVM_SYS_180_PREFIX="${llvmPkgs.libllvm.dev}"
+            export LLVM_SYS_180_PREFIX="${llvmPkgs.dev}"
             ${aliases}
           '' + pkgs.lib.optionalString (system == "aarch64-darwin") ''
             export RUSTFLAGS="-C link-arg=-lc++abi"

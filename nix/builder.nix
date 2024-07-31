@@ -1,6 +1,6 @@
 { pkgs, lib, zig, zls, rustPlatform, compile-deps, subPackage ? null }:
 let
-  inherit (compile-deps) llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+  inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
   subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
   mainBin = if subPackage == "language_server" then "roc_language_server" else "roc";
@@ -26,7 +26,7 @@ let
       };
 
       shellHook = ''
-        export LLVM_SYS_180_PREFIX="${llvmPkgs.libllvm.dev}"
+        export LLVM_SYS_180_PREFIX="${llvmPkgs.dev}"
       '';
 
       # required for zig
@@ -46,8 +46,8 @@ let
         git
         pkg-config
         python3
-        llvmPkgs.clangUseLLVM
-        llvmPkgs.bintools-unwrapped # contains lld
+        llvmPkgs.dev
+        llvmPkgs.lib
         zig
         zls
       ]);
@@ -70,7 +70,7 @@ let
             Security
           ]));
 
-    LLVM_SYS_180_PREFIX = lib.optionalString (llvmPkgs.libllvm != null) "${llvmPkgs.libllvm.dev}";
+    LLVM_SYS_180_PREFIX = lib.optionalString (llvmPkgs.dev != null) "${llvmPkgs.dev}";
 
 
       # cp: to copy str.zig,list.zig...
