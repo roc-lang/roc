@@ -104,6 +104,11 @@ jobs:
         if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/ubuntu_x86_64.yml
 
+    start-ubuntu-x86-64-tests-debug:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/ubuntu_x86_64_debug.yml
+
     start-windows-release-build-test:
         needs: check-changes
         if: needs.check-changes.outputs.run_tests == 'full'
@@ -128,6 +133,7 @@ jobs:
                 start-nix-macos-apple-silicon-tests,
                 start-macos-x86-64-tests,
                 start-ubuntu-x86-64-tests,
+                start-ubuntu-x86-64-tests-debug,
                 start-windows-release-build-test,
                 start-windows-tests,
                 start-roc-benchmarks
