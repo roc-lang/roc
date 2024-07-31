@@ -70,6 +70,9 @@ let
             Security
           ]));
 
+    LLVM_SYS_180_PREFIX = lib.optionalString (llvmPkgs.libllvm != null) "${llvmPkgs.libllvm.dev}";
+
+
       # cp: to copy str.zig,list.zig...
       # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
       postInstall =
