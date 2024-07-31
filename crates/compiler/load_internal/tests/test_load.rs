@@ -833,7 +833,7 @@ fn platform_parse_error() {
 
     match multiple_modules("platform_parse_error", modules) {
         Err(report) => {
-            assert!(report.contains("NOT END OF FILE"));
+            assert!(report.contains("STATEMENT AFTER EXPRESSION"));
             assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
         }
         Ok(_) => unreachable!("we expect failure here"),

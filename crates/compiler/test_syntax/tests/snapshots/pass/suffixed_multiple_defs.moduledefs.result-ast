@@ -64,7 +64,7 @@ Defs {
                                 @26-27 Identifier {
                                     ident: "x",
                                 },
-                                @26-39 Apply(
+                                @29-39 Apply(
                                     @29-32 TaskAwaitBang(
                                         Var {
                                             module_name: "B",

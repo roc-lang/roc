@@ -86,13 +86,13 @@ fn desugar_value_def<'a>(
         AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment,
+            lines_between,
             body_pattern,
             body_expr,
         } => AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment: *comment,
+            lines_between,
             body_pattern: desugar_loc_pattern(arena, body_pattern, src, line_info, module_path),
             body_expr: desugar_expr(arena, body_expr, src, line_info, module_path),
         },
@@ -170,7 +170,7 @@ fn desugar_value_def<'a>(
                         ext: None,
                     },
                 )),
-                comment: None,
+                lines_between: &[],
                 body_pattern: new_pat,
                 body_expr: desugar_expr(arena, stmt_expr, src, line_info, module_path),
             }
@@ -235,7 +235,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
         AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment,
+            lines_between,
             body_pattern,
             body_expr,
         } => {
@@ -244,7 +244,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                 Ok(new_expr) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
-                    comment,
+                    lines_between,
                     body_pattern,
                     body_expr: new_expr,
                 },
@@ -257,7 +257,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     AnnotatedBody {
                         ann_pattern,
                         ann_type,
-                        comment,
+                        lines_between,
                         body_pattern,
                         body_expr: apply_task_await(
                             arena,
@@ -272,7 +272,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                 Err(..) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
-                    comment,
+                    lines_between,
                     body_pattern,
                     body_expr: arena.alloc(Loc::at(body_expr.region, MalformedSuffixed(body_expr))),
                 },
@@ -1361,10 +1361,6 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
-        Assignment => unreachable!("Cannot desugar the = operator"),
-        IsAliasType => unreachable!("Cannot desugar the : operator"),
-        IsOpaqueType => unreachable!("Cannot desugar the := operator"),
-        Backpassing => unreachable!("Cannot desugar the <- operator"),
     }
 }
 

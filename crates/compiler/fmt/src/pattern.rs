@@ -1,5 +1,5 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::expr::{fmt_str_literal, format_sq_literal};
+use crate::expr::{fmt_str_literal, format_sq_literal, is_str_multiline};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Base, CommentOrNewline, Pattern, PatternAs};
@@ -48,7 +48,7 @@ impl<'a> Formattable for Pattern<'a> {
                     pattern
                 );
 
-                spaces.iter().any(|s| s.is_comment())
+                spaces.iter().any(|s| s.is_comment()) || pattern.is_multiline()
             }
 
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
@@ -63,15 +63,17 @@ impl<'a> Formattable for Pattern<'a> {
                     list_rest_spaces.iter().any(|s| s.is_comment()) || pattern_as.is_multiline()
                 }
             },
+            Pattern::StrLiteral(literal) => is_str_multiline(literal),
+            Pattern::Apply(pat, args) => {
+                pat.is_multiline() || args.iter().any(|a| a.is_multiline())
+            }
 
             Pattern::Identifier { .. }
             | Pattern::Tag(_)
             | Pattern::OpaqueRef(_)
-            | Pattern::Apply(_, _)
             | Pattern::NumLiteral(..)
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(..)
-            | Pattern::StrLiteral(_)
             | Pattern::SingleQuote(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
@@ -100,7 +102,13 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 // Sometimes, an Apply pattern needs parens around it.
                 // In particular when an Apply's argument is itself an Apply (> 0) arguments
-                let parens = !loc_arg_patterns.is_empty() && parens == Parens::InApply;
+                let parens = !loc_arg_patterns.is_empty() && (parens == Parens::InApply);
+
+                let indent_more = if self.is_multiline() {
+                    indent + INDENT
+                } else {
+                    indent
+                };
 
                 if parens {
                     buf.push('(');
@@ -110,7 +118,7 @@ impl<'a> Formattable for Pattern<'a> {
 
                 for loc_arg in loc_arg_patterns.iter() {
                     buf.spaces(1);
-                    loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
+                    loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, indent_more);
                 }
 
                 if parens {

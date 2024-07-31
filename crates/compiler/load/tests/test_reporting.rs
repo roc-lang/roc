@@ -3374,7 +3374,7 @@ mod test_reporting {
             f x y = x
             "
         ),
-        @r#"
+        @r###"
     ── ARGUMENTS BEFORE EQUALS in tmp/elm_function_syntax/Test.roc ─────────────────
 
     I am partway through parsing a definition, but I got stuck here:
@@ -3385,9 +3385,9 @@ mod test_reporting {
     4│      f x y = x
               ^^^
 
-    Looks like you are trying to define a function. In roc, functions are
+    Looks like you are trying to define a function. In Roc, functions are
     always written as a lambda, like increment = \n -> n + 1.
-    "#
+    "###
     );
 
     test_report!(
@@ -4320,16 +4320,26 @@ mod test_reporting {
             { x,  y }
             "
         ),
-        @r"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+        @r###"
+    ── STATEMENT AFTER EXPRESSION in tmp/double_equals_in_def/Test.roc ─────────────
 
-    This value is not a function, but it was given 3 arguments:
+    I just finished parsing an expression with a series of definitions,
 
+    and this line is indented as if it's intended to be part of that
+    expression:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      x = 3
+    5│      y =
     6│          x == 5
-                     ^
+    7│          Num.add 1 2
+                ^
 
-    Are there any missing commas? Or missing parentheses?
-    "
+    However, I already saw the final expression in that series of
+    definitions.
+    "###
     );
 
     test_report!(
@@ -5018,9 +5028,9 @@ mod test_reporting {
     I was partway through parsing an `import`, but I got stuck here:
 
     4│      import svg.Path a
-                            ^
+                           ^
 
-    I was expecting to see the `as` keyword, like:
+    I was expecting to see the `as` keyword next, like:
 
         import svg.Path as SvgPath
 
@@ -5417,14 +5427,25 @@ mod test_reporting {
              2 -> 2
             "
         ),
-        @r"
-    ── NOT END OF FILE in tmp/when_outdented_branch/Test.roc ───────────────────────
+        @r###"
+    ── UNKNOWN OPERATOR in tmp/when_outdented_branch/Test.roc ──────────────────────
 
-    I expected to reach the end of the file, but got stuck here:
+    This looks like an operator, but it's not one I recognize!
 
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      when 4 is
+    5│          5 -> 2
     6│       2 -> 2
-             ^
-    "
+               ^^
+
+    Looks like you are trying to define a function. 
+
+    In Roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
+    "###
     );
 
     test_report!(
@@ -5436,12 +5457,13 @@ mod test_reporting {
                  _ -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_underscore/Test.roc ──────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> 2
     6│           _ -> 2
                    ^^
@@ -5461,7 +5483,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     test_report!(
@@ -5473,12 +5495,13 @@ mod test_reporting {
                  2 -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_int/Test.roc ─────────────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
@@ -5498,7 +5521,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     // TODO I think we can do better here
@@ -6136,27 +6159,21 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "
         ),
-        |golden| pretty_assertions::assert_eq!(
-            golden,
-            &format!(
-                r#"── UNKNOWN OPERATOR in tmp/wild_case_arrow/Test.roc ────────────────────────────
+        @r###"
+    ── SYNTAX PROBLEM in tmp/wild_case_arrow/Test.roc ──────────────────────────────
 
-This looks like an operator, but it's not one I recognize!
+    I got stuck here:
 
-1│  app "test" provides [main] to "./platform"
-2│
-3│  main =
-4│      main = 5 -> 3
-                 ^^
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main = 5 -> 3
+                    ^
 
-Looks like you are trying to define a function.{}
-
-In roc, functions are always written as a lambda, like{}
-
-    increment = \n -> n + 1"#,
-                ' ', ' '
-            )
-        )
+    Whatever I am running into is confusing me a lot! Normally I can give
+    fairly specific hints, but something is really tripping me up this
+    time.
+    "###
     );
 
     #[test]
@@ -10971,13 +10988,13 @@ In roc, functions are always written as a lambda, like{}
             0
             "
         ),
-        @r"
+        @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
     4│      Pair _ _ = Pair 0 1
-            ^^^^
+            ^^^^^^^^
 
     If you don't need to use the value on the right-hand-side of this
     assignment, consider removing the assignment. Since Roc is purely
@@ -11019,7 +11036,7 @@ In roc, functions are always written as a lambda, like{}
     assignment, consider removing the assignment. Since Roc is purely
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
-    "
+    "###
     );
 
     test_report!(

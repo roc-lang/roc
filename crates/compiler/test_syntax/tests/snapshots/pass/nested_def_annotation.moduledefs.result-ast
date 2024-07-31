@@ -9,9 +9,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -55,7 +57,9 @@ Defs {
                                         [],
                                     ),
                                 ),
-                                comment: None,
+                                lines_between: [
+                                    Newline,
+                                ],
                                 body_pattern: @43-55 Identifier {
                                     ident: "wrappedNotEq",
                                 },

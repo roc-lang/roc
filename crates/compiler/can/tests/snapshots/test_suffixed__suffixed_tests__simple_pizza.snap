@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -28,7 +30,7 @@ Defs {
                     ident: "await",
                 },
                 [
-                    @26-56 Defs(
+                    @11-56 Defs(
                         Defs {
                             tags: [
                                 Index(2147483648),
@@ -46,22 +48,22 @@ Defs {
                             type_defs: [],
                             value_defs: [
                                 AnnotatedBody {
-                                    ann_pattern: @26-56 Identifier {
+                                    ann_pattern: @11-57 Identifier {
                                         ident: "#!0_stmt",
                                     },
-                                    ann_type: @26-56 Apply(
+                                    ann_type: @11-57 Apply(
                                         "",
                                         "Task",
                                         [
-                                            @26-56 Record {
+                                            @11-57 Record {
                                                 fields: [],
                                                 ext: None,
                                             },
-                                            @26-56 Inferred,
+                                            @11-57 Inferred,
                                         ],
                                     ),
-                                    comment: None,
-                                    body_pattern: @26-56 Identifier {
+                                    lines_between: [],
+                                    body_pattern: @11-57 Identifier {
                                         ident: "#!0_stmt",
                                     },
                                     body_expr: @11-56 Apply(
@@ -106,7 +108,7 @@ Defs {
                     ),
                     @11-56 Closure(
                         [
-                            @26-56 Underscore(
+                            @11-57 Underscore(
                                 "#!stmt",
                             ),
                         ],

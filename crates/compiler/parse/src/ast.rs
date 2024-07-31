@@ -21,6 +21,12 @@ pub struct Spaces<'a, T> {
     pub after: &'a [CommentOrNewline<'a>],
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SpacesBefore<'a, T> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
+}
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum Spaced<'a, T> {
     Item(T),
@@ -795,7 +801,7 @@ pub enum ValueDef<'a> {
     AnnotatedBody {
         ann_pattern: &'a Loc<Pattern<'a>>,
         ann_type: &'a Loc<TypeAnnotation<'a>>,
-        comment: Option<&'a str>,
+        lines_between: &'a [CommentOrNewline<'a>],
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
     },
@@ -1038,7 +1044,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                         ValueDef::AnnotatedBody {
                             ann_pattern: _,
                             ann_type: _,
-                            comment: _,
+                            lines_between: _,
                             body_pattern: _,
                             body_expr,
                         } => self.push_pending_from_expr(&body_expr.value),
@@ -1202,6 +1208,21 @@ impl<'a> Defs<'a> {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    pub fn loc_defs<'b>(
+        &'b self,
+    ) -> impl Iterator<Item = Result<Loc<TypeDef<'a>>, Loc<ValueDef<'a>>>> + 'b {
+        self.tags
+            .iter()
+            .enumerate()
+            .map(|(i, tag)| match tag.split() {
+                Ok(type_index) => Ok(Loc::at(self.regions[i], self.type_defs[type_index.index()])),
+                Err(value_index) => Err(Loc::at(
+                    self.regions[i],
+                    self.value_defs[value_index.index()],
+                )),
+            })
     }
 
     pub fn list_value_defs(&self) -> impl Iterator<Item = (usize, &ValueDef<'a>)> {
@@ -2072,6 +2093,28 @@ pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
+    fn maybe_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).before(spaces)
+        }
+    }
+
+    fn maybe_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).after(spaces)
+        }
+    }
+
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,
@@ -2683,7 +2726,7 @@ impl<'a> Malformed for ValueDef<'a> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => {
