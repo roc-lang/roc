@@ -2112,11 +2112,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             pattern
         }
 
-        Expr::SpaceBefore(..)
-        | Expr::SpaceAfter(..)
-        | Expr::ParensAround(..)
-        | Expr::OldRecordBuilder(..)
-        | Expr::RecordBuilder { .. } => unreachable!(),
+        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -2171,7 +2167,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
         | Expr::TaskAwaitBang(..)
-        | Expr::Crash => return Err(()),
+        | Expr::Crash
+        | Expr::OldRecordBuilder(..)
+        | Expr::RecordBuilder { .. } => return Err(()),
 
         Expr::Str(string) => Pattern::StrLiteral(string),
         Expr::SingleQuote(string) => Pattern::SingleQuote(string),
