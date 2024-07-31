@@ -30,13 +30,13 @@ pub fn copy_zig_glue() {
     ];
 
     for target_dir in zig_test_platforms_dirs {
-        copy_dir_all(&zig_builtins_source_dir, &target_dir).expect(
-            format!(
-                "unable to copy zig builtins source files to {}",
+        copy_dir_all(&zig_builtins_source_dir, &target_dir).unwrap_or_else(|e| {
+            panic!(
+                "unable to copy zig builtins source files to {}: {}",
                 target_dir.display(),
+                e
             )
-            .as_str(),
-        );
+        });
         println!("Copied zig glue source files into {}", target_dir.display());
     }
     println!("DONE");
