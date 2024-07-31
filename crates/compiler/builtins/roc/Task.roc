@@ -11,7 +11,7 @@ module [
     loop,
     fromResult,
     batch,
-    seq,
+    sequence,
     forEach,
     result,
 ]
@@ -200,19 +200,19 @@ batch = \current -> \next ->
 ## fetchAuthorTasks : List (Task Author [DbError])
 ##
 ## getAuthors : Task (List Author) [DbError]
-## getAuthors = Task.seq fetchAuthorTasks
+## getAuthors = Task.sequence fetchAuthorTasks
 ## ```
 ##
-seq : List (Task ok err) -> Task (List ok) err
-seq = \taskList ->
+sequence : List (Task ok err) -> Task (List ok) err
+sequence = \taskList ->
     Task.loop (taskList, List.withCapacity (List.len taskList)) \(tasks, values) ->
         when tasks is
             [task, .. as rest] ->
                 value = task!
                 Task.ok (Step (rest, List.append values value))
+
             [] ->
                 Task.ok (Done values)
-
 
 ## Apply a task repeatedly for each item in a list
 ##

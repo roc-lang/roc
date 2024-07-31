@@ -1758,7 +1758,7 @@ define_builtins! {
         9 TASK_MAP_ERR: "mapErr"
         10 TASK_FROM_RESULT: "fromResult"
         11 TASK_BATCH: "batch"
-        12 TASK_SEQ: "seq"
+        12 TASK_SEQUENCE: "sequence"
         13 TASK_FOR_EACH: "forEach"
         14 TASK_RESULT: "result"
     }
