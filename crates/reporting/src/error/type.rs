@@ -4788,17 +4788,14 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow("Learn more about optional fields at TODO."),
         ])),
 
-        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(alloc.concat([
-            alloc.reflow(
-                "Type comparisons between an opaque type are only ever \
-                equal if both types are the same opaque type. Did you mean \
-                to create an opaque type by wrapping it? If I have an opaque type ",
-            ),
-            alloc.type_str("Age := U32"),
-            alloc.reflow(" I can create an instance of this opaque type by doing "),
-            alloc.type_str("@Age 23"),
-            alloc.reflow("."),
-        ])),
+        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(
+            alloc.concat([
+                alloc
+                    .reflow("Add type annotations")
+                    .annotate(Annotation::Emphasized),
+                alloc.reflow(" to functions or values to help you figure this out."),
+            ]),
+        ),
 
         (BoolVsBoolTag(tag), _) => alloc.tip().append(alloc.concat([
             alloc.reflow("Did you mean to use "),
