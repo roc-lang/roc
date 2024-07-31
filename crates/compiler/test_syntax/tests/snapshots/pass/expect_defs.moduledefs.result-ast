@@ -62,7 +62,9 @@ Defs {
                                         },
                                     ],
                                 ),
-                                comment: None,
+                                lines_between: [
+                                    Newline,
+                                ],
                                 body_pattern: @30-34 Identifier {
                                     ident: "html",
                                 },
@@ -166,7 +168,9 @@ Defs {
                                     ],
                                     ext: None,
                                 },
-                                comment: None,
+                                lines_between: [
+                                    Newline,
+                                ],
                                 body_pattern: @190-196 Identifier {
                                     ident: "actual",
                                 },
@@ -246,7 +250,9 @@ Defs {
                                     ],
                                     ext: None,
                                 },
-                                comment: None,
+                                lines_between: [
+                                    Newline,
+                                ],
                                 body_pattern: @326-334 Identifier {
                                     ident: "expected",
                                 },

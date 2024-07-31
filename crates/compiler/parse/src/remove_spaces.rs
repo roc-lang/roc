@@ -392,13 +392,13 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
             AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => AnnotatedBody {
                 ann_pattern: arena.alloc(ann_pattern.remove_spaces(arena)),
                 ann_type: arena.alloc(ann_type.remove_spaces(arena)),
-                comment: None,
+                lines_between: &[],
                 body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
                 body_expr: arena.alloc(body_expr.remove_spaces(arena)),
             },
@@ -588,7 +588,7 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
             StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
             StrSegment::Interpolated(t) => StrSegment::Interpolated(t.remove_spaces(arena)),
             StrSegment::DeprecatedInterpolated(t) => {
-                StrSegment::DeprecatedInterpolated(t.remove_spaces(arena))
+                StrSegment::Interpolated(t.remove_spaces(arena))
             }
         }
     }

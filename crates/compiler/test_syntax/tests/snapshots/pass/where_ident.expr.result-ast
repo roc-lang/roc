@@ -34,7 +34,9 @@ SpaceAfter(
                         ],
                         ext: None,
                     },
-                    comment: None,
+                    lines_between: [
+                        Newline,
+                    ],
                     body_pattern: @21-26 Identifier {
                         ident: "where",
                     },

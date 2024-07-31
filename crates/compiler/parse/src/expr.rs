@@ -2113,11 +2113,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             pattern
         }
 
-        Expr::SpaceBefore(..)
-        | Expr::SpaceAfter(..)
-        | Expr::ParensAround(..)
-        | Expr::OldRecordBuilder(..)
-        | Expr::RecordBuilder { .. } => unreachable!(),
+        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -2172,7 +2168,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
         | Expr::TaskAwaitBang(..)
-        | Expr::Crash => return Err(()),
+        | Expr::Crash
+        | Expr::OldRecordBuilder(..)
+        | Expr::RecordBuilder { .. } => return Err(()),
 
         Expr::Str(string) => Pattern::StrLiteral(string),
         Expr::SingleQuote(string) => Pattern::SingleQuote(string),
@@ -3166,9 +3164,7 @@ fn stmts_to_defs<'a>(
                         let value_def = ValueDef::AnnotatedBody {
                             ann_pattern: arena.alloc(ann_pattern),
                             ann_type: arena.alloc(ann_type),
-                            comment: spaces_middle
-                                .first() // TODO: Why do we drop all but the first comment????
-                                .and_then(crate::ast::CommentOrNewline::comment_str),
+                            lines_between: spaces_middle,
                             body_pattern: loc_pattern,
                             body_expr: loc_def_expr,
                         };
@@ -3213,9 +3209,7 @@ pub fn join_alias_to_body<'a>(
     ValueDef::AnnotatedBody {
         ann_pattern: arena.alloc(loc_ann_pattern),
         ann_type: arena.alloc(ann_type),
-        comment: spaces_middle
-            .first() // TODO: Why do we drop all but the first comment????
-            .and_then(crate::ast::CommentOrNewline::comment_str),
+        lines_between: spaces_middle,
         body_pattern,
         body_expr,
     }

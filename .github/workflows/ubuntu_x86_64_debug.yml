@@ -1,0 +1,38 @@
+on:
+    workflow_call:
+  
+name: cargo test debug
+
+env:
+    RUST_BACKTRACE: 1
+
+jobs:
+    cargo-test-debug:
+        name: cargo test debug
+        runs-on: [ubuntu-22.04]
+        timeout-minutes: 90
+        steps:
+        - uses: actions/checkout@v4
+
+        - uses: goto-bus-stop/setup-zig@v2
+          with:
+            version: 0.11.0
+
+        - run: zig version
+
+        - name: Install dependencies
+          run: |
+            sudo apt -y install build-essential libunwind-dev pkg-config zlib1g-dev valgrind
+            wget https://apt.llvm.org/llvm.sh
+            chmod +x llvm.sh
+            sudo ./llvm.sh 16
+            sudo rm /usr/bin/clang
+            sudo ln -s /usr/bin/clang-16 /usr/bin/clang
+            sudo ln -s /usr/bin/lld-16 /usr/bin/ld.lld
+            sudo apt -y install libpolly-16-dev
+
+        # for skipped tests; see #6946, #6947
+        - name: cargo test without --release
+          env:
+            RUSTFLAGS: -C link-arg=-fuse-ld=lld
+          run: cargo test -- --skip tests/exhaustive/match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax.txt --skip tests::identity_lambda --skip tests::issue_2300 --skip tests::issue_2582_specialize_result_value --skip tests::sum_lambda

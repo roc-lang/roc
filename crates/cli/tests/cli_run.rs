@@ -1484,10 +1484,8 @@ mod cli_run {
 
                     Task {} []
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
+                Tip: Add type annotations to functions or values to help you figure
+                this out.
 
                 ────────────────────────────────────────────────────────────────────────────────
 

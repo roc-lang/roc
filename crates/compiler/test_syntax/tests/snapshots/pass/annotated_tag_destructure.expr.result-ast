@@ -42,7 +42,9 @@ SpaceAfter(
                             },
                         ],
                     },
-                    comment: None,
+                    lines_between: [
+                        Newline,
+                    ],
                     body_pattern: @26-34 Apply(
                         @26-32 Tag(
                             "UserId",
