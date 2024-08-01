@@ -819,6 +819,20 @@ Result.isOk (List.get ["a", "b", "c"] 1)
 # Note: There's a Result.isErr function that works similarly.
 ```
 
+```roc
+Result.try (Str.toU64 "2") \idx -> List.get ["a", "b", "c", "d"] idx
+# returns `Ok "c"`
+
+# Notes:
+#  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
+#    integer types later)
+#  - since parsing is successful, `Result.try` passes 2 to the function `\idx -> ...`
+#  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
+#    or `Err OutOfBounds` respectively
+```
+
+`Result.try` is often used to chain functions that can fail (as in the example above), returning the first error if any occurs. There is [a discussion](https://github.com/roc-lang/roc/issues/6828) to add syntax sugar for such chaining.
+
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
 We've now seen a few different ways you can transform lists. Sometimes, though, there's nothing
