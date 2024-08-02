@@ -2250,7 +2250,7 @@ These are reserved keywords in Roc. You can't choose any of them as names, excep
 
 `as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `then`, `when`
 
-Other keywords are used in unambiguous contexts, so they are not reserved. This includes:
+Other keywords are used only in specific places, so they are not reserved. This includes:
 
 `app`, `exposes`, `exposing`, `generates`, `implements`, `module`, `package`, `packages`, `platform`, `requires`, `where`, `with`
 
