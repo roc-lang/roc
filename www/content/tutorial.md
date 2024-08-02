@@ -831,7 +831,7 @@ listGet = \index ->
 # Notes:
 #  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
 #    integer types later)
-#  - since parsing is successful, `Result.try` passes 2 to the `listGet`` function
+#  - since parsing is successful, `Result.try` passes 2 to the `listGet` function
 #  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
 #    or `Err OutOfBounds` respectively
 ```
