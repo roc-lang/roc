@@ -820,18 +820,29 @@ Result.isOk (List.get ["a", "b", "c"] 1)
 ```
 
 ```roc
-Result.try (Str.toU64 "2") \idx -> List.get ["a", "b", "c", "d"] idx
-# returns `Ok "c"`
+Result.try (Str.toU64 "2") listGet
+
+listGet = U64 -> Result Str [OutOfBounds]
+listGet = \index ->
+    List.get ["a", "b", "c", "d"] index
+
+# Running returns `Ok "c"`
 
 # Notes:
 #  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
 #    integer types later)
-#  - since parsing is successful, `Result.try` passes 2 to the function `\idx -> ...`
+#  - since parsing is successful, `Result.try` passes 2 to the `listGet`` function
 #  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
 #    or `Err OutOfBounds` respectively
 ```
 
-`Result.try` is often used to chain functions that can fail (as in the example above), returning the first error if any occurs. There is [a discussion](https://github.com/roc-lang/roc/issues/6828) to add syntax sugar for such chaining.
+`Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
+
+<details>
+  <summary>Upcoming feature</summary>
+  
+  We plan to introduce syntax sugar to make `Result.try` nicer to use, follow [this issue](https://github.com/roc-lang/roc/issues/6828) for more.
+</details>
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1596,7 +1607,7 @@ main =
     Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). (We'll discuss the `!` part later.) `Stdout.line` has this type:
+The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>), we'll [discuss the `!` part later](https://www.roc-lang.org/tutorial#the-!-suffix). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
