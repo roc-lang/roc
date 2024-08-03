@@ -1261,8 +1261,8 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 group!(doc, {
                     pat.value.docify(doc);
                     doc.literal(":");
+                    doc.space();
                     indent!(doc, {
-                        doc.push(Node::OptionalNewline);
                         ty.value.docify(doc);
                     });
                 });
@@ -1273,8 +1273,8 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                     pat.value.docify(doc);
                     doc.space();
                     doc.literal("=");
+                    doc.space();
                     indent!(doc, {
-                        doc.push(Node::OptionalNewline);
                         body.value.docify(doc);
                     });
                 });
@@ -1290,7 +1290,6 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                     ann_pattern.value.docify(doc);
                     doc.literal(":");
                     indent!(doc, {
-                        doc.push(Node::OptionalNewline);
                         ann_type.value.docify(doc);
                     });
                 });
@@ -1302,8 +1301,8 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                     body_pattern.value.docify(doc);
                     doc.space();
                     doc.literal("=");
+                    doc.space();
                     indent!(doc, {
-                        doc.push(Node::OptionalNewline);
                         body_expr.value.docify(doc);
                     });
                 });
@@ -1790,18 +1789,51 @@ impl<'a> Doc<'a> {
 
     fn compute_indents(&self) -> VecDeque<u16> {
         let mut res = VecDeque::with_capacity(self.nodes.len());
-        let mut stack = Vec::<usize>::new();
+        let mut stack = Vec::<(usize, u16)>::new();
+        let mut depth = 0u16;
+        let mut encountered_leaf_nodes = false;
 
         for (i, node) in self.nodes.iter().enumerate().rev() {
-            while let Some(top) = stack.pop() {
+            eprintln!(
+                "considering {}@ {:?} -> {:?}",
+                i, node, encountered_leaf_nodes
+            );
+            while let Some((top, width)) = stack.pop() {
                 if top <= i {
-                    stack.push(top);
+                    stack.push((top, width));
                     break;
                 }
+                depth -= width;
             }
-            res.push_front(stack.len() as u16);
-            if let Node::Indent(range) = node {
-                stack.push(range.begin.0);
+            res.push_front(depth);
+            match node {
+                Node::Indent(range) => {
+                    let begin_mismatch = stack
+                        .last()
+                        .map(|(r, _)| *r != range.begin.0)
+                        .unwrap_or(true);
+                    dbg!(stack.last());
+                    dbg!(range.begin.0);
+                    let width = if encountered_leaf_nodes || dbg!(begin_mismatch) {
+                        1
+                    } else {
+                        0
+                    };
+                    stack.push((range.begin.0, width));
+                    depth += width;
+                    encountered_leaf_nodes = false;
+                }
+                Node::Group(_) | Node::ForcedNewline | Node::Space | Node::OptionalNewline => {
+                    // not setting `encountered_leaf_nodes` here!
+                }
+
+                Node::Copy(_)
+                | Node::CopyComputed(_, _)
+                | Node::CopyAllowSpaces(_)
+                | Node::WhenMultiline(_)
+                | Node::Literal(_)
+                | Node::Comment(_)
+                | Node::BlankLine => encountered_leaf_nodes = true,
             }
         }
 
@@ -1991,4 +2023,30 @@ fn debug_print_doc(
             doc.nodes[i]
         );
     }
+}
+
+#[test]
+fn test_multi_indent() {
+    let mut doc = Doc::new();
+    doc.literal("a=");
+    indent!(doc, {
+        doc.literal("\\");
+        doc.literal("x");
+        doc.literal("->");
+        indent!(doc, {
+            group!(doc, {
+                doc.push(Node::OptionalNewline);
+                doc.literal("asdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdf");
+            });
+        });
+    });
+
+    let res = doc.render(20);
+    assert_eq!(
+        res,
+        r"
+a=\
+    x->
+"[1..]
+    )
 }

@@ -221,7 +221,7 @@ impl<'a> Input<'a> {
             panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", self.as_str(), err);
         });
 
-        let output = actual.format();
+        let output = actual.format2();
 
         handle_formatted_output(output.as_ref());
 
