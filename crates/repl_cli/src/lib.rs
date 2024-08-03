@@ -52,9 +52,24 @@ pub fn main() -> i32 {
     loop {
         match editor.readline(PROMPT) {
             Ok(line) => {
-                let line = line.trim();
+                let line = line.trim_end();
+                if line.trim().is_empty() {
+                    // empty lines are ignored
+                    println!();
+                    continue;
+                }
 
                 editor.add_history_entry(line);
+
+                if line
+                    .lines()
+                    .map(|ln| ln.trim())
+                    .all(|ln| ln.is_empty() || ln.starts_with('#'))
+                {
+                    // if there are only whitespaces and comments, don't run it
+                    println!();
+                    continue;
+                }
 
                 let repl_state = &mut editor
                     .helper_mut()
