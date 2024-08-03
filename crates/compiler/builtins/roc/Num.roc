@@ -708,6 +708,8 @@ absDiff = \a, b ->
 ##
 ## Num.neg 0.0
 ## ```
+## !! Num.neg is not completely implemented for all types in all contexts, see github.com/roc-lang/roc/issues/6959
+##
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.neg on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
