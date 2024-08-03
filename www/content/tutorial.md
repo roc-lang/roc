@@ -820,13 +820,12 @@ Result.isOk (List.get ["a", "b", "c"] 1)
 ```
 
 ```roc
+# Running this will produce `Ok "c"`
 Result.try (Str.toU64 "2") listGet
 
-listGet = U64 -> Result Str [OutOfBounds]
+listGet : U64 -> Result Str [OutOfBounds]
 listGet = \index ->
     List.get ["a", "b", "c", "d"] index
-
-# Running returns `Ok "c"`
 
 # Notes:
 #  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
