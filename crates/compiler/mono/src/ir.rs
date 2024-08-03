@@ -6140,7 +6140,7 @@ fn late_resolve_ability_specialization(
             member,
             specialization_var,
         )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        .expect("Ability specialization is unknown. Tip: check out <https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/Non-Functions.20in.20Abilities/near/456068617>");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
