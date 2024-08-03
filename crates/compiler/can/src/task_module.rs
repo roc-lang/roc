@@ -172,9 +172,6 @@ fn build_fresh_opaque_variables(
 ) -> (Box<Type>, Vec<OptAbleVar>, Vec<LambdaSet>) {
     let closure_var = var_store.fresh();
 
-    // NB: if there are bugs, check whether not introducing variables is a problem!
-    // introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
-
     let ok_var = var_store.fresh();
     let err_var = var_store.fresh();
     let result_var = var_store.fresh();

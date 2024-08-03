@@ -33,10 +33,21 @@ forever = \@Task task ->
 
     @Task \{} -> looper {}
 
-# TODO: consider moving referenced documentation here.
-#
 ## Run a task repeatedly, until it fails with `err` or completes with `done`.
-## Check out [this example](https://www.roc-lang.org/examples/TaskLoop/README.html).
+##
+## ```
+## sum =
+##     Task.loop! 0 \total ->
+##         numResult =
+##             Stdin.line
+##                 |> Task.result!
+##                 |> Result.try Str.toU64
+##
+##         when numResult is
+##             Ok num -> Task.ok (Step (total + num))
+##             Err (StdinErr EndOfFile) -> Task.ok (Done total)
+##             Err InvalidNumStr -> Task.err NonNumberGiven
+## ```
 loop : state, (state -> Task [Step state, Done done] err) -> Task done err
 loop = \state, step ->
     looper = \current ->
@@ -74,25 +85,24 @@ err = \a -> @Task \{} -> Err a
 ## and returns another task based on that. This is useful for chaining tasks
 ## together or performing error handling and recovery.
 ##
-## Consider a the following task;
+## Consider the following task:
 ##
 ## `canFail : Task {} [Failure, AnotherFail, YetAnotherFail]`
 ##
-## We can use [attempt] to handle the failure cases using the following;
+## We can use [attempt] to handle the failure cases using the following:
 ##
 ## ```
-## result <- canFail |> Task.attempt
-## when result is
-##     Ok Success -> Stdout.line "Success!"
-##     Err Failure -> Stdout.line "Oops, failed!"
-##     Err AnotherFail -> Stdout.line "Ooooops, another failure!"
-##     Err YetAnotherFail -> Stdout.line "Really big oooooops, yet again!"
+## Task.attempt canFail \result ->
+##     when result is
+##         Ok Success -> Stdout.line "Success!"
+##         Err Failure -> Stdout.line "Oops, failed!"
+##         Err AnotherFail -> Stdout.line "Ooooops, another failure!"
+##         Err YetAnotherFail -> Stdout.line "Really big oooooops, yet again!"
 ## ```
 ##
 ## Here we know that the `canFail` task may fail, and so we use
 ## `Task.attempt` to convert the task to a `Result` and then use pattern
 ## matching to handle the success and possible failure cases.
-##
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \@Task task, transform ->
     @Task \{} ->
@@ -102,14 +112,18 @@ attempt = \@Task task, transform ->
 
 ## Take the success value from a given [Task] and use that to generate a new [Task].
 ##
-## For example we can use this to run tasks in sequence like follows;
+## We can [await] Task results with callbacks:
 ##
 ## ```
-## # Prints "Hello World!\n" to standard output.
-## {} <- Stdout.write "Hello "|> Task.await
-## {} <- Stdout.write "World!\n"|> Task.await
+## Task.await (Stdin.line "What's your name?") \name ->
+##     Stdout.line "Your name is: $(name)"
+## ```
 ##
-## Task.ok {}
+## Or we can more succinctly use the `!` bang operator, which desugars to [await]:
+##
+## ```
+## name = Stdin.line! "What's your name?"
+## Stdout.line "Your name is: $(name)"
 ## ```
 await : Task a b, (a -> Task c b) -> Task c b
 await = \@Task task, transform ->
