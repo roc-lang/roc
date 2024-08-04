@@ -1,13 +1,17 @@
-module { appId } -> [getUser, baseUrl, allUsers]
+module { appId } -> [baseUrl, allUsers, getUser, getUserPosts]
 
-getUser : U32 -> Str
-getUser = \userId ->
-    "api.example.com/$(appId)/users/$(Num.toStr userId)"
+baseUrl : Str
+baseUrl =
+    "api.example.com/$(appId)"
 
 allUsers : Str
 allUsers =
     "$(baseUrl)/users"
 
-baseUrl : Str
-baseUrl =
-    "api.example.com/$(appId)"
+getUser : U32 -> Str
+getUser = \userId ->
+    "$(allUsers)/$(Num.toStr userId)"
+
+getUserPosts : U32 -> Str
+getUserPosts = \userId ->
+    "$(getUser userId)/posts"

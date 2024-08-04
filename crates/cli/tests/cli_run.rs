@@ -724,10 +724,10 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn module_params_toplevel() {
+    fn module_params_fn() {
         test_roc_app(
             "crates/cli/tests/module_params",
-            "topLevelFn.roc",
+            "fn.roc",
             &[],
             &[],
             &[],
@@ -744,10 +744,10 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn module_params_toplevel_thunk() {
+    fn module_params_thunk() {
         test_roc_app(
             "crates/cli/tests/module_params",
-            "topLevelThunk.roc",
+            "thunk.roc",
             &[],
             &[],
             &[],
@@ -775,6 +775,25 @@ mod cli_run {
                     App1: api.example.com/one/users
                     App2: api.example.com/two/users
                     "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    fn module_params_fn_calls_fn() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "fnCallsFn.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                        App1: api.example.com/one/users/1/posts
+                        App2: api.example.com/two/users/2/posts
+                        "#
             ),
             UseValgrind::No,
             TestCliCommands::Run,

@@ -1469,7 +1469,6 @@ impl<'a, 'i> Env<'a, 'i> {
 
         Ok(())
     }
-
     /// Returns the variable for the params pattern of a lambda's module.
     fn params_var_for_lambda(&self, name: LambdaName) -> Option<&Variable> {
         self.params_var_for_symbol(name.name())
@@ -8790,6 +8789,17 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
     opt_params: Option<(Variable, Symbol)>,
 ) -> Stmt<'a> {
+    let opt_params = opt_params.or_else(|| {
+        if env.is_imported_symbol(proc_name) {
+            None
+        } else {
+            // Coalesce explicit params with local params
+            env.module_params
+                .as_ref()
+                .map(|params| (params.variable, params.symbol))
+        }
+    });
+
     let opt_params_var = opt_params.as_ref().map(|(var, _)| var);
 
     // Register a pending_specialization for this function
@@ -8991,12 +9001,12 @@ fn call_by_name_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
-    params: Option<(Variable, Symbol)>,
+    opt_params: Option<(Variable, Symbol)>,
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
     let arena = env.arena;
 
-    let loc_args = match params {
+    let loc_args = match opt_params {
         None => loc_args,
         Some((params_var, params_sym)) => {
             let mut args = std::vec::Vec::with_capacity(loc_args.len() + 1);
