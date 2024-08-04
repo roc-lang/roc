@@ -753,9 +753,9 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                    App1: api.example.com/one
-                    App2: api.example.com/two
-                    "#
+                App1: api.example.com/one
+                App2: api.example.com/two
+                "#
             ),
             UseValgrind::No,
             TestCliCommands::Run,
@@ -772,9 +772,9 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                    App1: api.example.com/one/users
-                    App2: api.example.com/two/users
-                    "#
+                App1: api.example.com/one/users
+                App2: api.example.com/two/users
+                "#
             ),
             UseValgrind::No,
             TestCliCommands::Run,
@@ -791,9 +791,9 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                        App1: api.example.com/one/users/1/posts
-                        App2: api.example.com/two/users/2/posts
-                        "#
+                App1: api.example.com/one/users/1/posts
+                App2: api.example.com/two/users/2/posts
+                "#
             ),
             UseValgrind::No,
             TestCliCommands::Run,
@@ -810,9 +810,28 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                        App1: api.example.com/one/users/0
-                        App2: api.example.com/two/users/0
-                        "#
+                App1: api.example.com/one/users/0
+                App2: api.example.com/two/users/0
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    fn module_params_nested_fn() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "nestedFn.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                App1: {comments: "api.example.com/one/posts/1/comments", details: "api.example.com/one/posts/1/details", likes: "api.example.com/one/posts/1/likes"}
+                App2: {comments: "api.example.com/two/posts/2/comments", details: "api.example.com/two/posts/2/details", likes: "api.example.com/two/posts/2/likes"}
+                "#
             ),
             UseValgrind::No,
             TestCliCommands::Run,

@@ -1,4 +1,11 @@
-module { appId } -> [baseUrl, allUsers, getUser, getUserPosts, getUserZero]
+module { appId } -> [
+    baseUrl,
+    allUsers,
+    getUser,
+    getUserPosts,
+    getUserZero,
+    postUrls,
+]
 
 baseUrl : Str
 baseUrl =
@@ -19,3 +26,14 @@ getUserPosts = \userId ->
 getUserZero : Str
 getUserZero =
     getUser 0
+
+postUrls : U32 -> { details: Str, comments: Str, likes: Str }
+postUrls = \postId ->
+    subUrl = \sub ->
+        "$(baseUrl)/posts/$(Num.toStr postId)/$(sub)"
+
+    {
+        details: subUrl "details",
+        comments: subUrl "comments",
+        likes: subUrl "likes",
+    }
