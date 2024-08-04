@@ -1101,80 +1101,6 @@ pub fn module_from_builtins<'ctx>(
     module
 }
 
-pub fn construct_optimization_passes<'a>(
-    module: &'a Module,
-    opt_level: OptLevel,
-) -> (PassManager<Module<'a>>, PassManager<FunctionValue<'a>>) {
-    let mpm = PassManager::create(());
-    let fpm = PassManager::create(module);
-
-    // remove unused global values (e.g. those defined by zig, but unused in user code)
-    // mpm.add_global_dce_pass();
-
-    // mpm.add_always_inliner_pass();
-
-    // tail-call elimination is always on
-    // fpm.add_instruction_combining_pass();
-    // fpm.add_tail_call_elimination_pass();
-
-    // let pmb = PassManagerBuilder::create();
-    match opt_level {
-        OptLevel::Development | OptLevel::Normal => {
-            // pmb.set_optimization_level(OptimizationLevel::None);
-        }
-        OptLevel::Size => {
-            // pmb.set_optimization_level(OptimizationLevel::Default);
-            // 2 is equivalent to `-Oz`.
-            // pmb.set_size_level(2);
-
-            // TODO: For some usecase, like embedded, it is useful to expose this and tune it.
-            // This really depends on if inlining causes enough simplifications to reduce code size.
-            // pmb.set_inliner_with_threshold(50);
-        }
-        OptLevel::Optimize => {
-            // pmb.set_optimization_level(OptimizationLevel::Aggressive);
-            // this threshold seems to do what we want
-            // pmb.set_inliner_with_threshold(750);
-        }
-    }
-
-    // Add extra optimization passes for Optimize.
-    if matches!(opt_level, OptLevel::Optimize) {
-        // TODO: figure out which of these actually help.
-        // Note, llvm probably already runs all of these as part of Aggressive.
-
-        // function passes
-
-        // fpm.add_cfg_simplification_pass();
-        // mpm.add_cfg_simplification_pass();
-
-        // fpm.add_jump_threading_pass();
-        // mpm.add_jump_threading_pass();
-
-        // fpm.add_memcpy_optimize_pass(); // this one is very important
-
-        // fpm.add_licm_pass();
-
-        // turn invoke into call
-        // TODO: is this pass needed. It theoretically prunes unused exception handling info.
-        // This seems unrelated to the comment above. It also seems to be missing in llvm-16.
-        // mpm.add_prune_eh_pass();
-
-        // remove unused global values (often the `_wrapper` can be removed)
-        // mpm.add_global_dce_pass();
-
-        // mpm.add_function_inlining_pass();
-    }
-
-    // pmb.populate_module_pass_manager(&mpm);
-    // pmb.populate_function_pass_manager(&fpm);
-
-    fpm.initialize();
-
-    // For now, we have just one of each
-    (mpm, fpm)
-}
-
 fn promote_to_main_function<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -5789,8 +5715,6 @@ fn build_procedures_help<'a>(
         &mut layout_ids,
     );
 
-    let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
-
     for (proc, fn_vals) in headers {
         for (func_spec_solutions, fn_val) in fn_vals {
             let mut current_scope = scope.clone();
@@ -5813,9 +5737,7 @@ fn build_procedures_help<'a>(
             // call finalize() before any code generation/verification
             env.dibuilder.finalize();
 
-            if fn_val.verify(true) {
-                function_pass.run_on(&fn_val);
-            } else {
+            if !fn_val.verify(true) {
                 let mode = "NON-OPTIMIZED";
 
                 eprintln!(

@@ -3,10 +3,6 @@ use crate::link::{
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
-use inkwell::{
-    passes::PassBuilderOptions,
-    targets::{InitializationConfig, TargetMachine},
-};
 use roc_error_macros::internal_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
@@ -200,7 +196,6 @@ fn gen_from_mono_module_llvm<'a>(
 
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
-    let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
@@ -263,36 +258,20 @@ fn gen_from_mono_module_llvm<'a>(
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
-    //
-    inkwell::targets::Target::initialize_all(&InitializationConfig::default());
-    let target_triple = TargetMachine::get_default_triple();
-    let inkwell_target = inkwell::targets::Target::from_triple(&target_triple).unwrap();
-    let inkwell_opt_level = match opt_level {
-        OptLevel::Development | OptLevel::Normal => inkwell::OptimizationLevel::None,
-        OptLevel::Size => inkwell::OptimizationLevel::Default,
-        OptLevel::Optimize => inkwell::OptimizationLevel::Aggressive,
-    };
 
-    let inkwell_target_machine = inkwell_target
-        .create_target_machine(
-            &target_triple,
-            "generic",
-            "",
-            inkwell_opt_level,
-            inkwell::targets::RelocMode::PIC,
-            inkwell::targets::CodeModel::Default,
-        )
-        .unwrap();
+    let inkwell_opt_level = crate::target::convert_opt_level(opt_level);
+    let inkwell_llvm_passes = crate::llvm_passes::get_llvm_passes_str(opt_level);
+    let inkwell_target_machine =
+        crate::target::target_machine(target, inkwell_opt_level, inkwell::targets::RelocMode::PIC)
+            .expect("should be a valid target machine");
 
     module
         .run_passes(
-            crate::llvm_passes::get_llvm_passes_str(opt_level),
+            inkwell_llvm_passes,
             &inkwell_target_machine,
-            PassBuilderOptions::create(),
+            inkwell::passes::PassBuilderOptions::create(),
         )
         .expect("valid llvm optimization passes");
-
-    // mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
