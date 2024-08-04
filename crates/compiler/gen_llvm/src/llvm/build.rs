@@ -5767,7 +5767,9 @@ fn build_procedures_help<'a>(
         it1,
         it2,
     ) {
-        Err(e) => panic!("Error in alias analysis: {e}"),
+        Err(e) => {
+            panic!("Error in alias analysis: {e}")
+        }
         Ok(solutions) => solutions,
     };
 
@@ -6036,7 +6038,7 @@ fn expose_alias_to_host<'a>(
         }
 
         RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-        RawFunctionLayout::ZeroArgumentThunk(result) => {
+        RawFunctionLayout::ZeroArgumentThunk(None, result) => {
             // Define only the return value size, since this is a thunk
             //
             // * roc__mainForHost_1_Update_result_size() -> i64
@@ -6051,6 +6053,9 @@ fn expose_alias_to_host<'a>(
                 Some("result"),
                 result_type,
             );
+        }
+        RawFunctionLayout::ZeroArgumentThunk(Some(_), _) => {
+            todo!("agus")
         }
     }
 }

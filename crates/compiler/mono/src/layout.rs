@@ -434,10 +434,10 @@ impl<T> Cacheable<T> {
 
 impl<T, E> Cacheable<Result<T, E>> {
     #[inline(always)]
-    fn then<U>(self, f: impl FnOnce(T) -> U) -> Cacheable<Result<U, E>> {
+    fn then<U>(self, f: impl FnOnce(T) -> Cacheable<Result<U, E>>) -> Cacheable<Result<U, E>> {
         let Cacheable(result, criteria) = self;
         match result {
-            Ok(t) => Cacheable(Ok(f(t)), criteria),
+            Ok(t) => f(t),
             Err(e) => Cacheable(Err(e), criteria),
         }
     }
@@ -488,12 +488,12 @@ impl From<LayoutProblem> for RuntimeError {
 pub enum RawFunctionLayout<'a> {
     Function(&'a [InLayout<'a>], LambdaSet<'a>, InLayout<'a>),
     ErasedFunction(&'a [InLayout<'a>], InLayout<'a>),
-    ZeroArgumentThunk(InLayout<'a>),
+    ZeroArgumentThunk(Option<InLayout<'a>>, InLayout<'a>),
 }
 
 impl<'a> RawFunctionLayout<'a> {
     pub fn is_zero_argument_thunk(&self) -> bool {
-        matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
+        matches!(self, RawFunctionLayout::ZeroArgumentThunk(_, _))
     }
 
     pub fn is_erased_function(&self) -> bool {
@@ -520,70 +520,87 @@ impl<'a> RawFunctionLayout<'a> {
             }
             ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type, opt_module_params),
-            RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
+            RangedNumber(..) => Layout::new_help(env, var, content).then(|layout| Self::thunk(env, opt_module_params, layout)),
 
             // Ints
             Alias(Symbol::NUM_I128, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::I128)))
+                Self::thunk(env, opt_module_params, Layout::I128)
             }
             Alias(Symbol::NUM_I64, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::I64)))
+                Self::thunk(env, opt_module_params, Layout::I64)
             }
             Alias(Symbol::NUM_I32, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::I32)))
+                Self::thunk(env, opt_module_params, Layout::I32)
             }
             Alias(Symbol::NUM_I16, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::I16)))
+                Self::thunk(env, opt_module_params, Layout::I16)
             }
             Alias(Symbol::NUM_I8, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::I8)))
+                Self::thunk(env, opt_module_params, Layout::I8)
             }
 
             // I think unsigned and signed use the same layout
             Alias(Symbol::NUM_U128, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::U128)))
+                Self::thunk(env, opt_module_params, Layout::U128)
             }
             Alias(Symbol::NUM_U64, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::U64)))
+                Self::thunk(env, opt_module_params, Layout::U64)
             }
             Alias(Symbol::NUM_U32, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::U32)))
+                Self::thunk(env, opt_module_params, Layout::U32)
             }
             Alias(Symbol::NUM_U16, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::U16)))
+                Self::thunk(env, opt_module_params, Layout::U16)
             }
             Alias(Symbol::NUM_U8, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::U8)))
+                Self::thunk(env, opt_module_params, Layout::U8)
             }
 
             // Floats
             Alias(Symbol::NUM_F64, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::F64)))
+                Self::thunk(env, opt_module_params, Layout::F64)
             }
             Alias(Symbol::NUM_F32, args, _, _) => {
                 debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::F32)))
+                Self::thunk(env, opt_module_params, Layout::F32)
             }
 
             Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var, opt_module_params),
 
             Alias(symbol, _, var, _) if symbol.is_builtin() => {
-                Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk)
+                Layout::new_help(env, var, content).then(|layout| Self::thunk(env, opt_module_params, layout))
             }
 
             Alias(_, _, var, _) => Self::from_var(env, var, opt_module_params),
             Error => cacheable(Err(LayoutProblem::Erroneous)),
+        }
+    }
+
+    fn thunk(
+        env: &mut Env<'a, '_>,
+        opt_module_params: Option<&Variable>,
+        layout: InLayout<'a>,
+    ) -> Cacheable<RawFunctionLayoutResult<'a>> {
+        match opt_module_params {
+            Some(params_var) => {
+                let mut cache_criteria = CACHEABLE;
+                let params_layout =
+                    cached!(Layout::from_var(env, *params_var), cache_criteria, env.subs);
+
+                cacheable(Ok(Self::ZeroArgumentThunk(Some(params_layout), layout)))
+            }
+            None => cacheable(Ok(Self::ZeroArgumentThunk(None, layout))),
         }
     }
 
@@ -651,7 +668,7 @@ impl<'a> RawFunctionLayout<'a> {
                 let mut criteria = CACHEABLE;
                 let layout = cached!(layout_from_flat_type(env, flat_type), criteria, env.subs);
 
-                Cacheable(Ok(Self::ZeroArgumentThunk(layout)), criteria)
+                Self::thunk(env, opt_module_params, layout)
             }
         }
     }
@@ -664,6 +681,12 @@ impl<'a> RawFunctionLayout<'a> {
         var: Variable,
         opt_module_params: Option<&Variable>,
     ) -> Cacheable<RawFunctionLayoutResult<'a>> {
+        if opt_module_params.is_some() {
+            // TODO cache with module params
+            let content = env.subs.get_content_without_compacting(var);
+            return Self::new_help(env, var, *content, opt_module_params);
+        }
+
         env.cached_raw_function_or(var, |env| {
             if env.is_seen(var) {
                 unreachable!("The initial variable of a signature cannot be seen already")

@@ -4528,7 +4528,7 @@ pub fn add_imports(
         },
     );
 
-    let mut imported_param_vars = VecMap::default();
+    let mut imported_module_params_vars = VecMap::default();
 
     for (module_id, _) in exposed_for_module.exposed_by_module.iter_all() {
         let ExposedModuleTypes {
@@ -4548,11 +4548,15 @@ pub fn add_imports(
                 imported_flex_vars,
             );
 
-            imported_param_vars.insert(*module_id, copied_import_var);
+            imported_module_params_vars.insert(*module_id, copied_import_var);
         }
     }
 
-    (import_variables, imported_param_vars, abilities_store)
+    (
+        import_variables,
+        imported_module_params_vars,
+        abilities_store,
+    )
 }
 
 enum OnSymbolNotFound {
@@ -4685,8 +4689,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    // todo(agus): rename this to `imported_module_param_variables`
-    let (import_variables, imported_param_vars, abilities_store) = add_imports(
+    let (import_variables, imported_module_param_variables, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
         &mut subs,
@@ -4725,7 +4728,7 @@ fn run_solve_solve(
             #[cfg(debug_assertions)]
             checkmate,
             params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
-            imported_module_param_vars: &imported_param_vars,
+            imported_module_param_variables: &imported_module_param_variables,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4779,7 +4782,7 @@ fn run_solve_solve(
         exposed_vars_by_symbol,
         problems: errors,
         abilities_store: resolved_abilities_store,
-        imported_module_param_variables: imported_param_vars,
+        imported_module_param_variables,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -5560,7 +5563,7 @@ fn make_specializations<'a>(
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
-        params_pattern,
+        home_params_pattern: params_pattern,
         imported_module_param_variables: &imported_module_param_variables,
     };
 
@@ -5668,7 +5671,7 @@ fn build_pending_specializations<'a>(
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
-        params_pattern,
+        home_params_pattern: params_pattern,
         imported_module_param_variables: &imported_module_param_variables,
     };
 
@@ -5752,22 +5755,35 @@ fn build_pending_specializations<'a>(
                         );
                     }
                     _ => {
-                        // mark this symbols as a top-level thunk before any other work on the procs
-                        module_thunks.push(symbol);
+                        if mono_env.home_params_pattern.is_some() {
+                            register_toplevel_function_into_procs_base(
+                                &mut mono_env,
+                                &mut procs_base,
+                                symbol,
+                                expr_var,
+                                vec![],
+                                expr_var,
+                                body,
+                                false,
+                            );
+                        } else {
+                            // mark this symbols as a top-level thunk before any other work on the procs
+                            module_thunks.push(symbol);
 
-                        let proc = PartialProc {
-                            annotation: expr_var,
-                            // This is a 0-arity thunk, so it has no arguments.
-                            pattern_symbols: &[],
-                            // This is a top-level definition, so it cannot capture anything
-                            captured_symbols: CapturedSymbols::None,
-                            body: body.value,
-                            body_var: expr_var,
-                            // This is a 0-arity thunk, so it cannot be recursive
-                            is_self_recursive: false,
-                        };
+                            let proc = PartialProc {
+                                annotation: expr_var,
+                                // This is a 0-arity thunk, so it has no arguments.
+                                pattern_symbols: &[],
+                                // This is a top-level definition, so it cannot capture anything
+                                captured_symbols: CapturedSymbols::None,
+                                body: body.value,
+                                body_var: expr_var,
+                                // This is a 0-arity thunk, so it cannot be recursive
+                                is_self_recursive: false,
+                            };
 
-                        procs_base.partial_procs.insert(symbol, proc);
+                            procs_base.partial_procs.insert(symbol, proc);
+                        }
                     }
                 }
             }
@@ -5789,7 +5805,7 @@ fn build_pending_specializations<'a>(
                         mono_env.arena,
                         expr_var,
                         mono_env.subs,
-                        /* todo(agus) */ None,
+                        mono_env.params_var_for_symbol(symbol),
                     );
 
                     // cannot specialize when e.g. main's type contains type variables
@@ -6174,7 +6190,7 @@ fn load_derived_partial_procs<'a>(
             exposed_by_module,
             derived_module,
             struct_indexing: UsageTrackingMap::default(),
-            params_pattern: params_pattern.clone(),
+            home_params_pattern: params_pattern.clone(),
             imported_module_param_variables: &imported_module_param_variables,
         };
 

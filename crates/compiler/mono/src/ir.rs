@@ -1043,8 +1043,10 @@ impl<'a> Procs<'a> {
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
         let raw_layout = layout_cache.raw_from_var(
-            env.arena, annotation, env.subs, // todo(agus): params?
-            None,
+            env.arena,
+            annotation,
+            env.subs,
+            env.params_var_for_lambda(name),
         )?;
 
         let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
@@ -1375,8 +1377,7 @@ pub struct Env<'a, 'i> {
     pub exposed_by_module: &'i ExposedByModule,
     pub derived_module: &'i SharedDerivedModule,
     pub struct_indexing: UsageTrackingMap<(Symbol, u64), Symbol>,
-    // todo(agus) make this ref?
-    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    pub home_params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     pub imported_module_param_variables: &'i VecMap<ModuleId, Variable>,
 }
 
@@ -1412,10 +1413,6 @@ impl<'a, 'i> Env<'a, 'i> {
             // The Derived_gen module takes responsibility for code-generating symbols in the
             // Derived_synth module.
             && !(self.home == ModuleId::DERIVED_GEN && sym_module == ModuleId::DERIVED_SYNTH)
-    }
-
-    pub fn params_var(&self) -> Option<&Variable> {
-        self.params_pattern.as_ref().map(|(var, _, _)| var)
     }
 
     /// While specializing the Derived_gen module, derived implementation symbols from the
@@ -1471,6 +1468,22 @@ impl<'a, 'i> Env<'a, 'i> {
             .for_each(|e| e.invalidate_cache(&changed_variables));
 
         Ok(())
+    }
+
+    /// Returns the variable for the params pattern of a lambda's module.
+    fn params_var_for_lambda(&self, name: LambdaName) -> Option<&Variable> {
+        self.params_var_for_symbol(name.name())
+    }
+
+    /// Returns the variable for the params pattern of a symbol's module.
+    pub fn params_var_for_symbol(&self, symbol: Symbol) -> Option<&Variable> {
+        let module_id = symbol.module_id();
+
+        if module_id == self.home {
+            self.home_params_pattern.as_ref().map(|(var, _, _)| var)
+        } else {
+            self.imported_module_param_variables.get(&module_id)
+        }
     }
 }
 
@@ -2820,7 +2833,7 @@ fn patterns_to_when<'a>(
     body_var: Variable,
     body: Loc<roc_can::expr::Expr>,
 ) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
-    let params_pattern = env.params_pattern.clone();
+    let params_pattern = env.home_params_pattern.clone();
     let params_pattern_iter = params_pattern.iter();
     let capacity = params_pattern_iter.len() + patterns.len();
     let patterns_iter = params_pattern_iter.chain(patterns.iter()).cloned();
@@ -3159,8 +3172,7 @@ fn specialize_host_specializations<'a>(
             let raw_function_layout = RawFunctionLayout::from_var(
                 &mut layout_env,
                 lambda_set.ambient_function,
-                // todo(agus)
-                None,
+                env.params_var_for_symbol(symbol),
             )
             .value()
             .unwrap();
@@ -3346,7 +3358,7 @@ fn generate_runtime_error_function<'a>(
         RawFunctionLayout::ErasedFunction(..) => {
             todo_lambda_erasure!()
         }
-        RawFunctionLayout::ZeroArgumentThunk(ret_layout) => (&[] as &[_], ret_layout),
+        RawFunctionLayout::ZeroArgumentThunk(_, ret_layout) => (&[] as &[_], ret_layout),
     };
 
     Proc {
@@ -3438,7 +3450,8 @@ fn generate_host_exposed_function<'a>(
         RawFunctionLayout::ErasedFunction(..) => {
             todo_lambda_erasure!()
         }
-        RawFunctionLayout::ZeroArgumentThunk(result) => {
+        RawFunctionLayout::ZeroArgumentThunk(_, result) => {
+            // todo(agus): params?
             let assigned = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(assigned));
             let forced = force_thunk(env, function_name, result, assigned, hole);
@@ -3857,7 +3870,12 @@ fn build_specialized_proc_from_var<'a>(
     pattern_symbols: &[Symbol],
     fn_var: Variable,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
-    match layout_cache.raw_from_var(env.arena, fn_var, env.subs, env.params_var())? {
+    match layout_cache.raw_from_var(
+        env.arena,
+        fn_var,
+        env.subs,
+        env.params_var_for_lambda(lambda_name),
+    )? {
         RawFunctionLayout::Function(pattern_layouts, closure_layout, ret_layout) => {
             let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
             pattern_layouts_vec.extend_from_slice(pattern_layouts);
@@ -3884,13 +3902,16 @@ fn build_specialized_proc_from_var<'a>(
                 ret_layout,
             )
         }
-        RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
+        RawFunctionLayout::ZeroArgumentThunk(params_layout, ret_layout) => {
+            let mut params_layout_vec = Vec::new_in(env.arena);
+            params_layout_vec.extend(params_layout.iter());
+
             // a top-level constant 0-argument thunk
             build_specialized_proc(
                 env.arena,
                 lambda_name,
                 pattern_symbols,
-                Vec::new_in(env.arena),
+                params_layout_vec,
                 None,
                 ret_layout,
             )
@@ -4063,14 +4084,25 @@ fn specialize_variable<'a>(
     // for debugging only
     // TODO: can we get rid of raw entirely?
     let raw = layout_cache
-        .raw_from_var(env.arena, fn_var, env.subs, /* todo(agus) */ None)
+        .raw_from_var(
+            env.arena,
+            fn_var,
+            env.subs,
+            env.params_var_for_lambda(proc_name),
+        )
         .unwrap_or_else(|err| panic!("TODO handle invalid function {err:?}"));
 
     let raw = if procs.is_module_thunk(proc_name.name()) {
         match raw {
             RawFunctionLayout::Function(_, lambda_set, _) => {
                 let lambda_set_layout = lambda_set.full_layout;
-                RawFunctionLayout::ZeroArgumentThunk(lambda_set_layout)
+                let opt_params_layout = env.params_var_for_lambda(proc_name).map(|params_var| {
+                    layout_cache
+                        .from_var(env.arena, *params_var, env.subs)
+                        .unwrap()
+                });
+
+                RawFunctionLayout::ZeroArgumentThunk(opt_params_layout, lambda_set_layout)
             }
             _ => raw,
         }
@@ -4176,8 +4208,9 @@ impl<'a> ProcLayout<'a> {
 
                 ProcLayout::new(arena, arguments, lambda_name.niche(), result)
             }
-            RawFunctionLayout::ZeroArgumentThunk(result) => {
-                ProcLayout::new(arena, &[], Niche::NONE, result)
+            RawFunctionLayout::ZeroArgumentThunk(module_params, result) => {
+                let arguments = arena.alloc_slice_fill_iter(module_params.iter().copied());
+                ProcLayout::new(arena, arguments, Niche::NONE, result)
             }
         }
     }
@@ -5054,7 +5087,8 @@ pub fn with_hole<'a>(
                             env.arena,
                             function_type,
                             env.subs,
-                            /* todo(agus) */ None
+                            // todo(agus): Record accessors cannot reference params
+                            env.params_var_for_symbol(name),
                         ),
                         "Expr::Accessor"
                     );
@@ -5075,7 +5109,7 @@ pub fn with_hole<'a>(
                             )
                         }
                         RawFunctionLayout::ErasedFunction(_, _) => todo_lambda_erasure!(),
-                        RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+                        RawFunctionLayout::ZeroArgumentThunk(_, _) => unreachable!(),
                     }
                 }
 
@@ -5157,8 +5191,8 @@ pub fn with_hole<'a>(
                             env.arena,
                             function_type,
                             env.subs,
-                            // todo(agus)
-                            None
+                            // todo(agus): Opaque wrap functions cannot reference params
+                            env.params_var_for_symbol(name)
                         ),
                         "Expr::OpaqueWrapFunction"
                     );
@@ -5179,7 +5213,7 @@ pub fn with_hole<'a>(
                             )
                         }
                         RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-                        RawFunctionLayout::ZeroArgumentThunk(_) => {
+                        RawFunctionLayout::ZeroArgumentThunk(_, _) => {
                             internal_error!("should not be a thunk!")
                         }
                     }
@@ -5397,11 +5431,11 @@ pub fn with_hole<'a>(
                 env.arena,
                 function_type,
                 env.subs,
-                /* todo(agus) */ None,
+                env.params_var_for_symbol(name),
             );
 
             match return_on_layout_error!(env, raw, "Expr::Closure") {
-                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                RawFunctionLayout::ZeroArgumentThunk(_, _) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
                 RawFunctionLayout::ErasedFunction(argument_layouts, ret_layout) => {
@@ -5516,7 +5550,7 @@ pub fn with_hole<'a>(
                         layout_cache,
                         assigned,
                         hole,
-                        // todo(agus)
+                        // todo(agus): pass params from current fn?
                         None,
                     )
                 }
@@ -5552,7 +5586,7 @@ pub fn with_hole<'a>(
                         layout_cache,
                         assigned,
                         hole,
-                        // todo(agus)
+                        // TODO params in abilities
                         None,
                     )
                 }
@@ -5589,8 +5623,10 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache
-                            .raw_from_var(env.arena, fn_var, env.subs, /* todo(agus) */ None),
+                        layout_cache.raw_from_var(
+                            env.arena, fn_var, env.subs,
+                            /* todo(agus): call by pointer with params */ None
+                        ),
                         "Expr::Call"
                     );
 
@@ -5646,7 +5682,7 @@ pub fn with_hole<'a>(
                                     );
                                 }
                                 RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-                                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                RawFunctionLayout::ZeroArgumentThunk(_, _) => {
                                     unreachable!("calling a non-closure layout")
                                 }
                             }
@@ -5681,7 +5717,7 @@ pub fn with_hole<'a>(
                                     );
                                 }
                                 RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-                                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                RawFunctionLayout::ZeroArgumentThunk(_, _) => {
                                     unreachable!("calling a non-closure layout")
                                 }
                             }
@@ -5709,7 +5745,7 @@ pub fn with_hole<'a>(
                                         layout_cache,
                                         assigned,
                                         hole,
-                                        // todo(agus)
+                                        // TODO params in abilites
                                         None,
                                     );
                                 }
@@ -5766,7 +5802,7 @@ pub fn with_hole<'a>(
                                         hole_layout,
                                     );
                                 }
-                                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                RawFunctionLayout::ZeroArgumentThunk(_, _) => {
                                     unreachable!(
                                         "{:?} cannot be called in the source language",
                                         full_layout
@@ -5853,7 +5889,7 @@ pub fn with_hole<'a>(
 
                     let closure_data_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs, /* todo(agus) */ None),
+                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs,  None),
                         "match_on_closure_argument"
                     );
 
@@ -5900,7 +5936,7 @@ pub fn with_hole<'a>(
                             )
                         }
                         RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-                        RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
+                        RawFunctionLayout::ZeroArgumentThunk(_, _) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
                     }
                 }};
             }
@@ -6777,7 +6813,13 @@ fn tag_union_to_function<'a>(
             // only need to construct closure data
             let raw_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, whole_var, env.subs, /* todo(agus) */ None),
+                layout_cache.raw_from_var(
+                    env.arena,
+                    whole_var,
+                    env.subs,
+                    // todo(agus): Function generated from tags cannot reference params
+                    env.params_var_for_symbol(proc_symbol)
+                ),
                 "tag_union_to_function"
             );
 
@@ -6798,7 +6840,7 @@ fn tag_union_to_function<'a>(
                     )
                 }
                 RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-                RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+                RawFunctionLayout::ZeroArgumentThunk(_, _) => unreachable!(),
             }
         }
 
@@ -6972,7 +7014,7 @@ fn register_capturing_closure<'a>(
                         env.arena,
                         function_type,
                         env.subs,
-                        /* todo(agus) */ None
+                        env.params_var_for_symbol(closure_name),
                     ),
                     env.subs,
                     (function_type, closure_type),
@@ -8299,9 +8341,12 @@ fn specialize_symbol<'a>(
                     if env.is_imported_symbol(original)
                         || env.is_unloaded_derived_symbol(original, procs) =>
                 {
-                    let raw = match layout_cache
-                        .raw_from_var(env.arena, arg_var, env.subs, /* todo(agus) */ None)
-                    {
+                    let raw = match layout_cache.raw_from_var(
+                        env.arena,
+                        arg_var,
+                        env.subs,
+                        env.params_var_for_symbol(original),
+                    ) {
                         Ok(v) => v,
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
@@ -8343,13 +8388,16 @@ fn specialize_symbol<'a>(
                             // This is an imported ZAT that returns either a value, or the closure
                             // data for a lambda set.
                             let layout = match raw {
-                                RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                                RawFunctionLayout::ZeroArgumentThunk(None, layout) => layout,
+                                RawFunctionLayout::ZeroArgumentThunk(Some(_), _) => {
+                                    todo!("agus")
+                                }
                                 RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
                                     .put_in_direct_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
 
-                            let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                            let raw = RawFunctionLayout::ZeroArgumentThunk(None, layout);
                             let lambda_name = LambdaName::no_niche(original);
                             let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, raw);
 
@@ -8393,7 +8441,12 @@ fn specialize_symbol<'a>(
             // to it in the IR.
             let res_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, arg_var, env.subs, /* todo(agus) */ None),
+                layout_cache.raw_from_var(
+                    env.arena,
+                    arg_var,
+                    env.subs,
+                    env.params_var_for_symbol(assign_to),
+                ),
                 "specialize_symbol res_layout"
             );
 
@@ -8526,7 +8579,10 @@ fn specialize_symbol<'a>(
                         result,
                     )
                 }
-                RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
+                RawFunctionLayout::ZeroArgumentThunk(Some(_), _) => {
+                    todo!("agus");
+                }
+                RawFunctionLayout::ZeroArgumentThunk(None, ret_layout) => {
                     // this is a 0-argument thunk
                     let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);
                     procs.insert_passed_by_name(
@@ -8812,7 +8868,9 @@ fn call_by_name<'a>(
             let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
             assign_to_symbols(env, procs, layout_cache, iter, result)
         }
-        Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
+        Ok(RawFunctionLayout::ZeroArgumentThunk(None, ret_layout)) => {
+            debug_assert!(opt_params.is_none());
+
             if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
                 call_by_name_module_thunk(
@@ -8830,6 +8888,51 @@ fn call_by_name<'a>(
                 force_thunk(env, proc_name, ret_layout, assigned, hole)
             } else {
                 panic!("most likely we're trying to call something that is not a function");
+            }
+        }
+        Ok(RawFunctionLayout::ZeroArgumentThunk(Some(params_layout), ret_layout)) => {
+            match opt_params {
+                None => internal_error!("Missing symbol for thunk from module with params"),
+                Some((params_var, params_sym)) => {
+                    let thunk_name = LambdaName::no_niche(proc_name);
+
+                    if env.is_imported_symbol(proc_name) {
+                        add_needed_external(procs, env, fn_var, thunk_name);
+                    } else {
+                        todo!("[agus] local thunk call with params")
+                    }
+
+                    let params_expr = roc_can::expr::Expr::Var(params_sym, params_var);
+
+                    let specialized_params_sym = possible_reuse_symbol_or_specialize(
+                        env,
+                        procs,
+                        layout_cache,
+                        &params_expr,
+                        params_var,
+                    );
+
+                    let call = self::Call {
+                        call_type: CallType::ByName {
+                            name: thunk_name,
+                            ret_layout,
+                            arg_layouts: env.arena.alloc([params_layout]),
+                            specialization_id: env.next_call_specialization_id(),
+                        },
+                        arguments: env.arena.alloc([specialized_params_sym]),
+                    };
+
+                    let result = build_call(env, call, assigned, ret_layout, env.arena.alloc(hole));
+                    assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        params_var,
+                        Loc::at_zero(params_expr),
+                        specialized_params_sym,
+                        result,
+                    )
+                }
             }
         }
     }
@@ -9318,7 +9421,7 @@ fn call_specialized_proc<'a>(
                 build_call(env, call, assigned, lambda_set.full_layout, hole)
             }
             RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
-            RawFunctionLayout::ZeroArgumentThunk(_) => {
+            RawFunctionLayout::ZeroArgumentThunk(_, _) => {
                 unreachable!()
             }
         }

@@ -52,7 +52,7 @@ pub fn infer_expr(
         derived_module,
         function_kind: FunctionKind::LambdaSet,
         params_pattern: None,
-        imported_module_param_vars: &Default::default(),
+        imported_module_param_variables: &Default::default(),
         #[cfg(debug_assertions)]
         checkmate: None,
     };

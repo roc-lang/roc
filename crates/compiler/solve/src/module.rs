@@ -83,7 +83,7 @@ pub struct SolveConfig<'a> {
 
     /// Module params
     pub params_pattern: Option<roc_can::pattern::Pattern>,
-    pub imported_module_param_vars: &'a VecMap<ModuleId, Variable>,
+    pub imported_module_param_variables: &'a VecMap<ModuleId, Variable>,
 }
 
 pub struct SolveOutput {

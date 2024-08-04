@@ -187,7 +187,8 @@ where
 
         for hels in hels {
             match hels.raw_function_layout {
-                RawFunctionLayout::Function(_, _, _) => {
+                RawFunctionLayout::Function(_, _, _)
+                | RawFunctionLayout::ZeroArgumentThunk(Some(_), _) => {
                     let it = hels.proc_layout.arguments.iter().copied();
                     let bytes =
                         func_name_bytes_help(hels.symbol, it, Niche::NONE, hels.proc_layout.result);
@@ -201,7 +202,7 @@ where
 
                     host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                RawFunctionLayout::ZeroArgumentThunk(None, _) => {
                     let bytes =
                         func_name_bytes_help(hels.symbol, [], Niche::NONE, hels.proc_layout.result);
 

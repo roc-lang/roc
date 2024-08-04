@@ -131,7 +131,7 @@ fn run_help(
         derived_module,
         function_kind,
         params_pattern,
-        imported_module_param_vars: module_params_vars,
+        imported_module_param_variables,
         ..
     } = config;
 
@@ -185,7 +185,7 @@ fn run_help(
         &mut obligation_cache,
         &mut awaiting_specializations,
         params_pattern,
-        module_params_vars,
+        imported_module_param_variables,
     );
 
     RunSolveOutput {

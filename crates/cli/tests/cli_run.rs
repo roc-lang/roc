@@ -744,6 +744,26 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_toplevel_thunk() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "topLevelThunk.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                    App1: api.example.com/one
+                    App2: api.example.com/two
+                    "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
