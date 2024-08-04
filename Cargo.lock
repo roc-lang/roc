@@ -475,6 +475,7 @@ dependencies = [
  "bumpalo",
  "copy_zig_glue",
  "criterion",
+ "regex",
  "rlimit",
  "roc_collections",
  "roc_command_utils",
