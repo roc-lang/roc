@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// to support the upgrade from zig 0.11.0 to 0.13.0, and keep the scope of the change smaller.
 ///
 /// Once we have zig 0.13.0, and also removed platform/host rebuilding, we will need to upgrade the
-/// test platforms so they produce thier own host binaries, and this will be the best time to
+/// test platforms so they produce their own host binaries, and this will be the best time to
 /// upgrade to a zig package and can also be done incrementally withouth changing all the platforms in one go.
 pub fn copy_zig_glue() {
     let workspace_dir = roc_test_utils_dir::workspace_root();
