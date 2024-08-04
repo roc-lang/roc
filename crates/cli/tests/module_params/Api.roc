@@ -1,4 +1,4 @@
-module { appId } -> [baseUrl, allUsers, getUser, getUserPosts]
+module { appId } -> [baseUrl, allUsers, getUser, getUserPosts, getUserZero]
 
 baseUrl : Str
 baseUrl =
@@ -15,3 +15,7 @@ getUser = \userId ->
 getUserPosts : U32 -> Str
 getUserPosts = \userId ->
     "$(getUser userId)/posts"
+
+getUserZero : Str
+getUserZero =
+    getUser 0
