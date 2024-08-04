@@ -12,7 +12,7 @@ use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_can::abilities::SpecializationId;
 use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
-use roc_can::module::ExposedByModule;
+use roc_can::module::{ExposedByModule, ModuleParams};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
@@ -1377,7 +1377,7 @@ pub struct Env<'a, 'i> {
     pub exposed_by_module: &'i ExposedByModule,
     pub derived_module: &'i SharedDerivedModule,
     pub struct_indexing: UsageTrackingMap<(Symbol, u64), Symbol>,
-    pub home_params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    pub module_params: Option<ModuleParams>,
     pub imported_module_param_variables: &'i VecMap<ModuleId, Variable>,
 }
 
@@ -1480,7 +1480,7 @@ impl<'a, 'i> Env<'a, 'i> {
         let module_id = symbol.module_id();
 
         if module_id == self.home {
-            self.home_params_pattern.as_ref().map(|(var, _, _)| var)
+            self.module_params.as_ref().map(|params| &params.variable)
         } else {
             self.imported_module_param_variables.get(&module_id)
         }
@@ -2826,20 +2826,33 @@ fn from_can_let<'a>(
 /// foo = \r -> when r is { x } -> body
 ///
 /// conversion of one-pattern when expressions will do the most optimal thing
+///
+/// Note: The module params' pattern will be added as the first argument if present.
 #[allow(clippy::type_complexity)]
 fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
     patterns: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     body_var: Variable,
-    body: Loc<roc_can::expr::Expr>,
+    mut body: Loc<roc_can::expr::Expr>,
 ) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
-    let params_pattern = env.home_params_pattern.clone();
-    let params_pattern_iter = params_pattern.iter();
-    let capacity = params_pattern_iter.len() + patterns.len();
-    let patterns_iter = params_pattern_iter.chain(patterns.iter()).cloned();
+    let capacity = patterns.len() + (if env.module_params.is_some() { 1 } else { 0 });
+    let patterns_iter = patterns.iter().cloned();
 
     let mut arg_vars = Vec::with_capacity_in(capacity, env.arena);
     let mut symbols = Vec::with_capacity_in(capacity, env.arena);
+
+    if let Some(module_params) = &env.module_params {
+        body = Loc::at_zero(pattern_to_when_help(
+            module_params.variable,
+            body_var,
+            module_params.symbol,
+            module_params.loc_pattern.clone(),
+            body,
+        ));
+        symbols.push(module_params.symbol);
+        arg_vars.push(module_params.variable);
+    }
+
     let mut body = Ok(body);
 
     // patterns that are not yet in a when (e.g. in let or function arguments) must be irrefutable
@@ -2898,7 +2911,6 @@ fn pattern_to_when(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
@@ -2943,27 +2955,7 @@ fn pattern_to_when(
         | TupleDestructure { .. }
         | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
-
-            let wrapped_body = When {
-                cond_var: pattern_var,
-                expr_var: body_var,
-                region: Region::zero(),
-                loc_cond: Box::new(Loc::at_zero(Var(symbol, pattern_var))),
-                branches: vec![WhenBranch {
-                    patterns: vec![WhenBranchPattern {
-                        pattern,
-                        degenerate: false,
-                    }],
-                    value: body,
-                    guard: None,
-                    // If this type-checked, it's non-redundant
-                    redundant: RedundantMark::known_non_redundant(),
-                }],
-                branches_cond_var: pattern_var,
-                // If this type-checked, it's exhaustive
-                exhaustive: ExhaustiveMark::known_exhaustive(),
-            };
-
+            let wrapped_body = pattern_to_when_help(pattern_var, body_var, symbol, pattern, body);
             (symbol, Loc::at_zero(wrapped_body))
         }
 
@@ -2985,6 +2977,37 @@ fn pattern_to_when(
                 pattern.value
             )
         }
+    }
+}
+
+fn pattern_to_when_help(
+    pattern_var: Variable,
+    body_var: Variable,
+    symbol: Symbol,
+    pattern: Loc<roc_can::pattern::Pattern>,
+    body: Loc<roc_can::expr::Expr>,
+) -> roc_can::expr::Expr {
+    use roc_can::expr::Expr::*;
+    use roc_can::expr::{WhenBranch, WhenBranchPattern};
+
+    When {
+        cond_var: pattern_var,
+        expr_var: body_var,
+        region: Region::zero(),
+        loc_cond: Box::new(Loc::at_zero(Var(symbol, pattern_var))),
+        branches: vec![WhenBranch {
+            patterns: vec![WhenBranchPattern {
+                pattern,
+                degenerate: false,
+            }],
+            value: body,
+            guard: None,
+            // If this type-checked, it's non-redundant
+            redundant: RedundantMark::known_non_redundant(),
+        }],
+        branches_cond_var: pattern_var,
+        // If this type-checked, it's exhaustive
+        exhaustive: ExhaustiveMark::known_exhaustive(),
     }
 }
 
@@ -8579,8 +8602,43 @@ fn specialize_symbol<'a>(
                         result,
                     )
                 }
-                RawFunctionLayout::ZeroArgumentThunk(Some(_), _) => {
-                    todo!("agus");
+                RawFunctionLayout::ZeroArgumentThunk(Some(params_layout), ret_layout) => {
+                    if !env.is_imported_symbol(original) {
+                        // This is a local thunk which requires params,
+                        // so we just pass them from the current function.
+
+                        let (params_symbol, params_var) = match &env.module_params {
+                            Some(module_params) => (module_params.symbol, module_params.variable),
+                            None => internal_error!(
+                                "Local thunk requires module params, but mono Env has none."
+                            ),
+                        };
+
+                        let top_level = ProcLayout::new(
+                            env.arena,
+                            env.arena.alloc([params_layout]),
+                            Niche::NONE,
+                            ret_layout,
+                        );
+
+                        let name = LambdaName::no_niche(original);
+                        procs.insert_passed_by_name(env, arg_var, name, top_level, layout_cache);
+
+                        force_thunk_with_params(
+                            env,
+                            procs,
+                            layout_cache,
+                            name,
+                            params_symbol,
+                            params_var,
+                            ret_layout,
+                            params_layout,
+                            assign_to,
+                            result,
+                        )
+                    } else {
+                        todo!("agus");
+                    }
                 }
                 RawFunctionLayout::ZeroArgumentThunk(None, ret_layout) => {
                     // this is a 0-argument thunk
@@ -8902,35 +8960,17 @@ fn call_by_name<'a>(
                         todo!("[agus] local thunk call with params")
                     }
 
-                    let params_expr = roc_can::expr::Expr::Var(params_sym, params_var);
-
-                    let specialized_params_sym = possible_reuse_symbol_or_specialize(
+                    force_thunk_with_params(
                         env,
                         procs,
                         layout_cache,
-                        &params_expr,
+                        thunk_name,
+                        params_sym,
                         params_var,
-                    );
-
-                    let call = self::Call {
-                        call_type: CallType::ByName {
-                            name: thunk_name,
-                            ret_layout,
-                            arg_layouts: env.arena.alloc([params_layout]),
-                            specialization_id: env.next_call_specialization_id(),
-                        },
-                        arguments: env.arena.alloc([specialized_params_sym]),
-                    };
-
-                    let result = build_call(env, call, assigned, ret_layout, env.arena.alloc(hole));
-                    assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        params_var,
-                        Loc::at_zero(params_expr),
-                        specialized_params_sym,
-                        result,
+                        ret_layout,
+                        params_layout,
+                        assigned,
+                        hole,
                     )
                 }
             }
@@ -9249,6 +9289,45 @@ fn call_by_name_help<'a>(
             }
         }
     }
+}
+
+fn force_thunk_with_params<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    name: LambdaName<'a>,
+    params_sym: Symbol,
+    params_var: Variable,
+    ret_layout: InLayout<'a>,
+    params_layout: InLayout<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let params_expr = roc_can::expr::Expr::Var(params_sym, params_var);
+
+    let specialized_params_sym =
+        possible_reuse_symbol_or_specialize(env, procs, layout_cache, &params_expr, params_var);
+
+    let call = self::Call {
+        call_type: CallType::ByName {
+            name,
+            ret_layout,
+            arg_layouts: env.arena.alloc([params_layout]),
+            specialization_id: env.next_call_specialization_id(),
+        },
+        arguments: env.arena.alloc([specialized_params_sym]),
+    };
+
+    let result = build_call(env, call, assigned, ret_layout, env.arena.alloc(hole));
+    assign_to_symbol(
+        env,
+        procs,
+        layout_cache,
+        params_var,
+        Loc::at_zero(params_expr),
+        specialized_params_sym,
+        result,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

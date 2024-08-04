@@ -15,10 +15,10 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
-use roc_can::expr::{AnnotatedMark, DbgLookup, Declarations, ExpectLookup, PendingDerives};
+use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations, TypeState,
+    ModuleParams, ResolvedImplementations, TypeState,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -408,7 +408,7 @@ fn start_phase<'a>(
                 let build_expects =
                     matches!(state.exec_mode, ExecutionMode::Test) && expectations.is_some();
 
-                let params_pattern = state.module_cache.param_patterns.get(&module_id).cloned();
+                let module_params = state.module_cache.module_params.get(&module_id).cloned();
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -425,8 +425,7 @@ fn start_phase<'a>(
                     derived_module,
                     expectations,
                     build_expects,
-                    // todo(agus): rename
-                    params_pattern,
+                    module_params,
                     imported_module_param_variables,
                 }
             }
@@ -523,7 +522,7 @@ fn start_phase<'a>(
                     )
                 };
 
-                let params_pattern = state.module_cache.param_patterns.get(&module_id).cloned();
+                let module_params = state.module_cache.module_params.get(&module_id).cloned();
 
                 if module_id == ModuleId::DERIVED_GEN {
                     load_derived_partial_procs(
@@ -537,7 +536,7 @@ fn start_phase<'a>(
                         &state.exposed_types,
                         &mut procs_base,
                         &mut state.world_abilities,
-                        &params_pattern,
+                        module_params.clone(),
                         &imported_module_param_variables,
                     );
                 }
@@ -557,7 +556,7 @@ fn start_phase<'a>(
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
                     expectations,
-                    params_pattern,
+                    module_params,
                     imported_module_param_variables,
                 }
             }
@@ -944,7 +943,7 @@ enum BuildTask<'a> {
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
         build_expects: bool,
-        params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+        module_params: Option<ModuleParams>,
         imported_module_param_variables: VecMap<ModuleId, Variable>,
     },
     MakeSpecializations {
@@ -959,7 +958,7 @@ enum BuildTask<'a> {
         world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
-        params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+        module_params: Option<ModuleParams>,
         imported_module_param_variables: VecMap<ModuleId, Variable>,
     },
 }
@@ -2420,11 +2419,11 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
-            if let Some(params_pattern) = constrained_module.module.params_pattern.clone() {
+            if let Some(module_params) = constrained_module.module.module_params.clone() {
                 state
                     .module_cache
-                    .param_patterns
-                    .insert(module_id, params_pattern);
+                    .module_params
+                    .insert(module_id, module_params);
             }
 
             state
@@ -4679,7 +4678,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
-        params_pattern,
+        module_params,
         ..
     } = module;
 
@@ -4727,7 +4726,7 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
-            params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
+            params_pattern: module_params.map(|params| params.loc_pattern.value),
             imported_module_param_variables: &imported_module_param_variables,
         };
 
@@ -4814,10 +4813,7 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let opt_params_var = module
-        .params_pattern
-        .as_ref()
-        .map(|(params_var, _, _)| *params_var);
+    let opt_params_var = module.module_params.as_ref().map(|params| params.variable);
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
@@ -5144,7 +5140,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
-            &module_output.params_pattern,
+            &module_output.module_params,
             module_id,
         )
     };
@@ -5201,7 +5197,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
-        params_pattern: module_output.params_pattern,
+        module_params: module_output.module_params,
     };
 
     let constrained_module = ConstrainedModule {
@@ -5542,7 +5538,7 @@ fn make_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
-    params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    module_params: Option<ModuleParams>,
     imported_module_param_variables: VecMap<ModuleId, Variable>,
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
@@ -5563,7 +5559,7 @@ fn make_specializations<'a>(
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
-        home_params_pattern: params_pattern,
+        module_params,
         imported_module_param_variables: &imported_module_param_variables,
     };
 
@@ -5636,7 +5632,7 @@ fn build_pending_specializations<'a>(
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
     build_expects: bool,
-    params_pattern: Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    module_params: Option<ModuleParams>,
     imported_module_param_variables: VecMap<ModuleId, Variable>,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
@@ -5671,7 +5667,7 @@ fn build_pending_specializations<'a>(
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
-        home_params_pattern: params_pattern,
+        module_params,
         imported_module_param_variables: &imported_module_param_variables,
     };
 
@@ -5755,7 +5751,7 @@ fn build_pending_specializations<'a>(
                         );
                     }
                     _ => {
-                        if mono_env.home_params_pattern.is_some() {
+                        if mono_env.module_params.is_some() {
                             register_toplevel_function_into_procs_base(
                                 &mut mono_env,
                                 &mut procs_base,
@@ -6150,7 +6146,7 @@ fn load_derived_partial_procs<'a>(
     exposed_by_module: &ExposedByModule,
     procs_base: &mut ProcsBase<'a>,
     world_abilities: &mut WorldAbilities,
-    params_pattern: &Option<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
+    module_params: Option<ModuleParams>,
     imported_module_param_variables: &VecMap<ModuleId, Variable>,
 ) {
     debug_assert_eq!(home, ModuleId::DERIVED_GEN);
@@ -6190,7 +6186,7 @@ fn load_derived_partial_procs<'a>(
             exposed_by_module,
             derived_module,
             struct_indexing: UsageTrackingMap::default(),
-            home_params_pattern: params_pattern.clone(),
+            module_params: module_params.clone(),
             imported_module_param_variables: &imported_module_param_variables,
         };
 
@@ -6364,7 +6360,7 @@ fn run_task<'a>(
             derived_module,
             expectations,
             build_expects,
-            params_pattern,
+            module_params,
             imported_module_param_variables,
         } => Ok(build_pending_specializations(
             arena,
@@ -6382,7 +6378,7 @@ fn run_task<'a>(
             derived_module,
             expectations,
             build_expects,
-            params_pattern,
+            module_params,
             imported_module_param_variables,
         )),
         MakeSpecializations {
@@ -6397,7 +6393,7 @@ fn run_task<'a>(
             exposed_by_module,
             derived_module,
             expectations,
-            params_pattern,
+            module_params,
             imported_module_param_variables,
         } => Ok(make_specializations(
             arena,
@@ -6413,7 +6409,7 @@ fn run_task<'a>(
             &exposed_by_module,
             derived_module,
             expectations,
-            params_pattern,
+            module_params,
             imported_module_param_variables,
         )),
     };

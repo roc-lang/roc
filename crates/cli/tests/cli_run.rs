@@ -763,6 +763,25 @@ mod cli_run {
     }
 
     #[test]
+    fn module_params_thunk_ref_thunk() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "thunkRefThunk.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                    App1: api.example.com/one/users
+                    App2: api.example.com/two/users
+                    "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(

@@ -6,7 +6,7 @@ use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{
-    AnnotatedMark, ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
+    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
 use crate::pattern::{
     canonicalize_record_destructure, BindingsFromPattern, Pattern, PermitShadows,
@@ -20,7 +20,7 @@ use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::{HeaderType, ModuleParams};
+use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -138,7 +138,14 @@ pub struct Module {
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
     pub loc_dbgs: VecMap<Symbol, DbgLookup>,
-    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
+    pub module_params: Option<ModuleParams>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleParams {
+    pub variable: Variable,
+    pub loc_pattern: Loc<Pattern>,
+    pub symbol: Symbol,
 }
 
 #[derive(Debug, Default)]
@@ -152,7 +159,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
-    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
+    pub module_params: Option<ModuleParams>,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
@@ -390,8 +397,8 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut output = Output::default();
 
-    let params_pattern = header_type.get_params().as_ref().map(
-        |ModuleParams {
+    let module_params = header_type.get_params().as_ref().map(
+        |roc_parse::header::ModuleParams {
              pattern,
              before_arrow: _,
              after_arrow: _,
@@ -413,11 +420,11 @@ pub fn canonicalize_module_defs<'a>(
                 env.top_level_symbols.insert(symbol);
             }
 
-            (
-                var_store.fresh(),
-                AnnotatedMark::new(var_store),
+            ModuleParams {
+                variable: var_store.fresh(),
                 loc_pattern,
-            )
+                symbol: scope.gen_unique_symbol(),
+            }
         },
     );
 
@@ -851,7 +858,7 @@ pub fn canonicalize_module_defs<'a>(
         scope,
         aliases,
         rigid_variables,
-        params_pattern,
+        module_params,
         declarations,
         referenced_values,
         exposed_imports: can_exposed_imports,
