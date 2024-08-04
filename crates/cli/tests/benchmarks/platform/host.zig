@@ -111,12 +111,15 @@ comptime {
 
 const Unit = extern struct {};
 
-pub fn main() !u8 {
+pub export fn main() u8 {
     const stderr = std.io.getStdErr().writer();
 
     // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
     const size = @max(@as(usize, @intCast(roc__mainForHost_1_exposed_size())), 8);
-    const raw_output = roc_alloc(@as(usize, @intCast(size)), @alignOf(u64)).?;
+    const raw_output = roc_alloc(@as(usize, @intCast(size)), @alignOf(u64)) orelse {
+        std.log.err("Memory allocation failed", .{});
+        return 1;
+    };
     const output = @as([*]u8, @ptrCast(raw_output));
 
     defer {

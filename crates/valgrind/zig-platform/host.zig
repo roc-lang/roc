@@ -106,7 +106,7 @@ extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
+pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 

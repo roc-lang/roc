@@ -2,8 +2,8 @@ const std = @import("std");
 const time = std.time;
 const Timer = time.Timer;
 
-const RocStr = @import("../src/str.zig").RocStr;
-const RocDec = @import("../src/dec.zig").RocDec;
+const RocStr = @import("./bitcode/src/str.zig").RocStr;
+const RocDec = @import("./bitcode/src/dec.zig").RocDec;
 
 fn roc_alloc(_: usize, _: u32) callconv(.C) ?*anyopaque {
     @panic("Not needed for dec benchmark");
@@ -23,7 +23,15 @@ comptime {
 
 var timer: Timer = undefined;
 
-pub fn main() !void {
+pub export fn main() u8 {
+    run_tests() catch |err| {
+        std.debug.print("Error: {}\n", .{err});
+        return 1;
+    };
+    return 0;
+}
+
+fn run_tests() !void {
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Warning: Timer seems to step in units of 41ns\n\n", .{});
     timer = try Timer.start();
@@ -35,11 +43,15 @@ pub fn main() !void {
 
     // This number are very close to 1 to avoid over and underflow.
     const f1 = 1.00123;
-    const dec1 = RocDec.fromF64(f1).?;
+    const dec1 = RocDec.fromF64(f1) orelse {
+        @panic("Failed to create RocDec from f64");
+    };
 
     // `asin` and `acos` have a limited range, so they will use this value.
     const f2 = 0.00130000847;
-    const dec2 = RocDec.fromF64(f2).?;
+    const dec2 = RocDec.fromF64(f2) orelse {
+        @panic("Failed to create RocDec from f64");
+    };
 
     try stdout.print("Dec:\n", .{});
     try stdout.print("{} additions took ", .{add_sub_n});
@@ -129,8 +141,8 @@ fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T)
         runs[i] = callWrapper(u64, .never_inline, run, .{ T, n, op, v });
     }
 
-    var real_runs = runs[warmups..runs.len];
-    std.sort.sort(u64, real_runs, {}, comptime std.sort.asc(u64));
+    const real_runs = runs[warmups..runs.len];
+    std.sort.insertion(u64, real_runs, {}, comptime std.sort.asc(u64));
 
     const median = real_runs[real_runs.len / 2];
     const highest = real_runs[real_runs.len - 1];
@@ -146,8 +158,8 @@ fn run(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) u64 
 
     // Split into outer and inner loop to avoid breaking comptime.
     const max_inline = 100;
-    comptime var outer = n / max_inline;
-    comptime var inner = std.math.min(n, max_inline);
+    const outer = n / max_inline;
+    const inner = @min(n, max_inline);
     var i: usize = 0;
     while (i < outer) : (i += 1) {
         comptime var j = 0;
@@ -156,7 +168,7 @@ fn run(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) u64 
         }
     }
     const rem = n % max_inline;
-    comptime var j = 0;
+    const j = 0;
     inline while (j < rem) : (j += 1) {
         a = callWrapper(T, .always_inline, op, .{ a, v });
     }
@@ -172,7 +184,7 @@ fn run(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) u64 
 
 // This is needed to work around a bug with using `@call` in loops.
 inline fn callWrapper(comptime T: type, call_modifier: anytype, comptime func: anytype, params: anytype) T {
-    return @call(.{ .modifier = call_modifier }, func, params);
+    return @call(call_modifier, func, params);
 }
 
 fn addF64(x: f64, y: f64) f64 {

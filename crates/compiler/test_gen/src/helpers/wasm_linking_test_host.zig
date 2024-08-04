@@ -33,7 +33,7 @@ export fn read_host_result() i32 {
     return host_result;
 }
 
-pub fn main() !void {
+pub export fn main() u8 {
     const host = host_called_directly_from_main();
     const js = js_called_directly_from_main();
     const app = roc__app_proc_1_exposed();
