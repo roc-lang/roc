@@ -914,6 +914,10 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
 
             let params = record.fields.map_items_result(arena, |loc_field| {
                 match loc_field.value.to_assigned_field(arena) {
+                    Ok(AssignedField::IgnoredValue(_, _, _)) => Err((
+                        MadeProgress,
+                        EImportParams::RecordIgnoredFieldFound(loc_field.region),
+                    )),
                     Ok(field) => Ok(Loc::at(loc_field.region, field)),
                     Err(FoundApplyValue) => Err((
                         MadeProgress,
@@ -2234,6 +2238,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
             spaces,
         ),
         AssignedField::Malformed(string) => Pattern::Malformed(string),
+        AssignedField::IgnoredValue(_, _, _) => return Err(()),
     })
 }
 
@@ -3322,6 +3327,7 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
 pub enum RecordField<'a> {
     RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
     OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
     LabelOnly(Loc<&'a str>),
     SpaceBefore(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
@@ -3337,7 +3343,10 @@ pub enum RecordField<'a> {
 pub struct FoundApplyValue;
 
 #[derive(Debug)]
-struct FoundOptionalValue;
+pub enum NotOldBuilderFieldValue {
+    FoundOptionalValue,
+    FoundIgnoredValue,
+}
 
 impl<'a> RecordField<'a> {
     fn is_apply_value(&self) -> bool {
@@ -3346,6 +3355,20 @@ impl<'a> RecordField<'a> {
         loop {
             match current {
                 RecordField::ApplyValue(_, _, _, _) => break true,
+                RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
+                    current = *field;
+                }
+                _ => break false,
+            }
+        }
+    }
+
+    fn is_ignored_value(&self) -> bool {
+        let mut current = self;
+
+        loop {
+            match current {
+                RecordField::IgnoredValue(_, _, _) => break true,
                 RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
                     current = *field;
                 }
@@ -3369,6 +3392,10 @@ impl<'a> RecordField<'a> {
                 Ok(OptionalValue(loc_label, spaces, loc_expr))
             }
 
+            RecordField::IgnoredValue(loc_label, spaces, loc_expr) => {
+                Ok(IgnoredValue(loc_label, spaces, loc_expr))
+            }
+
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
             RecordField::ApplyValue(_, _, _, _) => Err(FoundApplyValue),
@@ -3390,7 +3417,7 @@ impl<'a> RecordField<'a> {
     fn to_builder_field(
         self,
         arena: &'a Bump,
-    ) -> Result<OldRecordBuilderField<'a>, FoundOptionalValue> {
+    ) -> Result<OldRecordBuilderField<'a>, NotOldBuilderFieldValue> {
         use OldRecordBuilderField::*;
 
         match self {
@@ -3398,7 +3425,9 @@ impl<'a> RecordField<'a> {
                 Ok(Value(loc_label, spaces, loc_expr))
             }
 
-            RecordField::OptionalValue(_, _, _) => Err(FoundOptionalValue),
+            RecordField::OptionalValue(_, _, _) => Err(NotOldBuilderFieldValue::FoundOptionalValue),
+
+            RecordField::IgnoredValue(_, _, _) => Err(NotOldBuilderFieldValue::FoundIgnoredValue),
 
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
@@ -3434,41 +3463,69 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     use RecordField::*;
 
     map_with_arena(
-        and(
-            specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
+        either(
             and(
-                spaces(),
-                optional(either(
-                    and(byte(b':', ERecord::Colon), record_field_expr()),
-                    and(
-                        byte(b'?', ERecord::QuestionMark),
+                specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
+                and(
+                    spaces(),
+                    optional(either(
+                        and(byte(b':', ERecord::Colon), record_field_expr()),
+                        and(
+                            byte(b'?', ERecord::QuestionMark),
+                            spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
+                        ),
+                    )),
+                ),
+            ),
+            and(
+                loc(skip_first(
+                    byte(b'_', ERecord::UnderscoreField),
+                    optional(specialize_err(
+                        |_, pos| ERecord::Field(pos),
+                        lowercase_ident(),
+                    )),
+                )),
+                and(
+                    spaces(),
+                    skip_first(
+                        byte(b':', ERecord::Colon),
                         spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
                     ),
-                )),
+                ),
             ),
         ),
-        |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
-            match opt_loc_val {
-                Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
-                    RequiredValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+        |arena: &'a bumpalo::Bump, field_data| {
+            match field_data {
+                Either::First((loc_label, (spaces, opt_loc_val))) => {
+                    match opt_loc_val {
+                        Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
+                            RequiredValue(loc_label, spaces, arena.alloc(loc_val))
+                        }
 
-                Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
-                    ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
-                }
+                        Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
+                            ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
+                        }
 
-                Some(Either::Second((_, loc_val))) => {
-                    OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+                        Some(Either::Second((_, loc_val))) => {
+                            OptionalValue(loc_label, spaces, arena.alloc(loc_val))
+                        }
 
-                // If no value was provided, record it as a Var.
-                // Canonicalize will know what to do with a Var later.
-                None => {
-                    if !spaces.is_empty() {
-                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                    } else {
-                        LabelOnly(loc_label)
+                        // If no value was provided, record it as a Var.
+                        // Canonicalize will know what to do with a Var later.
+                        None => {
+                            if !spaces.is_empty() {
+                                SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                            } else {
+                                LabelOnly(loc_label)
+                            }
+                        }
                     }
+                }
+                Either::Second((loc_opt_label, (spaces, loc_val))) => {
+                    let loc_label = loc_opt_label
+                        .map(|opt_label| opt_label.unwrap_or_else(|| arena.alloc_str("")));
+
+                    IgnoredValue(loc_label, spaces, arena.alloc(loc_val))
                 }
             }
         },
@@ -3573,20 +3630,23 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                     new_record_builder_help(arena, mapper, record.fields)
                 }
                 None => {
-                    let is_old_record_builder = record
-                        .fields
-                        .iter()
-                        .any(|field| field.value.is_apply_value());
+                    let special_field_found = record.fields.iter().find_map(|field| {
+                        if field.value.is_apply_value() {
+                            Some(old_record_builder_help(arena, record.fields))
+                        } else if field.value.is_ignored_value() {
+                            Some(Err(EExpr::RecordUpdateIgnoredField(field.region)))
+                        } else {
+                            None
+                        }
+                    });
 
-                    if is_old_record_builder {
-                        old_record_builder_help(arena, record.fields)
-                    } else {
+                    special_field_found.unwrap_or_else(|| {
                         let fields = record.fields.map_items(arena, |loc_field| {
                             loc_field.map(|field| field.to_assigned_field(arena).unwrap())
                         });
 
                         Ok(Expr::Record(fields))
-                    }
+                    })
                 }
             };
 
@@ -3609,11 +3669,14 @@ fn record_update_help<'a>(
 ) -> Result<Expr<'a>, EExpr<'a>> {
     let result = fields.map_items_result(arena, |loc_field| {
         match loc_field.value.to_assigned_field(arena) {
+            Ok(AssignedField::IgnoredValue(_, _, _)) => {
+                Err(EExpr::RecordUpdateIgnoredField(loc_field.region))
+            }
             Ok(builder_field) => Ok(Loc {
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(FoundApplyValue) => Err(EExpr::RecordUpdateAccumulator(loc_field.region)),
+            Err(FoundApplyValue) => Err(EExpr::RecordUpdateOldBuilderField(loc_field.region)),
         }
     });
 
@@ -3634,7 +3697,7 @@ fn new_record_builder_help<'a>(
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(FoundApplyValue) => Err(EExpr::RecordBuilderAccumulator(loc_field.region)),
+            Err(FoundApplyValue) => Err(EExpr::RecordBuilderOldBuilderField(loc_field.region)),
         }
     });
 
@@ -3654,7 +3717,12 @@ fn old_record_builder_help<'a>(
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(FoundOptionalValue) => Err(EExpr::OptionalValueInRecordBuilder(loc_field.region)),
+            Err(NotOldBuilderFieldValue::FoundOptionalValue) => {
+                Err(EExpr::OptionalValueInOldRecordBuilder(loc_field.region))
+            }
+            Err(NotOldBuilderFieldValue::FoundIgnoredValue) => {
+                Err(EExpr::IgnoredValueInOldRecordBuilder(loc_field.region))
+            }
         }
     });
 

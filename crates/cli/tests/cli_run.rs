@@ -947,7 +947,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "For multiple tasks: {a: 123, b: \"abc\", c: [123], d: [\"abc\"], e: {\"a\": \"b\"}}\n",
+            "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )

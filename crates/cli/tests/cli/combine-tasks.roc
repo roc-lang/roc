@@ -9,8 +9,8 @@ main =
             a: Task.ok 123,
             b: Task.ok "abc",
             c: Task.ok [123],
-            d: Task.ok ["abc"],
-            e: Task.ok (Dict.single "a" "b"),
+            _d: Task.ok ["abc"],
+            _: Task.ok (Dict.single "a" "b"),
         }!
 
     Stdout.line! "For multiple tasks: $(Inspect.toStr multipleIn)"

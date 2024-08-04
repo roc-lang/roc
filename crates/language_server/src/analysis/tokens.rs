@@ -446,7 +446,8 @@ where
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
             AssignedField::RequiredValue(field, _, ty)
-            | AssignedField::OptionalValue(field, _, ty) => (field_token(field.region, arena)
+            | AssignedField::OptionalValue(field, _, ty)
+            | AssignedField::IgnoredValue(field, _, ty) => (field_token(field.region, arena)
                 .into_iter())
             .chain(ty.iter_tokens(arena))
             .collect_in(arena),

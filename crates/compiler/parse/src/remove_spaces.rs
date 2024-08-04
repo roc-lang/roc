@@ -543,6 +543,11 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
                 arena.alloc([]),
                 arena.alloc(c.remove_spaces(arena)),
             ),
+            AssignedField::IgnoredValue(a, _, c) => AssignedField::IgnoredValue(
+                a.remove_spaces(arena),
+                arena.alloc([]),
+                arena.alloc(c.remove_spaces(arena)),
+            ),
             AssignedField::LabelOnly(a) => AssignedField::LabelOnly(a.remove_spaces(arena)),
             AssignedField::Malformed(a) => AssignedField::Malformed(a),
             AssignedField::SpaceBefore(a, _) => a.remove_spaces(arena),
@@ -983,8 +988,11 @@ impl<'a> RemoveSpaces<'a> for EExpr<'a> {
             EExpr::Record(inner_err, _pos) => {
                 EExpr::Record(inner_err.remove_spaces(arena), Position::zero())
             }
-            EExpr::OptionalValueInRecordBuilder(_pos) => {
-                EExpr::OptionalValueInRecordBuilder(Region::zero())
+            EExpr::OptionalValueInOldRecordBuilder(_pos) => {
+                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
+            }
+            EExpr::IgnoredValueInOldRecordBuilder(_pos) => {
+                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
             }
             EExpr::Str(inner_err, _pos) => {
                 EExpr::Str(inner_err.remove_spaces(arena), Position::zero())
@@ -998,8 +1006,15 @@ impl<'a> RemoveSpaces<'a> for EExpr<'a> {
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
             EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
-            EExpr::RecordUpdateAccumulator(_) => EExpr::RecordUpdateAccumulator(Region::zero()),
-            EExpr::RecordBuilderAccumulator(_) => EExpr::RecordBuilderAccumulator(Region::zero()),
+            EExpr::RecordUpdateOldBuilderField(_pos) => {
+                EExpr::RecordUpdateOldBuilderField(Region::zero())
+            }
+            EExpr::RecordUpdateIgnoredField(_pos) => {
+                EExpr::RecordUpdateIgnoredField(Region::zero())
+            }
+            EExpr::RecordBuilderOldBuilderField(_pos) => {
+                EExpr::RecordBuilderOldBuilderField(Region::zero())
+            }
         }
     }
 }
@@ -1089,6 +1104,7 @@ impl<'a> RemoveSpaces<'a> for ERecord<'a> {
             ERecord::End(_) => ERecord::End(Position::zero()),
             ERecord::Open(_) => ERecord::Open(Position::zero()),
             ERecord::Field(_pos) => ERecord::Field(Position::zero()),
+            ERecord::UnderscoreField(_pos) => ERecord::Field(Position::zero()),
             ERecord::Colon(_) => ERecord::Colon(Position::zero()),
             ERecord::QuestionMark(_) => ERecord::QuestionMark(Position::zero()),
             ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
@@ -1217,6 +1233,9 @@ impl<'a> RemoveSpaces<'a> for EImportParams<'a> {
             }
             EImportParams::RecordUpdateFound(_) => EImportParams::RecordUpdateFound(Region::zero()),
             EImportParams::RecordApplyFound(_) => EImportParams::RecordApplyFound(Region::zero()),
+            EImportParams::RecordIgnoredFieldFound(_) => {
+                EImportParams::RecordIgnoredFieldFound(Region::zero())
+            }
             EImportParams::Space(inner_err, _) => {
                 EImportParams::Space(*inner_err, Position::zero())
             }
@@ -1248,6 +1267,9 @@ impl<'a> RemoveSpaces<'a> for ETypeAbilityImpl<'a> {
             ETypeAbilityImpl::End(_) => ETypeAbilityImpl::End(Position::zero()),
             ETypeAbilityImpl::Open(_) => ETypeAbilityImpl::Open(Position::zero()),
             ETypeAbilityImpl::Field(_) => ETypeAbilityImpl::Field(Position::zero()),
+            ETypeAbilityImpl::UnderscoreField(_) => {
+                ETypeAbilityImpl::UnderscoreField(Position::zero())
+            }
             ETypeAbilityImpl::Colon(_) => ETypeAbilityImpl::Colon(Position::zero()),
             ETypeAbilityImpl::Arrow(_) => ETypeAbilityImpl::Arrow(Position::zero()),
             ETypeAbilityImpl::Optional(_) => ETypeAbilityImpl::Optional(Position::zero()),

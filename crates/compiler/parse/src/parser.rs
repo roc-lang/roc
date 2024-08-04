@@ -372,9 +372,11 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    OptionalValueInRecordBuilder(Region),
-    RecordUpdateAccumulator(Region),
-    RecordBuilderAccumulator(Region),
+    OptionalValueInOldRecordBuilder(Region),
+    IgnoredValueInOldRecordBuilder(Region),
+    RecordUpdateOldBuilderField(Region),
+    RecordUpdateIgnoredField(Region),
+    RecordBuilderOldBuilderField(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -428,6 +430,7 @@ pub enum ERecord<'a> {
 
     Prefix(Position),
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
     Arrow(Position),
@@ -577,6 +580,7 @@ pub enum EImportParams<'a> {
     RecordUpdateFound(Region),
     RecordBuilderFound(Region),
     RecordApplyFound(Region),
+    RecordIgnoredFieldFound(Region),
     Space(BadInputError, Position),
 }
 
@@ -735,6 +739,7 @@ pub enum ETypeAbilityImpl<'a> {
     Open(Position),
 
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     Arrow(Position),
     Optional(Position),
@@ -756,6 +761,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::End(p) => ETypeAbilityImpl::End(p),
             ERecord::Open(p) => ETypeAbilityImpl::Open(p),
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
+            ERecord::UnderscoreField(p) => ETypeAbilityImpl::UnderscoreField(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
