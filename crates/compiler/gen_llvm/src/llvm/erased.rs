@@ -8,7 +8,7 @@ use roc_mono::ir::ErasedField;
 use super::build::{BuilderExt, Env};
 
 pub fn opaque_ptr_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
-    env.context.i8_type().ptr_type(AddressSpace::default())
+    env.context.ptr_type(AddressSpace::default())
 }
 
 fn refcounter_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
