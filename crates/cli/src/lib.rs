@@ -94,7 +94,7 @@ const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
 pub fn build_app() -> Command {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
-        .help("Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
+        .help("TEST Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
         .action(ArgAction::SetTrue)
         .required(false);
 
