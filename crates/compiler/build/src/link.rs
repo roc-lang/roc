@@ -269,9 +269,6 @@ pub fn build_zig_host_wasm32(
             emit_bin,
             // include the zig runtime
             // "-fcompiler-rt",
-            // include libc
-            "--library",
-            "c",
             "-target",
             "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",

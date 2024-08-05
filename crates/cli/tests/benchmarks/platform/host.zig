@@ -111,7 +111,7 @@ comptime {
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
+pub export fn main() u8 {
     const stderr = std.io.getStdErr().writer();
 
     // The size might be zero; if so, make it at least 8 so that we don't have a nullptr
