@@ -709,7 +709,7 @@ absDiff = \a, b ->
 ## Num.neg 0.0
 ## ```
 ## !! Num.neg is not completely implemented for all types in all contexts, see github.com/roc-lang/roc/issues/6959
-## You can use `\someNum -> 0 - someNum` as a workaround. 
+## You can use `\someNum -> 0 - someNum` as a workaround.
 ##
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
