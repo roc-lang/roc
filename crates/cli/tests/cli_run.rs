@@ -744,6 +744,26 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_dynamic_param() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "dynamicParam.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                App1: api.example.com/one/users/1
+                App2: api.example.com/two/users/2
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn module_params_thunk() {
         test_roc_app(
             "crates/cli/tests/module_params",

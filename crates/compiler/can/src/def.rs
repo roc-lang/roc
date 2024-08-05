@@ -2414,6 +2414,8 @@ fn canonicalize_pending_value_def<'a>(
                 .references
                 .insert_value_lookup(symbol, QualifiedReference::Unqualified);
 
+            output.references.insert_bound(symbol);
+
             let (opt_var_record, references) = match opt_provided {
                 Some(params) => {
                     let (record, can_output) =
