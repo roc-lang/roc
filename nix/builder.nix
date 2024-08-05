@@ -1,4 +1,4 @@
-{ pkgs, lib, zig, zls, rustPlatform, compile-deps, subPackage ? null }:
+{ pkgs, lib, rustPlatform, compile-deps, subPackage ? null }:
 let
   inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
@@ -48,8 +48,7 @@ let
         python3
         llvmPkgs.dev
         llvmPkgs.lib
-        zig
-        zls
+        zigPkg
       ]);
 
       buildInputs = (with pkgs;
