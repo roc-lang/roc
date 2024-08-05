@@ -12,21 +12,6 @@ pub fn opaque_ptr_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
 }
 
 fn refcounter_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
-    // let return_void = env.context.void_type();
-    // let arg_ty = opaque_ptr_type(env);
-
-    // return_void
-    //     .fn_type(&[arg_ty.into()], false)
-    //     .ptr_type(AddressSpace::default())
-
-    // TODO -- is it this simple?
-    //
-    // This was the error message
-    // ```
-    // warning: use of deprecated method `inkwell::types::FunctionType::<'ctx>::ptr_type`:
-    // Starting from version 15.0, LLVM doesn't differentiate between pointer types.
-    // Use Context::ptr_type instead.
-    // ```
     env.context.ptr_type(AddressSpace::default())
 }
 
