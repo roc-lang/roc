@@ -4922,6 +4922,7 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let packages = unspace(arena, header.packages.item.items);
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -4943,7 +4944,7 @@ fn build_platform_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         header_type,
         module_comments: comments,
         header_imports: Some(header.imports),
