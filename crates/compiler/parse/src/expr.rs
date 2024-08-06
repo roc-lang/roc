@@ -2350,17 +2350,22 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
         state.advance_mut(2);
 
-        let (_, body, state) = parse_block(
+        let body_res = parse_block(
             options,
             arena,
             state,
             true,
             EClosure::IndentBody,
             EClosure::Body,
-        )?;
+        );
 
-        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-        Ok((MadeProgress, closure, state))
+        match body_res {
+            Ok((_, body, state)) => {
+                let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                Ok((MadeProgress, closure, state))
+            }
+            Err((_, fail)) => Err((MadeProgress, fail)),
+        }
     }
 }
 
