@@ -4,6 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
+use regex::Regex;
 use roc_command_utils::{cargo, pretty_command_string, root_dir};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
@@ -49,19 +50,23 @@ where
 }
 
 pub fn has_error(stderr: &str) -> bool {
-    let stderr_stripped = stderr
-        .replacen("🔨 Rebuilding platform...\n", "", 1)
-        // for some reason, llvm prints out this warning when targeting windows
-        .replacen(
-            "warning: ignoring debug info with an invalid version (0) in app\r\n",
-            "",
-            1,
-        );
+    let stderr_stripped = {
+        let regx = Regex::new(r"\[.*? / .*?\]").unwrap(); // e.g. [20.7 / 20.7 MB] when downloading platform
+        regx.replace_all(stderr, "")
+    }
+    .replace('\u{1b}', "") // also shown when downloading platform
+    .replacen("🔨 Rebuilding platform...\n", "", 1)
+    // for some reason, llvm prints out this warning when targeting windows
+    .replacen(
+        "warning: ignoring debug info with an invalid version (0) in app\r\n",
+        "",
+        1,
+    );
 
     let is_reporting_runtime =
         stderr_stripped.starts_with("runtime: ") && stderr_stripped.ends_with("ms\n");
 
-    let is_clean = stderr_stripped.is_empty() ||
+    let is_clean = stderr_stripped.trim().is_empty() ||
         is_reporting_runtime ||
         // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
         // linking stops working properly.
