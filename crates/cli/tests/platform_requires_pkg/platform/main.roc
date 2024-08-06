@@ -11,4 +11,4 @@ import foo.Foo
 
 mainForHost : Str
 mainForHost =
-    "$(main) $(Foo.foo)\n"
+    "$(main) $(Foo.foo)"
