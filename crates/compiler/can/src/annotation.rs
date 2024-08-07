@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::{PendingAbilitiesInScope, Scope};
+use crate::scope::{PendingAbilitiesInScope, Scope, SymbolLookup};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -386,7 +386,10 @@ pub(crate) fn make_apply_symbol(
         // Look it up in scope!
 
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(SymbolLookup {
+                symbol,
+                module_params: _,
+            }) => {
                 references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
                 Ok(symbol)
             }
@@ -398,7 +401,10 @@ pub(crate) fn make_apply_symbol(
         }
     } else {
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => {
+            Ok(SymbolLookup {
+                symbol,
+                module_params: _,
+            }) => {
                 references.insert_type_lookup(symbol, QualifiedReference::Qualified);
                 Ok(symbol)
             }

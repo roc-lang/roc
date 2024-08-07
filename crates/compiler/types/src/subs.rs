@@ -4518,6 +4518,7 @@ pub struct ExposedTypesStorageSubs {
     pub stored_specialization_lambda_set_vars: VecMap<Variable, Variable>,
     /// ability member signature in other module -> var in storage subs
     pub stored_ability_member_vars: VecMap<Variable, Variable>,
+    pub stored_params_var: Option<Variable>,
 }
 
 #[derive(Clone, Debug)]

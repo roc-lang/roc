@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{ModuleId, ScopeModuleSource, Symbol};
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
@@ -236,6 +236,13 @@ pub enum Problem {
         one_occurrence: Region,
         kind: AliasKind,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
 }
 
 impl Problem {

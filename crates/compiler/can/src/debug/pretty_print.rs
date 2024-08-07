@@ -206,7 +206,13 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .append("]")
                     .group(),
             ),
-        Var(sym, _) | AbilityMember(sym, _, _) => pp_sym(c, f, *sym),
+        Var(sym, _) | ParamsVar { symbol: sym, .. } | AbilityMember(sym, _, _) => {
+            pp_sym(c, f, *sym)
+        }
+        ImportParams(_, _, Some((_, params_expr))) => expr(c, p, f, params_expr),
+        ImportParams(module_id, _, None) => {
+            text!(f, "<no params for {:?}>", module_id)
+        }
         When {
             loc_cond, branches, ..
         } => maybe_paren!(
