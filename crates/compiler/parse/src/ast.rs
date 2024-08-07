@@ -681,9 +681,9 @@ fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
 
 fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
     match value {
-        AssignedField::RequiredValue(_, _, a) | AssignedField::OptionalValue(_, _, a) => {
-            is_expr_suffixed(&a.value)
-        }
+        AssignedField::RequiredValue(_, _, a)
+        | AssignedField::OptionalValue(_, _, a)
+        | AssignedField::IgnoredValue(_, _, a) => is_expr_suffixed(&a.value),
         AssignedField::LabelOnly(_) => false,
         AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
             is_assigned_value_suffixed(a)
@@ -869,9 +869,9 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         use AssignedField::*;
 
                         match current {
-                            RequiredValue(_, _, loc_val) | OptionalValue(_, _, loc_val) => {
-                                break expr_stack.push(&loc_val.value)
-                            }
+                            RequiredValue(_, _, loc_val)
+                            | OptionalValue(_, _, loc_val)
+                            | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
                             SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
                             LabelOnly(_) | Malformed(_) => break,
                         }
@@ -1598,6 +1598,9 @@ pub enum AssignedField<'a, Val> {
     // and in destructuring patterns (e.g. `{ name ? "blah" }`)
     OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
+    // An ignored field, e.g. `{ _name: "blah" }` or `{ _ : Str }`
+    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
 
@@ -1615,7 +1618,9 @@ impl<'a, Val> AssignedField<'a, Val> {
 
         loop {
             match current {
-                Self::RequiredValue(_, _, val) | Self::OptionalValue(_, _, val) => break Some(val),
+                Self::RequiredValue(_, _, val)
+                | Self::OptionalValue(_, _, val)
+                | Self::IgnoredValue(_, _, val) => break Some(val),
                 Self::LabelOnly(_) | Self::Malformed(_) => break None,
                 Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
             }
@@ -2577,9 +2582,9 @@ impl<T: Malformed> Malformed for Option<T> {
 impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     fn is_malformed(&self) -> bool {
         match self {
-            AssignedField::RequiredValue(_, _, val) | AssignedField::OptionalValue(_, _, val) => {
-                val.is_malformed()
-            }
+            AssignedField::RequiredValue(_, _, val)
+            | AssignedField::OptionalValue(_, _, val)
+            | AssignedField::IgnoredValue(_, _, val) => val.is_malformed(),
             AssignedField::LabelOnly(_) => false,
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
