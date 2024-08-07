@@ -103,21 +103,6 @@ pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn find_zig_glue_path() -> PathBuf {
-    // First try using the repo path relative to the executable location.
-    let path = get_relative_path(Path::new("crates/compiler/builtins/bitcode/src/glue.zig"));
-    if let Some(path) = path {
-        return path;
-    }
-    // Fallback on a lib path relative to the executable location.
-    let path = get_relative_path(Path::new("lib/glue.zig"));
-    if let Some(path) = path {
-        return path;
-    }
-
-    internal_error!("cannot find `glue.zig`. Check the source code in find_zig_glue_path() to show all the paths I tried.")
-}
-
 fn find_wasi_libc_path() -> PathBuf {
     // This path is available when built and run from source
     // Environment variable defined in wasi-libc-sys/build.rs
@@ -171,10 +156,6 @@ pub fn build_zig_host_native(
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={emit_bin}"),
-        "--mod",
-        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-        "--deps",
-        "glue",
         // include libc
         "-lc",
         // cross-compile?
@@ -243,10 +224,6 @@ pub fn build_zig_host_native(
     zig_cmd.args(&[
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
-        "--mod",
-        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-        "--deps",
-        "glue",
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
@@ -290,15 +267,8 @@ pub fn build_zig_host_wasm32(
             "build-obj",
             zig_host_src,
             emit_bin,
-            "--mod",
-            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-            "--deps",
-            "glue",
             // include the zig runtime
             // "-fcompiler-rt",
-            // include libc
-            "--library",
-            "c",
             "-target",
             "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
@@ -1228,10 +1198,6 @@ fn link_wasm32(
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",
-            "--mod",
-            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-            "--deps",
-            "glue",
             "-fstrip",
             "-O",
             "ReleaseSmall",
@@ -1259,10 +1225,6 @@ fn link_windows(
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
                     "native",
-                    "--mod",
-                    &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-                    "--deps",
-                    "glue",
                     "-O",
                     "Debug",
                     "-dynamic",

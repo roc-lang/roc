@@ -199,8 +199,6 @@ fn mono_module_to_dylib_llvm<'a>(
     ));
 
     let module = arena.alloc(module);
-    let (module_pass, function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
@@ -253,13 +251,26 @@ fn mono_module_to_dylib_llvm<'a>(
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    if main_fn.verify(true) {
-        function_pass.run_on(&main_fn);
-    } else {
+    if !main_fn.verify(true) {
         internal_error!("Main function {main_fn_name} failed LLVM verification in build. Uncomment things nearby to see more details.", );
     }
 
-    module_pass.run_on(env.module);
+    let inkwell_opt_level = roc_build::target::convert_opt_level(opt_level);
+    let inkwell_llvm_passes = roc_build::llvm_passes::get_llvm_passes_str(opt_level);
+    let inkwell_target_machine = roc_build::target::target_machine(
+        target,
+        inkwell_opt_level,
+        inkwell::targets::RelocMode::PIC,
+    )
+    .expect("should be a valid target machine");
+
+    module
+        .run_passes(
+            inkwell_llvm_passes,
+            &inkwell_target_machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+        .expect("valid llvm optimization passes");
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();

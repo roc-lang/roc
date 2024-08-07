@@ -185,8 +185,6 @@ fn create_llvm_module<'a>(
     let module = roc_gen_llvm::llvm::build::module_from_builtins(target, context, "app");
 
     let module = arena.alloc(module);
-    let (module_pass, function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, config.opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
@@ -286,13 +284,27 @@ fn create_llvm_module<'a>(
         );
     };
 
-    if main_fn.verify(true) {
-        function_pass.run_on(&main_fn);
-    } else {
+    if !main_fn.verify(true) {
         panic_bad_llvm(main_fn_name);
     }
 
-    module_pass.run_on(env.module);
+    let test_opt_level = OptLevel::Development;
+    let inkwell_opt_level = roc_build::target::convert_opt_level(test_opt_level);
+    let inkwell_llvm_passes = roc_build::llvm_passes::get_llvm_passes_str(test_opt_level);
+    let inkwell_target_machine = roc_build::target::target_machine(
+        target,
+        inkwell_opt_level,
+        inkwell::targets::RelocMode::PIC,
+    )
+    .expect("should be a valid target machine");
+
+    module
+        .run_passes(
+            inkwell_llvm_passes,
+            &inkwell_target_machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+        .expect("valid llvm optimization passes");
 
     // Verify the module
     if let Err(errors) = env.module.verify() {

@@ -56,7 +56,7 @@ extern fn roc__main_1_exposed(RocStr, RocStr) callconv(.C) ResultStrStr;
 
 const hostJavaScriptBytes = @embedFile("../client-side/host.js");
 
-pub fn main() u8 {
+pub export fn main() u8 {
     const json = RocStr.fromSlice("42");
     defer json.decref();
 
