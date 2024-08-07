@@ -1,21 +1,16 @@
-app "rust-glue"
-    packages { pf: "../platform/main.roc" }
-    imports [
-        pf.Types.{ Types },
-        pf.Shape.{ Shape, RocFn },
-        pf.File.{ File },
-        pf.TypeId.{ TypeId },
-        "../static/Cargo.toml" as rocAppCargoToml : Str,
-        "../../roc_std/Cargo.toml" as rocStdCargoToml : Str,
-        "../../roc_std/src/lib.rs" as rocStdLib : Str,
-        "../../roc_std/src/roc_box.rs" as rocStdBox : Str,
-        "../../roc_std/src/roc_list.rs" as rocStdList : Str,
-        "../../roc_std/src/roc_dict.rs" as rocStdDict : Str,
-        "../../roc_std/src/roc_set.rs" as rocStdSet : Str,
-        "../../roc_std/src/roc_str.rs" as rocStdStr : Str,
-        "../../roc_std/src/storage.rs" as rocStdStorage : Str,
-    ]
-    provides [makeGlue] to pf
+app [makeGlue] { pf: platform "../platform/main.roc" }
+
+import pf.Types exposing [Types]
+import pf.Shape exposing [Shape, RocFn]
+import pf.File exposing [File]
+import pf.TypeId exposing [TypeId]
+import "../static/Cargo.toml" as rocAppCargoToml : Str
+import "../../roc_std/Cargo.toml" as rocStdCargoToml : Str
+import "../../roc_std/src/lib.rs" as rocStdLib : Str
+import "../../roc_std/src/roc_box.rs" as rocStdBox : Str
+import "../../roc_std/src/roc_list.rs" as rocStdList : Str
+import "../../roc_std/src/roc_str.rs" as rocStdStr : Str
+import "../../roc_std/src/storage.rs" as rocStdStorage : Str
 
 makeGlue : List Types -> Result (List File) Str
 makeGlue = \typesByArch ->
@@ -48,8 +43,6 @@ staticFiles = [
     { name: "roc_std/src/lib.rs", content: rocStdLib },
     { name: "roc_std/src/roc_box.rs", content: rocStdBox },
     { name: "roc_std/src/roc_list.rs", content: rocStdList },
-    { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
-    { name: "roc_std/src/roc_set.rs", content: rocStdSet },
     { name: "roc_std/src/roc_str.rs", content: rocStdStr },
     { name: "roc_std/src/storage.rs", content: rocStdStorage },
 ]
@@ -167,6 +160,7 @@ generateEntryPoint = \buf, types, name, id ->
                 when Types.shape types rocFn.ret is
                     Function _ ->
                         ("(_: *mut u8, $(arguments))", ret, Bool.true)
+
                     _ ->
                         ("(_: *mut $(ret), $(arguments))", ret, Bool.false)
 
@@ -299,6 +293,7 @@ generateFunction = \buf, types, rocFn ->
         }
     }
     """
+    |> generateRocRefcounted types (Function rocFn) name
 
 generateStruct : Str, Types, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
@@ -325,6 +320,7 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
     |> Str.concat "#[repr($(repr))]\n$(pub)struct $(escapedName) {\n"
     |> generateStructFields types Public structFields
     |> Str.concat "}\n\n"
+    |> generateRocRefcounted types structType escapedName
 
 generateStructFields = \buf, types, visibility, structFields ->
     when structFields is
@@ -380,6 +376,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
         """
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "$(indent)$(indent)}\n$(indent)}\n}\n\n"
+    |> generateRocRefcounted types enumType escapedName
 
 generateEnumTags = \accum, name, index ->
     indexStr = Num.toStr index
@@ -646,12 +643,46 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 else
                     "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.$(name)) }"
 
+            (borrow, borrowType) =
+                if canDeriveCopy types shape then
+                    ("unsafe { self.payload.$(name) }", payloadType)
+                else
+                    (
+                        """
+                        use core::borrow::Borrow;
+                        unsafe { self.payload.$(name).borrow() }
+                        """,
+                        "&$(payloadType)",
+                    )
+
+            (borrowMut, borrowMutType) =
+                if canDeriveCopy types shape then
+                    ("unsafe { &mut self.payload.$(name) }", "&mut $(payloadType)")
+                else
+                    (
+                        """
+                        use core::borrow::BorrowMut;
+                        unsafe { self.payload.$(name).borrow_mut() }
+                        """,
+                        "&mut $(payloadType)",
+                    )
+
             """
             $(buf)
 
                 pub fn unwrap_$(name)(mut self) -> $(payloadType) {
                     debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
                     $(take)
+                }
+
+                pub fn borrow_$(name)(&self) -> $(borrowType) {
+                    debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
+                    $(borrow)
+                }
+
+                pub fn borrow_mut_$(name)(&mut self) -> $(borrowMutType) {
+                    debug_assert_eq!(self.discriminant, discriminant_$(tagUnionType)::$(name));
+                    $(borrowMut)
                 }
 
                 pub fn is_$(name)(&self) -> bool {
@@ -697,6 +728,8 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 Some payloadId -> max accum (Types.alignment types payloadId)
                 None -> accum
         |> Num.toStr
+
+    unionType = Types.shape types id
 
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
@@ -752,8 +785,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     |> generateDestructorFunctions types escapedName tags
     |> generateConstructorFunctions types escapedName tags
     |> \b ->
-        type = Types.shape types id
-        if cannotSupportCopy types type then
+        if cannotSupportCopy types unionType then
             # A custom drop impl is only needed when we can't derive copy.
             b
             |> Str.concat
@@ -773,6 +805,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 """
         else
             b
+    |> generateRocRefcounted types unionType escapedName
 
 generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
@@ -808,6 +841,8 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
 
     buf1 = buf |> generateDiscriminant types discriminantName [tagName] discriminantSize
 
+    unionType = TagUnion (NonNullableUnwrapped { name, tagName, payload })
+
     """
     $(buf1)
 
@@ -830,6 +865,7 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
         }
     }
     """
+    |> generateRocRefcounted types unionType escapedName
 
 generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
     escapedName = escapeKW tagUnionName
@@ -1094,8 +1130,9 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> List.mapWithIndex hashCase
         |> Str.joinWith "\n"
 
+    unionType = Types.shape types id
     hashImpl =
-        if canSupportPartialEqOrd types (Types.shape types id) then
+        if canSupportPartialEqOrd types unionType then
             """
             impl core::hash::Hash for $(escapedName) {
                 fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
@@ -1253,6 +1290,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
+    |> generateRocRefcounted types unionType escapedName
 
 generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, discriminantSize, indents ->
     if discriminantSize == 0 then
@@ -1286,6 +1324,7 @@ writeIndents = \buf, indents ->
         |> Str.concat indent
         |> writeIndents (indents - 1)
 
+writeTagImpls : Str, List { name : Str, payload : [Some TypeId, None] }, Str, U64, (Str, [Some TypeId, None] -> Str) -> Str
 writeTagImpls = \buf, tags, discriminantName, indents, f ->
     buf
     |> writeIndents indents
@@ -1404,6 +1443,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             ".field(&node.f$(n))"
         |> Str.joinWith ""
 
+    unionType = TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull })
     discriminant =
         when whichTagIsNull is
             FirstTagIsNull ->
@@ -1527,6 +1567,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
         }
     }
     """
+    |> generateRocRefcounted types unionType name
 
 generateSingleTagStruct = \buf, types, name, tagName, payload ->
     # Store single-tag unions as structs rather than enums,
@@ -1565,6 +1606,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payload ->
                     generateZeroElementSingleTagStruct b escapedName tagName
                 else
                     generateMultiElementSingleTagStruct b types escapedName tagName fields asStructFields
+            |> generateRocRefcounted types (TagUnion (SingleTagStruct { name, tagName, payload })) escapedName
 
         HasClosure _ ->
             Str.concat buf "\\TODO: SingleTagStruct with closures"
@@ -1953,6 +1995,198 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
+generateRocRefcounted = \buf, types, type, escapedName ->
+    if containsRefcounted types type then
+        impl =
+            when type is
+                TagUnion (NonNullableUnwrapped _) ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            self.0.inc();
+                        }
+                        fn dec(&mut self) {
+                            self.0.dec();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                TagUnion (Recursive _) ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    impl roc_std::RocRefcounted for union_$(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                TagUnion (NullableWrapped _) ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    impl roc_std::RocRefcounted for union_$(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            unimplemented!();
+                        }
+                    }\n\n
+                    """
+
+                Struct { fields: HasNoClosure fields } ->
+                    incFields = generateRocRefcountedNamedFields types fields Inc Struct
+                    decFields = generateRocRefcountedNamedFields types fields Dec Struct
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                        $(incFields)
+                        }
+                        fn dec(&mut self) {
+                        $(decFields)
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                TagUnionPayload { fields: HasNoClosure fields } ->
+                    incFields = generateRocRefcountedNamedFields types fields Inc Tag
+                    decFields = generateRocRefcountedNamedFields types fields Dec Tag
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                        $(incFields)
+                        }
+                        fn dec(&mut self) {
+                        $(decFields)
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+
+                _ ->
+                    """
+                    impl roc_std::RocRefcounted for $(escapedName) {
+                        fn inc(&mut self) {
+                            unimplemented!();
+                        }
+                        fn dec(&mut self) {
+                            unimplemented!();
+                        }
+                        fn is_refcounted() -> bool {
+                            true
+                        }
+                    }\n\n
+                    """
+        Str.concat
+            buf
+            impl
+    else
+        Str.concat buf "roc_refcounted_noop_impl!($(escapedName));\n\n"
+
+generateRocRefcountedNamedFields = \types, fields, mode, wrapper ->
+    fieldName = \name ->
+        escapedName = escapeKW name
+        when wrapper is
+            Struct -> escapedName
+            Tag -> "f$(escapedName)"
+
+    methodName =
+        when mode is
+            Inc -> "inc"
+            Dec -> "dec"
+
+    walker =
+        \accum, { name, id } ->
+            if containsRefcounted types (Types.shape types id) then
+                Str.concat
+                    accum
+                    "$(indent) self.$(fieldName name).$(methodName)();\n"
+            else
+                accum
+
+    List.walk fields "" walker
+
+# If a value or any data in it must be refcounted.
+containsRefcounted = \types, type ->
+    containsRefcountedHelp types type (Set.empty {})
+
+containsRefcountedHelp = \types, type, doNotRecurse ->
+    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # I think there is a change it really only matters for RecursivePointer, so it may be fine.
+    # Otherwise we need to deal with threading through updates to doNotRecurse
+    when type is
+        RocStr | RocList _ | RocSet _ | RocDict _ _ | RocBox _ | RecursivePointer _ ->
+            Bool.true
+
+        Unit | Unsized | EmptyTagUnion | Num _ | Bool | TagUnion (Enumeration _) ->
+            Bool.false
+
+        Function { lambdaSet: id } ->
+            containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        RocResult id0 id1 ->
+            containsRefcountedHelp types (Types.shape types id0) doNotRecurse
+            || containsRefcountedHelp types (Types.shape types id1) doNotRecurse
+
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.any fields \{ id } -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+
+        TagUnion (Recursive _) -> Bool.true
+        TagUnion (NullableWrapped _) -> Bool.true
+        TagUnion (NonNullableUnwrapped _) -> Bool.true
+        TagUnion (NullableUnwrapped _) -> Bool.true
+        TagUnion (NonRecursive { tags }) ->
+            List.any tags \{ payload } ->
+                when payload is
+                    Some id -> containsRefcountedHelp types (Types.shape types id) doNotRecurse
+                    None -> Bool.false
+
 typeName = \types, id ->
     when Types.shape types id is
         Unit -> "()"
@@ -1973,16 +2207,16 @@ typeName = \types, id ->
         Num F32 -> "f32"
         Num F64 -> "f64"
         Num Dec -> "roc_std:RocDec"
-        RocDict key value ->
-            keyName = typeName types key
-            valueName = typeName types value
+        RocDict _key _value ->
+            # keyName = typeName types key
+            # valueName = typeName types value
+            # "roc_std::RocDict<$(keyName), $(valueName)>"
+            crash "RocDict is not yet supported in rust"
 
-            "roc_std::RocDict<$(keyName), $(valueName)>"
-
-        RocSet elem ->
-            elemName = typeName types elem
-
-            "roc_std::RocSet<$(elemName)>"
+        RocSet _elem ->
+            # elemName = typeName types elem
+            # "roc_std::RocSet<$(elemName)>"
+            crash "RocSet is not yet supported in rust"
 
         RocList elem ->
             elemName = typeName types elem
@@ -2067,6 +2301,9 @@ fileHeader =
     #![allow(clippy::clone_on_copy)]
     #![allow(clippy::non_canonical_partial_ord_impl)]
 
+
+    use roc_std::RocRefcounted;
+    use roc_std::roc_refcounted_noop_impl;
 
 
     """

@@ -26,7 +26,7 @@ Defs {
                             Index(2147483649),
                         ],
                         regions: [
-                            @14-21,
+                            @12-21,
                             @26-39,
                         ],
                         space_before: [
@@ -43,7 +43,7 @@ Defs {
                         type_defs: [],
                         value_defs: [
                             Stmt(
-                                @14-21 Apply(
+                                @12-21 Apply(
                                     @12-13 TaskAwaitBang(
                                         Var {
                                             module_name: "",
@@ -64,7 +64,7 @@ Defs {
                                 @26-27 Identifier {
                                     ident: "x",
                                 },
-                                @26-39 Apply(
+                                @29-39 Apply(
                                     @29-32 TaskAwaitBang(
                                         Var {
                                             module_name: "B",

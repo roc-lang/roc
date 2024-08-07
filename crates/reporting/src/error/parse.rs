@@ -154,7 +154,7 @@ fn to_syntax_report<'a>(
 
 #[allow(clippy::enum_variant_names)]
 enum Context {
-    InNode(Node, Position, Box<Context>),
+    InNode(Node, Position),
     InDef(Position),
     InDefFinalExpr(Position),
 }
@@ -185,16 +185,14 @@ fn to_expr_report<'a>(
     use roc_parse::parser::EExpr;
     let severity = Severity::RuntimeError;
     match parse_problem {
-        EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, context, if_, *pos),
-        EExpr::When(when, pos) => to_when_report(alloc, lines, filename, context, when, *pos),
+        EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, if_, *pos),
+        EExpr::When(when, pos) => to_when_report(alloc, lines, filename, when, *pos),
         EExpr::Closure(lambda, pos) => {
             to_lambda_report(alloc, lines, filename, context, lambda, *pos)
         }
-        EExpr::List(list, pos) => to_list_report(alloc, lines, filename, context, list, *pos),
-        EExpr::Str(string, pos) => to_str_report(alloc, lines, filename, context, string, *pos),
-        EExpr::InParens(expr, pos) => {
-            to_expr_in_parens_report(alloc, lines, filename, context, expr, *pos)
-        }
+        EExpr::List(list, pos) => to_list_report(alloc, lines, filename, list, *pos),
+        EExpr::Str(string, pos) => to_str_report(alloc, lines, filename, string, *pos),
+        EExpr::InParens(expr, pos) => to_expr_in_parens_report(alloc, lines, filename, expr, *pos),
         EExpr::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, *pos),
         EExpr::ElmStyleFunction(region, pos) => {
             let surroundings = Region::new(start, *pos);
@@ -205,7 +203,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
-                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.reflow("In Roc, functions are always written as a lambda, like "),
                     alloc.parser_suggestion("increment = \\n -> n + 1"),
                     alloc.reflow("."),
                 ]),
@@ -252,14 +250,14 @@ fn to_expr_report<'a>(
                         .indent(4),
                 ])],
                 "->" => match context {
-                    Context::InNode(Node::WhenBranch, _pos, _) => {
+                    Context::InNode(Node::WhenBranch, _pos) => {
                         return to_unexpected_arrow_report(alloc, lines, filename, *pos, start);
                     }
 
                     Context::InDef(_pos) => {
                         vec![alloc.stack([
                             alloc.reflow("Looks like you are trying to define a function. "),
-                            alloc.reflow("In roc, functions are always written as a lambda, like "),
+                            alloc.reflow("In Roc, functions are always written as a lambda, like "),
                             alloc
                                 .parser_suggestion("increment = \\n -> n + 1")
                                 .indent(4),
@@ -392,7 +390,7 @@ fn to_expr_report<'a>(
             };
 
             let (context_pos, a_thing) = match context {
-                Context::InNode(node, pos, _) => match node {
+                Context::InNode(node, pos) => match node {
                     Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
                         pos,
                         alloc.concat([
@@ -511,7 +509,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
-                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.reflow("In Roc, functions are always written as a lambda, like "),
                     alloc.parser_suggestion("increment = \\n -> n + 1"),
                     alloc.reflow("."),
                 ]),
@@ -547,7 +545,7 @@ fn to_expr_report<'a>(
             to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
-        EExpr::OptionalValueInRecordBuilder(region) => {
+        EExpr::OptionalValueInOldRecordBuilder(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
@@ -562,21 +560,21 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD RECORD BUILDER".to_string(),
+                title: "BAD OLD-STYLE RECORD BUILDER".to_string(),
                 severity,
             }
         }
 
-        EExpr::RecordUpdateBuilder(region) => {
+        EExpr::RecordUpdateOldBuilderField(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
             let doc = alloc.stack([
                 alloc.reflow(
-                    r"I am partway through parsing a record update, and I found a record builder field:",
+                    r"I am partway through parsing a record update, and I found an old-style record builder field:",
                 ),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("Record builders cannot be updated like records."),
+                alloc.reflow("Old-style record builders cannot be updated like records."),
             ]);
 
             Report {
@@ -603,7 +601,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity);
 
             let doc = match context {
-                Context::InNode(Node::Dbg, _, _) => alloc.stack([
+                Context::InNode(Node::Dbg, _) => alloc.stack([
                     alloc.reflow(
                         r"I am partway through parsing a dbg statement, but I got stuck here:",
                     ),
@@ -616,7 +614,7 @@ fn to_expr_report<'a>(
                         ]),
                     ]),
                 ]),
-                Context::InNode(Node::Expect, _, _) => alloc.stack([
+                Context::InNode(Node::Expect, _) => alloc.stack([
                     alloc.reflow(
                         r"I am partway through parsing an expect statement, but I got stuck here:",
                     ),
@@ -694,6 +692,29 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "UNEXPECTED COMMA".to_string(),
+                severity,
+            }
+        }
+        EExpr::StmtAfterExpr(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
+                alloc.reflow(
+                    r"and this line is indented as if it's intended to be part of that expression:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions.",
+                )]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "STATEMENT AFTER EXPRESSION".to_string(),
                 severity,
             }
         }
@@ -964,7 +985,6 @@ fn to_str_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EString<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -977,7 +997,7 @@ fn to_str_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::StringFormat, start, Box::new(context)),
+            Context::InNode(Node::StringFormat, start),
             expr,
             pos,
         ),
@@ -1260,7 +1280,6 @@ fn to_expr_in_parens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EInParens<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1273,7 +1292,7 @@ fn to_expr_in_parens_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::InsideParens, start, Box::new(context)),
+            Context::InNode(Node::InsideParens, start),
             expr,
             pos,
         ),
@@ -1353,7 +1372,6 @@ fn to_list_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EList<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1367,7 +1385,7 @@ fn to_list_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::ListElement, start, Box::new(context)),
+            Context::InNode(Node::ListElement, start),
             expr,
             pos,
         ),
@@ -1465,7 +1483,7 @@ fn to_dbg_or_expect_report<'a>(
             to_expr_report(alloc, lines, filename, context, e_expr, *condition_start)
         }
         roc_parse::parser::EExpect::Continuation(e_expr, continuation_start) => {
-            let context = Context::InNode(node, start, Box::new(context));
+            let context = Context::InNode(node, start);
             to_expr_report(alloc, lines, filename, context, e_expr, *continuation_start)
         }
 
@@ -1523,7 +1541,7 @@ fn to_import_report<'a>(
                 alloc.concat([
                     alloc.reflow("I was expecting to see the "),
                     alloc.keyword("as"),
-                    alloc.reflow(" keyword, like:"),
+                    alloc.reflow(" keyword next, like:"),
                 ]),
                 alloc
                     .parser_suggestion("import svg.Path as SvgPath")
@@ -1552,13 +1570,32 @@ fn to_import_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.reflow("This looks like a record builder field, but those are not allowed in module params."),
+                alloc.reflow("This looks like an old-style record builder field, but those are not allowed in module params."),
             ]);
 
             Report {
                 filename,
                 doc,
-                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
+                title: "OLD-STYLE RECORD BUILDER IN MODULE PARAMS".to_string(),
+                severity,
+            }
+        }
+        Params(EImportParams::RecordIgnoredFieldFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.reflow(
+                    "This is an ignored record field, but those are not allowed in module params.",
+                ),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "IGNORED RECORD FIELD IN MODULE PARAMS".to_string(),
                 severity,
             }
         }
@@ -1576,6 +1613,23 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "RECORD UPDATE IN MODULE PARAMS".to_string(),
+                severity,
+            }
+        }
+        Params(EImportParams::RecordBuilderFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.reflow("It looks like you're trying to use a record builder, but module params require a standalone record literal."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "RECORD BUILDER IN MODULE PARAMS".to_string(),
                 severity,
             }
         }
@@ -1710,7 +1764,6 @@ fn to_if_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EIf<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1723,7 +1776,7 @@ fn to_if_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::IfCondition, start, Box::new(context)),
+            Context::InNode(Node::IfCondition, start),
             expr,
             pos,
         ),
@@ -1732,7 +1785,7 @@ fn to_if_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::IfThenBranch, start, Box::new(context)),
+            Context::InNode(Node::IfThenBranch, start),
             expr,
             pos,
         ),
@@ -1741,7 +1794,7 @@ fn to_if_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::IfElseBranch, start, Box::new(context)),
+            Context::InNode(Node::IfElseBranch, start),
             expr,
             pos,
         ),
@@ -1824,7 +1877,6 @@ fn to_when_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    context: Context,
     parse_problem: &roc_parse::parser::EWhen<'a>,
     start: Position,
 ) -> Report<'a> {
@@ -1861,7 +1913,7 @@ fn to_when_report<'a>(
                     alloc,
                     lines,
                     filename,
-                    Context::InNode(Node::WhenIfGuard, start, Box::new(context)),
+                    Context::InNode(Node::WhenIfGuard, start),
                     nested,
                     pos,
                 ),
@@ -1896,7 +1948,7 @@ fn to_when_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::WhenBranch, start, Box::new(context)),
+            Context::InNode(Node::WhenBranch, start),
             expr,
             pos,
         ),
@@ -1905,7 +1957,7 @@ fn to_when_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(Node::WhenCondition, start, Box::new(context)),
+            Context::InNode(Node::WhenCondition, start),
             expr,
             pos,
         ),
@@ -2340,11 +2392,7 @@ fn to_precord_report<'a>(
             alloc,
             lines,
             filename,
-            Context::InNode(
-                Node::RecordConditionalDefault,
-                start,
-                Box::new(Context::InDef(pos)),
-            ),
+            Context::InNode(Node::RecordConditionalDefault, start),
             expr,
             pos,
         ),
@@ -4491,6 +4539,7 @@ fn to_unfinished_ability_report<'a>(
 enum Next<'a> {
     Keyword(&'a str),
     // Operator(&'a str),
+    #[allow(dead_code)]
     Close(&'a str, char),
     Token(&'a str),
     Other(Option<char>),

@@ -396,6 +396,16 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
+
+    pub fn proc_layout(&self, arena: &'a Bump) -> ProcLayout<'a> {
+        let args = Vec::from_iter_in(self.args.iter().map(|(a, _)| *a), arena);
+
+        ProcLayout {
+            arguments: args.into_bump_slice(),
+            result: self.ret_layout,
+            niche: Niche::NONE,
+        }
+    }
 }
 
 /// A host-exposed function must be specialized; it's a seed for subsequent specializations
@@ -2739,7 +2749,18 @@ fn from_can_let<'a>(
     let (mono_pattern, assignments) =
         match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
             Ok(v) => v,
-            Err(_) => todo!(),
+            Err(_) => {
+                eprintln!(indoc::indoc! {"
+                    Error:
+                        This can happen if you redefine a variable in the repl, for example:
+
+                            x = 1
+                            x = 2
+
+                        Roc does not allow this yet.
+                "});
+                std::process::exit(1);
+            }
         };
 
     // convert the continuation
@@ -5800,42 +5821,10 @@ pub fn with_hole<'a>(
 
             use LowLevel::*;
             match op {
-                ListMap => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListMap, [xs])
-                }
                 ListSortWith => {
                     debug_assert_eq!(arg_symbols.len(), 2);
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListSortWith, [xs])
-                }
-                ListMap2 => {
-                    debug_assert_eq!(arg_symbols.len(), 3);
-
-                    let xs = arg_symbols[0];
-                    let ys = arg_symbols[1];
-
-                    match_on_closure_argument!(ListMap2, [xs, ys])
-                }
-                ListMap3 => {
-                    debug_assert_eq!(arg_symbols.len(), 4);
-
-                    let xs = arg_symbols[0];
-                    let ys = arg_symbols[1];
-                    let zs = arg_symbols[2];
-
-                    match_on_closure_argument!(ListMap3, [xs, ys, zs])
-                }
-                ListMap4 => {
-                    debug_assert_eq!(arg_symbols.len(), 5);
-
-                    let xs = arg_symbols[0];
-                    let ys = arg_symbols[1];
-                    let zs = arg_symbols[2];
-                    let ws = arg_symbols[3];
-
-                    match_on_closure_argument!(ListMap4, [xs, ys, zs, ws])
                 }
                 BoxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);
@@ -6160,7 +6149,7 @@ fn late_resolve_ability_specialization(
             member,
             specialization_var,
         )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        .expect("Ability specialization is unknown. Tip: check out <https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/Non-Functions.20in.20Abilities/near/456068617>");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,

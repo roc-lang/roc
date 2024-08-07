@@ -65,10 +65,6 @@ comptime {
 const list = @import("list.zig");
 
 comptime {
-    exportListFn(list.listMap, "map");
-    exportListFn(list.listMap2, "map2");
-    exportListFn(list.listMap3, "map3");
-    exportListFn(list.listMap4, "map4");
     exportListFn(list.listAppendUnsafe, "append_unsafe");
     exportListFn(list.listReserve, "reserve");
     exportListFn(list.listPrepend, "prepend");
@@ -86,6 +82,8 @@ comptime {
     exportListFn(list.listAllocationPtr, "allocation_ptr");
     exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
     exportListFn(list.listConcatUtf8, "concat_utf8");
+    exportListFn(list.listIncref, "incref");
+    exportListFn(list.listDecref, "decref");
 }
 
 // Num Module
@@ -396,11 +394,13 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    if (builtin.is_test) {
-        std.debug.print("{s}: {?}", .{ message, stacktrace });
+    if (builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard libarry bug\n{s}: {?}", .{ message, stacktrace });
+        std.process.abort();
+    } else {
+        // Can't call abort or print from wasm. Just leave it as unreachable.
+        unreachable;
     }
-
-    unreachable;
 }
 
 // Run all tests in imported modules

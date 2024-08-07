@@ -863,7 +863,6 @@ fn call_spec<'a>(
 
             let closure_env = env.symbols[&passed_function.captured_environment];
 
-            let return_layout = &passed_function.return_layout;
             let argument_layouts = passed_function.argument_layouts;
 
             macro_rules! call_function {
@@ -879,30 +878,6 @@ fn call_spec<'a>(
             }
 
             match op {
-                ListMap { xs } => {
-                    let list = env.symbols[xs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, input_bag)?;
-
-                        let new_element = call_function!(builder, block, [element]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
                 ListSortWith { xs } => {
                     let list = env.symbols[xs];
 
@@ -925,109 +900,6 @@ fn call_spec<'a>(
                     let state_layout = LayoutRepr::Builtin(Builtin::List(arg0_layout));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
                     let init_state = list;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
-                ListMap2 { xs, ys } => {
-                    let list1 = env.symbols[xs];
-                    let list2 = env.symbols[ys];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag_1 =
-                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let input_bag_2 =
-                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-
-                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
-                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
-
-                        let new_element = call_function!(builder, block, [element_1, element_2]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
-                ListMap3 { xs, ys, zs } => {
-                    let list1 = env.symbols[xs];
-                    let list2 = env.symbols[ys];
-                    let list3 = env.symbols[zs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag_1 =
-                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let input_bag_2 =
-                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                        let input_bag_3 =
-                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
-
-                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
-                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
-                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
-
-                        let new_element =
-                            call_function!(builder, block, [element_1, element_2, element_3]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListMap4 { xs, ys, zs, ws } => {
-                    let list1 = env.symbols[xs];
-                    let list2 = env.symbols[ys];
-                    let list3 = env.symbols[zs];
-                    let list4 = env.symbols[ws];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag_1 =
-                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let input_bag_2 =
-                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                        let input_bag_3 =
-                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
-                        let input_bag_4 =
-                            builder.add_get_tuple_field(block, list4, LIST_BAG_INDEX)?;
-
-                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
-                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
-                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
-                        let element_4 = builder.add_bag_get(block, input_bag_4)?;
-
-                        let new_element = call_function!(
-                            builder,
-                            block,
-                            [element_1, element_2, element_3, element_4]
-                        );
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }

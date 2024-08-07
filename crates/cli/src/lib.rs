@@ -13,15 +13,18 @@ use roc_build::program::{
     handle_error_module, handle_loading_problem, standard_load_config, BuildFileError,
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
+#[cfg(not(windows))]
 use roc_collections::MutMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
+#[cfg(not(windows))]
 use roc_module::symbol::ModuleId;
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
+#[cfg(not(windows))]
 use roc_reporting::report::ANSI_STYLE_CODES;
 use roc_target::{Architecture, Target};
 use std::env;
@@ -31,7 +34,9 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::{Duration, Instant};
+#[cfg(not(windows))]
+use std::time::Duration;
+use std::time::Instant;
 use strum::IntoEnumIterator;
 #[cfg(not(target_os = "linux"))]
 use tempfile::TempDir;
@@ -79,6 +84,9 @@ pub const GLUE_DIR: &str = "GLUE_DIR";
 pub const GLUE_SPEC: &str = "GLUE_SPEC";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
+pub const FLAG_PP_HOST: &str = "host";
+pub const FLAG_PP_PLATFORM: &str = "platform";
+pub const FLAG_PP_DYLIB: &str = "lib";
 
 const VERSION: &str = include_str!("../../../version.txt");
 const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
@@ -400,18 +408,29 @@ pub fn build_app() -> Command {
         .subcommand(Command::new(CMD_PREPROCESS_HOST)
             .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
             .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file for an app using the platform")
+                Arg::new(FLAG_PP_HOST)
+                    .help("Path to the host executable where the app was linked dynamically")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
-                Arg::new(FLAG_TARGET)
-                    .long(FLAG_TARGET)
-                    .help("Choose a different target")
-                    .default_value(Into::<&'static str>::into(Target::default()))
-                    .value_parser(build_target_values_parser)
-                    .required(false),
+                Arg::new(FLAG_PP_PLATFORM)
+                    .help("Path to the platform/main.roc file")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_PP_DYLIB)
+                    .help("Path to a stubbed app dynamic library (e.g. roc build --lib app.roc)")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_VERBOSE)
+                    .long(FLAG_VERBOSE)
+                    .help("Print detailed information while pre-processing host")
+                    .action(ArgAction::SetTrue)
+                    .required(false)
             )
         )
         .arg(flag_optimize)
@@ -454,6 +473,7 @@ pub fn test(_matches: &ArgMatches, _target: Target) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
 }
 
+#[cfg(not(windows))]
 struct ModuleTestResults {
     module_id: ModuleId,
     failed_count: usize,
@@ -502,8 +522,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     }
 
     let arena = &arena;
-    // TODO may need to determine this dynamically based on dev builds.
-    let function_kind = FunctionKind::LambdaSet;
+    let function_kind = FunctionKind::from_env();
 
     let opt_main_path = matches.get_one::<PathBuf>(FLAG_MAIN);
 
@@ -633,6 +652,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
     }
 }
 
+#[cfg(not(windows))]
 fn print_test_results(
     module_test_results: ModuleTestResults,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -652,6 +672,7 @@ fn print_test_results(
     println!("\n{module_name}:\n    {test_summary_str}",);
 }
 
+#[cfg(not(windows))]
 fn test_summary(failed_count: usize, passed_count: usize, tests_duration: Duration) -> String {
     let failed_color = if failed_count == 0 {
         ANSI_STYLE_CODES.green
@@ -1143,6 +1164,11 @@ unsafe fn roc_run_native_fast(
 enum ExecutableFile {
     #[cfg(target_os = "linux")]
     MemFd(libc::c_int, PathBuf),
+    // We store the TempDir in the onDisk variant alongside the path to the executable,
+    // so that the TempDir doesn't get dropped until after we're done with the path.
+    // If we didn't do that, then the tempdir would potentially get deleted by the
+    // TempDir's Drop impl before the file had been executed.
+    #[allow(dead_code)]
     #[cfg(not(target_os = "linux"))]
     OnDisk(TempDir, PathBuf),
 }
@@ -1308,6 +1334,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(true)
         .mode(0o777) // create the file as executable
         .open(&app_path_buf)?;
 

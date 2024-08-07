@@ -32,7 +32,6 @@ procedure Str.42 (#Attr.2):
 
 procedure Str.64 (Str.189):
     let Str.190 : {I64, U8} = CallByName Str.42 Str.189;
-    dec Str.189;
     let Str.242 : U8 = StructAtIndex 1 Str.190;
     let Str.243 : U8 = 0i64;
     let Str.239 : Int1 = CallByName Bool.11 Str.242 Str.243;
@@ -68,6 +67,7 @@ procedure Test.19 ():
     let Test.133 : List U8 = CallByName Str.12 Test.135;
     let Test.134 : {} = Struct {};
     let Test.132 : {List U8, [C {}, C Str]} = CallByName Decode.26 Test.133 Test.134;
+    dec Test.133;
     let Test.93 : List U8 = StructAtIndex 0 Test.132;
     let Test.92 : [C {}, C Str] = StructAtIndex 1 Test.132;
     let Test.129 : U8 = 1i64;
@@ -76,6 +76,7 @@ procedure Test.19 ():
     if Test.131 then
         let Test.94 : Str = UnionAtIndex (Id 1) (Index 0) Test.92;
         let Test.117 : [C {}, C I64] = CallByName Str.27 Test.94;
+        dec Test.94;
         let Test.123 : U8 = 1i64;
         let Test.124 : U8 = GetTagId Test.117;
         let Test.125 : Int1 = lowlevel Eq Test.123 Test.124;
@@ -99,5 +100,6 @@ procedure Test.19 ():
 procedure Test.76 (Test.77, Test.138):
     let Test.141 : {} = Struct {};
     let Test.140 : [C {}, C Str] = TagId(0) Test.141;
+    inc Test.77;
     let Test.139 : {List U8, [C {}, C Str]} = Struct {Test.77, Test.140};
     ret Test.139;

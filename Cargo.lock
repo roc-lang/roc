@@ -468,6 +468,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "criterion",
+ "regex",
  "rlimit",
  "roc_collections",
  "roc_command_utils",
@@ -939,6 +940,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a62bc1cf6f830c2ec14a513a9fb124d0a213a629668a4186f329db21fe045652"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs"
+version = "0.0.1"
+dependencies = [
+ "widestring",
 ]
 
 [[package]]
@@ -2335,6 +2343,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "indoc",
+ "insta",
  "pretty_assertions",
  "roc_collections",
  "roc_error_macros",
@@ -2344,7 +2353,6 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_serialize",
- "roc_test_utils",
  "roc_types",
  "static_assertions",
  "ven_pretty",
@@ -2828,6 +2836,7 @@ dependencies = [
  "bitvec",
  "bumpalo",
  "hashbrown",
+ "indoc",
  "parking_lot",
  "roc_builtins",
  "roc_can",
@@ -4550,6 +4559,12 @@ name = "webpki-roots"
 version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14247bb57be4f377dfb94c72830b8ce8fc6beac03cf4bf7b9732eadd414123fc"
+
+[[package]]
+name = "widestring"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7219d36b6eac893fa81e84ebe06485e7dcbb616177469b142df14f1f4deb1311"
 
 [[package]]
 name = "winapi"

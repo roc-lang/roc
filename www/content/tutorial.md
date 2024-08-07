@@ -154,7 +154,7 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
 
 import pf.Stdout
 import pf.Task
@@ -476,8 +476,10 @@ third = tuple.2 # ["list"]
 # tuple destructuring
 (first, second, third) = ("hello", 42, ["list"])
 ```
-
-By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+<details>
+    <summary>Pronouncing Tuple</summary>
+    By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
+</details>
 
 ## [Pattern Matching](#pattern-matching) {#pattern-matching}
 
@@ -816,6 +818,30 @@ Result.isOk (List.get ["a", "b", "c"] 1)
 
 # Note: There's a Result.isErr function that works similarly.
 ```
+
+```roc
+# Running this will produce `Ok "c"`
+Result.try (Str.toU64 "2") listGet
+
+listGet : U64 -> Result Str [OutOfBounds]
+listGet = \index ->
+    List.get ["a", "b", "c", "d"] index
+
+# Notes:
+#  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
+#    integer types later)
+#  - since parsing is successful, `Result.try` passes 2 to the `listGet` function
+#  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
+#    or `Err OutOfBounds` respectively
+```
+
+`Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
+
+<details>
+  <summary>Upcoming feature</summary>
+  
+  We plan to introduce syntax sugar to make `Result.try` nicer to use, follow [this issue](https://github.com/roc-lang/roc/issues/6828) for more.
+</details>
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -1454,7 +1480,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
 
 import pf.Stdout
 ```
@@ -1572,7 +1598,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
 
 import pf.Stdout
 
@@ -1580,7 +1606,7 @@ main =
     Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). (We'll discuss the `!` part later.) `Stdout.line` has this type:
+The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>), we'll [discuss the `!` part later](https://www.roc-lang.org/tutorial#the-!-suffix). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
@@ -1605,7 +1631,7 @@ Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
@@ -2230,9 +2256,13 @@ See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 
-These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
+These are reserved keywords in Roc. You can't choose any of them as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `import`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `with`, `generates`, `packages`, `requires`
+`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `then`, `when`
+
+Other keywords are used only in specific places, so they are not reserved. This includes:
+
+`app`, `exposes`, `exposing`, `generates`, `implements`, `module`, `package`, `packages`, `platform`, `requires`, `where`, `with`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 

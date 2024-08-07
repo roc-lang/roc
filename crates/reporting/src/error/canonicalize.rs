@@ -1699,7 +1699,11 @@ fn to_bad_ident_pattern_report<'b>(
 enum BadIdentNext<'a> {
     LowercaseAccess(u32),
     UppercaseAccess(u32),
+    #[allow(dead_code)]
+    // The field u32 will be used once todo is implemented in to_bad_ident_expr_report
     NumberAccess(u32),
+    #[allow(dead_code)]
+    // The field str will be used once todo is implemented in to_bad_ident_expr_report
     Keyword(&'a str),
     DanglingDot,
     Other(Option<char>),
@@ -2418,23 +2422,23 @@ fn pretty_runtime_error<'b>(
 
             title = "DEGENERATE BRANCH";
         }
-        RuntimeError::MultipleRecordBuilders(region) => {
+        RuntimeError::MultipleOldRecordBuilders(region) => {
             let tip = alloc
                 .tip()
                 .append(alloc.reflow("You can combine them or apply them separately."));
 
             doc = alloc.stack([
-                alloc.reflow("This function is applied to multiple record builders:"),
+                alloc.reflow("This function is applied to multiple old-style record builders:"),
                 alloc.region(lines.convert_region(region), severity),
-                alloc.note("Functions can only take at most one record builder!"),
+                alloc.note("Functions can only take at most one old-style record builder!"),
                 tip,
             ]);
 
-            title = "MULTIPLE RECORD BUILDERS";
+            title = "MULTIPLE OLD-STYLE RECORD BUILDERS";
         }
-        RuntimeError::UnappliedRecordBuilder(region) => {
+        RuntimeError::UnappliedOldRecordBuilder(region) => {
             doc = alloc.stack([
-                alloc.reflow("This record builder was not applied to a function:"),
+                alloc.reflow("This old-style record builder was not applied to a function:"),
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("However, we need a function to construct the record."),
                 alloc.note(
@@ -2442,7 +2446,41 @@ fn pretty_runtime_error<'b>(
                 ),
             ]);
 
-            title = "UNAPPLIED RECORD BUILDER";
+            title = "UNAPPLIED OLD-STYLE RECORD BUILDER";
+        }
+        RuntimeError::EmptyRecordBuilder(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This record builder has no fields:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I need at least two fields to combine their values into a record."),
+            ]);
+
+            title = "EMPTY RECORD BUILDER";
+        }
+        RuntimeError::SingleFieldRecordBuilder(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This record builder only has one field:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("I need at least two fields to combine their values into a record."),
+            ]);
+
+            title = "NOT ENOUGH FIELDS IN RECORD BUILDER";
+        }
+        RuntimeError::OptionalFieldInRecordBuilder {
+            record: record_region,
+            field: field_region,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("Optional fields are not allowed to be used in record builders."),
+                alloc.region_with_subregion(
+                    lines.convert_region(record_region),
+                    lines.convert_region(field_region),
+                    severity,
+                ),
+                alloc.reflow("Record builders can only have required values for their fields."),
+            ]);
+
+            title = "OPTIONAL FIELD IN RECORD BUILDER";
         }
     }
 

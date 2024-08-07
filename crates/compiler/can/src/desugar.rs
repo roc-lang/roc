@@ -9,8 +9,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, ModuleImportParams, Pattern, RecordBuilderField, StrLiteral,
-    StrSegment, ValueDef, WhenBranch,
+    AssignedField, Collection, ModuleImportParams, OldRecordBuilderField, Pattern, StrLiteral,
+    StrSegment, TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_region::all::{LineInfo, Loc, Region};
 
@@ -86,13 +86,13 @@ fn desugar_value_def<'a>(
         AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment,
+            lines_between,
             body_pattern,
             body_expr,
         } => AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment: *comment,
+            lines_between,
             body_pattern: desugar_loc_pattern(arena, body_pattern, src, line_info, module_path),
             body_expr: desugar_expr(arena, body_expr, src, line_info, module_path),
         },
@@ -156,15 +156,26 @@ fn desugar_value_def<'a>(
         IngestedFileImport(_) => *def,
 
         Stmt(stmt_expr) => {
-            // desugar into a Body({}, stmt_expr)
-            let loc_pattern = arena.alloc(Loc::at(
-                stmt_expr.region,
-                Pattern::RecordDestructure(Collection::empty()),
-            ));
-            Body(
-                loc_pattern,
-                desugar_expr(arena, stmt_expr, src, line_info, module_path),
-            )
+            // desugar `stmt_expr!` to
+            // _ : {}
+            // _ = stmt_expr!
+
+            let region = stmt_expr.region;
+            let new_pat = arena.alloc(Loc::at(region, Pattern::Underscore("#!stmt")));
+
+            ValueDef::AnnotatedBody {
+                ann_pattern: new_pat,
+                ann_type: arena.alloc(Loc::at(
+                    region,
+                    TypeAnnotation::Record {
+                        fields: Collection::empty(),
+                        ext: None,
+                    },
+                )),
+                lines_between: &[],
+                body_pattern: new_pat,
+                body_expr: desugar_expr(arena, stmt_expr, src, line_info, module_path),
+            }
         }
     }
 }
@@ -213,7 +224,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     arena,
                     Body(
                         loc_pattern,
-                        apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new),
+                        apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new, None),
                     ),
                 ),
                 Err(..) => Body(
@@ -226,7 +237,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
         AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment,
+            lines_between,
             body_pattern,
             body_expr,
         } => {
@@ -235,7 +246,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                 Ok(new_expr) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
-                    comment,
+                    lines_between,
                     body_pattern,
                     body_expr: new_expr,
                 },
@@ -248,7 +259,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     AnnotatedBody {
                         ann_pattern,
                         ann_type,
-                        comment,
+                        lines_between,
                         body_pattern,
                         body_expr: apply_task_await(
                             arena,
@@ -256,13 +267,14 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                             sub_arg,
                             sub_pat,
                             sub_new,
+                            Some((ann_pattern, ann_type)),
                         ),
                     },
                 ),
                 Err(..) => AnnotatedBody {
                     ann_pattern,
                     ann_type,
-                    comment,
+                    lines_between,
                     body_pattern,
                     body_expr: arena.alloc(Loc::at(body_expr.region, MalformedSuffixed(body_expr))),
                 },
@@ -302,8 +314,11 @@ pub fn desugar_expr<'a>(
         | MalformedClosure
         | MalformedSuffixed(..)
         | PrecedenceConflict { .. }
-        | MultipleRecordBuilders { .. }
-        | UnappliedRecordBuilder { .. }
+        | MultipleOldRecordBuilders(_)
+        | UnappliedOldRecordBuilder(_)
+        | EmptyRecordBuilder(_)
+        | SingleFieldRecordBuilder(_)
+        | OptionalFieldInRecordBuilder { .. }
         | Tag(_)
         | OpaqueRef(_)
         | Crash => loc_expr,
@@ -487,10 +502,267 @@ pub fn desugar_expr<'a>(
                 }
             }
         }
-        RecordBuilder(_) => arena.alloc(Loc {
-            value: UnappliedRecordBuilder(loc_expr),
+        OldRecordBuilder(_) => arena.alloc(Loc {
+            value: UnappliedOldRecordBuilder(loc_expr),
             region: loc_expr.region,
         }),
+        RecordBuilder { mapper, fields } => {
+            // NOTE the `mapper` is always a `Var { .. }`, we only desugar it to get rid of
+            // any spaces before/after
+            let new_mapper = desugar_expr(arena, mapper, src, line_info, module_path);
+
+            if fields.is_empty() {
+                return arena.alloc(Loc {
+                    value: EmptyRecordBuilder(loc_expr),
+                    region: loc_expr.region,
+                });
+            } else if fields.len() == 1 {
+                return arena.alloc(Loc {
+                    value: SingleFieldRecordBuilder(loc_expr),
+                    region: loc_expr.region,
+                });
+            }
+
+            struct FieldData<'d> {
+                name: Loc<&'d str>,
+                value: &'d Loc<Expr<'d>>,
+                ignored: bool,
+            }
+
+            let mut field_data = Vec::with_capacity_in(fields.len(), arena);
+
+            for field in fields.items {
+                let (name, value, ignored) =
+                    match desugar_field(arena, &field.value, src, line_info, module_path) {
+                        AssignedField::RequiredValue(loc_name, _, loc_val) => {
+                            (loc_name, loc_val, false)
+                        }
+                        AssignedField::IgnoredValue(loc_name, _, loc_val) => {
+                            (loc_name, loc_val, true)
+                        }
+                        AssignedField::LabelOnly(loc_name) => (
+                            loc_name,
+                            &*arena.alloc(Loc {
+                                region: loc_name.region,
+                                value: Expr::Var {
+                                    module_name: "",
+                                    ident: loc_name.value,
+                                },
+                            }),
+                            false,
+                        ),
+                        AssignedField::OptionalValue(loc_name, _, loc_val) => {
+                            return arena.alloc(Loc {
+                                region: loc_expr.region,
+                                value: OptionalFieldInRecordBuilder(arena.alloc(loc_name), loc_val),
+                            });
+                        }
+                        AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
+                            unreachable!("Should have been desugared in `desugar_field`")
+                        }
+                        AssignedField::Malformed(_name) => continue,
+                    };
+
+                field_data.push(FieldData {
+                    name,
+                    value,
+                    ignored,
+                });
+            }
+
+            let closure_arg_from_field =
+                |FieldData {
+                     name,
+                     value: _,
+                     ignored,
+                 }: &FieldData<'a>| Loc {
+                    region: name.region,
+                    value: if *ignored {
+                        Pattern::Underscore(name.value)
+                    } else {
+                        Pattern::Identifier {
+                            ident: arena.alloc_str(&format!("#{}", name.value)),
+                        }
+                    },
+                };
+
+            let combiner_closure_in_region = |region| {
+                let closure_body = Tuple(Collection::with_items(
+                    Vec::from_iter_in(
+                        [
+                            &*arena.alloc(Loc::at(
+                                region,
+                                Expr::Var {
+                                    module_name: "",
+                                    ident: "#record_builder_closure_arg_a",
+                                },
+                            )),
+                            &*arena.alloc(Loc::at(
+                                region,
+                                Expr::Var {
+                                    module_name: "",
+                                    ident: "#record_builder_closure_arg_b",
+                                },
+                            )),
+                        ],
+                        arena,
+                    )
+                    .into_bump_slice(),
+                ));
+
+                arena.alloc(Loc::at(
+                    region,
+                    Closure(
+                        arena.alloc_slice_copy(&[
+                            Loc::at(
+                                region,
+                                Pattern::Identifier {
+                                    ident: "#record_builder_closure_arg_a",
+                                },
+                            ),
+                            Loc::at(
+                                region,
+                                Pattern::Identifier {
+                                    ident: "#record_builder_closure_arg_b",
+                                },
+                            ),
+                        ]),
+                        arena.alloc(Loc::at(region, closure_body)),
+                    ),
+                ))
+            };
+
+            let closure_args = {
+                if field_data.len() == 2 {
+                    arena.alloc_slice_copy(&[
+                        closure_arg_from_field(&field_data[0]),
+                        closure_arg_from_field(&field_data[1]),
+                    ])
+                } else {
+                    let second_to_last_arg =
+                        closure_arg_from_field(&field_data[field_data.len() - 2]);
+                    let last_arg = closure_arg_from_field(&field_data[field_data.len() - 1]);
+
+                    let mut second_arg = Pattern::Tuple(Collection::with_items(
+                        arena.alloc_slice_copy(&[second_to_last_arg, last_arg]),
+                    ));
+                    let mut second_arg_region =
+                        Region::span_across(&second_to_last_arg.region, &last_arg.region);
+
+                    for index in (1..(field_data.len() - 2)).rev() {
+                        second_arg =
+                            Pattern::Tuple(Collection::with_items(arena.alloc_slice_copy(&[
+                                closure_arg_from_field(&field_data[index]),
+                                Loc::at(second_arg_region, second_arg),
+                            ])));
+                        second_arg_region =
+                            Region::span_across(&field_data[index].name.region, &second_arg_region);
+                    }
+
+                    arena.alloc_slice_copy(&[
+                        closure_arg_from_field(&field_data[0]),
+                        Loc::at(second_arg_region, second_arg),
+                    ])
+                }
+            };
+
+            let record_val = Record(Collection::with_items(
+                Vec::from_iter_in(
+                    field_data
+                        .iter()
+                        .filter(|field| !field.ignored)
+                        .map(|field| {
+                            Loc::at(
+                                field.name.region,
+                                AssignedField::RequiredValue(
+                                    field.name,
+                                    &[],
+                                    arena.alloc(Loc::at(
+                                        field.name.region,
+                                        Expr::Var {
+                                            module_name: "",
+                                            ident: arena
+                                                .alloc_str(&format!("#{}", field.name.value)),
+                                        },
+                                    )),
+                                ),
+                            )
+                        }),
+                    arena,
+                )
+                .into_bump_slice(),
+            ));
+
+            let record_combiner_closure = arena.alloc(Loc {
+                region: loc_expr.region,
+                value: Closure(
+                    closure_args,
+                    arena.alloc(Loc::at(loc_expr.region, record_val)),
+                ),
+            });
+
+            if field_data.len() == 2 {
+                return arena.alloc(Loc {
+                    region: loc_expr.region,
+                    value: Apply(
+                        new_mapper,
+                        arena.alloc_slice_copy(&[
+                            field_data[0].value,
+                            field_data[1].value,
+                            record_combiner_closure,
+                        ]),
+                        CalledVia::RecordBuilder,
+                    ),
+                });
+            }
+
+            let mut inner_combined = arena.alloc(Loc {
+                region: Region::span_across(
+                    &field_data[field_data.len() - 2].value.region,
+                    &field_data[field_data.len() - 1].value.region,
+                ),
+                value: Apply(
+                    new_mapper,
+                    arena.alloc_slice_copy(&[
+                        field_data[field_data.len() - 2].value,
+                        field_data[field_data.len() - 1].value,
+                        combiner_closure_in_region(loc_expr.region),
+                    ]),
+                    CalledVia::RecordBuilder,
+                ),
+            });
+
+            for index in (1..(field_data.len() - 2)).rev() {
+                inner_combined = arena.alloc(Loc {
+                    region: Region::span_across(
+                        &field_data[index].value.region,
+                        &inner_combined.region,
+                    ),
+                    value: Apply(
+                        new_mapper,
+                        arena.alloc_slice_copy(&[
+                            field_data[index].value,
+                            inner_combined,
+                            combiner_closure_in_region(loc_expr.region),
+                        ]),
+                        CalledVia::RecordBuilder,
+                    ),
+                });
+            }
+
+            arena.alloc(Loc {
+                region: loc_expr.region,
+                value: Apply(
+                    new_mapper,
+                    arena.alloc_slice_copy(&[
+                        field_data[0].value,
+                        inner_combined,
+                        record_combiner_closure,
+                    ]),
+                    CalledVia::RecordBuilder,
+                ),
+            })
+        }
         BinOps(lefts, right) => desugar_bin_ops(
             arena,
             loc_expr.region,
@@ -515,15 +787,15 @@ pub fn desugar_expr<'a>(
                 let mut current = loc_arg.value;
                 let arg = loop {
                     match current {
-                        RecordBuilder(fields) => {
+                        OldRecordBuilder(fields) => {
                             if builder_apply_exprs.is_some() {
                                 return arena.alloc(Loc {
-                                    value: MultipleRecordBuilders(loc_expr),
+                                    value: MultipleOldRecordBuilders(loc_expr),
                                     region: loc_expr.region,
                                 });
                             }
 
-                            let builder_arg = record_builder_arg(arena, loc_arg.region, fields);
+                            let builder_arg = old_record_builder_arg(arena, loc_arg.region, fields);
                             builder_apply_exprs = Some(builder_arg.apply_exprs);
 
                             break builder_arg.closure;
@@ -559,7 +831,7 @@ pub fn desugar_expr<'a>(
                         let args = std::slice::from_ref(arena.alloc(apply));
 
                         apply = arena.alloc(Loc {
-                            value: Apply(desugared_expr, args, CalledVia::RecordBuilder),
+                            value: Apply(desugared_expr, args, CalledVia::OldRecordBuilder),
                             region: loc_expr.region,
                         });
                     }
@@ -856,6 +1128,14 @@ fn desugar_field<'a>(
             spaces,
             desugar_expr(arena, loc_expr, src, line_info, module_path),
         ),
+        IgnoredValue(loc_str, spaces, loc_expr) => IgnoredValue(
+            Loc {
+                value: loc_str.value,
+                region: loc_str.region,
+            },
+            spaces,
+            desugar_expr(arena, loc_expr, src, line_info, module_path),
+        ),
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
             let loc_expr = Loc {
@@ -1009,16 +1289,16 @@ fn desugar_pattern<'a>(
     }
 }
 
-struct RecordBuilderArg<'a> {
+struct OldRecordBuilderArg<'a> {
     closure: &'a Loc<Expr<'a>>,
     apply_exprs: Vec<'a, &'a Loc<Expr<'a>>>,
 }
 
-fn record_builder_arg<'a>(
+fn old_record_builder_arg<'a>(
     arena: &'a Bump,
     region: Region,
-    fields: Collection<'a, Loc<RecordBuilderField<'a>>>,
-) -> RecordBuilderArg<'a> {
+    fields: Collection<'a, Loc<OldRecordBuilderField<'a>>>,
+) -> OldRecordBuilderArg<'a> {
     let mut record_fields = Vec::with_capacity_in(fields.len(), arena);
     let mut apply_exprs = Vec::with_capacity_in(fields.len(), arena);
     let mut apply_field_names = Vec::with_capacity_in(fields.len(), arena);
@@ -1030,10 +1310,10 @@ fn record_builder_arg<'a>(
 
         let new_field = loop {
             match current {
-                RecordBuilderField::Value(label, spaces, expr) => {
+                OldRecordBuilderField::Value(label, spaces, expr) => {
                     break AssignedField::RequiredValue(label, spaces, expr)
                 }
-                RecordBuilderField::ApplyValue(label, _, _, expr) => {
+                OldRecordBuilderField::ApplyValue(label, _, _, expr) => {
                     apply_field_names.push(label);
                     apply_exprs.push(expr);
 
@@ -1047,14 +1327,14 @@ fn record_builder_arg<'a>(
 
                     break AssignedField::RequiredValue(label, &[], var);
                 }
-                RecordBuilderField::LabelOnly(label) => break AssignedField::LabelOnly(label),
-                RecordBuilderField::SpaceBefore(sub_field, _) => {
+                OldRecordBuilderField::LabelOnly(label) => break AssignedField::LabelOnly(label),
+                OldRecordBuilderField::SpaceBefore(sub_field, _) => {
                     current = *sub_field;
                 }
-                RecordBuilderField::SpaceAfter(sub_field, _) => {
+                OldRecordBuilderField::SpaceAfter(sub_field, _) => {
                     current = *sub_field;
                 }
-                RecordBuilderField::Malformed(malformed) => {
+                OldRecordBuilderField::Malformed(malformed) => {
                     break AssignedField::Malformed(malformed)
                 }
             }
@@ -1094,7 +1374,7 @@ fn record_builder_arg<'a>(
         });
     }
 
-    RecordBuilderArg {
+    OldRecordBuilderArg {
         closure: body,
         apply_exprs,
     }
@@ -1122,10 +1402,6 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
-        Assignment => unreachable!("Cannot desugar the = operator"),
-        IsAliasType => unreachable!("Cannot desugar the : operator"),
-        IsOpaqueType => unreachable!("Cannot desugar the := operator"),
-        Backpassing => unreachable!("Cannot desugar the <- operator"),
     }
 }
 

@@ -1,1 +1,1 @@
-Expr(When(Branch(BadOperator("->", @34), @19), @0), @0)
+Expr(When(IndentPattern(@34), @0), @0)

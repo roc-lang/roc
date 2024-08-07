@@ -11,6 +11,7 @@ procedure Test.1 (Test.5):
     ret Test.31;
 
 procedure Test.2 (Test.7):
+    inc Test.7;
     let Test.23 : [C {}, C U64, C Str] = TagId(2) Test.7;
     ret Test.23;
 
@@ -59,6 +60,7 @@ procedure Test.0 ():
         case 1:
             let Test.22 : Str = "foo";
             let Test.21 : [C {}, C U64, C Str] = CallByName Test.2 Test.22;
+            dec Test.22;
             jump Test.13 Test.21;
     
         default:

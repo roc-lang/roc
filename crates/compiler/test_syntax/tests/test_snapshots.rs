@@ -22,16 +22,16 @@ mod test_snapshots {
 
     macro_rules! snapshot_input {
         (expr => $input:expr) => {
-            Input::Expr($input.trim())
+            Input::Expr($input)
         };
         (header => $input:expr) => {
-            Input::Header($input.trim())
+            Input::Header($input)
         };
         (moduledefs => $input:expr) => {
-            Input::ModuleDefs($input.trim())
+            Input::ModuleDefs($input)
         };
         (full => $input:expr) => {
-            Input::Full($input.trim())
+            Input::Full($input)
         };
     }
 
@@ -187,8 +187,11 @@ mod test_snapshots {
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
         fail/alias_or_opaque_fail.expr,
+        fail/backpassing_after_annotation.expr,
+        fail/bound_variable.expr,
         fail/comment_with_tab.expr,
         fail/def_missing_final_expression.expr,
+        fail/def_without_newline.expr,
         fail/double_plus.expr,
         fail/elm_function_syntax.expr,
         fail/empty_or_pattern.expr,
@@ -215,6 +218,8 @@ mod test_snapshots {
         fail/module_params_with_missing_arrow.header,
         fail/module_with_unfinished_params.header,
         fail/multi_no_end.expr,
+        fail/newline_before_operator_with_defs.expr,
+        fail/opaque_type_def_with_newline.expr,
         fail/pattern_binds_keyword.expr,
         fail/pattern_in_parens_end.expr,
         fail/pattern_in_parens_end_comma.expr,
@@ -243,6 +248,7 @@ mod test_snapshots {
         fail/type_inline_alias.expr,
         fail/underscore_name_type_annotation.expr,
         fail/unfinished_closure_pattern_in_parens.expr,
+        fail/unfinished_import_as_or_exposing.moduledefs,
         fail/unicode_not_hex.expr,
         fail/weird_escape.expr,
         fail/when_missing_arrow.expr,
@@ -281,16 +287,13 @@ mod test_snapshots {
         pass/basic_tag.expr,
         pass/basic_tuple.expr,
         pass/basic_var.expr,
-        pass/bound_variable.expr,
-        pass/call_with_newlines.expr,
-        pass/closure_in_binop.expr,
         pass/closure_in_binop_with_spaces.expr,
         pass/closure_with_underscores.expr,
+        pass/comma_prefixed_indented_record.expr,
         pass/comment_after_annotation.expr,
         pass/comment_after_def.moduledefs,
         pass/comment_after_expr_in_parens.expr,
         pass/comment_after_op.expr,
-        pass/comment_after_tag_in_def.expr,
         pass/comment_before_colon_def.expr,
         pass/comment_before_equals_def.expr,
         pass/comment_before_op.expr,
@@ -300,7 +303,8 @@ mod test_snapshots {
         pass/crash.expr,
         pass/dbg.expr,
         pass/dbg_multiline.expr,
-        pass/def_without_newline.expr,
+        pass/defs_suffixed_middle_extra_indents.moduledefs,
+        pass/deprecated_interpolated_string.expr,
         pass/destructure_tag_assignment.expr,
         pass/docs.expr,
         pass/empty_app_header.header,
@@ -315,7 +319,10 @@ mod test_snapshots {
         pass/equals.expr,
         pass/equals_with_spaces.expr,
         pass/expect.expr,
+        pass/expect_defs.moduledefs,
         pass/expect_fx.moduledefs,
+        pass/expect_single_line.expr,
+        pass/extra_newline.expr,
         pass/extra_newline_in_parens.expr,
         pass/float_with_underscores.expr,
         pass/fn_with_record_arg.expr,
@@ -333,6 +340,7 @@ mod test_snapshots {
         pass/import_with_comments.moduledefs,
         pass/import_with_exposed.moduledefs,
         pass/import_with_params.moduledefs,
+        pass/indented_after_multi_backpassing.expr,
         pass/ingested_file.moduledefs,
         pass/inline_import.expr,
         pass/inline_ingested_file.expr,
@@ -362,6 +370,8 @@ mod test_snapshots {
         pass/multi_backpassing_in_def.moduledefs,
         pass/multi_backpassing_with_apply.expr,
         pass/multi_char_string.expr,
+        pass/multiline_binop_when_with_comments.expr,
+        pass/multiline_str_in_pat.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,
         pass/multiline_tuple_with_comments.expr,
@@ -375,9 +385,7 @@ mod test_snapshots {
         pass/negative_float.expr,
         pass/negative_in_apply_def.expr,
         pass/negative_int.expr,
-        pass/nested_backpassing_no_newline_before.expr,
         pass/nested_def_annotation.moduledefs,
-        pass/nested_def_without_newline.expr,
         pass/nested_if.expr,
         pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_mul.expr,
@@ -385,7 +393,6 @@ mod test_snapshots {
         pass/newline_after_sub.expr,
         pass/newline_and_spaces_before_less_than.expr,
         pass/newline_before_add.expr,
-        pass/newline_before_operator_with_defs.expr,
         pass/newline_before_sub.expr,
         pass/newline_in_packages.full,
         pass/newline_in_type_alias_application.expr,
@@ -412,7 +419,6 @@ mod test_snapshots {
         pass/opaque_reference_pattern.expr,
         pass/opaque_reference_pattern_with_arguments.expr,
         pass/opaque_simple.moduledefs,
-        pass/opaque_type_def_with_newline.expr,
         pass/opaque_with_type_arguments.moduledefs,
         pass/ops_with_newlines.expr,
         pass/outdented_app_with_record.expr,
@@ -421,7 +427,6 @@ mod test_snapshots {
         pass/outdented_record.expr,
         pass/packed_singleton_list.expr,
         pass/parens_in_type_def_apply.expr,
-        pass/parens_in_value_def_annotation.expr,
         pass/parenthesized_type_def.expr,
         pass/parenthesized_type_def_space_before.expr,
         pass/parenthetical_apply.expr,
@@ -434,6 +439,7 @@ mod test_snapshots {
         pass/pattern_as_list_rest.expr,
         pass/pattern_as_spaces.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
+        pass/pizza_bang.moduledefs,
         pass/plus_if.expr,
         pass/plus_when.expr,
         pass/pos_inf_float.expr,
@@ -443,12 +449,15 @@ mod test_snapshots {
         pass/qualified_field.expr,
         pass/qualified_var.expr,
         pass/record_access_after_tuple.expr,
+        pass/record_builder.expr,
+        pass/record_builder_ignored_fields.expr,
         pass/record_destructure_def.expr,
         pass/record_func_type_decl.expr,
         pass/record_type_with_function.expr,
         pass/record_update.expr,
         pass/record_with_if.expr,
         pass/requires_type.header,
+        pass/separate_defs.moduledefs,
         pass/single_arg_closure.expr,
         pass/single_underscore_closure.expr,
         pass/space_before_colon.full,

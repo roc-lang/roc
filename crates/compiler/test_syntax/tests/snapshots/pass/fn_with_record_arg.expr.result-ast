@@ -1,7 +1,7 @@
 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            Index(2147483648),
         ],
         regions: [
             @0-89,
@@ -15,44 +15,6 @@ Defs(
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-5 Identifier {
-                    ident: "table",
-                },
-                @8-44 Function(
-                    [
-                        @8-35 Record {
-                            fields: [
-                                @14-29 SpaceBefore(
-                                    SpaceAfter(
-                                        RequiredValue(
-                                            @14-20 "height",
-                                            [],
-                                            @23-29 Apply(
-                                                "",
-                                                "Pixels",
-                                                [],
-                                            ),
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                    [
-                                        Newline,
-                                    ],
-                                ),
-                            ],
-                            ext: None,
-                        },
-                    ],
-                    @39-44 Apply(
-                        "",
-                        "Table",
-                        [],
-                    ),
-                ),
-            ),
             AnnotatedBody {
                 ann_pattern: @0-5 Identifier {
                     ident: "table",
@@ -90,7 +52,9 @@ Defs(
                         [],
                     ),
                 ),
-                comment: None,
+                lines_between: [
+                    Newline,
+                ],
                 body_pattern: @45-50 Identifier {
                     ident: "table",
                 },

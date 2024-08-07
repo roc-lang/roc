@@ -63,8 +63,18 @@ p {
     margin-top: 0;
 }
 
+details summary {
+    cursor: pointer;
+    color: var(--primary-1);
+}
+
+details summary:hover {
+    color: var(--primary-2);
+}
+
 p,
-li {
+li,
+details {
     max-width: 720px;
 }
 
@@ -220,7 +230,7 @@ h4 {
 
 h1 {
     font-size: 5rem;
-    line-height: 1.2; 
+    line-height: 1.2;
 }
 
 h2 {
@@ -241,7 +251,8 @@ h2 {
 
 .article-layout p,
 .article-layout li,
-.article-layout pre {
+.article-layout pre,
+.article-layout details {
     font-size: 20px;
 }
 
@@ -485,7 +496,8 @@ td:last-child {
 
 p,
 aside,
-li {
+li,
+details {
     font-size: var(--font-size-normal);
     line-height: 1.85rem;
 }
@@ -1579,4 +1591,19 @@ code .dim {
 .repl-prompt:before {
     color: var(--light-cyan);
     content: "» ";
+}
+
+.banner {
+    background-color: var(--gray-bg);
+    padding: 1rem;
+    text-align: center;
+    font-family: var(--font-sans);
+    border: 1px solid var(--primary-1);
+    margin-bottom: 20px;
+}
+
+.banner a {
+    color: var(--link-color);
+    text-decoration: underline;
+    font-weight: bold;
 }

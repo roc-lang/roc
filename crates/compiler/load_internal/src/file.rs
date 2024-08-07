@@ -2993,8 +2993,10 @@ fn update<'a>(
 fn register_package_shorthands<'a>(
     shorthands: &mut MutMap<&'a str, ShorthandPath>,
     package_entries: &MutMap<&'a str, header::PackageName<'a>>,
+    #[allow(unused_variables)] // for wasm
     module_path: &Path,
     src_dir: &Path,
+    #[allow(unused_variables)] // for wasm
     cache_dir: &Path,
 ) -> Result<(), LoadingProblem<'a>> {
     for (shorthand, package_name) in package_entries.iter() {
@@ -3607,9 +3609,9 @@ fn load_module<'a>(
 
     macro_rules! load_builtins {
         ($($name:literal, $module_id:path)*) => {
-            match module_name.as_inner().as_str() {
+            match module_name.unqualified().map(|name| name.as_str()) {
             $(
-                $name => {
+                Some($name) => {
                     let (module_id, msg) = load_builtin_module(
                         arena,
                         module_ids,
@@ -3658,6 +3660,8 @@ fn load_module<'a>(
 #[derive(Debug)]
 enum ShorthandPath {
     /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
+    #[allow(dead_code)]
+    // wasm warns FromHttpsUrl is unused, but errors if it is removed ¯\_(ツ)_/¯
     FromHttpsUrl {
         /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
         root_module_dir: PathBuf,
@@ -4069,6 +4073,7 @@ fn load_packages<'a>(
     app_module_id: Option<ModuleId>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    #[allow(unused_variables)] // for wasm
     filename: PathBuf,
 ) {
     // Load all the packages
@@ -4959,6 +4964,7 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let packages = unspace(arena, header.packages.item.items);
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -4980,7 +4986,7 @@ fn build_platform_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         header_type,
         module_comments: comments,
         header_imports: Some(header.imports),

@@ -3374,7 +3374,7 @@ mod test_reporting {
             f x y = x
             "
         ),
-        @r#"
+        @r###"
     ── ARGUMENTS BEFORE EQUALS in tmp/elm_function_syntax/Test.roc ─────────────────
 
     I am partway through parsing a definition, but I got stuck here:
@@ -3385,9 +3385,9 @@ mod test_reporting {
     4│      f x y = x
               ^^^
 
-    Looks like you are trying to define a function. In roc, functions are
+    Looks like you are trying to define a function. In Roc, functions are
     always written as a lambda, like increment = \n -> n + 1.
-    "#
+    "###
     );
 
     test_report!(
@@ -4320,16 +4320,26 @@ mod test_reporting {
             { x,  y }
             "
         ),
-        @r"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+        @r###"
+    ── STATEMENT AFTER EXPRESSION in tmp/double_equals_in_def/Test.roc ─────────────
 
-    This value is not a function, but it was given 3 arguments:
+    I just finished parsing an expression with a series of definitions,
 
+    and this line is indented as if it's intended to be part of that
+    expression:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      x = 3
+    5│      y =
     6│          x == 5
-                     ^
+    7│          Num.add 1 2
+                ^
 
-    Are there any missing commas? Or missing parentheses?
-    "
+    However, I already saw the final expression in that series of
+    definitions.
+    "###
     );
 
     test_report!(
@@ -4972,7 +4982,7 @@ mod test_reporting {
             }
             "
         ),@r###"
-    ── RECORD BUILDER IN MODULE PARAMS in ...ord_builder_in_module_params/Test.roc ─
+    ── OLD-STYLE RECORD BUILDER IN MODULE PARAMS in ...r_in_module_params/Test.roc ─
 
     I was partway through parsing module params, but I got stuck here:
 
@@ -4981,8 +4991,8 @@ mod test_reporting {
     6│          name: <- applyName
                 ^^^^^^^^^^^^^^^^^^
 
-    This looks like a record builder field, but those are not allowed in
-    module params.
+    This looks like an old-style record builder field, but those are not
+    allowed in module params.
     "###
     );
 
@@ -5018,9 +5028,9 @@ mod test_reporting {
     I was partway through parsing an `import`, but I got stuck here:
 
     4│      import svg.Path a
-                            ^
+                           ^
 
-    I was expecting to see the `as` keyword, like:
+    I was expecting to see the `as` keyword next, like:
 
         import svg.Path as SvgPath
 
@@ -5417,14 +5427,25 @@ mod test_reporting {
              2 -> 2
             "
         ),
-        @r"
-    ── NOT END OF FILE in tmp/when_outdented_branch/Test.roc ───────────────────────
+        @r###"
+    ── UNKNOWN OPERATOR in tmp/when_outdented_branch/Test.roc ──────────────────────
 
-    I expected to reach the end of the file, but got stuck here:
+    This looks like an operator, but it's not one I recognize!
 
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      when 4 is
+    5│          5 -> 2
     6│       2 -> 2
-             ^
-    "
+               ^^
+
+    Looks like you are trying to define a function. 
+
+    In Roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
+    "###
     );
 
     test_report!(
@@ -5436,12 +5457,13 @@ mod test_reporting {
                  _ -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_underscore/Test.roc ──────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> 2
     6│           _ -> 2
                    ^^
@@ -5461,7 +5483,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     test_report!(
@@ -5473,12 +5495,13 @@ mod test_reporting {
                  2 -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_int/Test.roc ─────────────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
@@ -5498,7 +5521,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     // TODO I think we can do better here
@@ -6136,27 +6159,21 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "
         ),
-        |golden| pretty_assertions::assert_eq!(
-            golden,
-            &format!(
-                r#"── UNKNOWN OPERATOR in tmp/wild_case_arrow/Test.roc ────────────────────────────
+        @r###"
+    ── SYNTAX PROBLEM in tmp/wild_case_arrow/Test.roc ──────────────────────────────
 
-This looks like an operator, but it's not one I recognize!
+    I got stuck here:
 
-1│  app "test" provides [main] to "./platform"
-2│
-3│  main =
-4│      main = 5 -> 3
-                 ^^
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main = 5 -> 3
+                    ^
 
-Looks like you are trying to define a function.{}
-
-In roc, functions are always written as a lambda, like{}
-
-    increment = \n -> n + 1"#,
-                ' ', ' '
-            )
-        )
+    Whatever I am running into is confusing me a lot! Normally I can give
+    fairly specific hints, but something is really tripping me up this
+    time.
+    "###
     );
 
     #[test]
@@ -8240,10 +8257,8 @@ In roc, functions are always written as a lambda, like{}
 
         F Str
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "#
     );
 
@@ -8277,10 +8292,8 @@ In roc, functions are always written as a lambda, like{}
 
         Age
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "
     );
 
@@ -10403,10 +10416,8 @@ In roc, functions are always written as a lambda, like{}
 
         OList
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "
     );
 
@@ -10699,7 +10710,7 @@ In roc, functions are always written as a lambda, like{}
     // Record Builders
 
     test_report!(
-        optional_field_in_record_builder,
+        optional_field_in_old_record_builder,
         indoc!(
             r#"
             {
@@ -10710,7 +10721,7 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD BUILDER in tmp/optional_field_in_record_builder/Test.roc ─────────
+    ── BAD OLD-STYLE RECORD BUILDER in ...nal_field_in_old_record_builder/Test.roc ─
 
     I am partway through parsing a record builder, and I found an optional
     field:
@@ -10729,7 +10740,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        record_update_builder,
+        record_update_old_builder,
         indoc!(
             r#"
             { rec &
@@ -10739,10 +10750,10 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── BAD RECORD UPDATE in tmp/record_update_builder/Test.roc ─────────────────────
+    ── BAD RECORD UPDATE in tmp/record_update_old_builder/Test.roc ─────────────────
 
-    I am partway through parsing a record update, and I found a record
-    builder field:
+    I am partway through parsing a record update, and I found an old-style
+    record builder field:
 
     1│  app "test" provides [main] to "./platform"
     2│
@@ -10751,12 +10762,12 @@ In roc, functions are always written as a lambda, like{}
     5│          a: <- apply "a",
                 ^^^^^^^^^^^^^^^
 
-    Record builders cannot be updated like records.
+    Old-style record builders cannot be updated like records.
     "#
     );
 
     test_report!(
-        multiple_record_builders,
+        multiple_old_record_builders,
         indoc!(
             r#"
             succeed
@@ -10765,32 +10776,31 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r#"
-    ── MULTIPLE RECORD BUILDERS in /code/proj/Main.roc ─────────────────────────────
+    ── MULTIPLE OLD-STYLE RECORD BUILDERS in /code/proj/Main.roc ───────────────────
 
-    This function is applied to multiple record builders:
+    This function is applied to multiple old-style record builders:
 
     4│>      succeed
     5│>          { a: <- apply "a" }
     6│>          { b: <- apply "b" }
 
-    Note: Functions can only take at most one record builder!
+    Note: Functions can only take at most one old-style record builder!
 
     Tip: You can combine them or apply them separately.
-
     "#
     );
 
     test_report!(
-        unapplied_record_builder,
+        unapplied_old_record_builder,
         indoc!(
             r#"
             { a: <- apply "a" }
             "#
         ),
         @r#"
-    ── UNAPPLIED RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────
+    ── UNAPPLIED OLD-STYLE RECORD BUILDER in /code/proj/Main.roc ───────────────────
 
-    This record builder was not applied to a function:
+    This old-style record builder was not applied to a function:
 
     4│      { a: <- apply "a" }
             ^^^^^^^^^^^^^^^^^^^
@@ -10802,7 +10812,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        record_builder_apply_non_function,
+        old_record_builder_apply_non_function,
         indoc!(
             r#"
             succeed = \_ -> crash ""
@@ -10857,6 +10867,107 @@ In roc, functions are always written as a lambda, like{}
     // );
 
     test_report!(
+        empty_record_builder,
+        indoc!(
+            r#"
+            { a <- }
+            "#
+        ),
+        @r#"
+    ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
+    
+    This record builder has no fields:
+    
+    4│      { a <- }
+            ^^^^^^^^
+    
+    I need at least two fields to combine their values into a record.
+    "#
+    );
+
+    test_report!(
+        single_field_record_builder,
+        indoc!(
+            r#"
+            { a <-
+                b: 123
+            }
+            "#
+        ),
+        @r#"
+    ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
+
+    This record builder only has one field:
+    
+    4│>      { a <-
+    5│>          b: 123
+    6│>      }
+    
+    I need at least two fields to combine their values into a record.
+    "#
+    );
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { a <-
+                b: 123,
+                c? 456
+            }
+            "#
+        ),
+        @r#"
+    ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
+    
+    Optional fields are not allowed to be used in record builders.
+    
+    4│       { a <-
+    5│           b: 123,
+    6│>          c? 456
+    7│       }
+    
+    Record builders can only have required values for their fields.
+    "#
+    );
+
+    // CalledVia::RecordBuilder => {
+    //     alloc.concat([
+    //         alloc.note(""),
+    //         alloc.reflow("Record builders need a mapper function before the "),
+    //         alloc.keyword("<-"),
+    //         alloc.reflow(" to combine fields together with.")
+    //     ])
+    // }
+    // _ => {
+    //     alloc.reflow("Are there any missing commas? Or missing parentheses?")
+
+    test_report!(
+        record_builder_with_non_function_mapper,
+        indoc!(
+            r#"
+            xyz = "abc"
+
+            { xyz <-
+                b: 123,
+                c: 456
+            }
+            "#
+        ),
+        @r#"
+    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+
+    The `xyz` value is not a function, but it was given 3 arguments:
+
+    6│      { xyz <-
+              ^^^
+
+    Note: Record builders need a mapper function before the `<-` to combine
+    fields together with.
+    "#
+    );
+
+    test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(
             r"
@@ -10871,13 +10982,13 @@ In roc, functions are always written as a lambda, like{}
             0
             "
         ),
-        @r"
+        @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
     4│      Pair _ _ = Pair 0 1
-            ^^^^
+            ^^^^^^^^
 
     If you don't need to use the value on the right-hand-side of this
     assignment, consider removing the assignment. Since Roc is purely
@@ -10919,7 +11030,7 @@ In roc, functions are always written as a lambda, like{}
     assignment, consider removing the assignment. Since Roc is purely
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
-    "
+    "###
     );
 
     test_report!(
@@ -11779,6 +11890,30 @@ In roc, functions are always written as a lambda, like{}
     this one. Did you mean one of these?
 
         pf
+    "###
+    );
+
+    test_report!(
+        import_qualified_builtin,
+        indoc!(
+            r#"
+            app [main] { pf: platform "../../tests/platform.roc" }
+
+            import pf.Bool
+
+            main =
+                ""
+            "#
+        ),
+        @r###"
+    [1;36m── FILE NOT FOUND in tmp/import_qualified_builtin/../../tests/Bool.roc ─────────[0m
+
+    I am looking for this file, but it's not there:
+
+        [1;33mtmp/import_qualified_builtin/../../tests/Bool.roc[0m
+
+    Is the file supposed to be there? Maybe there is a typo in the file
+    name?
     "###
     );
 
@@ -14379,4 +14514,38 @@ In roc, functions are always written as a lambda, like{}
     make partial application explicit.
     "
     );
+
+    // TODO: add the following tests after built-in Tasks are added
+    // https://github.com/roc-lang/roc/pull/6836
+
+    // test_report!(
+    // suffixed_stmt_invalid_type,
+    //     indoc!(
+    //         r###"
+    //         app "test" provides [main] to "./platform"
+
+    //         main : Task U64 _ -> _
+    //         main = \task ->
+    //             task!
+    //             42
+    //         "###
+    //     ),
+    //     @r""
+    // );
+
+    // test_report!(
+    // suffixed_expr_invalid_type,
+    //     indoc!(
+    //         r###"
+    //         app "test" provides [main] to "./platform"
+
+    //         main : Task U64 _ -> _
+    //         main = \task ->
+    //             result : U32
+    //             result = task!
+    //             result
+    //         "###
+    //     ),
+    //     @r""
+    // );
 }

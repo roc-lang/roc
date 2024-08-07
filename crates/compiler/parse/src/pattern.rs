@@ -64,9 +64,14 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
             },
             Ok((_, pattern_as, state)) => {
                 let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
-                let pattern = arena
-                    .alloc(pattern.value)
-                    .with_spaces_after(pattern_spaces, pattern.region);
+
+                let mut pattern = pattern;
+                if !pattern_spaces.is_empty() {
+                    pattern = arena
+                        .alloc(pattern.value)
+                        .with_spaces_after(pattern_spaces, pattern.region)
+                }
+
                 let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
 
                 Ok((MadeProgress, Loc::at(region, as_pattern), state))

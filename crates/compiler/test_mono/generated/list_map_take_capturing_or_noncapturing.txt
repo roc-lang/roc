@@ -1,28 +1,78 @@
-procedure List.5 (#Attr.2, #Attr.3):
-    let List.578 : U8 = GetTagId #Attr.3;
-    joinpoint List.579 List.577:
-        ret List.577;
+procedure List.18 (List.166, List.167, List.168):
+    let List.629 : U64 = 0i64;
+    let List.630 : U64 = CallByName List.6 List.166;
+    let List.628 : List U8 = CallByName List.95 List.166 List.167 List.168 List.629 List.630;
+    ret List.628;
+
+procedure List.278 (List.279, List.280, List.276):
+    let List.644 : U8 = GetTagId List.276;
+    joinpoint List.645 List.642:
+        let List.641 : List U8 = CallByName List.71 List.279 List.642;
+        ret List.641;
     in
-    switch List.578:
+    switch List.644:
         case 0:
-            let List.580 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
-            decref #Attr.2;
-            jump List.579 List.580;
+            let List.646 : U8 = CallByName Test.4 List.280 List.276;
+            jump List.645 List.646;
     
         case 1:
-            let List.581 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
-            decref #Attr.2;
-            jump List.579 List.581;
+            let List.646 : U8 = CallByName Test.6 List.280 List.276;
+            jump List.645 List.646;
     
         default:
-            let List.582 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
-            decref #Attr.2;
-            jump List.579 List.582;
+            let List.646 : U8 = CallByName Test.8 List.280;
+            jump List.645 List.646;
     
+
+procedure List.5 (List.275, List.276):
+    let List.277 : U64 = CallByName List.6 List.275;
+    let List.626 : List U8 = CallByName List.68 List.277;
+    let List.625 : List U8 = CallByName List.18 List.275 List.626 List.276;
+    ret List.625;
+
+procedure List.6 (#Attr.2):
+    let List.639 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.639;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.638 : U8 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.638;
+
+procedure List.68 (#Attr.2):
+    let List.647 : List U8 = lowlevel ListWithCapacity #Attr.2;
+    ret List.647;
+
+procedure List.71 (#Attr.2, #Attr.3):
+    let List.643 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.643;
+
+procedure List.95 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+    joinpoint List.631 List.169 List.170 List.171 List.172 List.173:
+        let List.633 : Int1 = CallByName Num.22 List.172 List.173;
+        if List.633 then
+            let List.637 : U8 = CallByName List.66 List.169 List.172;
+            let List.174 : List U8 = CallByName List.278 List.170 List.637 List.171;
+            let List.636 : U64 = 1i64;
+            let List.635 : U64 = CallByName Num.51 List.172 List.636;
+            jump List.631 List.169 List.174 List.171 List.635 List.173;
+        else
+            dec List.169;
+            ret List.170;
+    in
+    inc #Derived_gen.0;
+    jump List.631 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.283 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.283;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.285 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.285;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.284 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.4 (Test.5, #Attr.12):
     let Test.16 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
@@ -44,6 +94,7 @@ procedure Test.0 ():
     joinpoint Test.13 Test.3:
         let Test.11 : List U8 = Array [1i64, 2i64, 3i64];
         let Test.10 : List U8 = CallByName List.5 Test.11 Test.3;
+        dec Test.11;
         ret Test.10;
     in
     let Test.12 : Str = "";

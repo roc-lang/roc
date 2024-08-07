@@ -473,7 +473,8 @@ pub fn find_type_def_symbols(
                 while let Some(assigned_field) = inner_stack.pop() {
                     match assigned_field {
                         AssignedField::RequiredValue(_, _, t)
-                        | AssignedField::OptionalValue(_, _, t) => {
+                        | AssignedField::OptionalValue(_, _, t)
+                        | AssignedField::IgnoredValue(_, _, t) => {
                             stack.push(&t.value);
                         }
                         AssignedField::LabelOnly(_) => {}
@@ -974,19 +975,10 @@ fn can_annotation_help(
             );
 
             if tags.is_empty() {
-                match ext {
-                    Some(_) => {
-                        // just `a` does not mean the same as `[]`, so even
-                        // if there are no fields, still make this a `TagUnion`,
-                        // not an EmptyTagUnion
-                        Type::TagUnion(
-                            Default::default(),
-                            TypeExtension::from_type(ext_type, is_implicit_openness),
-                        )
-                    }
-
-                    None => Type::EmptyTagUnion,
-                }
+                Type::TagUnion(
+                    Default::default(),
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             } else {
                 let mut tag_types = can_tags(
                     env,
@@ -1179,6 +1171,7 @@ fn can_extension_type(
                 local_aliases,
                 references,
             );
+
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
                     && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
@@ -1400,6 +1393,7 @@ fn can_assigned_fields<'a>(
 
                     break 'inner label;
                 }
+                IgnoredValue(_, _, _) => unreachable!(),
                 LabelOnly(loc_field_name) => {
                     // Interpret { a, b } as { a : a, b : b }
                     let field_name = Lowercase::from(loc_field_name.value);

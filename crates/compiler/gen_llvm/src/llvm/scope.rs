@@ -1,6 +1,6 @@
 use inkwell::{
     basic_block::BasicBlock,
-    values::{BasicValueEnum, FunctionValue, PhiValue},
+    values::{BasicValue, BasicValueEnum, FunctionValue, PhiValue, PointerValue},
 };
 use roc_collections::ImMap;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -13,11 +13,17 @@ use roc_mono::{
 pub(crate) struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (InLayout<'a>, BasicValueEnum<'ctx>)>,
     top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
-    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, Vec<PhiValue<'ctx>>)>,
+    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, Vec<JoinPointArg<'ctx>>)>,
 }
 
 #[derive(Debug)]
 pub(crate) struct JoinPointNotFound;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum JoinPointArg<'ctx> {
+    Alloca(PointerValue<'ctx>),
+    Phi(PhiValue<'ctx>),
+}
 
 impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert(&mut self, symbol: Symbol, layout: InLayout<'a>, value: BasicValueEnum<'ctx>) {
@@ -62,7 +68,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         &mut self,
         join_point_id: JoinPointId,
         bb: BasicBlock<'ctx>,
-        phis: Vec<PhiValue<'ctx>>,
+        phis: Vec<JoinPointArg<'ctx>>,
     ) {
         self.join_points.insert(join_point_id, (bb, phis));
     }
@@ -74,7 +80,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn get_join_point(
         &self,
         join_point_id: JoinPointId,
-    ) -> Option<&(BasicBlock<'ctx>, Vec<PhiValue<'ctx>>)> {
+    ) -> Option<&(BasicBlock<'ctx>, Vec<JoinPointArg<'ctx>>)> {
         self.join_points.get(&join_point_id)
     }
 
@@ -89,9 +95,17 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
             .ok_or(JoinPointNotFound)?
             .1;
 
-        for (phi_value, param) in ref_join_points.iter().zip(parameters.into_iter()) {
-            let value = phi_value.as_basic_value();
-            self.symbols.insert(param.symbol, (param.layout, value));
+        for (joinpoint_arg, param) in ref_join_points.iter().zip(parameters.into_iter()) {
+            match joinpoint_arg {
+                crate::llvm::scope::JoinPointArg::Alloca(alloca) => {
+                    self.symbols
+                        .insert(param.symbol, (param.layout, alloca.as_basic_value_enum()));
+                }
+                crate::llvm::scope::JoinPointArg::Phi(phi) => {
+                    self.symbols
+                        .insert(param.symbol, (param.layout, phi.as_basic_value()));
+                }
+            }
         }
 
         Ok(())

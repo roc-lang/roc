@@ -882,7 +882,7 @@ fn platform_parse_error() {
 
     match multiple_modules("platform_parse_error", modules) {
         Err(report) => {
-            assert!(report.contains("NOT END OF FILE"));
+            assert!(report.contains("STATEMENT AFTER EXPRESSION"));
             assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
         }
         Ok(_) => unreachable!("we expect failure here"),
@@ -2151,7 +2151,7 @@ fn roc_file_no_extension() {
         indoc!(
             r#"
             app "helloWorld"
-                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
                 imports [pf.Stdout]
                 provides [main] to pf
 
