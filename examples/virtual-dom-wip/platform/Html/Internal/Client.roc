@@ -4,8 +4,7 @@ module [
     dispatchEvent,
 ]
 
-import Effect exposing [
-    Effect,
+import PlatformTask exposing [
     NodeId,
     HandlerId,
     TagName,
@@ -81,16 +80,16 @@ DiffState state : { rendered : RenderedTree state, patches : List Patch }
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initClientApp : List U8, App state initData -> Effect (PlatformState state initData) where initData implements Decoding
+initClientApp : List U8, App state initData -> Task (PlatformState state initData) * where initData implements Decoding
 initClientApp = \json, app ->
     # Initialise the Roc representation of the rendered DOM, and calculate patches (for event listeners)
     { state, rendered, patches } =
         initClientAppHelp json app
 
     # Call out to JS to patch the DOM, attaching the event listeners
-    _ <- applyPatches patches |> Effect.after
+    applyPatches! patches
 
-    Effect.always {
+    Task.ok {
         app,
         state,
         rendered,
@@ -162,30 +161,28 @@ indexNodes = \{ nodes, siblingIds }, unrendered ->
 # -------------------------------
 #   Patches
 # -------------------------------
-applyPatch : Patch -> Effect {}
+applyPatch : Patch -> Task {} *
 applyPatch = \patch ->
     when patch is
-        CreateElement nodeId tagName -> Effect.createElement nodeId tagName
-        CreateTextNode nodeId content -> Effect.createTextNode nodeId content
-        UpdateTextNode nodeId content -> Effect.updateTextNode nodeId content
-        AppendChild parentId childId -> Effect.appendChild parentId childId
-        RemoveNode id -> Effect.removeNode id
-        ReplaceNode oldId newId -> Effect.replaceNode oldId newId
-        SetAttribute nodeId attrName value -> Effect.setAttribute nodeId attrName value
-        RemoveAttribute nodeId attrName -> Effect.removeAttribute nodeId attrName
-        SetProperty nodeId propName json -> Effect.setProperty nodeId propName json
-        RemoveProperty nodeId propName -> Effect.removeProperty nodeId propName
-        SetStyle nodeId key value -> Effect.setStyle nodeId key value
-        SetListener nodeId eventType accessorsJson handlerId -> Effect.setListener nodeId eventType accessorsJson handlerId
-        RemoveListener nodeId handlerId -> Effect.removeListener nodeId handlerId
+        CreateElement nodeId tagName -> PlatformTask.createElement nodeId tagName
+        CreateTextNode nodeId content -> PlatformTask.createTextNode nodeId content
+        UpdateTextNode nodeId content -> PlatformTask.updateTextNode nodeId content
+        AppendChild parentId childId -> PlatformTask.appendChild parentId childId
+        RemoveNode id -> PlatformTask.removeNode id
+        ReplaceNode oldId newId -> PlatformTask.replaceNode oldId newId
+        SetAttribute nodeId attrName value -> PlatformTask.setAttribute nodeId attrName value
+        RemoveAttribute nodeId attrName -> PlatformTask.removeAttribute nodeId attrName
+        SetProperty nodeId propName json -> PlatformTask.setProperty nodeId propName json
+        RemoveProperty nodeId propName -> PlatformTask.removeProperty nodeId propName
+        SetStyle nodeId key value -> PlatformTask.setStyle nodeId key value
+        SetListener nodeId eventType accessorsJson handlerId -> PlatformTask.setListener nodeId eventType accessorsJson handlerId
+        RemoveListener nodeId handlerId -> PlatformTask.removeListener nodeId handlerId
 
-walkPatches : Effect {}, Patch -> Effect {}
-walkPatches = \previousEffects, patch ->
-    Effect.after previousEffects \{} -> applyPatch patch
-
-applyPatches : List Patch -> Effect {}
+applyPatches : List Patch -> Task {} *
 applyPatches = \patches ->
-    List.walk patches (Effect.always {}) walkPatches
+    List.walk patches (Task.ok {}) \previousEffects, patch ->
+        previousEffects!
+        applyPatch patch
 
 # -------------------------------
 #   EVENT HANDLING
@@ -197,7 +194,7 @@ JsEventResult state initData : {
 }
 
 ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
-dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Effect (JsEventResult state initData) where initData implements Decoding
+dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Task (JsEventResult state initData) * where initData implements Decoding
 dispatchEvent = \platformState, eventData, handlerId ->
     { app, state, rendered } =
         platformState
@@ -222,8 +219,8 @@ dispatchEvent = \platformState, eventData, handlerId ->
             { rendered: newRendered, patches } =
                 diff { rendered, patches: [] } newViewUnrendered
 
-            _ <- applyPatches patches |> Effect.after
-            Effect.always {
+            applyPatches! patches
+            Task.ok {
                 platformState: {
                     app,
                     state: newState,
@@ -234,7 +231,7 @@ dispatchEvent = \platformState, eventData, handlerId ->
             }
 
         None ->
-            Effect.always { platformState, stopPropagation, preventDefault }
+            Task.ok { platformState, stopPropagation, preventDefault }
 
 # -------------------------------
 #   DIFF

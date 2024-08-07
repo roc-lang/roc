@@ -1,7 +1,6 @@
-app "rbtree-del"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
+
+import pf.PlatformTask
 
 Color : [Red, Black]
 
@@ -11,9 +10,9 @@ Map : Tree I64 Bool
 
 ConsList a : [Nil, Cons a (ConsList a)]
 
-main : Task.Task {} []
+main : Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    inputResult = PlatformTask.getInt!
 
     when inputResult is
         Ok n ->
@@ -22,10 +21,10 @@ main =
 
             val
             |> Num.toStr
-            |> Task.putLine
+            |> PlatformTask.putLine
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+            PlatformTask.putLine "Error: Failed to get Integer from stdin."
 
 boom : Str -> a
 boom = \_ -> boom ""

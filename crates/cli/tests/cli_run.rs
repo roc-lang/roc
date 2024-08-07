@@ -748,11 +748,11 @@ mod cli_run {
                 r#"
                 Compiled in <ignored for test> ms.
 
-                Direct.roc:
-                    0 failed and 2 passed in <ignored for test> ms.
-
                 Transitive.roc:
                     0 failed and 1 passed in <ignored for test> ms.
+
+                Direct.roc:
+                    0 failed and 2 passed in <ignored for test> ms.
                 "#
             ),
         );
@@ -1493,7 +1493,7 @@ mod cli_run {
 
                 But the type annotation on main says it should be:
 
-                    Effect.Effect (Result {} [])
+                    Task {} []
 
                 Tip: Add type annotations to functions or values to help you figure
                 this out.
@@ -1568,30 +1568,6 @@ mod cli_run {
                 ────────────────────────────────────────────────────────────────────────────────
 
                 0 errors and 1 warning found in <ignored for test> ms."#
-            ),
-        );
-    }
-
-    #[test]
-    fn unknown_generates_with() {
-        check_compile_error(
-            &known_bad_file("UnknownGeneratesWith.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
-
-                I don't know how to generate the foobar function.
-
-                4│      generates Effect with [after, map, always, foobar]
-                                                                   ^^^^^^
-
-                Only specific functions like `after` and `map` can be generated.Learn
-                more about hosted modules at TODO.
-
-                ────────────────────────────────────────────────────────────────────────────────
-
-                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

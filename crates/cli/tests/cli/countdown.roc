@@ -2,18 +2,17 @@ app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downlo
 
 import pf.Stdin
 import pf.Stdout
-import pf.Task exposing [await, loop]
 
 main =
-    _ <- await (Stdout.line "\nLet's count down from 3 together - all you have to do is press <ENTER>.")
-    _ <- await Stdin.line
-    loop 3 tick
+    _ <- Task.await (Stdout.line "\nLet's count down from 3 together - all you have to do is press <ENTER>.")
+    _ <- Task.await Stdin.line
+    Task.loop 3 tick
 
 tick = \n ->
     if n == 0 then
-        _ <- await (Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂")
+        _ <- Task.await (Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂")
         Task.ok (Done {})
     else
-        _ <- await (n |> Num.toStr |> \s -> "$(s)..." |> Stdout.line)
-        _ <- await Stdin.line
+        _ <- Task.await (n |> Num.toStr |> \s -> "$(s)..." |> Stdout.line)
+        _ <- Task.await Stdin.line
         Task.ok (Step (n - 1))

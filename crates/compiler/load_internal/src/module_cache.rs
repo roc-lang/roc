@@ -91,6 +91,7 @@ impl Default for ModuleCache<'_> {
             DECODE,
             HASH,
             INSPECT,
+            TASK,
         }
 
         Self {

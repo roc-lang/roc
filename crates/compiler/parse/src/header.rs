@@ -10,7 +10,7 @@ use crate::parser::{
 };
 use crate::parser::{optional, then};
 use crate::string_literal;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::ModuleId;
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
@@ -47,14 +47,11 @@ pub enum HeaderType<'a> {
     Hosted {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
-        generates: UppercaseIdent<'a>,
-        generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
         name: ModuleName<'a>,
         exposes: &'a [Loc<ExposedName<'a>>],
-        generates_with: &'a [Symbol],
     },
     Package {
         /// usually something other than `pf`
@@ -104,11 +101,9 @@ impl<'a> HeaderType<'a> {
 
     pub fn to_maybe_builtin(self, module_id: ModuleId) -> Self {
         match self {
-            HeaderType::Module { name, exposes } if module_id.is_builtin() => HeaderType::Builtin {
-                name,
-                exposes,
-                generates_with: &[],
-            },
+            HeaderType::Module { name, exposes } if module_id.is_builtin() => {
+                HeaderType::Builtin { name, exposes }
+            }
             _ => self,
         }
     }
@@ -225,8 +220,6 @@ macro_rules! keywords {
 
 keywords! {
     ExposesKeyword => "exposes",
-    WithKeyword => "with",
-    GeneratesKeyword => "generates",
     PackageKeyword => "package",
     PackagesKeyword => "packages",
     RequiresKeyword => "requires",
@@ -270,10 +263,6 @@ pub struct HostedHeader<'a> {
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 
     pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
-
-    pub generates: KeywordItem<'a, GeneratesKeyword, UppercaseIdent<'a>>,
-    pub generates_with:
-        KeywordItem<'a, WithKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -352,7 +341,7 @@ pub enum ImportsEntry<'a> {
 
 /// e.g.
 ///
-/// printLine : Str -> Effect {}
+/// printLine : Str -> Result {} *
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TypedIdent<'a> {
     pub ident: Loc<&'a str>,

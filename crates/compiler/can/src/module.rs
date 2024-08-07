@@ -3,7 +3,6 @@ use std::path::Path;
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
-use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{
     ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
@@ -23,7 +22,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{AbilitySet, Alias, AliasKind, AliasVar, Type};
+use roc_types::types::{AbilitySet, Alias, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -161,98 +160,6 @@ pub struct ModuleOutput {
     pub loc_dbgs: VecMap<Symbol, DbgLookup>,
 }
 
-fn validate_generate_with<'a>(
-    generate_with: &'a [Loc<roc_parse::header::ExposedName<'a>>],
-) -> (HostedGeneratedFunctions, Vec<Loc<Ident>>) {
-    let mut functions = HostedGeneratedFunctions::default();
-    let mut unknown = Vec::new();
-
-    for generated in generate_with {
-        match generated.value.as_str() {
-            "after" => functions.after = true,
-            "map" => functions.map = true,
-            "always" => functions.always = true,
-            "loop" => functions.loop_ = true,
-            "forever" => functions.forever = true,
-            other => {
-                // we don't know how to generate this function
-                let ident = Ident::from(other);
-                unknown.push(Loc::at(generated.region, ident));
-            }
-        }
-    }
-
-    (functions, unknown)
-}
-
-#[derive(Debug)]
-enum GeneratedInfo {
-    Hosted {
-        effect_symbol: Symbol,
-        generated_functions: HostedGeneratedFunctions,
-    },
-    Builtin,
-    NotSpecial,
-}
-
-impl GeneratedInfo {
-    fn from_header_type(
-        env: &mut Env,
-        scope: &mut Scope,
-        var_store: &mut VarStore,
-        header_type: &HeaderType,
-    ) -> Self {
-        match header_type {
-            HeaderType::Hosted {
-                generates,
-                generates_with,
-                name: _,
-                exposes: _,
-            } => {
-                let name: &str = generates.into();
-                let (generated_functions, unknown_generated) =
-                    validate_generate_with(generates_with);
-
-                for unknown in unknown_generated {
-                    env.problem(Problem::UnknownGeneratesWith(unknown));
-                }
-
-                let effect_symbol = scope.introduce(name.into(), Region::zero()).unwrap();
-
-                {
-                    let a_var = var_store.fresh();
-
-                    let actual =
-                        crate::effect_module::build_effect_actual(Type::Variable(a_var), var_store);
-
-                    scope.add_alias(
-                        effect_symbol,
-                        Region::zero(),
-                        vec![Loc::at_zero(AliasVar::unbound("a".into(), a_var))],
-                        vec![],
-                        actual,
-                        AliasKind::Opaque,
-                    );
-                }
-
-                GeneratedInfo::Hosted {
-                    effect_symbol,
-                    generated_functions,
-                }
-            }
-            HeaderType::Builtin {
-                generates_with,
-                name: _,
-                exposes: _,
-            } => {
-                debug_assert!(generates_with.is_empty());
-                GeneratedInfo::Builtin
-            }
-            _ => GeneratedInfo::NotSpecial,
-        }
-    }
-}
-
 fn has_no_implementation(expr: &Expr) -> bool {
     match expr {
         Expr::RuntimeError(RuntimeError::NoImplementationNamed { .. }) => true,
@@ -320,9 +227,6 @@ pub fn canonicalize_module_defs<'a>(
         );
     }
 
-    let generated_info =
-        GeneratedInfo::from_header_type(&mut env, &mut scope, var_store, header_type);
-
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -335,7 +239,7 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut rigid_variables = RigidVariables::default();
 
-    // Iniital scope values are treated like defs that appear before any others.
+    // Initial scope values are treated like defs that appear before any others.
     // They include builtin types that are automatically imported, and for a platform
     // package, the required values from the app.
     //
@@ -495,24 +399,6 @@ pub fn canonicalize_module_defs<'a>(
 
     report_unused_imports(imports_introduced, &output.references, &mut env, &mut scope);
 
-    if let GeneratedInfo::Hosted {
-        effect_symbol,
-        generated_functions,
-    } = generated_info
-    {
-        let mut exposed_symbols = VecSet::default();
-
-        // NOTE this currently builds all functions, not just the ones that the user requested
-        crate::effect_module::build_effect_builtins(
-            &mut scope,
-            effect_symbol,
-            var_store,
-            &mut exposed_symbols,
-            &mut declarations,
-            generated_functions,
-        );
-    }
-
     for index in 0..declarations.len() {
         use crate::expr::DeclarationTag::*;
 
@@ -533,8 +419,8 @@ pub fn canonicalize_module_defs<'a>(
                 // and which are meant to be normal definitions without a body. So for now
                 // we just assume they are hosted functions (meant to be provided by the platform)
                 if has_no_implementation(&declarations.expressions[index].value) {
-                    match generated_info {
-                        GeneratedInfo::Builtin => {
+                    match header_type {
+                        HeaderType::Builtin { .. } => {
                             match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                 None => {
                                     internal_error!("A builtin module contains a signature without implementation for {:?}", symbol)
@@ -544,7 +430,7 @@ pub fn canonicalize_module_defs<'a>(
                                 }
                             }
                         }
-                        GeneratedInfo::Hosted { effect_symbol, .. } => {
+                        HeaderType::Hosted { .. } => {
                             let ident_id = symbol.ident_id();
                             let ident = scope
                                 .locals
@@ -562,13 +448,8 @@ pub fn canonicalize_module_defs<'a>(
                                 aliases: Default::default(),
                             };
 
-                            let hosted_def = crate::effect_module::build_host_exposed_def(
-                                &mut scope,
-                                *symbol,
-                                &ident,
-                                effect_symbol,
-                                var_store,
-                                annotation,
+                            let hosted_def = crate::task_module::build_host_exposed_def(
+                                &mut scope, *symbol, &ident, var_store, annotation,
                             );
 
                             declarations.update_builtin_def(index, hosted_def);
@@ -591,8 +472,8 @@ pub fn canonicalize_module_defs<'a>(
                 // and which are meant to be normal definitions without a body. So for now
                 // we just assume they are hosted functions (meant to be provided by the platform)
                 if has_no_implementation(&declarations.expressions[index].value) {
-                    match generated_info {
-                        GeneratedInfo::Builtin => {
+                    match header_type {
+                        HeaderType::Builtin { .. } => {
                             match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                 None => {
                                     internal_error!("A builtin module contains a signature without implementation for {:?}", symbol)
@@ -602,7 +483,7 @@ pub fn canonicalize_module_defs<'a>(
                                 }
                             }
                         }
-                        GeneratedInfo::Hosted { effect_symbol, .. } => {
+                        HeaderType::Hosted { .. } => {
                             let ident_id = symbol.ident_id();
                             let ident = scope
                                 .locals
@@ -620,13 +501,8 @@ pub fn canonicalize_module_defs<'a>(
                                 aliases: Default::default(),
                             };
 
-                            let hosted_def = crate::effect_module::build_host_exposed_def(
-                                &mut scope,
-                                *symbol,
-                                &ident,
-                                effect_symbol,
-                                var_store,
-                                annotation,
+                            let hosted_def = crate::task_module::build_host_exposed_def(
+                                &mut scope, *symbol, &ident, var_store, annotation,
                             );
 
                             declarations.update_builtin_def(index, hosted_def);
@@ -651,18 +527,6 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut aliases = MutMap::default();
-
-    if let GeneratedInfo::Hosted { effect_symbol, .. } = generated_info {
-        // Remove this from exposed_symbols,
-        // so that at the end of the process,
-        // we can see if there were any
-        // exposed symbols which did not have
-        // corresponding defs.
-        exposed_but_not_defined.remove(&effect_symbol);
-
-        let hosted_alias = scope.lookup_alias(effect_symbol).unwrap().clone();
-        aliases.insert(effect_symbol, hosted_alias);
-    }
 
     for (symbol, alias) in output.aliases {
         // Remove this from exposed_symbols,

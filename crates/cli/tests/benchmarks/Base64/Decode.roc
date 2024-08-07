@@ -1,4 +1,4 @@
-interface Base64.Decode exposes [fromBytes] imports []
+module [fromBytes]
 
 import Bytes.Decode exposing [ByteDecoder, DecodeProblem]
 
