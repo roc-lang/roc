@@ -2,10 +2,10 @@ use brotli::enc::BrotliEncoderParams;
 use bumpalo::Bump;
 use flate2::write::GzEncoder;
 use roc_parse::ast::{
-    Header, IngestedFileImport, Module, RecursiveValueDefIter, StrLiteral, ValueDef,
+    Header, IngestedFileImport, RecursiveValueDefIter, SpacesBefore, StrLiteral, ValueDef,
 };
 use roc_parse::header::PlatformHeader;
-use roc_parse::module::{parse_header, parse_module_defs};
+use roc_parse::header::{parse_header, parse_module_defs};
 use roc_parse::state::State;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -129,7 +129,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
 
     // TODO use this when finding .roc files by discovering them from the root module.
     // let other_modules: &[Module<'_>] =
-    match read_header(&arena, &mut buf, path)?.0.header {
+    match read_header(&arena, &mut buf, path)?.0.item {
         Header::Module(_) => {
             todo!();
             // TODO report error
@@ -261,7 +261,7 @@ fn read_header<'a>(
     arena: &'a Bump,
     buf: &'a mut Vec<u8>,
     path: &'a Path,
-) -> io::Result<(Module<'a>, State<'a>)> {
+) -> io::Result<(SpacesBefore<'a, Header<'a>>, State<'a>)> {
     // Read all the bytes into the buffer.
     {
         let mut file = File::open(path)?;
@@ -287,8 +287,8 @@ fn add_ingested_files<W: Write>(
     builder: &mut tar::Builder<W>,
 ) -> io::Result<()> {
     let mut buf = Vec::new();
-    let (module, state) = read_header(arena, &mut buf, dot_roc_path)?;
-    let (_, defs) = module.upgrade_header_imports(arena);
+    let (header, state) = read_header(arena, &mut buf, dot_roc_path)?;
+    let (_, defs) = header.item.upgrade_header_imports(arena);
 
     let defs = parse_module_defs(arena, state, defs).unwrap_or_else(|err| {
         panic!("{} failed to parse: {:?}", dot_roc_path.display(), err);

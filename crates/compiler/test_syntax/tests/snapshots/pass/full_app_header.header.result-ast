@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: App(
+SpacesBefore {
+    before: [],
+    item: App(
         AppHeader {
             before_provides: [],
             provides: [

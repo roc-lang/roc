@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Hosted(
+SpacesBefore {
+    before: [],
+    item: Hosted(
         HostedHeader {
             before_name: [],
             name: @7-10 ModuleName(

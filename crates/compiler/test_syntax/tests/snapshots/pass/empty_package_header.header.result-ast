@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Package(
+SpacesBefore {
+    before: [],
+    item: Package(
         PackageHeader {
             before_exposes: [],
             exposes: [],

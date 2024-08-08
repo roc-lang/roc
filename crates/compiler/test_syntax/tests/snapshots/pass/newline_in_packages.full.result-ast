@@ -1,81 +1,83 @@
-Full {
-    header: Module {
-        comments: [],
-        header: App(
-            AppHeader {
-                before_provides: [],
-                provides: [
-                    @5-9 ExposedName(
-                        "main",
-                    ),
-                ],
-                before_packages: [],
-                packages: @11-134 [
-                    @13-132 SpaceAfter(
-                        PackageEntry {
-                            shorthand: "pf",
-                            spaces_after_shorthand: [
+Full(
+    Full {
+        header: SpacesBefore {
+            before: [],
+            item: App(
+                AppHeader {
+                    before_provides: [],
+                    provides: [
+                        @5-9 ExposedName(
+                            "main",
+                        ),
+                    ],
+                    before_packages: [],
+                    packages: @11-134 [
+                        @13-132 SpaceAfter(
+                            PackageEntry {
+                                shorthand: "pf",
+                                spaces_after_shorthand: [
+                                    Newline,
+                                ],
+                                platform_marker: None,
+                                package_name: @17-132 PackageName(
+                                    "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br",
+                                ),
+                            },
+                            [
                                 Newline,
                             ],
-                            platform_marker: None,
-                            package_name: @17-132 PackageName(
-                                "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br",
-                            ),
-                        },
+                        ),
+                    ],
+                    old_imports: None,
+                    old_provides_to_new_package: None,
+                },
+            ),
+        },
+        defs: Defs {
+            tags: [
+                Index(2147483648),
+            ],
+            regions: [
+                @136-183,
+            ],
+            space_before: [
+                Slice(start = 0, length = 2),
+            ],
+            space_after: [
+                Slice(start = 2, length = 1),
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @136-140 Identifier {
+                        ident: "main",
+                    },
+                    @147-183 SpaceBefore(
+                        Apply(
+                            @147-158 Var {
+                                module_name: "Stdout",
+                                ident: "line",
+                            },
+                            [
+                                @159-183 Str(
+                                    PlainLine(
+                                        "I'm a Roc application!",
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
                         [
                             Newline,
                         ],
                     ),
-                ],
-                old_imports: None,
-                old_provides_to_new_package: None,
-            },
-        ),
-    },
-    module_defs: Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @136-183,
-        ],
-        space_before: [
-            Slice(start = 0, length = 2),
-        ],
-        space_after: [
-            Slice(start = 2, length = 1),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @136-140 Identifier {
-                    ident: "main",
-                },
-                @147-183 SpaceBefore(
-                    Apply(
-                        @147-158 Var {
-                            module_name: "Stdout",
-                            ident: "line",
-                        },
-                        [
-                            @159-183 Str(
-                                PlainLine(
-                                    "I'm a Roc application!",
-                                ),
-                            ),
-                        ],
-                        Space,
-                    ),
-                    [
-                        Newline,
-                    ],
                 ),
-            ),
-        ],
+            ],
+        },
     },
-}
+)

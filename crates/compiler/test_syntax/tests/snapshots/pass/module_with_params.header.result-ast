@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Module(
+SpacesBefore {
+    before: [],
+    item: Module(
         ModuleHeader {
             after_keyword: [],
             params: Some(

@@ -6,18 +6,11 @@ pub mod annotation;
 pub mod collection;
 pub mod def;
 pub mod expr;
-pub mod module;
+pub mod header;
 pub mod pattern;
 pub mod spaces;
 
 use bumpalo::{collections::String, Bump};
-use roc_parse::ast::Module;
-
-#[derive(Debug)]
-pub struct Ast<'a> {
-    pub module: Module<'a>,
-    pub defs: roc_parse::ast::Defs<'a>,
-}
 
 #[derive(Debug)]
 pub struct Buf<'a> {

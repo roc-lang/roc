@@ -16,7 +16,7 @@ mod test_reporting {
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_packaging::cache::RocCacheDir;
-    use roc_parse::module::parse_header;
+    use roc_parse::header::parse_header;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_problem::Severity;
@@ -359,7 +359,7 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
 
-        match roc_parse::module::parse_header(arena, state) {
+        match roc_parse::header::parse_header(arena, state) {
             Err(fail) => {
                 let interns = Interns::default();
                 let home = crate::helpers::test_home();
@@ -10875,12 +10875,12 @@ All branches in an `if` must have the same type!
         ),
         @r#"
     ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
-    
+
     This record builder has no fields:
-    
+
     4│      { a <- }
             ^^^^^^^^
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10898,11 +10898,11 @@ All branches in an `if` must have the same type!
     ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
 
     This record builder only has one field:
-    
+
     4│>      { a <-
     5│>          b: 123
     6│>      }
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10919,14 +10919,14 @@ All branches in an `if` must have the same type!
         ),
         @r#"
     ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
-    
+
     Optional fields are not allowed to be used in record builders.
-    
+
     4│       { a <-
     5│           b: 123,
     6│>          c? 456
     7│       }
-    
+
     Record builders can only have required values for their fields.
     "#
     );
