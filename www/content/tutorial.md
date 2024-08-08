@@ -1053,7 +1053,7 @@ You can read `List Str` as "a list of strings." Here, `Str` is a _type parameter
 
 ### [Wildcard Types (\*)](#wildcard-type) {#wildcard-type}
 
-There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty` has this type:
+There are some functions that work on any list, regardless of their type parameter. For example, `List.isEmpty` has this type:
 
 ```roc
 isEmpty : List * -> Bool
@@ -1062,6 +1062,14 @@ isEmpty : List * -> Bool
 The `*` is a _wildcard type_; a type that's compatible with any other type. `List *` is compatible with any type of `List` like `List Str`, `List Bool`, and so on. So you can call `List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [Bool.true]`, and they will both work fine.
 
 The wildcard type also comes up with empty lists. Suppose we have one function that takes a `List Str` and another function that takes a `List Bool`. We might reasonably expect to be able to pass an empty list (that is, `[]`) to either of these functions, and we can! This is because a `[]` value has the type `List *`. It is a "list with a wildcard type parameter", or a "list whose element type could be anything."
+
+Let's test your understanding, for a function with the signature `List * -> List *`, what kind of arguments would it accept and what would it return? Take a moment to think.
+
+- The function could only return `[]`. Remember, the wildcard type means **any** type, so our function `List * -> List *` **must** return a list that can contain **any** type. The only specific list that would fit the description is the empty list. 
+- Note the function would not only accept `[]` as argument, but any list!
+Function arguments are allowed to be broad/general but the values you return must be specific.
+
+Another way to think about the wildcard type is as a "type variable whose name appears nowhere else in this type anotation". Behind the scenes we convert `List * -> List *` to `List a -> List b`.
 
 ### [Type Variables](#type-variables) {#type-variables}
 
