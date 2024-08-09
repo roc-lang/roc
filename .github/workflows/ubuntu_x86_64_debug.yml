@@ -31,6 +31,9 @@ jobs:
             sudo ln -s /usr/bin/lld-16 /usr/bin/ld.lld
             sudo apt -y install libpolly-16-dev
 
+        - name: Check if debug flag files are in sync
+          run: ./ci/check_debug_vars.sh
+
         # for skipped tests; see #6946, #6947
         - name: cargo test without --release
           env:
