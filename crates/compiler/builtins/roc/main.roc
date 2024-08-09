@@ -12,4 +12,5 @@ package [
     Box,
     Inspect,
     Task,
+    Crypt,
 ] {}
