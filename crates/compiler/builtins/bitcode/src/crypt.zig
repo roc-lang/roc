@@ -5,19 +5,19 @@ const list = @import("list.zig");
 const utils = @import("utils.zig");
 
 const Sha256 = extern struct{
-    location:usize,
+    location:[*]u8,
     fn pointer(self : Sha256) *sha2.Sha256{
-        return @ptrFromInt(self.location);
+        return @alignCast(@ptrCast(self.location));
     }
     };
 
 const EmptyStruct = extern struct{};
 
 pub fn emptySha256(_: EmptyStruct) callconv(.C) Sha256{
-    const allocation = utils.allocateWithRefcount(@sizeOf(sha2.Sha256), @alignOf(sha2.Sha256));
+    const allocation = utils.allocateWithRefcount(@sizeOf(sha2.Sha256), @alignOf(sha2.Sha256), false);
     const ptr:*sha2.Sha256 = @alignCast(@ptrCast(allocation));
     ptr.* = sha2.Sha256.init(.{});
-    return Sha256{.location = @intFromPtr(ptr),};
+    return Sha256{.location = @alignCast(@ptrCast(ptr)),};
 }
 
 pub fn addBytes(sha: Sha256, data: list.RocList) callconv(.C) Sha256{
