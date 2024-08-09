@@ -35,4 +35,5 @@ jobs:
         - name: cargo test without --release
           env:
             RUSTFLAGS: -C link-arg=-fuse-ld=lld
+            ROC_CHECK_MONO_IR: 1
           run: cargo test -- --skip tests/exhaustive/match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax.txt --skip tests::identity_lambda --skip tests::issue_2300 --skip tests::issue_2582_specialize_result_value --skip tests::sum_lambda
