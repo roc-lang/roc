@@ -11,4 +11,5 @@ package [
     Hash,
     Box,
     Inspect,
+    Crypt,
 ] {}
