@@ -257,6 +257,7 @@ jobs:
         run: |
           cd basic-cli-platform
           # no need to build platform anymore
+          # TODO ditch sed in favor of NO_BUILD=1, see basic-cli#241
           sed -i '/build\.roc\|jump-start\.sh/d' ./ci/all_tests.sh
           # temp for debugging
           sed -i 's/# exp_internal 1/exp_internal 1/' ./ci/expect_scripts/args.exp
