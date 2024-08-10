@@ -2919,16 +2919,17 @@ fn list_literal<'a, 'ctx>(
     // Nested pointers in globals will break the surgical linker.
     // For now, block them from being constants.
     let is_refcounted = layout_interner.contains_refcounted(element_layout);
+    // NOTE: we should be able to create a constant of records, but these literals are only primitives.
     let is_all_constant = elems.iter().all(|e| e.is_literal());
 
     if is_all_constant && !is_refcounted {
-        let element_type = element_type.into_int_type();
-
         let element_width = layout_interner.stack_size(element_layout);
 
-        let refcount_slot_bytes = layout_interner
+        let alignment = layout_interner
             .alignment_bytes(element_layout)
-            .max(env.target.ptr_width() as u32) as usize;
+            .max(env.target.ptr_width() as u32);
+
+        let refcount_slot_bytes = alignment as usize;
 
         let refcount_slot_elements =
             (refcount_slot_bytes as f64 / element_width as f64).ceil() as usize;
@@ -2937,28 +2938,53 @@ fn list_literal<'a, 'ctx>(
 
         assert!(refcount_slot_elements > 0);
 
-        let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
+        // There must be a generic way to do this, but types here are making me duplicate code.
+        let global = if element_type.is_int_type() {
+            let element_type = element_type.into_int_type();
+            let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
 
-        // Fill the refcount slot with nulls
-        for _ in 0..(refcount_slot_elements) {
-            bytes.push(element_type.const_zero());
-        }
+            // Fill the refcount slot with nulls
+            for _ in 0..(refcount_slot_elements) {
+                bytes.push(element_type.const_zero());
+            }
 
-        // Copy the elements from the list literal into the array
-        for element in elems.iter() {
-            let literal = element.get_literal().expect("is_all_constant is true");
-            let val = build_exp_literal(env, layout_interner, element_layout, &literal);
-            bytes.push(val.into_int_value());
-        }
+            // Copy the elements from the list literal into the array
+            for element in elems.iter() {
+                let literal = element.get_literal().expect("is_all_constant is true");
+                let val = build_exp_literal(env, layout_interner, element_layout, &literal);
+                bytes.push(val.into_int_value());
+            }
 
-        let alignment = layout_interner
-            .alignment_bytes(element_layout)
-            .max(env.target.ptr_width() as u32);
+            let typ = element_type.array_type(bytes.len() as u32);
+            let global = env.module.add_global(typ, None, "roc__list_literal");
 
-        let typ = element_type.array_type(bytes.len() as u32);
-        let global = env.module.add_global(typ, None, "roc__list_literal");
+            global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+            global
+        } else if element_type.is_float_type() {
+            let element_type = element_type.into_float_type();
+            let mut bytes = Vec::with_capacity_in(refcount_slot_elements + data_bytes, env.arena);
 
-        global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+            // Fill the refcount slot with nulls
+            for _ in 0..(refcount_slot_elements) {
+                bytes.push(element_type.const_zero());
+            }
+
+            // Copy the elements from the list literal into the array
+            for element in elems.iter() {
+                let literal = element.get_literal().expect("is_all_constant is true");
+                let val = build_exp_literal(env, layout_interner, element_layout, &literal);
+                bytes.push(val.into_float_value());
+            }
+
+            let typ = element_type.array_type(bytes.len() as u32);
+            let global = env.module.add_global(typ, None, "roc__list_literal");
+
+            global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
+            global
+        } else {
+            internal_error!("unexpected element type: {:?}", element_type);
+        };
+
         global.set_constant(true);
         global.set_alignment(alignment);
         global.set_unnamed_addr(true);
