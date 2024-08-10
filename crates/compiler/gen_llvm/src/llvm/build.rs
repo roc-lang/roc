@@ -2915,9 +2915,13 @@ fn list_literal<'a, 'ctx>(
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
 
+    // Anything that requires refcounting contains nested pointers.
+    // Nested pointers in globals will break the surgical linker.
+    // For now, block them from being constants.
+    let is_refcounted = layout_interner.contains_refcounted(element_layout);
     let is_all_constant = elems.iter().all(|e| e.is_literal());
 
-    if is_all_constant {
+    if is_all_constant && !is_refcounted {
         let element_type = element_type.into_int_type();
 
         let element_width = layout_interner.stack_size(element_layout);
@@ -2947,18 +2951,26 @@ fn list_literal<'a, 'ctx>(
             bytes.push(val.into_int_value());
         }
 
+        let alignment = layout_interner
+            .alignment_bytes(element_layout)
+            .max(env.target.ptr_width() as u32);
+
         let typ = element_type.array_type(bytes.len() as u32);
         let global = env.module.add_global(typ, None, "roc__list_literal");
 
         global.set_initializer(&element_type.const_array(bytes.into_bump_slice()));
         global.set_constant(true);
-        global.set_alignment(layout_interner.alignment_bytes(element_layout));
+        global.set_alignment(alignment);
         global.set_unnamed_addr(true);
         global.set_linkage(inkwell::module::Linkage::Private);
 
+        // Currently, morphic will break if we use the global directly.
+        // It will attempt to update the global in place.
+        // This is invalid due to putting the global in the read only section.
+        // For now, eagerly copy the global into a new allocation with unique refcount.
         let with_rc_ptr = global.as_pointer_value();
 
-        let data_ptr = unsafe {
+        let const_data_ptr = unsafe {
             env.builder.new_build_in_bounds_gep(
                 element_type,
                 with_rc_ptr,
@@ -2968,6 +2980,15 @@ fn list_literal<'a, 'ctx>(
                 "get_data_ptr",
             )
         };
+
+        let data_ptr = allocate_list(env, layout_interner, element_layout, list_length_intval);
+
+        let byte_size = env
+            .ptr_int()
+            .const_int(list_length as u64 * element_width as u64, false);
+        builder
+            .build_memcpy(data_ptr, alignment, const_data_ptr, alignment, byte_size)
+            .unwrap();
 
         super::build_list::store_list(env, data_ptr, list_length_intval).into()
     } else {
