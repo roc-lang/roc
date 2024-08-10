@@ -2220,7 +2220,7 @@ fn single_tag_payload_fields<'a, 'b>(
 ) -> (String, RocSingleTagPayload) {
     let layout = env.layout_cache.interner.get(in_layout);
 
-    if std::env::var_os("SINGLE_TAG_GLUE_CHECK_OFF").as_deref() != Some("1") {
+    if std::env::var("SINGLE_TAG_GLUE_CHECK_OFF").as_deref() != Ok("1") {
         // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
         // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
         // anyway just so we have some warning in case that relationship somehow didn't hold!
