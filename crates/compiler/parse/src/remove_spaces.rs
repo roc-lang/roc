@@ -1,4 +1,4 @@
-use bumpalo::collections::Vec;
+use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
@@ -598,10 +598,101 @@ impl<'a> RemoveSpaces<'a> for StrLiteral<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
             StrLiteral::PlainLine(t) => StrLiteral::PlainLine(t),
-            StrLiteral::Line(t) => StrLiteral::Line(t.remove_spaces(arena)),
-            StrLiteral::Block(t) => StrLiteral::Block(t.remove_spaces(arena)),
+            StrLiteral::Line(t) => {
+                let mut needs_merge = false;
+                let mut last_was_mergable = false;
+                for segment in t.iter() {
+                    let mergable = matches!(
+                        segment,
+                        StrSegment::Plaintext(_)
+                            | StrSegment::Unicode(_)
+                            | StrSegment::EscapedChar(_)
+                    );
+                    if mergable && last_was_mergable {
+                        needs_merge = true;
+                        break;
+                    }
+                    last_was_mergable = mergable;
+                }
+
+                if !needs_merge {
+                    return StrLiteral::Line(t.remove_spaces(arena));
+                }
+
+                let mut new_segments = Vec::new_in(arena);
+                let mut last_text = String::new_in(arena);
+
+                normalize_str_segments(arena, t, &mut last_text, &mut new_segments);
+                if !last_text.is_empty() {
+                    new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
+                }
+
+                StrLiteral::Line(new_segments.into_bump_slice())
+            }
+            StrLiteral::Block(t) => {
+                let mut new_segments = Vec::new_in(arena);
+                let mut last_text = String::new_in(arena);
+                for line in t {
+                    normalize_str_segments(arena, line, &mut last_text, &mut new_segments);
+                }
+                if !last_text.is_empty() {
+                    new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
+                }
+
+                StrLiteral::Line(new_segments.into_bump_slice())
+            }
         }
     }
+}
+
+fn normalize_str_segments<'a>(
+    arena: &'a Bump,
+    segments: &[StrSegment<'a>],
+    last_text: &mut String<'a>,
+    new_segments: &mut Vec<'a, StrSegment<'a>>,
+) {
+    for segment in segments.iter() {
+        match segment {
+            StrSegment::Plaintext(t) => {
+                last_text.push_str(t);
+            }
+            StrSegment::Unicode(t) => {
+                let hex_code: &str = t.value;
+                let c = char::from_u32(u32::from_str_radix(hex_code, 16).unwrap()).unwrap();
+                last_text.push(c);
+            }
+            StrSegment::EscapedChar(c) => {
+                last_text.push(c.unescape());
+            }
+            StrSegment::Interpolated(e) => {
+                if !last_text.is_empty() {
+                    let text = std::mem::replace(last_text, String::new_in(arena));
+                    new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
+                }
+                new_segments.push(StrSegment::Interpolated(e.remove_spaces(arena)));
+            }
+            StrSegment::DeprecatedInterpolated(e) => {
+                if !last_text.is_empty() {
+                    let text = std::mem::replace(last_text, String::new_in(arena));
+                    new_segments.push(StrSegment::Plaintext(text.into_bump_str()));
+                }
+                new_segments.push(StrSegment::Interpolated(e.remove_spaces(arena)));
+            }
+        }
+    }
+}
+
+#[test]
+fn test_str_normalize() {
+    use crate::test_helpers::parse_expr_with;
+    let arena = Bump::new();
+    let a = parse_expr_with(&arena, r#""a\nb""#).unwrap();
+    let b = parse_expr_with(&arena, "\"\"\"\na\nb\"\"\"").unwrap();
+
+    let ar = a.remove_spaces(&arena);
+    let br = b.remove_spaces(&arena);
+
+    assert_eq!(ar, br);
 }
 
 impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
