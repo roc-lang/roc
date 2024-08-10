@@ -15,7 +15,7 @@ use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
 #[derive(Debug, Clone)]
-pub struct Full<'a> {
+pub struct FullAst<'a> {
     pub header: SpacesBefore<'a, Header<'a>>,
     pub defs: Defs<'a>,
 }
@@ -2436,7 +2436,7 @@ pub trait Malformed {
     fn is_malformed(&self) -> bool;
 }
 
-impl<'a> Malformed for Full<'a> {
+impl<'a> Malformed for FullAst<'a> {
     fn is_malformed(&self) -> bool {
         self.header.item.is_malformed() || self.defs.is_malformed()
     }

@@ -5,7 +5,7 @@ use roc_region::all::{Loc, Position, Region};
 
 use crate::{
     ast::{
-        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Full, Header,
+        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
         Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
         ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
         IngestedFileImport, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern,
@@ -111,9 +111,9 @@ impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for SpacesBefore<'a, V> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Full<'a> {
+impl<'a> RemoveSpaces<'a> for FullAst<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        Full {
+        FullAst {
             header: self.header.remove_spaces(arena),
             defs: self.defs.remove_spaces(arena),
         }
