@@ -1,5 +1,5 @@
 Full(
-    Full {
+    FullAst {
         header: SpacesBefore {
             before: [],
             item: App(

@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_fmt::{annotation::Formattable, header::fmt_header};
 use roc_parse::{
-    ast::{Defs, Expr, Full, Header, Malformed, SpacesBefore},
+    ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
     header::parse_module_defs,
     parser::{Parser, SyntaxError},
     remove_spaces::RemoveSpaces,
@@ -76,7 +76,7 @@ pub enum Output<'a> {
 
     Expr(Expr<'a>),
 
-    Full(Full<'a>),
+    Full(FullAst<'a>),
 }
 
 impl<'a> Output<'a> {
@@ -182,7 +182,7 @@ impl<'a> Input<'a> {
 
                 let defs = parse_module_defs(arena, state, defs)?;
 
-                Ok(Output::Full(Full { header, defs }))
+                Ok(Output::Full(FullAst { header, defs }))
             }
         }
     }
