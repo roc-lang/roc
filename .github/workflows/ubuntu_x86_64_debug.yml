@@ -22,7 +22,7 @@ jobs:
 
         - name: Install dependencies
           run: |
-            sudo apt -y install build-essential libunwind-dev pkg-config zlib1g-dev valgrind
+            sudo apt -y install build-essential libunwind-dev pkg-config zlib1g-dev
             wget https://apt.llvm.org/llvm.sh
             chmod +x llvm.sh
             sudo ./llvm.sh 16
@@ -30,6 +30,7 @@ jobs:
             sudo ln -s /usr/bin/clang-16 /usr/bin/clang
             sudo ln -s /usr/bin/lld-16 /usr/bin/ld.lld
             sudo apt -y install libpolly-16-dev
+            sudo snap install valgrind --classic
 
         - name: Check if debug flag files are in sync
           run: ./ci/check_debug_vars.sh
