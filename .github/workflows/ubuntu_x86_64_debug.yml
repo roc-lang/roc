@@ -22,7 +22,7 @@ jobs:
 
         - name: Install dependencies
           run: |
-            sudo apt -y install build-essential libunwind-dev pkg-config zlib1g-dev
+            sudo apt -y install build-essential libunwind-dev pkg-config zlib1g-dev libc6-dbg
             wget https://apt.llvm.org/llvm.sh
             chmod +x llvm.sh
             sudo ./llvm.sh 16
