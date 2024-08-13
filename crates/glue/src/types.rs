@@ -1540,7 +1540,7 @@ fn add_type_help<'a>(
 
                         type_id
                     }
-                    LayoutRepr::LambdaSet(lambda_set) if *name == Symbol::TASK_TASK => {
+                    LayoutRepr::LambdaSet(_lambda_set) if *name == Symbol::TASK_TASK => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
                         debug_assert_eq!(type_vars.len(), 2);
 

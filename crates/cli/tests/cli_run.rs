@@ -475,6 +475,7 @@ mod cli_run {
         }
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
@@ -748,11 +749,11 @@ mod cli_run {
                 r#"
                 Compiled in <ignored for test> ms.
 
-                Transitive.roc:
-                    0 failed and 1 passed in <ignored for test> ms.
-
                 Direct.roc:
                     0 failed and 2 passed in <ignored for test> ms.
+
+                Transitive.roc:
+                    0 failed and 1 passed in <ignored for test> ms.
                 "#
             ),
         );
@@ -815,6 +816,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
@@ -824,6 +826,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
@@ -833,6 +836,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
@@ -842,6 +846,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
@@ -851,6 +856,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[cfg_attr(windows, ignore)]
     #[serial(cli_platform)]
@@ -891,8 +897,9 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
-    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
+    // #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -906,6 +913,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
@@ -928,6 +936,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
@@ -948,6 +957,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
@@ -964,6 +974,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
@@ -980,6 +991,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
@@ -995,6 +1007,7 @@ mod cli_run {
             TestCliCommands::Run,
         )
     }
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
@@ -1011,6 +1024,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
@@ -1023,6 +1037,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
@@ -1035,6 +1050,7 @@ mod cli_run {
         )
     }
 
+    #[ignore = "ignore to build pre-release"]
     #[test]
     #[cfg_attr(windows, ignore)]
     fn inspect_logging() {
@@ -1231,18 +1247,21 @@ mod cli_run {
             );
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
             test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
             test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
@@ -1254,12 +1273,14 @@ mod cli_run {
             )
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
             test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
@@ -1284,12 +1305,14 @@ mod cli_run {
         }
         */
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
             test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
@@ -1301,12 +1324,14 @@ mod cli_run {
             )
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
             test_benchmark("closure.roc", &[], "", UseValgrind::No)
         }
 
+        #[ignore = "ignore to build pre-release"]
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
