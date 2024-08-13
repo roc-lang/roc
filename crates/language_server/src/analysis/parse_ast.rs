@@ -1,8 +1,8 @@
 use bumpalo::Bump;
 use roc_fmt::Buf;
 use roc_parse::{
-    ast::{Defs, Module},
-    module::parse_module_defs,
+    ast::{Defs, Header, SpacesBefore},
+    header::parse_module_defs,
     parser::SyntaxError,
 };
 use roc_region::all::Loc;
@@ -15,23 +15,26 @@ mod format;
 
 pub struct Ast<'a> {
     arena: &'a Bump,
-    module: Module<'a>,
+    module: SpacesBefore<'a, Header<'a>>,
     defs: Defs<'a>,
 }
 
 impl<'a> Ast<'a> {
     pub fn parse(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-        use roc_parse::{module::parse_header, state::State};
+        use roc_parse::{header::parse_header, state::State};
 
         let (module, state) = parse_header(arena, State::new(src.as_bytes()))
             .map_err(|e| SyntaxError::Header(e.problem))?;
 
-        let (module, defs) = module.upgrade_header_imports(arena);
+        let (header, defs) = module.item.upgrade_header_imports(arena);
 
         let defs = parse_module_defs(arena, state, defs)?;
 
         Ok(Ast {
-            module,
+            module: SpacesBefore {
+                before: module.before,
+                item: header,
+            },
             defs,
             arena,
         })
@@ -40,7 +43,7 @@ impl<'a> Ast<'a> {
     pub fn fmt(&self) -> FormattedAst<'a> {
         let mut buf = Buf::new_in(self.arena);
 
-        roc_fmt::module::fmt_module(&mut buf, &self.module);
+        roc_fmt::header::fmt_header(&mut buf, &self.module);
 
         roc_fmt::def::fmt_defs(&mut buf, &self.defs, 0);
 
@@ -50,7 +53,7 @@ impl<'a> Ast<'a> {
     }
 
     pub fn semantic_tokens(&self) -> impl IntoIterator<Item = Loc<Token>> + '_ {
-        let header_tokens = self.module.iter_tokens(self.arena);
+        let header_tokens = self.module.item.iter_tokens(self.arena);
         let body_tokens = self.defs.iter_tokens(self.arena);
 
         header_tokens.into_iter().chain(body_tokens)

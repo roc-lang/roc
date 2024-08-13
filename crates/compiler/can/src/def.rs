@@ -631,7 +631,9 @@ fn canonicalize_claimed_ability_impl<'a>(
             // An error will already have been reported
             Err(())
         }
-        AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
+        AssignedField::SpaceBefore(_, _)
+        | AssignedField::SpaceAfter(_, _)
+        | AssignedField::IgnoredValue(_, _, _) => {
             internal_error!("unreachable")
         }
     }
