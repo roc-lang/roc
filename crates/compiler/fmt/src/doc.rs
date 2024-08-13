@@ -2,13 +2,14 @@ use std::{collections::VecDeque, fmt::Display};
 
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
+use roc_parse::ast::SpacesBefore;
 use roc_parse::{
     ast::{
         AbilityImpls, AssignedField, Base, Collection, CommentOrNewline, Defs, EscapedChar, Expr,
         ExtractSpaces, Header, ImplementsAbilities, ImplementsAbility, ImportAlias,
-        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Module, Pattern,
-        SingleQuoteLiteral, SingleQuoteSegment, Spaced, Spaces, StrLiteral, StrSegment, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Pattern, SingleQuoteLiteral,
+        SingleQuoteSegment, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
+        TypeHeader, ValueDef,
     },
     header::{
         ExposedName, ExposesKeyword, GeneratesKeyword, ImportsEntry, ImportsKeyword, KeywordItem,
@@ -182,7 +183,7 @@ enum Prec {
     TaskAwaitBang,
 }
 
-pub fn doc_fmt_module(header: Option<&Module>, defs: Option<&Defs>) -> String {
+pub fn doc_fmt_module(header: Option<&SpacesBefore<Header>>, defs: Option<&Defs>) -> String {
     let mut doc = Doc::new();
     if let Some(header) = header {
         header.docify(&mut doc);
@@ -205,15 +206,15 @@ trait Docify<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>);
 }
 
-impl<'a> Docify<'a> for Module<'a> {
-    fn docify(&'a self, doc: &mut Doc<'a>) {
-        self.header.docify(doc)
-    }
-}
-
 impl<'a, T: Docify<'a>> Docify<'a> for Loc<T> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         self.value.docify(doc)
+    }
+}
+
+impl<'a, T: Docify<'a>> Docify<'a> for SpacesBefore<'a, T> {
+    fn docify(&'a self, doc: &mut Doc<'a>) {
+        self.item.docify(doc);
     }
 }
 
@@ -326,7 +327,10 @@ fn docify_collection<'a, T: Docify<'a> + std::fmt::Debug>(
 ) {
     group!(doc, {
         match delim {
-            Braces::Curly => doc.literal("{"),
+            Braces::Curly => {
+                doc.literal("{");
+                doc.space();
+            }
             Braces::Square => doc.literal("["),
             Braces::Round => doc.literal("("),
         };
@@ -338,7 +342,10 @@ fn docify_collection<'a, T: Docify<'a> + std::fmt::Debug>(
             item.docify(doc);
         }
         match delim {
-            Braces::Curly => doc.literal("}"),
+            Braces::Curly => {
+                doc.space();
+                doc.literal("}");
+            }
             Braces::Square => doc.literal("]"),
             Braces::Round => doc.literal(")"),
         };
@@ -414,6 +421,7 @@ impl<'a> Docify<'a> for PackageEntry<'a> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         let begin = doc.begin();
         doc.copy(self.shorthand);
+        doc.space();
         doc.literal(":");
         doc.space();
 
@@ -846,6 +854,7 @@ impl<'a> Docify<'a> for TypeDef<'a> {
         match self {
             TypeDef::Alias { header, ann } => {
                 header.docify(doc);
+                doc.space();
                 doc.literal(":");
                 doc.space();
                 ann.value.docify(doc);
@@ -1135,6 +1144,7 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                     for (i, field) in fields.iter().enumerate() {
                         if i > 0 {
                             doc.literal(",");
+                            doc.space();
                         }
                         field.value.docify(doc);
                     }
@@ -1152,6 +1162,7 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                     for (i, elem) in elems.iter().enumerate() {
                         if i > 0 {
                             doc.literal(",");
+                            doc.space();
                         }
                         elem.value.docify(doc);
                     }
@@ -1260,6 +1271,7 @@ impl<'a> Docify<'a> for ValueDef<'a> {
             ValueDef::Annotation(pat, ty) => {
                 group!(doc, {
                     pat.value.docify(doc);
+                    doc.space();
                     doc.literal(":");
                     doc.space();
                     indent!(doc, {
@@ -1282,21 +1294,21 @@ impl<'a> Docify<'a> for ValueDef<'a> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment,
+                lines_between,
                 body_pattern,
                 body_expr,
             } => {
                 group!(doc, {
                     ann_pattern.value.docify(doc);
+                    doc.space();
                     doc.literal(":");
+                    doc.space();
                     indent!(doc, {
                         ann_type.value.docify(doc);
                     });
                 });
                 doc.push(Node::ForcedNewline);
-                if let Some(comment) = comment {
-                    doc.comment(comment);
-                }
+                doc.comments(lines_between);
                 group!(doc, {
                     body_pattern.value.docify(doc);
                     doc.space();
@@ -1472,6 +1484,7 @@ impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
                 doc.comments(comments);
             }
             AssignedField::Malformed(_) => todo!(),
+            AssignedField::IgnoredValue(_, _, _) => todo!(),
         }
     }
 }
@@ -1780,7 +1793,7 @@ impl<'a> Doc<'a> {
                 Node::Space | Node::OptionalNewline => 1,
                 Node::WhenMultiline(_) => 0,
                 Node::ForcedNewline | Node::BlankLine => 0,
-                Node::Comment(s) => s.len() + 2, // '# ' prefix
+                Node::Comment(s) => s.len() + 2, // ' #' prefix
                 Node::Group(_) | Node::Indent(_) => 0,
             },
             |a, b| a + b,
@@ -1983,8 +1996,8 @@ impl<'a> Doc<'a> {
                 }
                 Node::Comment(s) => {
                     buf.indent(indent);
+                    buf.ensure_ends_with_space();
                     buf.push_str("#");
-                    buf.spaces(1);
                     buf.push_str(s);
                     buf.ensure_ends_with_newline();
                 }

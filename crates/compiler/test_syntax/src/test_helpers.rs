@@ -127,10 +127,9 @@ impl<'a> Output<'a> {
             Output::Header(header) => InputOwned::Header(doc_fmt_module(Some(header), None)),
             Output::ModuleDefs(defs) => InputOwned::ModuleDefs(doc_fmt_module(None, Some(defs))),
             Output::Expr(expr) => InputOwned::Expr(doc_fmt_expr(expr)),
-            Output::Full {
-                header,
-                module_defs,
-            } => InputOwned::Full(doc_fmt_module(Some(header), Some(module_defs))),
+            Output::Full(full) => {
+                InputOwned::Full(doc_fmt_module(Some(&full.header), Some(&full.defs)))
+            }
         }
     }
 }

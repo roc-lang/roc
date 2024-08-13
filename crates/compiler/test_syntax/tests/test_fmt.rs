@@ -9,7 +9,6 @@ mod test_fmt {
     use roc_fmt::header::fmt_header;
     use roc_fmt::Buf;
     use roc_parse::ast::{Defs, Header, SpacesBefore};
-    use roc_parse::ast::{Defs, Module};
     use roc_parse::header::{self, parse_module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::parser::SyntaxError;
