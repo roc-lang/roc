@@ -3793,9 +3793,9 @@ mod test_reporting {
     of these?
 
         Set
+        Task
         List
         Dict
-        Hash
 
     ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
 
@@ -3804,7 +3804,7 @@ mod test_reporting {
     10│      y = { Test.example & age: 3 }
                    ^^^^^^^^^^^^
 
-    Only variables can be updated with record update syntax.
+    Only variables can be updated with record update syntax. 
     "
     );
 
@@ -6328,7 +6328,7 @@ All branches in an `if` must have the same type!
                     requires { main : Task {} [] }
                     exposes []
                     packages {}
-                    imports [Task]
+                    imports []
                     provides [mainForHost]
                     effects fx.Effect
                          {
@@ -6351,7 +6351,7 @@ All branches in an `if` must have the same type!
                 I am expecting a list of type names like `{}` or `{ Model }` next. A full
                 `requires` definition looks like
 
-                    requires { Model, Msg } {main : Effect {}}
+                    requires { Model, Msg } {main : Task {} []}
             "#
             ),
         )
@@ -8145,7 +8145,7 @@ All branches in an `if` must have the same type!
         unimported_modules_reported,
         indoc!(
             r#"
-            alt : Task.Task {} []
+            alt : Unimported.CustomType
             alt = "whatever man you don't even know my type"
             alt
             "#
@@ -8153,18 +8153,18 @@ All branches in an `if` must have the same type!
         @r"
     ── MODULE NOT IMPORTED in /code/proj/Main.roc ──────────────────────────────────
 
-    The `Task` module is not imported:
+    The `Unimported` module is not imported:
 
-    4│      alt : Task.Task {} []
-                  ^^^^^^^^^^^^^^^
+    4│      alt : Unimported.CustomType
+                  ^^^^^^^^^^^^^^^^^^^^^
 
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        Hash
+        Encode
+        Inspect
+        Dict
         List
-        Num
-        Box
     "
     );
 
