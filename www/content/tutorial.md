@@ -818,6 +818,30 @@ Result.isOk (List.get ["a", "b", "c"] 1)
 # Note: There's a Result.isErr function that works similarly.
 ```
 
+```roc
+# Running this will produce `Ok "c"`
+Result.try (Str.toU64 "2") listGet
+
+listGet : U64 -> Result Str [OutOfBounds]
+listGet = \index ->
+    List.get ["a", "b", "c", "d"] index
+
+# Notes:
+#  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
+#    integer types later)
+#  - since parsing is successful, `Result.try` passes 2 to the `listGet` function
+#  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
+#    or `Err OutOfBounds` respectively
+```
+
+`Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
+
+<details>
+  <summary>Upcoming feature</summary>
+  
+  We plan to introduce syntax sugar to make `Result.try` nicer to use, follow [this issue](https://github.com/roc-lang/roc/issues/6828) for more.
+</details>
+
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
 We've now seen a few different ways you can transform lists. Sometimes, though, there's nothing
@@ -1587,7 +1611,7 @@ main =
     Stdout.line! "Hello, World!"
 ```
 
-The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). (We'll discuss the `!` part later.) `Stdout.line` has this type:
+The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>), we'll [discuss the `!` part later](https://www.roc-lang.org/tutorial#the-!-suffix). `Stdout.line` has this type:
 
 ```roc
 Stdout.line : Str -> Task {} *
@@ -2236,9 +2260,13 @@ See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 
-These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
+These are reserved keywords in Roc. You can't choose any of them as names, except as record field names.
 
-`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `import`, `expect`, `expect-fx`, `crash`, `module`, `app`, `package`, `platform`, `hosted`, `exposes`, `with`, `generates`, `packages`, `requires`
+`as`, `crash`, `dbg`, `else`, `expect`, `expect-fx`, `if`, `import`, `is`, `then`, `when`
+
+Other keywords are used only in specific places, so they are not reserved. This includes:
+
+`app`, `exposes`, `exposing`, `generates`, `implements`, `module`, `package`, `packages`, `platform`, `requires`, `where`, `with`
 
 ## [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 

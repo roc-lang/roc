@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
 use roc_fmt::def::fmt_defs;
-use roc_fmt::module::fmt_module;
-use roc_fmt::{Ast, Buf};
-use roc_parse::module::parse_module_defs;
+use roc_fmt::header::fmt_header;
+use roc_fmt::Buf;
+use roc_parse::ast::{FullAst, SpacesBefore};
+use roc_parse::header::parse_module_defs;
 use roc_parse::remove_spaces::RemoveSpaces;
-use roc_parse::{module, parser::SyntaxError, state::State};
+use roc_parse::{header, parser::SyntaxError, state::State};
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -230,19 +231,25 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
     Ok(buf.as_str().to_string())
 }
 
-fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
+fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<FullAst<'a>, SyntaxError<'a>> {
+    let (header, state) = header::parse_header(arena, State::new(src.as_bytes()))
         .map_err(|e| SyntaxError::Header(e.problem))?;
 
-    let (module, defs) = module.upgrade_header_imports(arena);
+    let (h, defs) = header.item.upgrade_header_imports(arena);
 
     let defs = parse_module_defs(arena, state, defs)?;
 
-    Ok(Ast { module, defs })
+    Ok(FullAst {
+        header: SpacesBefore {
+            before: header.before,
+            item: h,
+        },
+        defs,
+    })
 }
 
-fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
-    fmt_module(buf, &ast.module);
+fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
+    fmt_header(buf, &ast.header);
 
     fmt_defs(buf, &ast.defs, 0);
 

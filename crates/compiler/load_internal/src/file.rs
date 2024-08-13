@@ -48,11 +48,11 @@ use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
+use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
     PlatformHeader, To, TypedIdent,
 };
-use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
@@ -1327,8 +1327,8 @@ fn load_packages_from_main<'a>(
 
     let parse_state = roc_parse::state::State::new(arena.alloc(src_bytes));
 
-    let (parsed_module, _) =
-        roc_parse::module::parse_header(arena, parse_state.clone()).map_err(|fail| {
+    let (parsed_header, _) =
+        roc_parse::header::parse_header(arena, parse_state.clone()).map_err(|fail| {
             LoadingProblem::ParsingFailed(
                 fail.map_problem(SyntaxError::Header)
                     .into_file_error(filename.clone()),
@@ -1337,7 +1337,7 @@ fn load_packages_from_main<'a>(
 
     use ast::Header::*;
 
-    let packages = match parsed_module.header {
+    let packages = match parsed_header.item {
         App(AppHeader { packages, .. }) | Package(PackageHeader { packages, .. }) => {
             unspace(arena, packages.value.items)
         }
@@ -3350,7 +3350,7 @@ fn load_package_from_disk<'a>(
             let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+            let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
             let parse_header_duration = parse_start.elapsed();
 
             // Insert the first entries for this module's timings
@@ -3361,8 +3361,8 @@ fn load_package_from_disk<'a>(
 
             match parsed {
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Module(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Module(header),
                         ..
                     },
                     _parse_state,
@@ -3370,8 +3370,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Hosted(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Hosted(header),
                         ..
                     },
                     _parse_state,
@@ -3379,8 +3379,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Hosted module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::App(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::App(header),
                         ..
                     },
                     _parse_state,
@@ -3388,9 +3388,9 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got App with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Package(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Package(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3431,9 +3431,9 @@ fn load_package_from_disk<'a>(
                     Ok(Msg::Many(messages))
                 }
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Platform(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Platform(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3531,13 +3531,13 @@ fn load_builtin_module_help<'a>(
     let opt_shorthand = None;
     let filename = PathBuf::from(filename);
     let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3787,7 +3787,7 @@ fn parse_header<'a>(
 ) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
 
     if let Err(problem) = ensure_roc_file(&filename, src_bytes) {
@@ -3816,9 +3816,9 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3853,9 +3853,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Hosted(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Hosted(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3882,9 +3882,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::App(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::App(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3987,9 +3987,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Package(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Package(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4014,9 +4014,9 @@ fn parse_header<'a>(
         }
 
         Ok((
-            ast::Module {
-                header: ast::Header::Platform(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Platform(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4921,6 +4921,7 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let packages = unspace(arena, header.packages.item.items);
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -4942,7 +4943,7 @@ fn build_platform_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         header_type,
         module_comments: comments,
         header_imports: Some(header.imports),
@@ -5152,7 +5153,7 @@ fn parse<'a>(
     let parse_state = header.parse_state;
 
     let header_import_defs =
-        roc_parse::ast::Module::header_imports_to_defs(arena, header.header_imports);
+        roc_parse::ast::Header::header_imports_to_defs(arena, header.header_imports);
 
     let parsed_defs = match parse_module_defs(arena, parse_state.clone(), header_import_defs) {
         Ok(success) => success,

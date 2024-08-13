@@ -1846,6 +1846,11 @@ fn canonicalize_field<'a>(
             field_region: Region::span_across(&label.region, &loc_expr.region),
         }),
 
+        // An ignored value, e.g. `{ _name: 123 }`
+        IgnoredValue(_, _, _) => {
+            internal_error!("Somehow an IgnoredValue record field was not desugared!");
+        }
+
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
             internal_error!("Somehow a LabelOnly record field was not desugared!");
@@ -2433,7 +2438,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
             ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
             ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2481,7 +2487,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&update.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
                     ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2514,7 +2521,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&mapper.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
                     ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,

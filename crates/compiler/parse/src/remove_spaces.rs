@@ -5,12 +5,12 @@ use roc_region::all::{Loc, Position, Region};
 
 use crate::{
     ast::{
-        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Header, Implements,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias, ImportAsKeyword,
-        ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
-        Module, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern, PatternAs,
-        Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
+        Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
+        IngestedFileImport, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern,
+        PatternAs, Spaced, Spaces, SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation,
+        TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword,
@@ -99,6 +99,24 @@ impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for Spaces<'a, V> {
     }
 }
 
+impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for SpacesBefore<'a, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        SpacesBefore {
+            before: &[],
+            item: self.item.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for FullAst<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        FullAst {
+            header: self.header.remove_spaces(arena),
+            defs: self.defs.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a, K: RemoveSpaces<'a>, V: RemoveSpaces<'a>> RemoveSpaces<'a> for KeywordItem<'a, K, V> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         KeywordItem {
@@ -120,9 +138,9 @@ impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Module<'a> {
+impl<'a> RemoveSpaces<'a> for Header<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        let header = match &self.header {
+        match self {
             Header::Module(header) => Header::Module(ModuleHeader {
                 after_keyword: &[],
                 params: header.params.remove_spaces(arena),
@@ -160,10 +178,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 exposes: header.exposes.remove_spaces(arena),
                 imports: header.imports.remove_spaces(arena),
             }),
-        };
-        Module {
-            comments: &[],
-            header,
         }
     }
 }
@@ -534,6 +548,11 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
                 arena.alloc(c.remove_spaces(arena)),
             ),
             AssignedField::OptionalValue(a, _, c) => AssignedField::OptionalValue(
+                a.remove_spaces(arena),
+                arena.alloc([]),
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            AssignedField::IgnoredValue(a, _, c) => AssignedField::IgnoredValue(
                 a.remove_spaces(arena),
                 arena.alloc([]),
                 arena.alloc(c.remove_spaces(arena)),
@@ -978,8 +997,11 @@ impl<'a> RemoveSpaces<'a> for EExpr<'a> {
             EExpr::Record(inner_err, _pos) => {
                 EExpr::Record(inner_err.remove_spaces(arena), Position::zero())
             }
-            EExpr::OptionalValueInRecordBuilder(_pos) => {
-                EExpr::OptionalValueInRecordBuilder(Region::zero())
+            EExpr::OptionalValueInOldRecordBuilder(_pos) => {
+                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
+            }
+            EExpr::IgnoredValueInOldRecordBuilder(_pos) => {
+                EExpr::OptionalValueInOldRecordBuilder(Region::zero())
             }
             EExpr::Str(inner_err, _pos) => {
                 EExpr::Str(inner_err.remove_spaces(arena), Position::zero())
@@ -993,8 +1015,15 @@ impl<'a> RemoveSpaces<'a> for EExpr<'a> {
             EExpr::UnexpectedComma(_pos) => EExpr::UnexpectedComma(Position::zero()),
             EExpr::UnexpectedTopLevelExpr(_pos) => EExpr::UnexpectedTopLevelExpr(Position::zero()),
             EExpr::StmtAfterExpr(_pos) => EExpr::StmtAfterExpr(Position::zero()),
-            EExpr::RecordUpdateAccumulator(_) => EExpr::RecordUpdateAccumulator(Region::zero()),
-            EExpr::RecordBuilderAccumulator(_) => EExpr::RecordBuilderAccumulator(Region::zero()),
+            EExpr::RecordUpdateOldBuilderField(_pos) => {
+                EExpr::RecordUpdateOldBuilderField(Region::zero())
+            }
+            EExpr::RecordUpdateIgnoredField(_pos) => {
+                EExpr::RecordUpdateIgnoredField(Region::zero())
+            }
+            EExpr::RecordBuilderOldBuilderField(_pos) => {
+                EExpr::RecordBuilderOldBuilderField(Region::zero())
+            }
         }
     }
 }
@@ -1084,6 +1113,7 @@ impl<'a> RemoveSpaces<'a> for ERecord<'a> {
             ERecord::End(_) => ERecord::End(Position::zero()),
             ERecord::Open(_) => ERecord::Open(Position::zero()),
             ERecord::Field(_pos) => ERecord::Field(Position::zero()),
+            ERecord::UnderscoreField(_pos) => ERecord::Field(Position::zero()),
             ERecord::Colon(_) => ERecord::Colon(Position::zero()),
             ERecord::QuestionMark(_) => ERecord::QuestionMark(Position::zero()),
             ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
@@ -1212,6 +1242,9 @@ impl<'a> RemoveSpaces<'a> for EImportParams<'a> {
             }
             EImportParams::RecordUpdateFound(_) => EImportParams::RecordUpdateFound(Region::zero()),
             EImportParams::RecordApplyFound(_) => EImportParams::RecordApplyFound(Region::zero()),
+            EImportParams::RecordIgnoredFieldFound(_) => {
+                EImportParams::RecordIgnoredFieldFound(Region::zero())
+            }
             EImportParams::Space(inner_err, _) => {
                 EImportParams::Space(*inner_err, Position::zero())
             }
@@ -1243,6 +1276,9 @@ impl<'a> RemoveSpaces<'a> for ETypeAbilityImpl<'a> {
             ETypeAbilityImpl::End(_) => ETypeAbilityImpl::End(Position::zero()),
             ETypeAbilityImpl::Open(_) => ETypeAbilityImpl::Open(Position::zero()),
             ETypeAbilityImpl::Field(_) => ETypeAbilityImpl::Field(Position::zero()),
+            ETypeAbilityImpl::UnderscoreField(_) => {
+                ETypeAbilityImpl::UnderscoreField(Position::zero())
+            }
             ETypeAbilityImpl::Colon(_) => ETypeAbilityImpl::Colon(Position::zero()),
             ETypeAbilityImpl::Arrow(_) => ETypeAbilityImpl::Arrow(Position::zero()),
             ETypeAbilityImpl::Optional(_) => ETypeAbilityImpl::Optional(Position::zero()),

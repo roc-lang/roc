@@ -5,7 +5,7 @@ use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
-use roc_parse::ast::{Collection, CommentOrNewline, Header, Module, Spaced, Spaces};
+use roc_parse::ast::{Collection, CommentOrNewline, Header, Spaced, Spaces, SpacesBefore};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, HostedHeader, ImportsEntry, ImportsKeyword, Keyword,
     KeywordItem, ModuleHeader, ModuleName, PackageEntry, PackageHeader, PackageKeyword,
@@ -15,9 +15,9 @@ use roc_parse::header::{
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
-pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
-    fmt_comments_only(buf, module.comments.iter(), NewlineAt::Bottom, 0);
-    match &module.header {
+pub fn fmt_header<'a>(buf: &mut Buf<'_>, header: &'a SpacesBefore<'a, Header<'a>>) {
+    fmt_comments_only(buf, header.before.iter(), NewlineAt::Bottom, 0);
+    match &header.item {
         Header::Module(header) => {
             fmt_module_header(buf, header);
         }
