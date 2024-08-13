@@ -5,12 +5,12 @@ use roc_region::all::{Loc, Position, Region};
 
 use crate::{
     ast::{
-        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Header, Implements,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias, ImportAsKeyword,
-        ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
-        Module, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern, PatternAs,
-        Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
+        Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation,
+        IngestedFileImport, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern,
+        PatternAs, Spaced, Spaces, SpacesBefore, StrLiteral, StrSegment, Tag, TypeAnnotation,
+        TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
@@ -102,6 +102,24 @@ impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for Spaces<'a, V> {
     }
 }
 
+impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for SpacesBefore<'a, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        SpacesBefore {
+            before: &[],
+            item: self.item.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for FullAst<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        FullAst {
+            header: self.header.remove_spaces(arena),
+            defs: self.defs.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a, K: RemoveSpaces<'a>, V: RemoveSpaces<'a>> RemoveSpaces<'a> for KeywordItem<'a, K, V> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         KeywordItem {
@@ -123,9 +141,9 @@ impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Module<'a> {
+impl<'a> RemoveSpaces<'a> for Header<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        let header = match &self.header {
+        match self {
             Header::Module(header) => Header::Module(ModuleHeader {
                 after_keyword: &[],
                 params: header.params.remove_spaces(arena),
@@ -165,10 +183,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 generates: header.generates.remove_spaces(arena),
                 generates_with: header.generates_with.remove_spaces(arena),
             }),
-        };
-        Module {
-            comments: &[],
-            header,
         }
     }
 }

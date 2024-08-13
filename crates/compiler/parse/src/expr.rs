@@ -9,10 +9,10 @@ use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
+use crate::header::module_name_help;
 use crate::ident::{
     integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident, Suffix,
 };
-use crate::module::module_name_help;
 use crate::parser::{
     self, and, backtrackable, between, byte, byte_indent, collection_inner,
     collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
@@ -24,8 +24,8 @@ use crate::parser::{
 use crate::pattern::closure_param;
 use crate::state::State;
 use crate::string_literal::{self, StrLikeLiteral};
+use crate::type_annotation;
 use crate::{header, keyword};
-use crate::{module, type_annotation};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
@@ -954,7 +954,7 @@ fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport
 fn import_as<'a>(
 ) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport<'a>> {
     record!(header::KeywordItem {
-        keyword: module::spaces_around_keyword(
+        keyword: header::spaces_around_keyword(
             ImportAsKeyword,
             EImport::As,
             EImport::IndentAs,
@@ -988,7 +988,7 @@ fn import_exposing<'a>() -> impl Parser<
     EImport<'a>,
 > {
     record!(header::KeywordItem {
-        keyword: module::spaces_around_keyword(
+        keyword: header::spaces_around_keyword(
             ImportExposingKeyword,
             EImport::Exposing,
             EImport::IndentExposing,
@@ -1033,7 +1033,7 @@ fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>>
 fn import_ingested_file_as<'a>(
 ) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>, EImport<'a>> {
     record!(header::KeywordItem {
-        keyword: module::spaces_around_keyword(
+        keyword: header::spaces_around_keyword(
             ImportAsKeyword,
             EImport::As,
             EImport::IndentAs,

@@ -14,6 +14,12 @@ use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
+#[derive(Debug, Clone)]
+pub struct FullAst<'a> {
+    pub header: SpacesBefore<'a, Header<'a>>,
+    pub defs: Defs<'a>,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
@@ -111,15 +117,9 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Module<'a> {
-    pub comments: &'a [CommentOrNewline<'a>],
-    pub header: Header<'a>,
-}
-
-impl<'a> Module<'a> {
+impl<'a> Header<'a> {
     pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
-        let (header, defs) = match self.header {
+        let (header, defs) = match self {
             Header::Module(header) => (
                 Header::Module(ModuleHeader {
                     interface_imports: None,
@@ -134,12 +134,10 @@ impl<'a> Module<'a> {
                 }),
                 Self::header_imports_to_defs(arena, header.old_imports),
             ),
-            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => {
-                (self.header, Defs::default())
-            }
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => (self, Defs::default()),
         };
 
-        (Module { header, ..self }, defs)
+        (header, defs)
     }
 
     pub fn header_imports_to_defs(
@@ -2438,9 +2436,9 @@ pub trait Malformed {
     fn is_malformed(&self) -> bool;
 }
 
-impl<'a> Malformed for Module<'a> {
+impl<'a> Malformed for FullAst<'a> {
     fn is_malformed(&self) -> bool {
-        self.header.is_malformed()
+        self.header.item.is_malformed() || self.defs.is_malformed()
     }
 }
 
@@ -2457,6 +2455,12 @@ impl<'a> Malformed for Header<'a> {
 }
 
 impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for SpacesBefore<'a, T> {
     fn is_malformed(&self) -> bool {
         self.item.is_malformed()
     }
