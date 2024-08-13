@@ -432,7 +432,7 @@ where
     }
 }
 
-fn consume_spaces<'a, E, F>(
+pub fn consume_spaces<'a, E, F>(
     mut state: State<'a>,
     mut on_space: F,
 ) -> Result<(Progress, State<'a>), (Progress, E)>
