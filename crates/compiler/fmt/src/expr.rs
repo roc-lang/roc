@@ -1529,6 +1529,23 @@ fn format_assigned_field_multiline<T>(
             ann.value.format(buf, indent);
             buf.push(',');
         }
+        IgnoredValue(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push('_');
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
         LabelOnly(name) => {
             buf.newline();
             buf.indent(indent);

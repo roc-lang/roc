@@ -545,7 +545,7 @@ fn to_expr_report<'a>(
             to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
-        EExpr::OptionalValueInRecordBuilder(region) => {
+        EExpr::OptionalValueInOldRecordBuilder(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
@@ -565,7 +565,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::RecordUpdateAccumulator(region) => {
+        EExpr::RecordUpdateOldBuilderField(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
@@ -1529,6 +1529,25 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "OLD-STYLE RECORD BUILDER IN MODULE PARAMS".to_string(),
+                severity,
+            }
+        }
+        Params(EImportParams::RecordIgnoredFieldFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.reflow(
+                    "This is an ignored record field, but those are not allowed in module params.",
+                ),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "IGNORED RECORD FIELD IN MODULE PARAMS".to_string(),
                 severity,
             }
         }

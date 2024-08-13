@@ -22,7 +22,7 @@ mod test_parse {
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
     use roc_parse::ast::{CommentOrNewline, StrLiteral::*};
-    use roc_parse::module::parse_module_defs;
+    use roc_parse::header::parse_module_defs;
     use roc_parse::parser::SyntaxError;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
