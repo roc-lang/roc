@@ -339,6 +339,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 }
 
 /// Entry point for parsing an expression.
+/// If returns Ok then it is always MadeProgress
 fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     (move |arena, state: State<'a>, min_indent| {
         let start = state.pos();
@@ -2344,8 +2345,8 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
         match body_res {
             Ok((_, body, state)) => {
-                let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-                Ok((MadeProgress, closure, state))
+                let out = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
+                Ok((MadeProgress, out, state))
             }
             Err((_, fail)) => Err((MadeProgress, fail)),
         }
@@ -2360,30 +2361,52 @@ mod when {
 
     /// Parser for when expressions.
     pub fn when_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
-        map_with_arena(
-            and(
-                indented_seq_skip_first(
-                    parser::keyword(keyword::WHEN, EWhen::When),
-                    space0_around_e_no_after_indent_check(
-                        specialize_err_ref(EWhen::Condition, expr_start(options)),
-                        EWhen::IndentCondition,
-                    )
-                ),
-                // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
-                // ambiguity. The formatter will fix it up.
-                //
-                // We require that branches are indented relative to the line containing the `is`.
-                indented_seq_skip_first(
-                    parser::keyword(keyword::IS, EWhen::Is),
-                    branches(options)
-                )
-            ),
-            move |arena: &'a Bump, (loc_condition, branches): (Loc<Expr<'a>>, Vec<'a, &'a WhenBranch<'a>>)| {
-                Expr::When(arena.alloc(loc_condition), branches.into_bump_slice())
+        (move |arena, state: State<'a>, min_indent| {
+            let before = parser::keyword(keyword::WHEN, EWhen::When);
+            let parser = space0_around_e_no_after_indent_check(
+                specialize_err_ref(EWhen::Condition, expr_start(options)),
+                EWhen::IndentCondition,
+            );
+
+            let cond_parser = indented_seq_skip_first(before, parser);
+
+            match cond_parser.parse(arena, state, min_indent) {
+                Ok((cond_p, cond, mut state)) => {
+                    // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
+                    // ambiguity. The formatter will fix it up.
+                    // We require that branches are indented relative to the line containing the `is`.
+
+                    if !state.bytes().starts_with(keyword::IS.as_bytes()) {
+                        return Err((cond_p, EWhen::Is(state.pos())));
+                    }
+
+                    // the next character should not be an identifier character
+                    // to prevent treating `whence` as a keyword
+                    let width = keyword::IS.len();
+                    match state.bytes().get(width) {
+                        Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
+                        None => {}
+                        _ => return Err((cond_p, EWhen::Is(state.pos()))),
+                    };
+
+                    let br_indent = state.line_indent() + 1;
+                    state.advance_mut(width);
+
+                    match branches(options).parse(arena, state, br_indent) {
+                        Ok((_, brs, state)) => {
+                            let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
+                            Ok((MadeProgress, out, state))
+                        }
+                        Err((_, fail)) => Err((MadeProgress, fail)),
+                    }
+                }
+                Err(fail) => Err(fail),
             }
-        ).trace("when")
+        })
+        .trace("when")
     }
 
+    /// If Ok always returns MadeProgress
     fn branches<'a>(
         options: ExprParseOptions,
     ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, EWhen<'a>> {
@@ -2700,6 +2723,7 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     )
 }
 
+/// If Ok always returns MadeProgress
 fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<'a>> {
     move |arena: &'a Bump, state, min_indent| {
         let (_, _, state) =
@@ -2858,7 +2882,7 @@ where
 
         Ok((MadeProgress, loc_expr, state))
     } else {
-        let (p2, loc_expr, state) =
+        let (progress, loc_expr, state) =
             specialize_err_ref(wrap_error, expr_start(options)).parse(arena, state, min_indent)?;
 
         let loc_expr = if first_space.value.is_empty() {
@@ -2869,7 +2893,7 @@ where
                 .with_spaces_before(first_space.value, loc_expr.region)
         };
 
-        Ok((p2, loc_expr, state))
+        Ok((progress, loc_expr, state))
     }
 }
 
