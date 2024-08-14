@@ -339,7 +339,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 }
 
 /// Entry point for parsing an expression.
-/// If returns Ok then it is always MadeProgress
+/// If Ok it always returns MadeProgress
 fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     (move |arena, state: State<'a>, min_indent| {
         let start = state.pos();
@@ -372,21 +372,21 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
     (move |arena, state: State<'a>, min_indent: u32| {
         let line_indent = state.line_indent();
 
-        let (_, expr, state) =
+        let (_, term, state) =
             loc_possibly_negative_or_negated_term(options).parse(arena, state, min_indent)?;
 
         let mut initial_state = state.clone();
 
         let (spaces_before_op, state) =
             match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => return Ok((MadeProgress, expr.value, state)),
+                Err((_, _)) => return Ok((MadeProgress, term.value, state)), // TODO: @wip refactor to more simple code
                 Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
             };
 
         let mut expr_state = ExprState {
             operators: Vec::new_in(arena),
             arguments: Vec::new_in(arena),
-            expr,
+            expr: term,
             spaces_after: spaces_before_op,
             end: initial_state.pos(),
         };
@@ -413,6 +413,11 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                     // so we're going to try parsing an operator.
                     return match loc(bin_op(true)).parse(arena, state.clone(), min_indent) {
                         Err((MadeProgress, f)) => Err((MadeProgress, f)),
+                        Err((NoProgress, _)) => {
+                            let out = parse_expr_final(expr_state, arena);
+                            // roll back space parsing
+                            Ok((MadeProgress, out, initial_state))
+                        }
                         Ok((_, loc_op, state)) => {
                             expr_state.consume_spaces(arena);
                             let (_, spaces_after_operator, state) =
@@ -420,13 +425,12 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
 
                             // a `-` is unary if it is preceded by a space and not followed by a space
 
-                            let op = loc_op.value;
-                            let op_start = loc_op.region.start();
-                            let op_end = loc_op.region.end();
+                            let op_loc = loc_op.region;
                             let new_start = state.pos();
-                            match op {
+                            match loc_op.value {
                                 BinOp::Minus
-                                    if expr_state.end != op_start && op_end == new_start =>
+                                    if expr_state.end != op_loc.start()
+                                        && op_loc.end() == new_start =>
                                 {
                                     parse_negated_term(
                                         arena,
@@ -451,11 +455,6 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
                                     loc_op,
                                 ),
                             }
-                        }
-                        Err((NoProgress, _)) => {
-                            let expr = parse_expr_final(expr_state, arena);
-                            // roll back space parsing
-                            Ok((MadeProgress, expr, initial_state))
                         }
                     };
                 }
@@ -1555,6 +1554,7 @@ fn parse_after_binop<'a>(
         call_min_indent,
     ) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
+        Err((NoProgress, _e)) => Err((MadeProgress, EExpr::TrailingOperator(state.pos()))),
         Ok((_, mut new_expr, state)) => {
             let new_end = state.pos();
 
@@ -1603,9 +1603,6 @@ fn parse_after_binop<'a>(
                     )
                 }
             }
-        }
-        Err((NoProgress, _e)) => {
-            return Err((MadeProgress, EExpr::TrailingOperator(state.pos())));
         }
     }
 }
@@ -1813,6 +1810,7 @@ fn parse_negated_term<'a>(
 
 /// Parse an expression, not allowing `if`/`when`/etc.
 /// TODO: this should probably be subsumed into `expr_operator_chain`
+/// If Ok always returns MadeProgress
 #[allow(clippy::too_many_arguments)]
 fn parse_expr_end<'a>(
     arena: &'a Bump,
@@ -2236,6 +2234,7 @@ pub fn parse_top_level_defs<'a>(
     Ok((MadeProgress, output, state))
 }
 
+/// If Ok it always returns MadeProgress
 fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     move |arena, state: State<'a>, _min_indent| {
         // After the first token, all other tokens must be indented past the start of the line
@@ -2364,6 +2363,7 @@ mod when {
     use crate::{ast::WhenBranch, blankspace::spaces_around_help};
 
     /// Parser for when expressions.
+    /// If Ok it always returns MadeProgress
     pub fn when_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
         (move |arena, mut state: State<'a>, _| {
             if !state.bytes().starts_with(keyword::WHEN.as_bytes()) {
@@ -2703,7 +2703,7 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     )
 }
 
-/// If Ok always returns MadeProgress
+/// If Ok it always returns MadeProgress
 fn if_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EIf<'a>> {
     move |arena: &'a Bump, state, min_indent| {
         let (_, _, state) =
