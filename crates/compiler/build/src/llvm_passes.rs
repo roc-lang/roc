@@ -2,7 +2,7 @@ use roc_mono::ir::OptLevel;
 
 // generated using "opt --passes="default<Oz>" --print-pipeline-passes example.ll"
 //
-// we also include a "globaldce" pass at the beggining of each pipeline here, which is required
+// we also include a "globaldce" pass at the beginning of each pipeline here, which is required
 // to prevent bugs with the surgical linker, and also improves the build time.
 pub fn get_llvm_passes_str(opt_level: OptLevel) -> &'static str {
     match opt_level {
