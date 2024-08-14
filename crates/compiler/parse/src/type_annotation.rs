@@ -565,6 +565,9 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, ETyp
 fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
     then(record_field(), move |arena, state, _, field| {
         match field.to_assigned_field(arena) {
+            Ok(AssignedField::IgnoredValue(_, _, _)) => {
+                Err((MadeProgress, ERecord::Field(state.pos())))
+            }
             Ok(assigned_field) => Ok((MadeProgress, assigned_field, state)),
             Err(FoundApplyValue) => Err((MadeProgress, ERecord::Field(state.pos()))),
         }

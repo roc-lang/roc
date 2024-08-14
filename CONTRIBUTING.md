@@ -43,20 +43,9 @@ Execute `cargo fmt --all` to fix the formatting.
 - The [compiler's README](https://github.com/roc-lang/roc/tree/main/crates/compiler) contains important info.
 - The AI chat in the [cursor editor](https://www.cursor.com/) can also help you find your way in the codebase.
 
-<details>
-<summary>:beetle: Debugging Tips</summary>
-- Use a debug build of the compiler. We have many asserts enabled in the debug compiler that can alert you to something going wrong. When building from source, build the debug compiler with `cargo build --bin roc`, the binary is at roc/target/debug/roc. When using roc through a nix flake like in [basic-cli](https://github.com/roc-lang/basic-cli), use `rocPkgs.cli-debug` instead of `rocPkgs.cli`.
-- At the bottom of [.cargo/config.toml](https://github.com/roc-lang/roc/blob/main/.cargo/config.toml) we have useful debug flags that activate certain debug prints.
-- For Roc code; minimize the code that produces the issue.
-- If you plan to look at the data used and produced inside the compiler, try to reproduce your issue with a very simple platform like our [minimal Rust platform](https://github.com/roc-lang/roc/tree/main/examples/platform-switching/rust-platform) instead of for example basic-cli.
-- For segmentation faults:
-    + In general we recommend using linux to investigate, it has better tools for this. 
-    + Use `roc build myApp.roc --linker=legacy` followed by `valgrind ./myApp`.
-    + Use gdb to step through the code, [this gdb script](https://roc.zulipchat.com/#narrow/stream/395097-compiler-development/topic/gdb.20script/near/424422545) can be helpful.
-    + Inspect the generated LLVM IR (`roc build myApp.roc --emit-llvm-ir`) between Roc code that encounters the segfault and code that doesn't.
-  
+### Debugging tips
 
-</details>
+If you need to do some debugging, check out [our tips](devtools/debug_tips.md).
 
 ### Commit signing
 

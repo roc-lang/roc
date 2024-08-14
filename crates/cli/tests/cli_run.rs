@@ -713,6 +713,17 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn platform_requires_pkg() {
+        test_roc_app_slim(
+            "crates/cli/tests/platform_requires_pkg",
+            "app.roc",
+            "from app from package",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
@@ -947,7 +958,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "For multiple tasks: {a: 123, b: \"abc\", c: [123], d: [\"abc\"], e: {\"a\": \"b\"}}\n",
+            "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )

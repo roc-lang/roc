@@ -449,6 +449,8 @@ mod test_snapshots {
         pass/qualified_field.expr,
         pass/qualified_var.expr,
         pass/record_access_after_tuple.expr,
+        pass/record_builder.expr,
+        pass/record_builder_ignored_fields.expr,
         pass/record_destructure_def.expr,
         pass/record_func_type_decl.expr,
         pass/record_type_with_function.expr,
