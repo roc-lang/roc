@@ -4155,3 +4155,39 @@ fn list_concat_utf8() {
         RocList<u8>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_sort_asc_by() {
+    assert_evals_to!(
+        r#"
+        testCompareFn : _ -> U8
+        testCompareFn = \n ->
+            when n is
+                ONE -> 1
+                TWO -> 2
+                THREE -> 3
+                FOUR -> 4
+
+        List.sortAscBy [THREE, ONE, TWO, FOUR] testCompareFn |> List.map testCompareFn
+        "#,
+        RocList::from_slice(&[1u8, 2, 3, 4]),
+        RocList<u8>
+    );
+
+    assert_evals_to!(
+        r#"
+        testCompareFn : _ -> U8
+        testCompareFn = \n ->
+            when n is
+                ONE -> 1
+                TWO -> 2
+                THREE -> 3
+                FOUR -> 4
+
+        List.sortDescBy [THREE, ONE, TWO, FOUR] testCompareFn |> List.map testCompareFn
+        "#,
+        RocList::from_slice(&[4u8, 3, 2, 1]),
+        RocList<u8>
+    );
+}

@@ -36,6 +36,8 @@ module [
     walkFromUntil,
     range,
     sortWith,
+    sortAscBy,
+    sortDescBy,
     swap,
     dropAt,
     min,
@@ -1003,6 +1005,17 @@ sortAsc = \list -> List.sortWith list Num.compare
 sortDesc : List (Num a) -> List (Num a)
 sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
 
+## Sorts a list in ascending order (lowest to highest) using a comparison function.
+sortAscBy : List a, (a -> Num *) -> List a
+sortAscBy = \list, toNum -> List.sortWith list \a, b -> Num.compare (toNum a) (toNum b)
+
+## Sorts a list in descending order (highest to lowest) using a comparison function.
+sortDescBy : List a, (a -> Num *) -> List a
+sortDescBy = \list, toNum ->
+    list
+    |> List.sortWith \a, b -> Num.compare (toNum a) (toNum b)
+    |> List.reverse
+
 swap : List a, U64, U64 -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
@@ -1382,4 +1395,3 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
 concatUtf8 : List U8, Str -> List U8
 
 expect (List.concatUtf8 [1, 2, 3, 4] "🐦") == [1, 2, 3, 4, 240, 159, 144, 166]
-
