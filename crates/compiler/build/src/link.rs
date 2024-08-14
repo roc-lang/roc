@@ -1168,8 +1168,6 @@ fn link_macos(
 
             debug_print_command(&check_sign_cmd);
 
-            check_sign_cmd.output()?;
-
             if check_sign_cmd.status()?.success() {
                 // File is already signed. Skipping signing process.
                 Ok((ld_child, output_path))
