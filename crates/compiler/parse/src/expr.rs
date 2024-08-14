@@ -2365,86 +2365,59 @@ mod when {
 
     /// Parser for when expressions.
     pub fn when_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
-        (move |arena, state: State<'a>, _| {
-            let before = parser::keyword(keyword::WHEN, EWhen::When);
-            let expr_start_p = specialize_err_ref(EWhen::Condition, expr_start(options));
-            let parser = map_with_arena(
-                and(
-                    space0_e(EWhen::IndentCondition),
-                    and(expr_start_p, spaces()),
-                ),
+        (move |arena, mut state: State<'a>, _| {
+            if !state.bytes().starts_with(keyword::WHEN.as_bytes()) {
+                return Err((NoProgress, EWhen::When(state.pos())));
+            }
+
+            // the next character should not be an identifier character
+            // to prevent treating `whence` as a keyword
+            let when_width = keyword::WHEN.len();
+            match state.bytes().get(when_width) {
+                Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
+                None => {}
+                _ => return Err((NoProgress, EWhen::When(state.pos()))),
+            };
+
+            let cond_indent = state.line_indent() + 1;
+            state.advance_mut(when_width);
+
+            let cond_parser = specialize_err_ref(EWhen::Condition, expr_start(options));
+            let spaced_cond_parser = map_with_arena(
+                and(space0_e(EWhen::IndentCondition), and(cond_parser, spaces())),
                 spaces_around_help,
             );
 
-            let cond_indent = state.line_indent() + 1;
-            match before.parse(arena, state, 0) {
-                Ok((_, (), state)) => match parser.parse(arena, state, cond_indent) {
-                    Ok((_, cond, mut state)) => {
-                        // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
-                        // ambiguity. The formatter will fix it up.
-                        // We require that branches are indented relative to the line containing the `is`.
+            match spaced_cond_parser.parse(arena, state, cond_indent) {
+                Ok((_, cond, mut state)) => {
+                    // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
+                    // ambiguity. The formatter will fix it up.
+                    // We require that branches are indented relative to the line containing the `is`.
 
-                        if !state.bytes().starts_with(keyword::IS.as_bytes()) {
-                            return Err((MadeProgress, EWhen::Is(state.pos())));
-                        }
-
-                        // the next character should not be an identifier character
-                        // to prevent treating `whence` as a keyword
-                        let width = keyword::IS.len();
-                        match state.bytes().get(width) {
-                            Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
-                            None => {}
-                            _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
-                        };
-
-                        let br_indent = state.line_indent() + 1;
-                        state.advance_mut(width);
-
-                        match branches(options).parse(arena, state, br_indent) {
-                            Ok((_, brs, state)) => {
-                                let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
-                                Ok((MadeProgress, out, state))
-                            }
-                            Err((_, fail)) => Err((MadeProgress, fail)),
-                        }
+                    if !state.bytes().starts_with(keyword::IS.as_bytes()) {
+                        return Err((MadeProgress, EWhen::Is(state.pos())));
                     }
-                    Err((_, fail)) => Err((MadeProgress, fail)),
-                },
-                Err(fail) => Err(fail),
+
+                    let is_width = keyword::IS.len();
+                    match state.bytes().get(is_width) {
+                        Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
+                        None => {}
+                        _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
+                    };
+
+                    let br_indent = state.line_indent() + 1;
+                    state.advance_mut(is_width);
+
+                    match branches(options).parse(arena, state, br_indent) {
+                        Ok((_, brs, state)) => {
+                            let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
+                            Ok((MadeProgress, out, state))
+                        }
+                        Err((_, fail)) => Err((MadeProgress, fail)),
+                    }
+                }
+                Err((_, fail)) => Err((MadeProgress, fail)),
             }
-
-            // match cond_parser.parse(arena, state, min_indent) {
-            //     Ok((_, cond, mut state)) => {
-            // // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
-            // // ambiguity. The formatter will fix it up.
-            // // We require that branches are indented relative to the line containing the `is`.
-
-            // if !state.bytes().starts_with(keyword::IS.as_bytes()) {
-            //     return Err((MadeProgress, EWhen::Is(state.pos())));
-            // }
-
-            // // the next character should not be an identifier character
-            // // to prevent treating `whence` as a keyword
-            // let width = keyword::IS.len();
-            // match state.bytes().get(width) {
-            //     Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
-            //     None => {}
-            //     _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
-            // };
-
-            // let br_indent = state.line_indent() + 1;
-            // state.advance_mut(width);
-
-            // match branches(options).parse(arena, state, br_indent) {
-            //     Ok((_, brs, state)) => {
-            //         let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
-            //         Ok((MadeProgress, out, state))
-            //     }
-            //     Err((_, fail)) => Err((MadeProgress, fail)),
-            // }
-            //     }
-            //     Err(fail) => Err(fail),
-            // }
         })
         .trace("when")
     }
