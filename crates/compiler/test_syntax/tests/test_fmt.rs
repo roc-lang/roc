@@ -63,7 +63,7 @@ mod test_fmt {
 
         match header::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                use roc_parse::remove_spaces::RemoveSpaces;
+                use roc_parse::normalize::Normalize;
 
                 let mut buf = Buf::new_in(&arena);
 
@@ -77,8 +77,8 @@ mod test_fmt {
                     );
                 });
 
-                let ast_normalized = actual.remove_spaces(&arena);
-                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+                let ast_normalized = actual.normalize(&arena);
+                let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
                 // HACK!
                 // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,

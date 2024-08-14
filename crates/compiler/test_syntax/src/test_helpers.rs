@@ -3,8 +3,8 @@ use roc_fmt::{annotation::Formattable, header::fmt_header};
 use roc_parse::{
     ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
     header::parse_module_defs,
+    normalize::Normalize,
     parser::{Parser, SyntaxError},
-    remove_spaces::RemoveSpaces,
     state::State,
     test_helpers::{parse_defs_with, parse_expr_with, parse_header_with},
 };
@@ -128,13 +128,13 @@ impl<'a> Malformed for Output<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Output<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+impl<'a> Normalize<'a> for Output<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
-            Output::Header(header) => Output::Header(header.remove_spaces(arena)),
-            Output::ModuleDefs(defs) => Output::ModuleDefs(defs.remove_spaces(arena)),
-            Output::Expr(expr) => Output::Expr(expr.remove_spaces(arena)),
-            Output::Full(full) => Output::Full(full.remove_spaces(arena)),
+            Output::Header(header) => Output::Header(header.normalize(arena)),
+            Output::ModuleDefs(defs) => Output::ModuleDefs(defs.normalize(arena)),
+            Output::Expr(expr) => Output::Expr(expr.normalize(arena)),
+            Output::Full(full) => Output::Full(full.normalize(arena)),
         }
     }
 }
@@ -221,8 +221,8 @@ impl<'a> Input<'a> {
             );
         });
 
-        let ast_normalized = actual.remove_spaces(&arena);
-        let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+        let ast_normalized = actual.normalize(&arena);
+        let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
         // HACK!
         // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
