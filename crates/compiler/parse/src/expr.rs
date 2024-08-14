@@ -2360,54 +2360,91 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 }
 
 mod when {
-    use parser::indented_seq_skip_first;
-
     use super::*;
-    use crate::{ast::WhenBranch, blankspace::space0_around_e_no_after_indent_check};
+    use crate::{ast::WhenBranch, blankspace::spaces_around_help};
 
     /// Parser for when expressions.
     pub fn when_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
-        (move |arena, state: State<'a>, min_indent| {
+        (move |arena, state: State<'a>, _| {
             let before = parser::keyword(keyword::WHEN, EWhen::When);
-            let parser = space0_around_e_no_after_indent_check(
-                specialize_err_ref(EWhen::Condition, expr_start(options)),
-                EWhen::IndentCondition,
+            let expr_start_p = specialize_err_ref(EWhen::Condition, expr_start(options));
+            let parser = map_with_arena(
+                and(
+                    space0_e(EWhen::IndentCondition),
+                    and(expr_start_p, spaces()),
+                ),
+                spaces_around_help,
             );
 
-            let cond_parser = indented_seq_skip_first(before, parser);
+            let cond_indent = state.line_indent() + 1;
+            match before.parse(arena, state, 0) {
+                Ok((_, (), state)) => match parser.parse(arena, state, cond_indent) {
+                    Ok((_, cond, mut state)) => {
+                        // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
+                        // ambiguity. The formatter will fix it up.
+                        // We require that branches are indented relative to the line containing the `is`.
 
-            match cond_parser.parse(arena, state, min_indent) {
-                Ok((_, cond, mut state)) => {
-                    // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
-                    // ambiguity. The formatter will fix it up.
-                    // We require that branches are indented relative to the line containing the `is`.
-
-                    if !state.bytes().starts_with(keyword::IS.as_bytes()) {
-                        return Err((MadeProgress, EWhen::Is(state.pos())));
-                    }
-
-                    // the next character should not be an identifier character
-                    // to prevent treating `whence` as a keyword
-                    let width = keyword::IS.len();
-                    match state.bytes().get(width) {
-                        Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
-                        None => {}
-                        _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
-                    };
-
-                    let br_indent = state.line_indent() + 1;
-                    state.advance_mut(width);
-
-                    match branches(options).parse(arena, state, br_indent) {
-                        Ok((_, brs, state)) => {
-                            let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
-                            Ok((MadeProgress, out, state))
+                        if !state.bytes().starts_with(keyword::IS.as_bytes()) {
+                            return Err((MadeProgress, EWhen::Is(state.pos())));
                         }
-                        Err((_, fail)) => Err((MadeProgress, fail)),
+
+                        // the next character should not be an identifier character
+                        // to prevent treating `whence` as a keyword
+                        let width = keyword::IS.len();
+                        match state.bytes().get(width) {
+                            Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
+                            None => {}
+                            _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
+                        };
+
+                        let br_indent = state.line_indent() + 1;
+                        state.advance_mut(width);
+
+                        match branches(options).parse(arena, state, br_indent) {
+                            Ok((_, brs, state)) => {
+                                let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
+                                Ok((MadeProgress, out, state))
+                            }
+                            Err((_, fail)) => Err((MadeProgress, fail)),
+                        }
                     }
-                }
+                    Err((_, fail)) => Err((MadeProgress, fail)),
+                },
                 Err(fail) => Err(fail),
             }
+
+            // match cond_parser.parse(arena, state, min_indent) {
+            //     Ok((_, cond, mut state)) => {
+            // // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
+            // // ambiguity. The formatter will fix it up.
+            // // We require that branches are indented relative to the line containing the `is`.
+
+            // if !state.bytes().starts_with(keyword::IS.as_bytes()) {
+            //     return Err((MadeProgress, EWhen::Is(state.pos())));
+            // }
+
+            // // the next character should not be an identifier character
+            // // to prevent treating `whence` as a keyword
+            // let width = keyword::IS.len();
+            // match state.bytes().get(width) {
+            //     Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
+            //     None => {}
+            //     _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
+            // };
+
+            // let br_indent = state.line_indent() + 1;
+            // state.advance_mut(width);
+
+            // match branches(options).parse(arena, state, br_indent) {
+            //     Ok((_, brs, state)) => {
+            //         let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
+            //         Ok((MadeProgress, out, state))
+            //     }
+            //     Err((_, fail)) => Err((MadeProgress, fail)),
+            // }
+            //     }
+            //     Err(fail) => Err(fail),
+            // }
         })
         .trace("when")
     }

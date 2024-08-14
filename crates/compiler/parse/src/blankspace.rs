@@ -39,21 +39,6 @@ where
     parser::map_with_arena(and(spaces(), and(parser, spaces())), spaces_around_help)
 }
 
-pub fn space0_around_e_no_after_indent_check<'a, P, S, E>(
-    parser: P,
-    indent_before_problem: fn(Position) -> E,
-) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(space0_e(indent_before_problem), and(parser, spaces())),
-        spaces_around_help,
-    )
-}
-
 pub fn space0_before_optional_after<'a, P, S, E>(
     parser: P,
     indent_before_problem: fn(Position) -> E,
@@ -97,7 +82,7 @@ where
     )
 }
 
-fn spaces_around_help<'a, S>(
+pub fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (
         &'a [CommentOrNewline<'a>],
