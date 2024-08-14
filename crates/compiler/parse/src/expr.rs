@@ -2427,31 +2427,32 @@ mod when {
                         guard,
                     }));
 
-                    let branch_match_p = then(
-                        branch_alternatives(options, Some(pattern_indent)),
-                        move |_arena, state, _, ((indent_column, loc_patterns), loc_guard)| {
-                            if pattern_indent == indent_column {
-                                Ok((MadeProgress, (loc_patterns, loc_guard), state))
-                            } else {
-                                let indent = pattern_indent - indent_column;
-                                Err((MadeProgress, EWhen::PatternAlignment(indent, state.pos())))
-                            }
-                        },
-                    );
+                    let branch_alt_p = branch_alternatives(options, Some(pattern_indent));
                     let branch_block_p = branch_result(pattern_indent + 1);
 
-                    let branch_parser = and(branch_match_p, branch_block_p);
-
                     while !state.bytes().is_empty() {
-                        match branch_parser.parse(arena, state.clone(), branch_indent) {
-                            Ok((_, ((patterns, guard), value), next_state)) => {
-                                let branch = WhenBranch {
-                                    patterns: patterns.into_bump_slice(),
-                                    value,
-                                    guard,
-                                };
-                                branches.push(arena.alloc(branch));
-                                state = next_state;
+                        match branch_alt_p.parse(arena, state.clone(), branch_indent) {
+                            Ok((_, ((indent_column, patterns), guard), m_state)) => {
+                                if pattern_indent == indent_column {
+                                    match branch_block_p.parse(arena, m_state, branch_indent) {
+                                        Ok((_, value, next_state)) => {
+                                            let branch = WhenBranch {
+                                                patterns: patterns.into_bump_slice(),
+                                                value,
+                                                guard,
+                                            };
+                                            branches.push(arena.alloc(branch));
+                                            state = next_state;
+                                        }
+                                        Err((_, fail)) => {
+                                            return Err((MadeProgress, fail));
+                                        }
+                                    }
+                                } else {
+                                    let indent = pattern_indent - indent_column;
+                                    let fail = EWhen::PatternAlignment(indent, m_state.pos());
+                                    return Err((MadeProgress, fail));
+                                }
                             }
                             Err((NoProgress, _)) => {
                                 break;
@@ -2503,16 +2504,6 @@ mod when {
         )
     }
 
-    fn error_on_arrow<'a, T, E: 'a>(f: impl Fn(Position) -> E) -> impl Parser<'a, T, E> {
-        move |_, state: State<'a>, _| {
-            if state.bytes().starts_with(b"->") {
-                Err((MadeProgress, f(state.pos())))
-            } else {
-                Err((NoProgress, f(state.pos())))
-            }
-        }
-    }
-
     fn branch_single_alternative<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EWhen<'a>> {
         move |arena, state, min_indent| {
             let (_, spaces, state) =
@@ -2544,12 +2535,15 @@ mod when {
         move |arena, state: State<'a>, min_indent: u32| {
             // put no restrictions on the indent after the spaces; we'll check it manually
             match space0_e(EWhen::IndentPattern).parse(arena, state, 0) {
-                Err((MadeProgress, fail)) => Err((NoProgress, fail)),
-                Err((NoProgress, fail)) => Err((NoProgress, fail)),
+                Err(fail) => Err(fail),
                 Ok((_progress, spaces, state)) => {
                     match pattern_indent_level {
                         Some(wanted) if state.column() > wanted => {
-                            error_on_arrow(EWhen::IndentPattern).parse(arena, state, min_indent)
+                            if state.bytes().starts_with(b"->") {
+                                Err((MadeProgress, EWhen::IndentPattern(state.pos())))
+                            } else {
+                                Err((NoProgress, EWhen::IndentPattern(state.pos())))
+                            }
                         }
                         Some(wanted) if state.column() < wanted => {
                             let indent = wanted - state.column();
@@ -2566,12 +2560,7 @@ mod when {
                                 sep_by1(byte(b'|', EWhen::Bar), branch_single_alternative());
 
                             match parser.parse(arena, state.clone(), pattern_indent) {
-                                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
-                                Err((NoProgress, fail)) => {
-                                    // roll back space parsing if the pattern made no progress
-                                    Err((NoProgress, fail))
-                                }
-
+                                Err(fail) => Err(fail),
                                 Ok((_, mut loc_patterns, state)) => {
                                     // tag spaces onto the first parsed pattern
                                     if !spaces.is_empty() {
