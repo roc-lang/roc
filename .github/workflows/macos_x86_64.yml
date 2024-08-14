@@ -18,9 +18,12 @@ jobs:
       - name: set LLVM_SYS_180_PREFIX
         run: echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
 
-      - name: Update PATH to use zig 11
+      - name: check for zig 13
+        run: ls /Users/username1/Downloads/zig-macos-x86_64-0.13.0
+
+      - name: Update PATH to use zig 13
         run: |
-          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.13.0:$PATH" >> $GITHUB_ENV
 
       - run: zig version
 
