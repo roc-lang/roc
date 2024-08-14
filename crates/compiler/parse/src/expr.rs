@@ -2407,47 +2407,27 @@ mod when {
                     let branch_indent = state.line_indent() + 1;
                     state.advance_mut(is_width);
 
-                    match branches(options).parse(arena, state, branch_indent) {
-                        Ok((_, brs, state)) => {
-                            let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
-                            Ok((MadeProgress, out, state))
-                        }
-                        Err((_, fail)) => Err((MadeProgress, fail)),
-                    }
-                }
-                Err((_, fail)) => Err((MadeProgress, fail)),
-            }
-        })
-        .trace("when")
-    }
+                    // 1. Parse the first branch and get its indentation level (it must be >= branch_indent).
+                    // 2. Parse the other branches. Their indentation levels must be == the first branch's.
+                    let (_, ((pattern_indent, first_patterns), guard), state) =
+                        branch_alternatives(options, None)
+                            .parse(arena, state, branch_indent)
+                            .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-    /// If Ok always returns MadeProgress
-    fn branches<'a>(
-        options: ExprParseOptions,
-    ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, EWhen<'a>> {
-        move |arena, state: State<'a>, branch_indent: u32| {
-            let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
+                    // Parse the first "->" and the expression after it.
+                    let (_, value, mut state) = branch_result(pattern_indent + 1)
+                        .parse(arena, state, pattern_indent + 1)
+                        .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-            // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
-            // 2. Parse the other branches. Their indentation levels must be == the first branch's.
+                    // Record this as the first branch, then optionally parse additional branches.
+                    let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
+                    branches.push(arena.alloc(WhenBranch {
+                        patterns: first_patterns.into_bump_slice(),
+                        value,
+                        guard,
+                    }));
 
-            let (_, ((pattern_indent, loc_first_patterns), loc_first_guard), state) =
-                branch_alternatives(options, None).parse(arena, state, branch_indent)?;
-
-            // Parse the first "->" and the expression after it.
-            let (_, loc_first_expr, mut state) =
-                branch_result(pattern_indent + 1).parse(arena, state, pattern_indent + 1)?;
-
-            // Record this as the first branch, then optionally parse additional branches.
-            branches.push(arena.alloc(WhenBranch {
-                patterns: loc_first_patterns.into_bump_slice(),
-                value: loc_first_expr,
-                guard: loc_first_guard,
-            }));
-
-            let branch_parser = map(
-                and(
-                    then(
+                    let branch_match_p = then(
                         branch_alternatives(options, Some(pattern_indent)),
                         move |_arena, state, _, ((indent_column, loc_patterns), loc_guard)| {
                             if pattern_indent == indent_column {
@@ -2457,33 +2437,38 @@ mod when {
                                 Err((MadeProgress, EWhen::PatternAlignment(indent, state.pos())))
                             }
                         },
-                    ),
-                    branch_result(pattern_indent + 1),
-                ),
-                |((patterns, guard), expr)| WhenBranch {
-                    patterns: patterns.into_bump_slice(),
-                    value: expr,
-                    guard,
-                },
-            );
+                    );
+                    let branch_block_p = branch_result(pattern_indent + 1);
 
-            while !state.bytes().is_empty() {
-                match branch_parser.parse(arena, state.clone(), branch_indent) {
-                    Ok((_, next_output, next_state)) => {
-                        state = next_state;
-                        branches.push(arena.alloc(next_output));
+                    let branch_parser = and(branch_match_p, branch_block_p);
+
+                    while !state.bytes().is_empty() {
+                        match branch_parser.parse(arena, state.clone(), branch_indent) {
+                            Ok((_, ((patterns, guard), value), next_state)) => {
+                                let branch = WhenBranch {
+                                    patterns: patterns.into_bump_slice(),
+                                    value,
+                                    guard,
+                                };
+                                branches.push(arena.alloc(branch));
+                                state = next_state;
+                            }
+                            Err((NoProgress, _)) => {
+                                break;
+                            }
+                            Err(fail) => {
+                                return Err(fail);
+                            }
+                        }
                     }
-                    Err((MadeProgress, problem)) => {
-                        return Err((MadeProgress, problem));
-                    }
-                    Err((NoProgress, _)) => {
-                        break;
-                    }
+
+                    let out = Expr::When(arena.alloc(cond), branches.into_bump_slice());
+                    Ok((MadeProgress, out, state))
                 }
+                Err((_, fail)) => Err((MadeProgress, fail)),
             }
-
-            Ok((MadeProgress, branches, state))
-        }
+        })
+        .trace("when")
     }
 
     /// Parsing alternative patterns in `when` branches.
