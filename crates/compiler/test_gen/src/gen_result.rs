@@ -357,7 +357,7 @@ fn roc_result_after_err() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn roc_result_map_other() {
+fn roc_result_map_both() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -383,7 +383,11 @@ fn roc_result_map_other() {
         RocResult::err(RocStr::from("24")),
         RocResult<RocStr, RocStr>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn roc_result_map_two() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -397,6 +401,38 @@ fn roc_result_map_other() {
             "#
         ),
         RocResult::ok(14i64),
+        RocResult<i64, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            first : Result I64 Str
+            first = Err "foo"
+
+            second : Result I64 Str
+            second = Err "bar"
+
+            Result.map2 first second \a, b -> a + b
+            "#
+        ),
+        RocResult::err(RocStr::from("foo")),
+        RocResult<i64, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            first : Result I64 Str
+            first = Ok 42
+
+            second : Result I64 Str
+            second = Err "bar"
+
+            Result.map2 first second \a, b -> a + b
+            "#
+        ),
+        RocResult::err(RocStr::from("bar")),
         RocResult<i64, RocStr>
     );
 }
