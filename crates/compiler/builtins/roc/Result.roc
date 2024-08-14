@@ -1,4 +1,15 @@
-module [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
+module [
+    Result,
+    isOk,
+    isErr,
+    map,
+    mapErr,
+    mapBoth,
+    map2,
+    try,
+    onErr,
+    withDefault,
+]
 
 import Bool exposing [Bool]
 
@@ -66,6 +77,22 @@ mapErr = \result, transform ->
     when result is
         Ok v -> Ok v
         Err e -> Err (transform e)
+
+## Maps both the `Ok` and `Err` values of a `Result` to new values.
+mapBoth : Result ok1 err1, (ok1 -> ok2), (err1 -> err2) -> Result ok2 err2
+mapBoth = \result, okTransform, errTransform ->
+    when result is
+        Ok val -> Ok (okTransform val)
+        Err err -> Err (errTransform err)
+
+## Maps the `Ok` values of two `Result`s to a new value using a given transformation,
+## or returns the first `Err` value encountered.
+map2 : Result a err, Result b err, (a, b -> c) -> Result c err
+map2 = \firstResult, secondResult, transform ->
+    when (firstResult, secondResult) is
+        (Ok first, Ok second) -> Ok (transform first second)
+        (Err err, _) -> Err err
+        (_, Err err) -> Err err
 
 ## If the result is `Ok`, transforms the entire result by running a conversion
 ## function on the value the `Ok` holds. Then returns that new result. If the
