@@ -405,7 +405,7 @@ fn check_derived_typechecks_and_golden(
     let mut def_types = Default::default();
     let mut rigid_vars = Default::default();
     let mut flex_vars = Default::default();
-    let (import_variables, abilities_store) = add_imports(
+    let (import_variables, imported_param_vars, abilities_store) = add_imports(
         test_module,
         &mut constraints,
         &mut test_subs,
@@ -438,6 +438,8 @@ fn check_derived_typechecks_and_golden(
         pending_derives: Default::default(),
         exposed_by_module: &exposed_for_module.exposed_by_module,
         derived_module: Default::default(),
+        params_pattern: None,
+        module_params_vars: imported_param_vars,
 
         #[cfg(debug_assertions)]
         checkmate: None,
