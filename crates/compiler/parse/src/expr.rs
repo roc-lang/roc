@@ -2390,10 +2390,6 @@ mod when {
 
             match spaced_cond_parser.parse(arena, state, cond_indent) {
                 Ok((_, cond, mut state)) => {
-                    // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
-                    // ambiguity. The formatter will fix it up.
-                    // We require that branches are indented relative to the line containing the `is`.
-
                     if !state.bytes().starts_with(keyword::IS.as_bytes()) {
                         return Err((MadeProgress, EWhen::Is(state.pos())));
                     }
@@ -2405,10 +2401,13 @@ mod when {
                         _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
                     };
 
-                    let br_indent = state.line_indent() + 1;
+                    // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
+                    // ambiguity. The formatter will fix it up.
+                    // We require that branches are indented relative to the line containing the `is`.
+                    let branch_indent = state.line_indent() + 1;
                     state.advance_mut(is_width);
 
-                    match branches(options).parse(arena, state, br_indent) {
+                    match branches(options).parse(arena, state, branch_indent) {
                         Ok((_, brs, state)) => {
                             let out = Expr::When(arena.alloc(cond), brs.into_bump_slice());
                             Ok((MadeProgress, out, state))
@@ -2426,23 +2425,18 @@ mod when {
     fn branches<'a>(
         options: ExprParseOptions,
     ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, EWhen<'a>> {
-        move |arena, state: State<'a>, min_indent: u32| {
+        move |arena, state: State<'a>, branch_indent: u32| {
             let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
 
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
             // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-            let (_, ((pattern_indent_level, loc_first_patterns), loc_first_guard), state): (
-                _,
-                ((_, _), _),
-                State<'a>,
-            ) = branch_alternatives(options, None).parse(arena, state, min_indent)?;
-
-            let original_indent = pattern_indent_level;
+            let (_, ((pattern_indent, loc_first_patterns), loc_first_guard), state) =
+                branch_alternatives(options, None).parse(arena, state, branch_indent)?;
 
             // Parse the first "->" and the expression after it.
             let (_, loc_first_expr, mut state) =
-                branch_result(original_indent + 1).parse(arena, state, original_indent + 1)?;
+                branch_result(pattern_indent + 1).parse(arena, state, pattern_indent + 1)?;
 
             // Record this as the first branch, then optionally parse additional branches.
             branches.push(arena.alloc(WhenBranch {
@@ -2454,33 +2448,29 @@ mod when {
             let branch_parser = map(
                 and(
                     then(
-                        branch_alternatives(options, Some(pattern_indent_level)),
+                        branch_alternatives(options, Some(pattern_indent)),
                         move |_arena, state, _, ((indent_column, loc_patterns), loc_guard)| {
-                            if pattern_indent_level == indent_column {
+                            if pattern_indent == indent_column {
                                 Ok((MadeProgress, (loc_patterns, loc_guard), state))
                             } else {
-                                let indent = pattern_indent_level - indent_column;
+                                let indent = pattern_indent - indent_column;
                                 Err((MadeProgress, EWhen::PatternAlignment(indent, state.pos())))
                             }
                         },
                     ),
-                    branch_result(original_indent + 1),
+                    branch_result(pattern_indent + 1),
                 ),
-                |((patterns, guard), expr)| {
-                    let patterns: Vec<'a, _> = patterns;
-                    WhenBranch {
-                        patterns: patterns.into_bump_slice(),
-                        value: expr,
-                        guard,
-                    }
+                |((patterns, guard), expr)| WhenBranch {
+                    patterns: patterns.into_bump_slice(),
+                    value: expr,
+                    guard,
                 },
             );
 
             while !state.bytes().is_empty() {
-                match branch_parser.parse(arena, state.clone(), min_indent) {
+                match branch_parser.parse(arena, state.clone(), branch_indent) {
                     Ok((_, next_output, next_state)) => {
                         state = next_state;
-
                         branches.push(arena.alloc(next_output));
                     }
                     Err((MadeProgress, problem)) => {
