@@ -1159,12 +1159,31 @@ fn link_macos(
         Architecture::Aarch64 => {
             ld_child.wait()?;
 
-            let mut codesign_cmd = Command::new("codesign");
-            codesign_cmd.args(["-s", "-", output_path.to_str().unwrap()]);
-            debug_print_command(&codesign_cmd);
-            let codesign_child = codesign_cmd.spawn()?;
+            let output_path_str = output_path.to_str().unwrap();
 
-            Ok((codesign_child, output_path))
+            // Check if the file is already signed
+            let mut check_sign_cmd = Command::new("codesign");
+
+            check_sign_cmd.args(["--verify", output_path_str]);
+
+            debug_print_command(&check_sign_cmd);
+
+            check_sign_cmd.output()?;
+
+            if check_sign_cmd.status()?.success() {
+                // File is already signed. Skipping signing process.
+                Ok((ld_child, output_path))
+            } else {
+                // File is not signed. Proceeding with signing.")
+                let mut codesign_cmd = Command::new("codesign");
+
+                codesign_cmd.args(["-s", "-", output_path_str]);
+
+                debug_print_command(&codesign_cmd);
+                let codesign_child = codesign_cmd.spawn()?;
+
+                Ok((codesign_child, output_path))
+            }
         }
         _ => Ok((ld_child, output_path)),
     }
