@@ -25,6 +25,7 @@ pub enum PatternType {
     DefExpr,
     FunctionArg,
     WhenBranch,
+    ModuleParams,
 }
 
 pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
