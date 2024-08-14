@@ -7,7 +7,7 @@
 
 use crate::test_helpers::{Input, InputKind};
 use bumpalo::Bump;
-use roc_parse::{ast::Malformed, remove_spaces::RemoveSpaces};
+use roc_parse::{ast::Malformed, normalize::Normalize};
 
 pub fn print_minimizations(text: &str, kind: InputKind) {
     let Some(original_error) = round_trip_once_and_extract_error(text, kind) else {
@@ -81,12 +81,7 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
 
     let actual = match input.parse_in(&arena) {
         Ok(a) => a,
-        Err(e) => {
-            return Some(format!(
-                "Initial parse failed: {:?}",
-                e.remove_spaces(&arena)
-            ))
-        }
+        Err(e) => return Some(format!("Initial parse failed: {:?}", e.normalize(&arena))),
     };
 
     if actual.is_malformed() {
@@ -97,11 +92,11 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
 
     let reparsed_ast = match output.as_ref().parse_in(&arena) {
         Ok(r) => r,
-        Err(e) => return Some(format!("Reparse failed: {:?}", e.remove_spaces(&arena))),
+        Err(e) => return Some(format!("Reparse failed: {:?}", e.normalize(&arena))),
     };
 
-    let ast_normalized = actual.remove_spaces(&arena);
-    let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+    let ast_normalized = actual.normalize(&arena);
+    let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
     if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
         return Some("Different ast".to_string());

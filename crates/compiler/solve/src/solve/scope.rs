@@ -2,13 +2,43 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
 /// The scope of the solver, as symbols are introduced.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Scope {
     symbols: Vec<Symbol>,
     variables: Vec<Variable>,
 }
 
 impl Scope {
+    pub fn new(params_pattern: Option<roc_can::pattern::Pattern>) -> Self {
+        match params_pattern {
+            Some(params_pattern) => match params_pattern {
+                roc_can::pattern::Pattern::RecordDestructure {
+                    whole_var: _,
+                    ext_var: _,
+                    destructs,
+                } => {
+                    let mut symbols = Vec::with_capacity(destructs.len());
+                    let mut variables = Vec::with_capacity(destructs.len());
+
+                    for destruct in destructs {
+                        symbols.push(destruct.value.symbol);
+                        variables.push(destruct.value.var);
+                    }
+
+                    Self { symbols, variables }
+                }
+                _ => unreachable!(
+                    "other pattern types should have parsed: {:?}",
+                    params_pattern
+                ),
+            },
+            None => Self {
+                symbols: Vec::default(),
+                variables: Vec::default(),
+            },
+        }
+    }
+
     pub fn vars_by_symbol(&self) -> impl Iterator<Item = (Symbol, Variable)> + '_ {
         let it1 = self.symbols.iter().copied();
         let it2 = self.variables.iter().copied();

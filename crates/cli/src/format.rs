@@ -9,7 +9,7 @@ use roc_fmt::header::fmt_header;
 use roc_fmt::Buf;
 use roc_parse::ast::{FullAst, SpacesBefore};
 use roc_parse::header::parse_module_defs;
-use roc_parse::remove_spaces::RemoveSpaces;
+use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
 
 #[derive(Copy, Clone, Debug)]
@@ -200,8 +200,8 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
         }
     };
 
-    let ast_normalized = ast.remove_spaces(arena);
-    let reparsed_ast_normalized = reparsed_ast.remove_spaces(arena);
+    let ast_normalized = ast.normalize(arena);
+    let reparsed_ast_normalized = reparsed_ast.normalize(arena);
 
     // HACK!
     // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,

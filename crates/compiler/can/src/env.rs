@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::procedure::References;
-use crate::scope::Scope;
+use crate::scope::{ModuleLookup, Scope, SymbolLookup};
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, ModuleName};
@@ -74,7 +74,7 @@ impl<'a> Env<'a> {
         module_name_str: &str,
         ident: &str,
         region: Region,
-    ) -> Result<Symbol, RuntimeError> {
+    ) -> Result<SymbolLookup, RuntimeError> {
         debug_assert!(
             !module_name_str.is_empty(),
             "Called env.qualified_lookup with an unqualified ident: {ident:?}"
@@ -82,8 +82,10 @@ impl<'a> Env<'a> {
 
         let module_name = ModuleName::from(module_name_str);
 
-        match scope.modules.get_id(&module_name) {
-            Some(module_id) => self.qualified_lookup_help(scope, module_id, ident, region),
+        match scope.modules.lookup(&module_name) {
+            Some(lookedup_module) => {
+                self.qualified_lookup_help(scope, lookedup_module, ident, region)
+            }
             None => Err(RuntimeError::ModuleNotImported {
                 module_name: module_name.clone(),
                 imported_modules: scope
@@ -106,11 +108,11 @@ impl<'a> Env<'a> {
         module_id: ModuleId,
         ident: &str,
         region: Region,
-    ) -> Result<Symbol, RuntimeError> {
-        if !scope.modules.has_id(module_id) {
-            Err(self.module_exists_but_not_imported(scope, module_id, region))
+    ) -> Result<SymbolLookup, RuntimeError> {
+        if let Some(module) = scope.modules.lookup_by_id(&module_id) {
+            self.qualified_lookup_help(scope, module, ident, region)
         } else {
-            self.qualified_lookup_help(scope, module_id, ident, region)
+            Err(self.module_exists_but_not_imported(scope, module_id, region))
         }
     }
 
@@ -118,18 +120,18 @@ impl<'a> Env<'a> {
     fn qualified_lookup_help(
         &mut self,
         scope: &Scope,
-        module_id: ModuleId,
+        module: ModuleLookup,
         ident: &str,
         region: Region,
-    ) -> Result<Symbol, RuntimeError> {
+    ) -> Result<SymbolLookup, RuntimeError> {
         let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
 
         // You can do qualified lookups on your own module, e.g.
         // if I'm in the Foo module, I can do a `Foo.bar` lookup.
-        if module_id == self.home {
+        if module.id == self.home {
             match scope.locals.ident_ids.get_id(ident) {
                 Some(ident_id) => {
-                    let symbol = Symbol::new(module_id, ident_id);
+                    let symbol = Symbol::new(module.id, ident_id);
 
                     if is_type_name {
                         self.qualified_type_lookups.insert(symbol);
@@ -137,7 +139,7 @@ impl<'a> Env<'a> {
                         self.qualified_value_lookups.insert(symbol);
                     }
 
-                    Ok(symbol)
+                    Ok(SymbolLookup::no_params(symbol))
                 }
                 None => {
                     let error = RuntimeError::LookupNotInScope {
@@ -157,10 +159,10 @@ impl<'a> Env<'a> {
                 }
             }
         } else {
-            match self.dep_idents.get(&module_id) {
+            match self.dep_idents.get(&module.id) {
                 Some(exposed_ids) => match exposed_ids.get_id(ident) {
                     Some(ident_id) => {
-                        let symbol = Symbol::new(module_id, ident_id);
+                        let symbol = Symbol::new(module.id, ident_id);
 
                         if is_type_name {
                             self.qualified_type_lookups.insert(symbol);
@@ -168,12 +170,12 @@ impl<'a> Env<'a> {
                             self.qualified_value_lookups.insert(symbol);
                         }
 
-                        Ok(symbol)
+                        Ok(module.into_symbol(symbol))
                     }
                     None => Err(RuntimeError::ValueNotExposed {
                         module_name: self
                             .qualified_module_ids
-                            .get_name(module_id)
+                            .get_name(module.id)
                             .expect("Module ID known, but not in the module IDs somehow")
                             .as_inner()
                             .clone(),
@@ -182,7 +184,7 @@ impl<'a> Env<'a> {
                         exposed_values: exposed_ids.exposed_values(),
                     }),
                 },
-                _ => Err(self.module_exists_but_not_imported(scope, module_id, region)),
+                _ => Err(self.module_exists_but_not_imported(scope, module.id, region)),
             }
         }
     }
