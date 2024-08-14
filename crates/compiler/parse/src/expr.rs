@@ -892,10 +892,10 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
     then(
         and(
             backtrackable(space0_e(EImportParams::Indent)),
-            specialize_err(EImportParams::Record, record_help()),
+            specialize_err(EImportParams::Record, loc(record_help())),
         ),
-        |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
-            if let Some(prefix) = record.prefix {
+        |arena, state, _, (before, loc_record): (_, Loc<RecordHelp<'a>>)| {
+            if let Some(prefix) = loc_record.value.prefix {
                 match prefix {
                     (update, RecordHelpPrefix::Update) => {
                         return Err((
@@ -912,21 +912,27 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
                 }
             }
 
-            let params = record.fields.map_items_result(arena, |loc_field| {
-                match loc_field.value.to_assigned_field(arena) {
-                    Ok(AssignedField::IgnoredValue(_, _, _)) => Err((
-                        MadeProgress,
-                        EImportParams::RecordIgnoredFieldFound(loc_field.region),
-                    )),
-                    Ok(field) => Ok(Loc::at(loc_field.region, field)),
-                    Err(FoundApplyValue) => Err((
-                        MadeProgress,
-                        EImportParams::RecordApplyFound(loc_field.region),
-                    )),
-                }
-            })?;
+            let params = loc_record
+                .value
+                .fields
+                .map_items_result(arena, |loc_field| {
+                    match loc_field.value.to_assigned_field(arena) {
+                        Ok(AssignedField::IgnoredValue(_, _, _)) => Err((
+                            MadeProgress,
+                            EImportParams::RecordIgnoredFieldFound(loc_field.region),
+                        )),
+                        Ok(field) => Ok(Loc::at(loc_field.region, field)),
+                        Err(FoundApplyValue) => Err((
+                            MadeProgress,
+                            EImportParams::RecordApplyFound(loc_field.region),
+                        )),
+                    }
+                })?;
 
-            let import_params = ModuleImportParams { before, params };
+            let import_params = ModuleImportParams {
+                before,
+                params: Loc::at(loc_record.region, params),
+            };
 
             Ok((MadeProgress, import_params, state))
         },

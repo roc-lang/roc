@@ -189,7 +189,7 @@ impl<'a> Normalize<'a> for Header<'a> {
 impl<'a> Normalize<'a> for ModuleParams<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         ModuleParams {
-            params: self.params.normalize(arena),
+            pattern: self.pattern.normalize(arena),
             before_arrow: &[],
             after_arrow: &[],
         }
