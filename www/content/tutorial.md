@@ -2232,7 +2232,9 @@ For example, let's say we want a record builder to match URLs as follows:
 
 ```roc
 combineMatchers : UrlMatcher a, UrlMatcher b, (a, b -> c) -> UrlMatcher c
+combineMatchers = \matcherA, matcherB, combiner -> ...
 
+userTabMatcher : UrlMatcher { users: {}, userId: U64, tab: Str }
 userTabMatcher =
     { combineMatchers <-
         users: exactSegment "users",
@@ -2266,6 +2268,7 @@ You can see that the `combineMatchers` builder function is simply applied in seq
 You'll notice that the `users` field above holds an empty record, and isn't a useful part of the result. If you want to ignore such a field in the record builder, prefix its name with an underscore as you would do to ignore a variable:
 
 ```roc
+userTabMatcher : UrlMatcher { userId: U64 }
 userTabMatcher =
     { combineMatchers <-
         _: exactSegment "users",
