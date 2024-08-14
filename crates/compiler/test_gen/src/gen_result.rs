@@ -354,3 +354,49 @@ fn roc_result_after_err() {
         RocResult<RocStr, i64>
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn roc_result_map_other() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 I64
+            result = Ok 42
+
+            result |> Result.mapBoth Num.toStr Num.toStr
+            "#
+        ),
+        RocResult::ok(RocStr::from("42")),
+        RocResult<RocStr, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 I64
+            result = Err 24
+
+            result |> Result.mapBoth Num.toStr Num.toStr
+            "#
+        ),
+        RocResult::err(RocStr::from("24")),
+        RocResult<RocStr, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            first : Result I64 Str
+            first = Ok 24
+
+            second : Result I64 Str
+            second = Ok -10
+
+            Result.map2 first second \a, b -> a + b
+            "#
+        ),
+        RocResult::ok(14i64),
+        RocResult<i64, RocStr>
+    );
+}

@@ -1556,6 +1556,8 @@ define_builtins! {
         5 RESULT_WITH_DEFAULT: "withDefault"
         6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
+        8 RESULT_MAP_BOTH: "mapBoth"
+        9 RESULT_MAP_TWO: "map2"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
