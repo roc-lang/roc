@@ -26,7 +26,7 @@ Work has not started on this yet, but we'd like to have the project completed so
 
 Shadowing is [currently disallowed](https://www.roc-lang.org/functional#no-reassignment), which means that once a name has been assigned to a value, nothing in the same scope can assign it again.
 
-The plan is to enable shadowing in a future re-write of the Canonicalisation pass as a trial to see if it's a good idea. If it turns out that shadowing isn't the best fit for roc, at least we will be able to provide a good warning for users.
+The plan is to enable shadowing in a future re-write of the [Canonicalization](https://en.wikipedia.org/wiki/Canonicalization) pass as a trial to see if it's a good idea. If it turns out that shadowing isn't the best fit for Roc, we'll remove it as we've done for other experiments, e.g. backpassing.
 
 ### Platform Author Specific Breaking Changes
 
