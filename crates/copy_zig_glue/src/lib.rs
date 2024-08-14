@@ -16,6 +16,7 @@ pub fn copy_zig_glue() {
     let zig_builtins_source_dir = workspace_dir.join("crates/compiler/builtins/bitcode/src");
 
     let zig_test_platforms_dirs: Vec<PathBuf> = vec![
+        workspace_dir.join("crates/cli/tests/platform_requires_pkg/platform/glue"),
         workspace_dir.join("crates/cli/tests/algorithms/fibonacci-platform/glue"),
         workspace_dir.join("crates/cli/tests/algorithms/quicksort-platform/glue"),
         workspace_dir.join("crates/cli/tests/benchmarks/platform/glue"),
