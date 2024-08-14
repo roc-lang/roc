@@ -2371,13 +2371,13 @@ mod when {
             let cond_parser = indented_seq_skip_first(before, parser);
 
             match cond_parser.parse(arena, state, min_indent) {
-                Ok((cond_p, cond, mut state)) => {
+                Ok((_, cond, mut state)) => {
                     // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
                     // ambiguity. The formatter will fix it up.
                     // We require that branches are indented relative to the line containing the `is`.
 
                     if !state.bytes().starts_with(keyword::IS.as_bytes()) {
-                        return Err((cond_p, EWhen::Is(state.pos())));
+                        return Err((MadeProgress, EWhen::Is(state.pos())));
                     }
 
                     // the next character should not be an identifier character
@@ -2386,7 +2386,7 @@ mod when {
                     match state.bytes().get(width) {
                         Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
                         None => {}
-                        _ => return Err((cond_p, EWhen::Is(state.pos()))),
+                        _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
                     };
 
                     let br_indent = state.line_indent() + 1;
