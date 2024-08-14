@@ -14,8 +14,14 @@ fn exec_bench_w_input<T: Measurement>(
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
-    let run = Run::new_roc().add_args(["build", BUILD_HOST_FLAG, OPTIMIZE_FLAG, file.to_str().unwrap()]);
-    let compile_out = run.run();
+    let runner = Run::new_roc().add_args([
+        "build",
+        BUILD_HOST_FLAG,
+        OPTIMIZE_FLAG,
+        file.to_str().unwrap(),
+    ]);
+
+    let compile_out = runner.run();
 
     if !compile_out.stderr.is_empty() && compile_out.stderr != "🔨 Rebuilding platform...\n" {
         panic!("stderr was not empty:\n\t{}", compile_out.stderr);
@@ -43,17 +49,19 @@ fn check_cmd_output(
         .unwrap()
         .to_string();
 
-    let run = Run::new(&cmd_str).with_stdin_vals([stdin_str]);
+    let runner = Run::new(&cmd_str).with_stdin_vals([stdin_str]);
 
     let out = if cmd_str.contains("cfold") {
-        let child = thread::Builder::new()
-            .stack_size(CFOLD_STACK_SIZE)
-            .spawn(move || run.run())
-            .unwrap();
+        thread::scope(|s| {
+            let child = thread::Builder::new()
+                .stack_size(CFOLD_STACK_SIZE)
+                .spawn_scoped(s, move || runner.run())
+                .unwrap();
 
-        child.join().unwrap()
+            child.join().unwrap()
+        })
     } else {
-        run.run()
+        runner.run()
     };
 
     if !&out.stdout.ends_with(expected_ending) {
@@ -64,7 +72,7 @@ fn check_cmd_output(
 
 fn bench_cmd<T: Measurement>(
     file: &Path,
-    stdin_str: &str,
+    stdin_str: &'static str,
     executable_filename: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
@@ -92,13 +100,18 @@ fn bench_cmd<T: Measurement>(
         }
     }
 
-
     if let Some(bench_group) = bench_group_opt {
         bench_group.bench_function(&format!("Benchmarking {executable_filename:?}"), |b| {
-            b.iter(|| Run::new(black_box(&cmd_str)).with_stdin_vals([stdin_str]).run())
+            b.iter(|| {
+                Run::new(black_box(&cmd_str))
+                    .with_stdin_vals([stdin_str])
+                    .run()
+            })
         });
     } else {
-        Run::new(file.with_file_name(executable_filename).to_str().unwrap()).with_stdin_vals([stdin_str]).run();
+        Run::new(file.with_file_name(executable_filename).to_str().unwrap())
+            .with_stdin_vals([stdin_str])
+            .run();
     }
 }
 

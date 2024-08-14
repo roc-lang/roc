@@ -10,7 +10,6 @@ use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
 use std::io::Write;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -34,16 +33,16 @@ lazy_static::lazy_static! {
 static GLUE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug)]
-pub struct Out<'run> {
+pub struct Out {
     pub cmd_str: OsString, // command with all its arguments, for easy debugging
     pub stdout: String,
     pub stderr: String,
     pub status: ExitStatus,
-    pub run: &'run Run<'run>,
+    pub run: Run,
     pub valgrind_xml: Option<NamedTempFile>,
 }
 
-impl std::fmt::Display for Out<'_> {
+impl std::fmt::Display for Out {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -56,7 +55,7 @@ impl std::fmt::Display for Out<'_> {
     }
 }
 
-impl Out<'_> {
+impl Out {
     pub fn assert_clean_success(&self) {
         self.assert_success_with_no_unexpected_errors(COMMON_STDERR.as_slice());
     }
@@ -91,13 +90,13 @@ impl Out<'_> {
 /// Unlike `std::process::Command`, this builder is clonable and provides convenience methods for
 /// constructing Commands for the configured run and instrumenting the configured command with valgrind.
 #[derive(Debug, Clone)]
-pub struct Run<'a> {
+pub struct Run {
     args: Vec<OsString>,
     env: Vec<(String, String)>,
-    stdin_vals: Vec<&'a str>,
+    stdin_vals: Vec<&'static str>,
 }
 
-impl<'run> Run<'run> {
+impl<'run> Run {
     pub fn new<S>(exe: S) -> Self
     where
         S: AsRef<OsStr>,
@@ -159,7 +158,7 @@ impl<'run> Run<'run> {
         (cmd, named_tempfile)
     }
 
-    pub fn arg<S>(&mut self, arg: S) -> &mut Self
+    pub fn arg<S>(mut self, arg: S) -> Self
     where
         S: Into<OsString>,
     {
@@ -167,13 +166,13 @@ impl<'run> Run<'run> {
         self
     }
 
-    pub fn add_args<I, S>(&mut self, args: I) -> &mut Self
+    pub fn add_args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
         for arg in args {
-            self.arg(&arg);
+            self = self.arg(&arg);
         }
         self
     }
@@ -186,16 +185,17 @@ impl<'run> Run<'run> {
         self.env.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
-    pub fn with_stdin_vals<I>(&mut self, stdin_vals: I) -> &mut Self
+    pub fn with_stdin_vals<I>(mut self, stdin_vals: I) -> Self
     where
-        I: IntoIterator<Item = &'run str>,
+        I: IntoIterator<Item = &'static str>,
     {
         self.stdin_vals.extend(stdin_vals.into_iter());
         self
     }
 
     pub fn with_env<'a, I>(&mut self, env: I) -> &mut Self
-    where I: IntoIterator<Item = (&'a str, &'a str)>
+    where
+        I: IntoIterator<Item = (&'a str, &'a str)>,
     {
         for (k, v) in env {
             self.env.push((k.into(), v.into()));
@@ -203,7 +203,7 @@ impl<'run> Run<'run> {
         self
     }
 
-    fn do_run(&self, mut cmd: Command, stdin_vals: &[&str]) -> Out {
+    fn run_with_command(self, mut cmd: Command) -> Out {
         let cmd_str = pretty_command_string(&cmd);
         let mut roc_cmd_child = cmd
             .stdin(Stdio::piped())
@@ -215,7 +215,7 @@ impl<'run> Run<'run> {
             });
         let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
 
-        for stdin_str in stdin_vals.iter() {
+        for stdin_str in self.stdin_vals.iter() {
             stdin
                 .write_all(stdin_str.as_bytes())
                 .unwrap_or_else(|err| {
@@ -236,18 +236,19 @@ impl<'run> Run<'run> {
         }
     }
 
-    pub fn run(&mut self) -> Out {
-        self.do_run(self.command(), &self.stdin_vals)
+    pub fn run(self) -> Out {
+        let command = self.command();
+        self.run_with_command(command)
     }
 
-    pub fn run_glue(&mut self) -> Out {
+    pub fn run_glue(self) -> Out {
         let _guard = GLUE_LOCK.lock().unwrap();
         self.run()
     }
 
-    pub fn run_with_valgrind(&mut self) -> Out {
+    pub fn run_with_valgrind(self) -> Out {
         let (valgrind_cmd, valgrind_xml) = self.valgrind_command();
-        let mut out = self.do_run(valgrind_cmd, &self.stdin_vals);
+        let mut out = self.run_with_command(valgrind_cmd);
         out.valgrind_xml = Some(valgrind_xml);
         out
     }
