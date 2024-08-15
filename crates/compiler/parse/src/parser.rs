@@ -1230,48 +1230,43 @@ where
     move |arena, state: State<'a>, min_indent: u32| {
         let start_bytes_len = state.bytes().len();
 
-        match parser.parse(arena, state, min_indent) {
-            Ok((progress, first_output, next_state)) => {
-                debug_assert_eq!(progress, MadeProgress);
-                let mut state = next_state;
-                let mut buf = Vec::with_capacity_in(1, arena);
+        let (progress, first_out, next_state) = parser.parse(arena, state, min_indent)?;
+        debug_assert_eq!(progress, MadeProgress);
 
-                buf.push(first_output);
+        let mut state = next_state;
+        let mut buf = Vec::with_capacity_in(1, arena);
 
-                loop {
-                    let old_state = state.clone();
-                    match delimiter.parse(arena, state, min_indent) {
-                        Ok((_, (), next_state)) => {
-                            // If the delimiter passed, check the element parser.
-                            match parser.parse(arena, next_state, min_indent) {
-                                Ok((_, next_output, next_state)) => {
-                                    state = next_state;
-                                    buf.push(next_output);
-                                }
-                                Err((_, fail)) => {
-                                    return Err((MadeProgress, fail));
-                                }
-                            }
+        buf.push(first_out);
+
+        loop {
+            let old_state = state.clone();
+            match delimiter.parse(arena, state, min_indent) {
+                Ok((_, (), next_state)) => {
+                    // If the delimiter passed, check the element parser.
+                    match parser.parse(arena, next_state, min_indent) {
+                        Ok((_, next_output, next_state)) => {
+                            state = next_state;
+                            buf.push(next_output);
                         }
-                        Err((delim_progress, fail)) => {
-                            match delim_progress {
-                                MadeProgress => {
-                                    // fail if the delimiter made progress
-                                    return Err((MadeProgress, fail));
-                                }
-                                NoProgress => {
-                                    let progress = Progress::from_lengths(
-                                        start_bytes_len,
-                                        old_state.bytes().len(),
-                                    );
-                                    return Ok((progress, buf, old_state));
-                                }
-                            }
+                        Err((_, fail)) => {
+                            return Err((MadeProgress, fail));
+                        }
+                    }
+                }
+                Err((delim_progress, fail)) => {
+                    match delim_progress {
+                        MadeProgress => {
+                            // fail if the delimiter made progress
+                            return Err((MadeProgress, fail));
+                        }
+                        NoProgress => {
+                            let progress =
+                                Progress::from_lengths(start_bytes_len, old_state.bytes().len());
+                            return Ok((progress, buf, old_state));
                         }
                     }
                 }
             }
-            Err((fail_progress, fail)) => Err((fail_progress, fail)),
         }
     }
 }

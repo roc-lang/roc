@@ -2095,7 +2095,7 @@ impl<'a, T> Default for Collection<'a, T> {
 pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
-
+    /// todo: @wip add Region as parameter and use instead of [`with_spaces_before`]
     fn maybe_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
     where
         Self: Sized + 'a,
