@@ -1119,7 +1119,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
+        ast::Expr::TrySuffix { .. } => internal_error!("a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -2515,7 +2515,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
-        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
+        | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args

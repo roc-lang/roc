@@ -44,12 +44,13 @@ Defs {
                         value_defs: [
                             Stmt(
                                 @12-21 Apply(
-                                    @12-13 TaskAwaitBang(
-                                        Var {
+                                    @12-13 TrySuffix {
+                                        target: Task,
+                                        expr: Var {
                                             module_name: "",
                                             ident: "a",
                                         },
-                                    ),
+                                    },
                                     [
                                         @16-21 Str(
                                             PlainLine(
@@ -65,12 +66,13 @@ Defs {
                                     ident: "x",
                                 },
                                 @29-39 Apply(
-                                    @29-32 TaskAwaitBang(
-                                        Var {
+                                    @29-32 TrySuffix {
+                                        target: Task,
+                                        expr: Var {
                                             module_name: "B",
                                             ident: "b",
                                         },
-                                    ),
+                                    },
                                     [
                                         @34-39 Str(
                                             PlainLine(
@@ -85,12 +87,13 @@ Defs {
                     },
                     @45-49 SpaceBefore(
                         Apply(
-                            @45-46 TaskAwaitBang(
-                                Var {
+                            @45-46 TrySuffix {
+                                target: Task,
+                                expr: Var {
                                     module_name: "",
                                     ident: "c",
                                 },
-                            ),
+                            },
                             [
                                 @48-49 Var {
                                     module_name: "",
