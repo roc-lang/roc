@@ -12,7 +12,7 @@ main =
             file,
             count: numParam { name: "count" },
             doubled: numParam { name: "doubled" }
-                |> cliMap \d -> d * 2,
+            |> cliMap \d -> d * 2,
         }
 
     args = ["parse-args", "file.txt", "5", "7"]

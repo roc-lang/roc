@@ -242,13 +242,13 @@ interpretCtxLoop = \ctx ->
             when result is
                 Ok (T 0xB8 newCtx) ->
                     result2 =
-                        (T popCtx index) <- Result.try (popNumber newCtx)
+                        (T popCtx index) = popNumber? newCtx
                         # I think Num.abs is too restrictive, it should be able to produce a natural number, but it seem to be restricted to signed numbers.
                         size = List.len popCtx.stack - 1
                         offset = Num.intCast size - index
 
                         if offset >= 0 then
-                            stackVal <- Result.try (List.get popCtx.stack (Num.intCast offset))
+                            stackVal = List.get? popCtx.stack (Num.intCast offset)
                             Ok (Context.pushStack popCtx stackVal)
                         else
                             Err OutOfBounds
@@ -292,7 +292,7 @@ stepExecCtx = \ctx, char ->
             # `!` execute lambda
             Task.fromResult
                 (
-                    (T popCtx bytes) <- Result.try (popLambda ctx)
+                    (T popCtx bytes) = popLambda? ctx
                     Ok { popCtx & scopes: List.append popCtx.scopes { data: None, buf: bytes, index: 0, whileInfo: None } }
                 )
 
@@ -300,8 +300,8 @@ stepExecCtx = \ctx, char ->
             # `?` if
             Task.fromResult
                 (
-                    (T popCtx1 bytes) <- Result.try (popLambda ctx)
-                    (T popCtx2 n1) <- Result.try (popNumber popCtx1)
+                    (T popCtx1 bytes) = popLambda? ctx
+                    (T popCtx2 n1) = popNumber? popCtx1
                     if n1 == 0 then
                         Ok popCtx2
                     else
@@ -312,8 +312,8 @@ stepExecCtx = \ctx, char ->
             # `#` while
             Task.fromResult
                 (
-                    (T popCtx1 body) <- Result.try (popLambda ctx)
-                    (T popCtx2 cond) <- Result.try (popLambda popCtx1)
+                    (T popCtx1 body) = popLambda? ctx
+                    (T popCtx2 cond) = popLambda? popCtx1
                     last = (List.len popCtx2.scopes - 1)
 
                     when List.get popCtx2.scopes last is
@@ -346,8 +346,8 @@ stepExecCtx = \ctx, char ->
         0x5C ->
             # `\` swap
             result2 =
-                (T popCtx1 n1) <- Result.try (Context.popStack ctx)
-                (T popCtx2 n2) <- Result.try (Context.popStack popCtx1)
+                (T popCtx1 n1) = Context.popStack? ctx
+                (T popCtx2 n2) = Context.popStack? popCtx1
                 Ok (Context.pushStack (Context.pushStack popCtx2 n1) n2)
 
             when result2 is
@@ -361,9 +361,9 @@ stepExecCtx = \ctx, char ->
         0x40 ->
             # `@` rot
             result2 =
-                (T popCtx1 n1) <- Result.try (Context.popStack ctx)
-                (T popCtx2 n2) <- Result.try (Context.popStack popCtx1)
-                (T popCtx3 n3) <- Result.try (Context.popStack popCtx2)
+                (T popCtx1 n1) = Context.popStack? ctx
+                (T popCtx2 n2) = Context.popStack? popCtx1
+                (T popCtx3 n3) = Context.popStack? popCtx2
                 Ok (Context.pushStack (Context.pushStack (Context.pushStack popCtx3 n2) n1) n3)
 
             when result2 is
@@ -384,13 +384,13 @@ stepExecCtx = \ctx, char ->
             # `O` also treat this as pick for easier script writing
             Task.fromResult
                 (
-                    (T popCtx index) <- Result.try (popNumber ctx)
+                    (T popCtx index) = popNumber? ctx
                     # I think Num.abs is too restrictive, it should be able to produce a natural number, but it seem to be restricted to signed numbers.
                     size = List.len popCtx.stack - 1
                     offset = Num.intCast size - index
 
                     if offset >= 0 then
-                        stackVal <- Result.try (List.get popCtx.stack (Num.intCast offset))
+                        stackVal = List.get? popCtx.stack (Num.intCast offset)
                         Ok (Context.pushStack popCtx stackVal)
                     else
                         Err OutOfBounds
@@ -422,9 +422,9 @@ stepExecCtx = \ctx, char ->
             # Due to possible division by zero error, this must be handled specially.
             Task.fromResult
                 (
-                    (T popCtx1 numR) <- Result.try (popNumber ctx)
-                    (T popCtx2 numL) <- Result.try (popNumber popCtx1)
-                    res <- Result.try (Num.divTruncChecked numL numR)
+                    (T popCtx1 numR) = popNumber? ctx
+                    (T popCtx2 numL) = popNumber? popCtx1
+                    res = Num.divTruncChecked? numL numR
                     Ok (Context.pushStack popCtx2 (Number res))
                 )
 
@@ -504,9 +504,9 @@ stepExecCtx = \ctx, char ->
             # `:` store to variable
             Task.fromResult
                 (
-                    (T popCtx1 var) <- Result.try (popVariable ctx)
+                    (T popCtx1 var) = popVariable? ctx
                     # The Result.mapErr on the next line maps from EmptyStack in Context.roc to the full InterpreterErrors union here.
-                    (T popCtx2 n1) <- Result.try (Result.mapErr (Context.popStack popCtx1) (\EmptyStack -> EmptyStack))
+                    (T popCtx2 n1) = Result.mapErr? (Context.popStack popCtx1) (\EmptyStack -> EmptyStack)
                     Ok { popCtx2 & vars: List.set popCtx2.vars (Variable.toIndex var) n1 }
                 )
 
@@ -514,8 +514,8 @@ stepExecCtx = \ctx, char ->
             # `;` load from variable
             Task.fromResult
                 (
-                    (T popCtx var) <- Result.try (popVariable ctx)
-                    elem <- Result.try (List.get popCtx.vars (Variable.toIndex var))
+                    (T popCtx var) = popVariable? ctx
+                    elem = List.get? popCtx.vars (Variable.toIndex var)
                     Ok (Context.pushStack popCtx elem)
                 )
 
@@ -551,13 +551,13 @@ stepExecCtx = \ctx, char ->
 
 unaryOp : Context, (I32 -> I32) -> Result Context InterpreterErrors
 unaryOp = \ctx, op ->
-    (T popCtx num) <- Result.try (popNumber ctx)
+    (T popCtx num) = popNumber? ctx
     Ok (Context.pushStack popCtx (Number (op num)))
 
 binaryOp : Context, (I32, I32 -> I32) -> Result Context InterpreterErrors
 binaryOp = \ctx, op ->
-    (T popCtx1 numR) <- Result.try (popNumber ctx)
-    (T popCtx2 numL) <- Result.try (popNumber popCtx1)
+    (T popCtx1 numR) = popNumber? ctx
+    (T popCtx2 numL) = popNumber? popCtx1
     Ok (Context.pushStack popCtx2 (Number (op numL numR)))
 
 popNumber : Context -> Result [T Context I32] InterpreterErrors

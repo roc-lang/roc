@@ -62,12 +62,13 @@ Defs {
                             ),
                             Stmt(
                                 @97-111 Apply(
-                                    @97-108 TaskAwaitBang(
-                                        Var {
+                                    @97-108 TrySuffix {
+                                        target: Task,
+                                        expr: Var {
                                             module_name: "Stdout",
                                             ident: "line",
                                         },
-                                    ),
+                                    },
                                     [
                                         @110-111 Var {
                                             module_name: "",
@@ -80,12 +81,13 @@ Defs {
                         ],
                     },
                     @141-150 SpaceBefore(
-                        TaskAwaitBang(
-                            Var {
+                        TrySuffix {
+                            target: Task,
+                            expr: Var {
                                 module_name: "",
                                 ident: "printBar",
                             },
-                        ),
+                        },
                         [
                             Newline,
                             Newline,
