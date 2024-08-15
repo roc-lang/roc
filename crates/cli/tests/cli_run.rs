@@ -386,8 +386,7 @@ mod cli_run {
 
     #[allow(clippy::too_many_arguments)]
     fn test_roc_app(
-        dir_name: &str,
-        roc_filename: &str,
+        file_path: &Path,
         stdin: Vec<&'static str>,
         args: &[&str],
         extra_env: Vec<(&str, &str)>,
@@ -395,24 +394,13 @@ mod cli_run {
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
-        if dir_name.to_ascii_lowercase().contains("webassembly")
-            || roc_filename.to_ascii_lowercase().contains("webassembly")
-        {
-            // this is a web assembly example, but we don't test with JS at the moment
-            eprintln!(
-                    "WARNING: skipping testing example {roc_filename} because it only works in a browser!"
-                );
-            return;
-        }
-
         let runner = Run::new_roc()
             .arg(CMD_RUN)
-            .arg(OPTIMIZE_FLAG) // because the false interpreter is still very slow without it
-            .with_stdin_vals(stdin)
+            .arg(file_path)
             .add_args(args)
-            // TODO we should pipe this in here... just need to fix lifetimes 
+            // TODO we should pipe this in here... just need to fix lifetimes
             // .with_env(extra_env)
-            .arg(file_path_from_root(dir_name, roc_filename).as_path());
+            .with_stdin_vals(stdin);
 
         if use_valgrind.and_is_supported() {
             let out = runner.run_with_valgrind();
@@ -499,8 +487,7 @@ mod cli_run {
         // on the building of the platform
 
         test_roc_app(
-            "crates/cli/tests/expects",
-            "expects.roc",
+            file_path_from_root("crates/cli/tests/expects", "expects.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -532,8 +519,7 @@ mod cli_run {
         );
 
         test_roc_app(
-            "crates/cli/tests/expects",
-            "expects.roc",
+            file_path_from_root("crates/cli/tests/expects", "expects.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -847,8 +833,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
         test_roc_app(
-            "examples/cli",
-            "effects.roc",
+            file_path_from_root("examples/cli", "effects.roc").as_path(),
             vec!["hi there!"],
             &[],
             vec![],
@@ -863,8 +848,7 @@ mod cli_run {
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         test_roc_app(
-            "examples/cli",
-            "tui.roc",
+            file_path_from_root("examples/cli", "tui.roc").as_path(),
             vec!["foo\n"], // NOTE: adding more lines leads to memory leaks
             &[],
             vec![],
@@ -878,10 +862,9 @@ mod cli_run {
     #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
-            "examples/cli/false-interpreter",
-            "False.roc",
-            vec![],
-            &["examples/sqrt.false"],
+            file_path_from_root("examples/cli/false-interpreter", "False.roc").as_path(),
+            vec![OPTIMIZE_FLAG],
+            &["--", "examples/sqrt.false"],
             vec![],
             "1414",
             UseValgrind::Yes,
@@ -895,8 +878,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            "crates/cli/tests/cli",
-            "env.roc",
+            file_path_from_root("crates/cli/tests/cli", "env.roc").as_path(),
             vec![],
             &[],
             vec![
@@ -917,8 +899,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            "crates/cli/tests/cli",
-            "ingested-file.roc",
+            file_path_from_root("crates/cli/tests/cli", "ingested-file.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -937,8 +918,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn combine_tasks_with_record_builder() {
         test_roc_app(
-            "crates/cli/tests/cli",
-            "combine-tasks.roc",
+            file_path_from_root("crates/cli/tests/cli", "combine-tasks.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -953,8 +933,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_args_with_record_builder() {
         test_roc_app(
-            "crates/cli/tests/cli",
-            "parse-args.roc",
+            file_path_from_root("crates/cli/tests/cli", "parse-args.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -969,8 +948,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            "crates/cli/tests/cli",
-            "ingested-file-bytes.roc",
+            file_path_from_root("crates/cli/tests/cli", "ingested-file-bytes.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -984,8 +962,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes_no_ann() {
         test_roc_app(
-            "crates/cli/tests/cli",
-            "ingested-file-bytes-no-ann.roc",
+            file_path_from_root("crates/cli/tests/cli", "ingested-file-bytes-no-ann.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -1085,8 +1062,7 @@ mod cli_run {
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
             {
                 test_roc_app(
-                    dir_name,
-                    roc_filename,
+                    file_path_from_root(dir_name, roc_filename).as_path(),
                     stdin,
                     &[],
                     vec![],
@@ -1320,12 +1296,11 @@ mod cli_run {
     #[serial(multi_dep_str)]
     #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_unoptimized() {
-        check_output_with_stdin(
+        test_roc_app(
             file_path_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
+            vec![],
             &[],
-            &[],
-            &[],
-            &[],
+            vec![],
             "I am Dep2.str2\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1336,12 +1311,11 @@ mod cli_run {
     #[serial(multi_dep_str)]
     #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_optimized() {
-        check_output_with_stdin(
+        test_roc_app(
             file_path_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
-            &[],
+            vec![],
             &[OPTIMIZE_FLAG],
-            &[],
-            &[],
+            vec![],
             "I am Dep2.str2\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1352,12 +1326,11 @@ mod cli_run {
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
     fn run_multi_dep_thunk_unoptimized() {
-        check_output_with_stdin(
+        test_roc_app(
             file_path_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path(),
+            vec![],
             &[],
-            &[],
-            &[],
-            &[],
+            vec![],
             "I am Dep2.value2\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1371,12 +1344,11 @@ mod cli_run {
         ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
     )]
     fn run_multi_dep_thunk_optimized() {
-        check_output_with_stdin(
+        test_roc_app(
             file_path_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path(),
+            vec![OPTIMIZE_FLAG],
             &[],
-            &[OPTIMIZE_FLAG],
-            &[],
-            &[],
+            vec![],
             "I am Dep2.value2\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1387,12 +1359,11 @@ mod cli_run {
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
     fn run_packages_unoptimized() {
-        check_output_with_stdin(
+        test_roc_app(
             file_path_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path(),
+            vec![],
             &[],
-            &[],
-            &[],
-            &[],
+            vec![],
             "Hello, World! This text came from a package! This text came from a CSV package!\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1403,12 +1374,11 @@ mod cli_run {
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
     fn run_packages_optimized() {
-        check_output_with_stdin(
+        test_roc_app(
             file_path_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path(),
+            vec![OPTIMIZE_FLAG],
             &[],
-            &[OPTIMIZE_FLAG],
-            &[],
-            &[],
+            vec![],
             "Hello, World! This text came from a package! This text came from a CSV package!\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1419,16 +1389,16 @@ mod cli_run {
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
     fn run_transitive_deps_app() {
-        check_output_with_stdin(
-            file_path_from_root(
-                "crates/cli/tests/fixtures/transitive-deps",
-                "direct-one.roc",
-            )
-            .as_path(),
+        let file_path = file_path_from_root(
+            "crates/cli/tests/fixtures/transitive-deps",
+            "direct-one.roc",
+        );
+
+        test_roc_app(
+            file_path.as_path(),
+            vec![],
             &[],
-            &[],
-            &[],
-            &[],
+            vec![],
             "[One imports Two: From two]\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1439,16 +1409,16 @@ mod cli_run {
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
     fn run_transitive_and_direct_dep_app() {
-        check_output_with_stdin(
-            file_path_from_root(
-                "crates/cli/tests/fixtures/transitive-deps",
-                "direct-one-and-two.roc",
-            )
-            .as_path(),
+        let file_path = file_path_from_root(
+            "crates/cli/tests/fixtures/transitive-deps",
+            "direct-one-and-two.roc",
+        );
+
+        test_roc_app(
+            file_path.as_path(),
+            vec![],
             &[],
-            &[],
-            &[],
-            &[],
+            vec![],
             "[One imports Two: From two] | From two\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
@@ -1459,31 +1429,20 @@ mod cli_run {
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
     fn run_double_transitive_dep_app() {
-        get_output_with_stdin(
-            file_path_from_root(
-                "crates/cli/tests/fixtures/transitive-deps",
-                "direct-zero.roc",
-            )
-            .as_path(),
+        let file_path = file_path_from_root(
+            "crates/cli/tests/fixtures/transitive-deps",
+            "direct-zero.roc",
+        );
+
+        test_roc_app(
+            file_path.as_path(),
             vec![],
             &[],
-            &[],
-            &[],
+            vec![],
+            "[Zero imports One: [One imports Two: From two]]\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
-        )
-        .iter()
-        .for_each(|(cli_mode, out)| {
-            out.assert_clean_success();
-            match cli_mode {
-                CliMode::Roc | CliMode::RocRun | CliMode::RocDev => {
-                    out.assert_stdout_ends_with(
-                        "[Zero imports One: [One imports Two: From two]]\n",
-                    );
-                }
-                _ => {}
-            }
-        });
+        );
     }
 
     #[test]
