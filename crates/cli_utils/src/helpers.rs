@@ -452,20 +452,6 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
     Ok(answer)
 }
 
-// start the dir with crates/cli/tests
-#[allow(dead_code)]
-pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
-    let mut path = root_dir();
-
-    // Descend into examples/{dir_name}
-    path.push("crates");
-    path.push("cli");
-    path.push("tests");
-    path.extend(dir_name.split('/')); // Make slashes cross-target
-
-    path
-}
-
 #[allow(dead_code)]
 pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
@@ -475,32 +461,8 @@ pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
 pub fn file_path_from_root(dir_name: &str, file_name: &str) -> PathBuf {
     let mut path = dir_path_from_root(dir_name);
-
-    path.push(file_name);
-
-    path
-}
-
-#[allow(dead_code)]
-pub fn fixtures_dir(dir_name: &str) -> PathBuf {
-    let mut path = root_dir();
-
-    // Descend into crates/cli/tests/fixtures/{dir_name}
-    path.push("crates");
-    path.push("cli");
-    path.push("tests");
-    path.push("fixtures");
-    path.extend(dir_name.split('/')); // Make slashes cross-target
-
-    path
-}
-
-#[allow(dead_code)]
-pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
-    let mut path = fixtures_dir(dir_name);
 
     path.push(file_name);
 

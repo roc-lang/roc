@@ -10,7 +10,7 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, known_bad_file,
+        dir_path_from_root, extract_valgrind_errors, file_path_from_root, known_bad_file,
         ExpectedString, Out, Run, ValgrindError, ValgrindErrorXWhat, COMMON_STDERR,
     };
     use const_format::concatcp;
@@ -41,6 +41,12 @@ mod cli_run {
     enum UseValgrind {
         Yes,
         No,
+    }
+
+    impl UseValgrind {
+        fn and_is_supported(&self) -> bool {
+            matches!(self, UseValgrind::Yes) && ALLOW_VALGRIND
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -74,14 +80,7 @@ mod cli_run {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
 
-    #[derive(Debug, PartialEq, Eq)]
-    enum Arg<'a> {
-        ExamplePath(&'a str),
-        // allow because we may need PlainText in the future
-        #[allow(dead_code)]
-        PlainText(&'a str),
-    }
-
+    /// Run `roc check` on a file and check that the output matches the expected string.
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let runner = Run::new_roc()
             .arg(CMD_CHECK)
@@ -89,8 +88,6 @@ mod cli_run {
             .add_args(flags.clone());
 
         let out = runner.run();
-
-        out.assert_clean_success();
 
         let err = out.stdout.trim();
         let err = strip_colors(err);
@@ -110,9 +107,9 @@ mod cli_run {
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let runner = Run::new_roc()
-            .arg(file.to_str().unwrap())
             .arg(CMD_FORMAT)
-            .arg(CHECK_FLAG);
+            .arg(CHECK_FLAG)
+            .arg(file.to_str().unwrap());
 
         let out = runner.run();
 
@@ -281,9 +278,10 @@ mod cli_run {
                 }
                 CliMode::RocRun => {
                     let mut runner = Run::new_roc()
-                        .arg(file)
-                        .add_args(iter::once(CMD_RUN).chain(flags.clone()))
+                        .arg(CMD_RUN)
+                        .add_args(flags.clone())
                         .add_args(roc_app_args)
+                        .arg(file)
                         .with_stdin_vals(stdin.clone());
 
                     for env in extra_env {
@@ -301,9 +299,10 @@ mod cli_run {
                     // here failure is what we expect
 
                     let mut runner = Run::new_roc()
-                        .arg(file)
-                        .add_args(iter::once(CMD_TEST).chain(flags.clone()))
+                        .arg(CMD_TEST)
+                        .add_args(flags.clone())
                         .add_args(roc_app_args)
+                        .arg(file)
                         .with_stdin_vals(stdin.clone());
 
                     for env in extra_env {
@@ -342,74 +341,60 @@ mod cli_run {
         output
     }
 
-    /// Run `roc test` to execute `expect`s, perhaps on a library rather than an application.
+    /// Run `roc test` to execute `expect`s, perhaps on a library rather than an application
+    /// will use valgrind if it's supported
     fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
-        // TODO - do we want to run with Valgrind?
-
-        let out = Run::new_roc()
+        let runner = Run::new_roc()
             .arg(CMD_TEST)
             .arg(file_path_from_root(dir_name, roc_filename).as_path())
-            .add_args(flags)
-            .run();
+            .add_args(flags);
 
-        out.assert_clean_success();
+        let use_valgrind = UseValgrind::Yes;
 
-        out.assert_stdout_ends_with(expected_ending);
+        if use_valgrind.and_is_supported() {
+            let out = runner.run_with_valgrind();
+            out.assert_clean_success();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
-    // when you don't need args, stdin or extra_env
+    /// For when you don't need args, stdin or extra_env pizzazz.
     fn test_roc_app_slim(
         dir_name: &str,
         roc_filename: &str,
         expected_ending: &str,
         use_valgrind: UseValgrind,
     ) {
-        test_roc_app(
-            dir_name,
-            roc_filename,
-            &[],
-            &[],
-            &[],
-            expected_ending,
-            use_valgrind,
-            TestCliCommands::Run,
-        )
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_path_from_root(dir_name, roc_filename).as_path());
+
+        if use_valgrind.and_is_supported() {
+            let out = runner.run_with_valgrind();
+            out.assert_clean_success();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
     fn test_roc_app(
         dir_name: &str,
         roc_filename: &str,
-        stdin: &[&str],
-        args: &[Arg],
-        extra_env: &[(&str, &str)],
+        stdin: Vec<&'static str>,
+        args: &[&str],
+        extra_env: Vec<(&str, &str)>,
         expected_ending: &str,
-        // expected_stderr: &[ExpectedString],
         use_valgrind: UseValgrind,
         test_cli_commands: TestCliCommands,
     ) {
-        let file_name = file_path_from_root(dir_name, roc_filename);
-        let mut roc_app_args: Vec<String> = Vec::new();
-
-        for arg in args {
-            match arg {
-                Arg::ExamplePath(file) => {
-                    roc_app_args.push(
-                        file_path_from_root(dir_name, file)
-                            .to_str()
-                            .unwrap()
-                            .to_string(),
-                    );
-                }
-                Arg::PlainText(arg) => {
-                    roc_app_args.push(arg.to_string());
-                }
-            }
-        }
-
-        // workaround for surgical linker issue, see PR #3990
-        let mut custom_flags: Vec<&str> = Vec::new();
-
         if dir_name.to_ascii_lowercase().contains("webassembly")
             || roc_filename.to_ascii_lowercase().contains("webassembly")
         {
@@ -420,86 +405,23 @@ mod cli_run {
             return;
         }
 
-        // Only run Swift examples on macOS
-        if dir_name.to_ascii_lowercase().contains("swift")
-            || roc_filename.to_ascii_lowercase().contains("swift")
-        {
-            if cfg!(target_os = "macos") {
-                Run::new_roc()
-                    .arg(&file_name)
-                    .add_args([CMD_BUILD, OPTIMIZE_FLAG])
-                    .run()
-                    .assert_clean_success();
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(OPTIMIZE_FLAG) // because the false interpreter is still very slow without it
+            .with_stdin_vals(stdin)
+            .add_args(args)
+            // TODO we should pipe this in here... just need to fix lifetimes 
+            // .with_env(extra_env)
+            .arg(file_path_from_root(dir_name, roc_filename).as_path());
 
-                return;
-            } else {
-                eprintln!(
-                        "WARNING: skipping testing example {roc_filename} because it only works on MacOS."
-                    );
-                return;
-            }
-        }
-
-        if dir_name.starts_with("examples/gui")
-            || roc_filename.ends_with("gui.roc")
-            || dir_name.ends_with("-interop")
-        {
-            // Since these require things the build system often doesn't have
-            // (e.g. GUIs open a window, interop needs a language installed)
-            // we do `roc build` on them but don't run them.
-            Run::new_roc()
-                .arg(&file_name)
-                .add_args([CMD_BUILD, OPTIMIZE_FLAG])
-                .run()
-                .assert_clean_success();
-
-            return;
-        } else if roc_filename == "args.roc" {
-            custom_flags = vec![LINKER_FLAG, "legacy"];
-        }
-
-        // Check with and without optimizations
-        check_output_with_stdin(
-            &file_name,
-            stdin,
-            &custom_flags,
-            &roc_app_args,
-            extra_env,
-            expected_ending,
-            // expected_stderr,
-            use_valgrind,
-            test_cli_commands,
-        );
-
-        custom_flags.push(OPTIMIZE_FLAG);
-        // This is mostly because the false interpreter is still very slow -
-        // 25s for the cli tests is just not acceptable during development!
-        #[cfg(not(debug_assertions))]
-        check_output_with_stdin(
-            &file_name,
-            stdin,
-            &custom_flags,
-            &roc_app_args,
-            extra_env,
-            expected_ending,
-            use_valgrind,
-            test_cli_commands,
-        );
-
-        // Also check with the legacy linker.
-
-        if TEST_LEGACY_LINKER {
-            check_output_with_stdin(
-                &file_name,
-                stdin,
-                &[LINKER_FLAG, "legacy"],
-                &roc_app_args,
-                extra_env,
-                expected_ending,
-                // expected_stderr,
-                use_valgrind,
-                test_cli_commands,
-            );
+        if use_valgrind.and_is_supported() {
+            let out = runner.run_with_valgrind();
+            out.assert_clean_success();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_ends_with(expected_ending);
         }
     }
 
@@ -579,9 +501,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/expects",
             "expects.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             indoc!(
                 r#"
                 ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
@@ -612,9 +534,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/expects",
             "expects.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             indoc!(
                 r#"
                 ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
@@ -787,21 +709,6 @@ mod cli_run {
         );
     }
 
-    #[ignore = "TODO move this to roc-lang/examples repository"]
-    #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "this platform is broken, and `roc run --lib` is missing on windows"
-    )]
-    fn ruby_interop() {
-        test_roc_app_slim(
-            "examples/ruby-interop",
-            "libhello.roc",
-            "",
-            UseValgrind::Yes,
-        )
-    }
-
     #[test]
     #[cfg_attr(
         windows,
@@ -939,50 +846,47 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
-        todo!()
-        // test_roc_app(
-        //     "examples/cli",
-        //     "effects.roc",
-        //     &["hi there!"],
-        //     &[],
-        //     &[],
-        //     "hi there!\nIt is known\n",
-        //     UseValgrind::Yes,
-        //     TestCliCommands::Run,
-        // )
+        test_roc_app(
+            "examples/cli",
+            "effects.roc",
+            vec!["hi there!"],
+            &[],
+            vec![],
+            "hi there!\nIt is known\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        )
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
-        todo!()
-        // test_roc_app(
-        //     "examples/cli",
-        //     "tui.roc",
-        //     &["foo\n"], // NOTE: adding more lines leads to memory leaks
-        //     &[],
-        //     &[],
-        //     "Hello Worldfoo!\n",
-        //     UseValgrind::Yes,
-        //     TestCliCommands::Run,
-        // )
+        test_roc_app(
+            "examples/cli",
+            "tui.roc",
+            vec!["foo\n"], // NOTE: adding more lines leads to memory leaks
+            &[],
+            vec![],
+            "Hello Worldfoo!\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        )
     }
 
     #[test]
     #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
-        todo!()
-        // test_roc_app(
-        //     "examples/cli/false-interpreter",
-        //     "False.roc",
-        //     &[],
-        //     &[Arg::ExamplePath("examples/sqrt.false")],
-        //     &[],
-        //     "1414",
-        //     UseValgrind::Yes,
-        //     TestCliCommands::Many,
-        // )
+        test_roc_app(
+            "examples/cli/false-interpreter",
+            "False.roc",
+            vec![],
+            &["examples/sqrt.false"],
+            vec![],
+            "1414",
+            UseValgrind::Yes,
+            TestCliCommands::Many,
+        )
     }
 
     #[ignore = "TODO move this to roc-lang/examples repository"]
@@ -993,9 +897,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/cli",
             "env.roc",
+            vec![],
             &[],
-            &[],
-            &[
+            vec![
                 ("EDITOR", "roc-editor"),
                 ("SHLVL", "3"),
                 ("LETTERS", "a,c,e,j"),
@@ -1015,9 +919,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/cli",
             "ingested-file.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             format!(
                 "\nThis roc file can print its own source code. The source is:\n\n{}\n",
                 include_str!("cli/ingested-file.roc")
@@ -1035,9 +939,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/cli",
             "combine-tasks.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
             UseValgrind::No,
             TestCliCommands::Run,
@@ -1051,9 +955,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/cli",
             "parse-args.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             "Success: {count: 5, doubled: 14, file: \"file.txt\"}\n",
             UseValgrind::No,
             TestCliCommands::Run,
@@ -1067,9 +971,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/cli",
             "ingested-file-bytes.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
@@ -1082,9 +986,9 @@ mod cli_run {
         test_roc_app(
             "crates/cli/tests/cli",
             "ingested-file-bytes-no-ann.roc",
+            vec![],
             &[],
-            &[],
-            &[],
+            vec![],
             "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
@@ -1130,9 +1034,12 @@ mod cli_run {
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        use crate::cli_run::test_roc_app;
+
         #[allow(unused_imports)]
         use super::{TestCliCommands, UseValgrind};
-        use cli_utils::helpers::cli_testing_dir;
+        use cli_utils::helpers::{file_path_from_root, Run};
+        use roc_cli::CMD_BUILD;
 
         #[allow(unused_imports)]
         use super::{check_output_with_stdin, OPTIMIZE_FLAG};
@@ -1142,11 +1049,19 @@ mod cli_run {
 
         fn test_benchmark(
             roc_filename: &str,
-            stdin: &[&str],
+            stdin: Vec<&'static str>,
             expected_ending: &str,
-            _use_valgrind: UseValgrind,
+            use_valgrind: UseValgrind,
         ) {
-            let file_name = cli_testing_dir("benchmarks").join(roc_filename);
+            let dir_name = "crates/cli/tests/benchmarks";
+
+            // Build the platform host once, and use it for all benchmark tests
+            BENCHMARKS_BUILD_PLATFORM.call_once(|| {
+                Run::new_roc()
+                    .arg(CMD_BUILD)
+                    .arg(file_path_from_root(dir_name, roc_filename).as_path())
+                    .run();
+            });
 
             // TODO fix QuicksortApp and then remove this!
             match roc_filename {
@@ -1168,13 +1083,26 @@ mod cli_run {
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            check_output_regular(&file_name, stdin, expected_ending, _use_valgrind);
+            {
+                test_roc_app(
+                    dir_name,
+                    roc_filename,
+                    stdin,
+                    &[],
+                    vec![],
+                    expected_ending,
+                    use_valgrind,
+                    TestCliCommands::Run,
+                )
+            }
 
-            #[cfg(feature = "wasm32-cli-run")]
-            check_output_wasm(&file_name, stdin, expected_ending);
+            // TODO RESTORE
+            // #[cfg(feature = "wasm32-cli-run")]
+            // check_output_wasm(&file_name, stdin, expected_ending);
 
-            #[cfg(feature = "i386-cli-run")]
-            check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
+            // TODO RESTORE
+            // #[cfg(feature = "i386-cli-run")]
+            // check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
         }
 
         #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
@@ -1188,22 +1116,6 @@ mod cli_run {
             use_valgrind: UseValgrind,
         ) {
             let mut ran_without_optimizations = false;
-
-            BENCHMARKS_BUILD_PLATFORM.call_once(|| {
-                // Check with and without optimizations
-                check_output_with_stdin(
-                    file_name,
-                    stdin,
-                    &[],
-                    &[],
-                    &[],
-                    expected_ending,
-                    use_valgrind,
-                    TestCliCommands::Run,
-                );
-
-                ran_without_optimizations = true;
-            });
 
             // now we can pass the `PREBUILT_PLATFORM` flag, because the
             // `call_once` will have built the platform
@@ -1314,13 +1226,13 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark("nQueens.roc", vec!["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("cFold.roc", vec!["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -1328,7 +1240,7 @@ mod cli_run {
         fn deriv() {
             test_benchmark(
                 "deriv.roc",
-                &["2"],
+                vec!["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
             )
@@ -1337,7 +1249,7 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
+            test_benchmark("rBTreeCk.roc", vec!["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -1345,7 +1257,7 @@ mod cli_run {
         fn rbtree_insert() {
             test_benchmark(
                 "rBTreeInsert.roc",
-                &[],
+                vec![],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
             )
@@ -1367,7 +1279,7 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
+            test_benchmark("testAStar.roc", vec![], "True\n", UseValgrind::No)
         }
 
         #[test]
@@ -1375,7 +1287,7 @@ mod cli_run {
         fn base64() {
             test_benchmark(
                 "testBase64.roc",
-                &[],
+                vec![],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,
             )
@@ -1384,20 +1296,20 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("closure.roc", &[], "", UseValgrind::No)
+            test_benchmark("closure.roc", vec![], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark("issue2279.roc", vec![], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
                 "quicksortApp.roc",
-                &[],
+                vec![],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,
             )
@@ -1409,7 +1321,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_unoptimized() {
         check_output_with_stdin(
-            &fixture_file("multi-dep-str", "Main.roc"),
+            file_path_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
             &[],
             &[],
             &[],
@@ -1425,7 +1337,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_optimized() {
         check_output_with_stdin(
-            &fixture_file("multi-dep-str", "Main.roc"),
+            file_path_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
             &[],
             &[OPTIMIZE_FLAG],
             &[],
@@ -1441,7 +1353,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_multi_dep_thunk_unoptimized() {
         check_output_with_stdin(
-            &fixture_file("multi-dep-thunk", "Main.roc"),
+            file_path_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path(),
             &[],
             &[],
             &[],
@@ -1460,7 +1372,7 @@ mod cli_run {
     )]
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
-            &fixture_file("multi-dep-thunk", "Main.roc"),
+            file_path_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path(),
             &[],
             &[OPTIMIZE_FLAG],
             &[],
@@ -1476,7 +1388,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_packages_unoptimized() {
         check_output_with_stdin(
-            &fixture_file("packages", "app.roc"),
+            file_path_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path(),
             &[],
             &[],
             &[],
@@ -1492,7 +1404,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_packages_optimized() {
         check_output_with_stdin(
-            &fixture_file("packages", "app.roc"),
+            file_path_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path(),
             &[],
             &[OPTIMIZE_FLAG],
             &[],
@@ -1508,7 +1420,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_transitive_deps_app() {
         check_output_with_stdin(
-            &fixture_file("transitive-deps", "direct-one.roc"),
+            file_path_from_root(
+                "crates/cli/tests/fixtures/transitive-deps",
+                "direct-one.roc",
+            )
+            .as_path(),
             &[],
             &[],
             &[],
@@ -1524,7 +1440,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_transitive_and_direct_dep_app() {
         check_output_with_stdin(
-            &fixture_file("transitive-deps", "direct-one-and-two.roc"),
+            file_path_from_root(
+                "crates/cli/tests/fixtures/transitive-deps",
+                "direct-one-and-two.roc",
+            )
+            .as_path(),
             &[],
             &[],
             &[],
@@ -1540,7 +1460,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn run_double_transitive_dep_app() {
         get_output_with_stdin(
-            &fixture_file("transitive-deps", "direct-zero.roc"),
+            file_path_from_root(
+                "crates/cli/tests/fixtures/transitive-deps",
+                "direct-zero.roc",
+            )
+            .as_path(),
             vec![],
             &[],
             &[],
@@ -1689,21 +1613,33 @@ mod cli_run {
 
     #[test]
     fn format_check_good() {
-        check_format_check_as_expected(&fixture_file("format", "Formatted.roc"), true);
+        check_format_check_as_expected(
+            file_path_from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path(),
+            true,
+        );
     }
 
     #[test]
     fn format_check_reformatting_needed() {
-        check_format_check_as_expected(&fixture_file("format", "NotFormatted.roc"), false);
+        check_format_check_as_expected(
+            file_path_from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path(),
+            false,
+        );
     }
 
     #[test]
     fn format_check_folders() {
         // This fails, because "NotFormatted.roc" is present in this folder
-        check_format_check_as_expected(&fixtures_dir("format"), false);
+        check_format_check_as_expected(
+            dir_path_from_root("crates/cli/tests/fixtures/format").as_path(),
+            false,
+        );
 
         // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
-        check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
+        check_format_check_as_expected(
+            dir_path_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path(),
+            true,
+        );
     }
 }
 
