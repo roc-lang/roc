@@ -1,6 +1,4 @@
-use crate::link::{
-    link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
-};
+use crate::link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy};
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
@@ -434,22 +432,34 @@ fn gen_from_mono_module_dev<'a>(
     backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     match (preprocessed_host_path, target.architecture()) {
-        (PrebuiltHost::Additive(host_path), Architecture::Wasm32) => gen_from_mono_module_dev_wasm32(
-            arena,
-            loaded,
-            host_path,
-            wasm_dev_stack_bytes,
+        (PrebuiltHost::Additive(host_path), Architecture::Wasm32) => {
+            gen_from_mono_module_dev_wasm32(arena, loaded, host_path, wasm_dev_stack_bytes)
+        }
+        (PrebuiltHost::None, Architecture::Wasm32) => {
+            todo!("Cannot compile wasm32 without a host on the dev compiler backend")
+        }
+        (PrebuiltHost::Legacy(host_path), Architecture::Wasm32) => todo!(
+            "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
+            host_path.display()
         ),
-        (PrebuiltHost::None, Architecture::Wasm32) =>
-            todo!("Cannot compile wasm32 without a host on the dev compiler backend"),
-        (PrebuiltHost::Legacy(host_path), Architecture::Wasm32) => 
-            todo!("Unsupported host files found for use with wasm32 dev compiler backend\n    {}", host_path.display()),
-        (PrebuiltHost::Surgical(SurgicalHostArtifacts {preprocessed_host, ..}), Architecture::Wasm32) =>
-            todo!("Unsupported host files found for use with wasm32 dev compiler backend\n    {}", preprocessed_host.display()),
-        (_, Architecture::X86_64 | Architecture::Aarch64) =>
-            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode),
-        (_, Architecture::Aarch32) => todo!("Dev compiler backend does not support 32 bit ARM architectures"),
-        (_, Architecture::X86_32) => todo!("Dev compiler backend does not support 32 bit x86 architectures"),
+        (
+            PrebuiltHost::Surgical(SurgicalHostArtifacts {
+                preprocessed_host, ..
+            }),
+            Architecture::Wasm32,
+        ) => todo!(
+            "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
+            preprocessed_host.display()
+        ),
+        (_, Architecture::X86_64 | Architecture::Aarch64) => {
+            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
+        }
+        (_, Architecture::Aarch32) => {
+            todo!("Dev compiler backend does not support 32 bit ARM architectures")
+        }
+        (_, Architecture::X86_32) => {
+            todo!("Dev compiler backend does not support 32 bit x86 architectures")
+        }
     }
 }
 
@@ -745,8 +755,6 @@ pub enum PrebuiltHost {
     None,
 }
 
-
-
 fn build_and_preprocess_host(
     code_gen_options: CodeGenOptions,
     dll_stub_symbols: Vec<String>,
@@ -757,14 +765,12 @@ fn build_and_preprocess_host(
     target: Target,
 ) -> PrebuiltHost {
     let rebuild_thread = match linking_strategy {
-        LinkingStrategy::Additive => {
-            spawn_wasm32_host_build_thread(
-                code_gen_options.opt_level,
-                target,
-                platform_main_roc.to_owned(),
-                preprocessed_host_path.to_owned(),
-            )
-        },
+        LinkingStrategy::Additive => spawn_wasm32_host_build_thread(
+            code_gen_options.opt_level,
+            target,
+            platform_main_roc.to_owned(),
+            preprocessed_host_path.to_owned(),
+        ),
         LinkingStrategy::Surgical => {
             let preprocessed_path =
                 platform_main_roc.with_file_name(target.prebuilt_surgical_host());
@@ -779,13 +785,11 @@ fn build_and_preprocess_host(
                 metadata_path,
             )
         }
-        LinkingStrategy::Legacy => {
-            spawn_legacy_host_build_thread(
-                code_gen_options.opt_level,
-                target,
-                platform_main_roc.to_owned(),
-            )
-        }
+        LinkingStrategy::Legacy => spawn_legacy_host_build_thread(
+            code_gen_options.opt_level,
+            target,
+            platform_main_roc.to_owned(),
+        ),
     };
     let (rebuild_duration, path) = rebuild_thread.join().expect("Failed to build host.");
     if emit_timings {
@@ -836,7 +840,7 @@ fn build_loaded_file<'a>(
         legacy_host_path,
         surgical_artifacts,
         build_host_requested,
-        link_type
+        link_type,
     ) {
         // The following 4 cases represent the possible valid host states for the compiler once
         // host rebuilding has been removed.
@@ -847,7 +851,7 @@ fn build_loaded_file<'a>(
         (Err(legacy_paths), Err(surgical_paths), false, LinkType::Executable) => {
             report_missing_prebuilt_host(&format!("{legacy_paths}\n    {surgical_paths}"));
             std::process::exit(1);
-        },
+        }
 
         // The following 3 cases we currently support for host rebuilding. Emit a deprecation
         // warning and rebuild the host.
@@ -863,7 +867,14 @@ fn build_loaded_file<'a>(
                 target,
             )
         }
-        (_, Ok(SurgicalHostArtifacts {preprocessed_host, ..}), true, LinkType::Executable) => {
+        (
+            _,
+            Ok(SurgicalHostArtifacts {
+                preprocessed_host, ..
+            }),
+            true,
+            LinkType::Executable,
+        ) => {
             report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
             build_and_preprocess_host(
                 code_gen_options,
@@ -894,7 +905,15 @@ fn build_loaded_file<'a>(
             report_refusing_to_rebuild_host(&host_path.to_string_lossy());
             std::process::exit(1);
         }
-        (_, Ok(SurgicalHostArtifacts {preprocessed_host, metadata}), true, LinkType::Dylib | LinkType::None) => {
+        (
+            _,
+            Ok(SurgicalHostArtifacts {
+                preprocessed_host,
+                metadata,
+            }),
+            true,
+            LinkType::Dylib | LinkType::None,
+        ) => {
             report_refusing_to_rebuild_host(&format!(
                 "{}\n    {}",
                 preprocessed_host.to_string_lossy(),
@@ -906,12 +925,12 @@ fn build_loaded_file<'a>(
             report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
             eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
             std::process::exit(1);
-        },
+        }
         (Err(legacy_paths), Err(surgical_paths), true, LinkType::None) => {
             report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
             eprintln!("You asked me to build the host, but I don't know how to rebuild a host for an unlinked object.");
             std::process::exit(1);
-        },
+        }
     };
 
     let buf = &mut String::with_capacity(1024);
@@ -1116,7 +1135,6 @@ fn get_exe_path(
     }
 }
 
-
 fn report_rebuilding_existing_host(host_path: &str) {
     eprintln!(
         indoc::indoc!(
@@ -1203,7 +1221,10 @@ fn spawn_wasm32_host_build_thread(
 
         preprocess_host_wasm32(host_dest.as_path(), &output_path);
 
-        (start.elapsed().as_millis(), PrebuiltHost::Additive(output_path))
+        (
+            start.elapsed().as_millis(),
+            PrebuiltHost::Additive(output_path),
+        )
     })
 }
 
@@ -1254,10 +1275,13 @@ fn spawn_surgical_host_build_thread(
         // The surgical linker will modify that copy in-place.
         //std::fs::copy(&preprocessed_path, &output_exe_path).unwrap();
 
-        (start.elapsed().as_millis(), PrebuiltHost::Surgical(SurgicalHostArtifacts {
-            metadata: metadata_path,
-            preprocessed_host: preprocessed_path,
-        }))
+        (
+            start.elapsed().as_millis(),
+            PrebuiltHost::Surgical(SurgicalHostArtifacts {
+                metadata: metadata_path,
+                preprocessed_host: preprocessed_path,
+            }),
+        )
     })
 }
 
