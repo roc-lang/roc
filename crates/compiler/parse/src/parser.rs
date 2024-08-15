@@ -1216,61 +1216,6 @@ where
     }
 }
 
-/// Parse one or more values separated by a delimiter (e.g. a comma) whose
-/// values are discarded
-pub fn sep_by1<'a, P, D, Val, Error>(
-    delimiter: D,
-    parser: P,
-) -> impl Parser<'a, Vec<'a, Val>, Error>
-where
-    D: Parser<'a, (), Error>,
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    move |arena, state: State<'a>, min_indent: u32| {
-        let start_bytes_len = state.bytes().len();
-
-        let (progress, first_out, next_state) = parser.parse(arena, state, min_indent)?;
-        debug_assert_eq!(progress, MadeProgress);
-
-        let mut state = next_state;
-        let mut buf = Vec::with_capacity_in(1, arena);
-
-        buf.push(first_out);
-
-        loop {
-            let old_state = state.clone();
-            match delimiter.parse(arena, state, min_indent) {
-                Ok((_, (), next_state)) => {
-                    // If the delimiter passed, check the element parser.
-                    match parser.parse(arena, next_state, min_indent) {
-                        Ok((_, next_output, next_state)) => {
-                            state = next_state;
-                            buf.push(next_output);
-                        }
-                        Err((_, fail)) => {
-                            return Err((MadeProgress, fail));
-                        }
-                    }
-                }
-                Err((delim_progress, fail)) => {
-                    match delim_progress {
-                        MadeProgress => {
-                            // fail if the delimiter made progress
-                            return Err((MadeProgress, fail));
-                        }
-                        NoProgress => {
-                            let progress =
-                                Progress::from_lengths(start_bytes_len, old_state.bytes().len());
-                            return Ok((progress, buf, old_state));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Make the given parser optional, it can complete or not consume anything,
 /// but it can't error with progress made.
 ///
