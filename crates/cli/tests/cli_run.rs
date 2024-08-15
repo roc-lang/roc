@@ -342,17 +342,19 @@ mod cli_run {
         output
     }
 
-    // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
+    /// Run `roc test` to execute `expect`s, perhaps on a library rather than an application.
     fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
-        _ = get_output_with_stdin(
-            file_path_from_root(dir_name, roc_filename).as_path(),
-            vec![],
-            flags,
-            &[],
-            &[],
-            UseValgrind::Yes,
-            TestCliCommands::Test,
-        );
+        // TODO - do we want to run with Valgrind?
+
+        let out = Run::new_roc()
+            .arg(CMD_TEST)
+            .arg(file_path_from_root(dir_name, roc_filename).as_path())
+            .add_args(flags)
+            .run();
+
+        out.assert_clean_success();
+
+        out.assert_stdout_ends_with(expected_ending);
     }
 
     // when you don't need args, stdin or extra_env

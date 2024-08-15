@@ -69,15 +69,20 @@ impl Out {
         );
     }
 
+    /// Normalise the output for comparison in tests by stripping ANSI color codes
+    /// and replace test timings with a placeholder.
     pub fn stdout_without_test_timings(&self) -> String {
+        let ansi_regex = Regex::new(r"\x1b\[[0-9;]*[mGKH]").expect("Invalid ANSI regex pattern");
+        let without_ansi = ansi_regex.replace_all(&self.stdout, "");
+
         let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
         let replacement = " in <ignored for test> ms.";
-        regex.replace_all(&self.stdout, replacement).to_string()
+        regex.replace_all(&without_ansi, replacement).to_string()
     }
 
     pub fn assert_stdout_ends_with(&self, expected: &str) {
         assert!(
-            self.stdout_without_test_timings().ends_with(expected),
+            dbg!(self.stdout_without_test_timings()).ends_with(expected),
             "Expected stdout to end with:\n{}\n\nActual stdout:\n{}",
             expected,
             self.stdout
