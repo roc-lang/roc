@@ -379,7 +379,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
 
         let (spaces_before_op, state) =
             match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => return Ok((MadeProgress, term.value, state)), // TODO: @wip refactor to more simple code
+                Err((_, _)) => return Ok((MadeProgress, term.value, state)),
                 Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
             };
 
@@ -396,10 +396,7 @@ fn expr_operator_chain<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a
 
         loop {
             let res = if state.column() >= call_min_indent {
-                match loc_term_or_underscore(options).parse(arena, state.clone(), call_min_indent) {
-                    Ok((p, term, state)) => Ok((p, term, state)),
-                    Err(fail) => Err(fail),
-                }
+                loc_term_or_underscore(options).parse(arena, state.clone(), call_min_indent)
             } else {
                 Err((NoProgress, EExpr::IndentEnd(state.pos())))
             };
@@ -2481,27 +2478,34 @@ mod when {
             check_for_arrow: false,
             ..options
         };
-        and(
-            branch_alternatives_help(pattern_indent_level),
-            one_of![
-                map(
-                    skip_first(
-                        parser::keyword(keyword::IF, EWhen::IfToken),
-                        // TODO we should require space before the expression but not after
-                        space0_around_ee(
-                            specialize_err_ref(
-                                EWhen::IfGuard,
-                                increment_min_indent(expr_start(options))
-                            ),
-                            EWhen::IndentIfGuard,
-                            EWhen::IndentArrow,
-                        )
+
+        move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| {
+            let (_, patterns, state) =
+                branch_alternatives_help(pattern_indent_level).parse(arena, state, min_indent)?;
+
+            let parser0 = map(
+                skip_first(
+                    parser::keyword(keyword::IF, EWhen::IfToken),
+                    // TODO we should require space before the expression but not after
+                    space0_around_ee(
+                        specialize_err_ref(
+                            EWhen::IfGuard,
+                            increment_min_indent(expr_start(options)),
+                        ),
+                        EWhen::IndentIfGuard,
+                        EWhen::IndentArrow,
                     ),
-                    Some
                 ),
-                |_, s, _| Ok((NoProgress, None, s))
-            ],
-        )
+                Some,
+            );
+
+            let parser = one_of![parser0, |_, s, _| Ok((NoProgress, None, s))];
+
+            match parser.parse(arena, state, min_indent) {
+                Ok((_, guard, state)) => Ok((MadeProgress, (patterns, guard), state)),
+                Err(fail) => Err(fail),
+            }
+        }
     }
 
     fn branch_single_alternative<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EWhen<'a>> {
@@ -2529,6 +2533,7 @@ mod when {
         }
     }
 
+    /// If Ok it always returns MadeProgress
     fn branch_alternatives_help<'a>(
         pattern_indent_level: Option<u32>,
     ) -> impl Parser<'a, (u32, Vec<'a, Loc<Pattern<'a>>>), EWhen<'a>> {
@@ -2536,7 +2541,7 @@ mod when {
             // put no restrictions on the indent after the spaces; we'll check it manually
             match space0_e(EWhen::IndentPattern).parse(arena, state, 0) {
                 Err(fail) => Err(fail),
-                Ok((_progress, spaces, state)) => {
+                Ok((_, spaces, state)) => {
                     match pattern_indent_level {
                         Some(wanted) if state.column() > wanted => {
                             if state.bytes().starts_with(b"->") {
