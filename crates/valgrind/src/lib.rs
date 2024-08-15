@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+use std::io::Read;
+
 use indoc::indoc;
 
 #[cfg(target_os = "linux")]
@@ -160,10 +162,20 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
         .to_str()
         .unwrap();
 
-    let (valgrind_out, raw_xml) =
-        cli_utils::helpers::run_with_valgrind([], &[generated_filename.to_string()]);
+    let valgrind_out = cli_utils::helpers::Run::new_roc()
+        .arg(generated_filename)
+        .run_with_valgrind();
 
     if valgrind_out.status.success() {
+        let mut raw_xml = String::new();
+
+        valgrind_out
+            .valgrind_xml
+            .as_ref()
+            .unwrap()
+            .read_to_string(&mut raw_xml)
+            .unwrap();
+
         let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
             panic!(
                 indoc!(
