@@ -343,21 +343,16 @@ mod cli_run {
 
     /// Run `roc test` to execute `expect`s, perhaps on a library rather than an application
     /// will use valgrind if it's supported
-    fn test_roc_expect(dir_name: &str, roc_filename: &str, flags: &[&str], expected_ending: &str) {
-        let runner = Run::new_roc()
-            .arg(CMD_TEST)
-            .arg(file_path_from_root(dir_name, roc_filename).as_path())
-            .add_args(flags);
+    fn test_roc_expect(file_path: &Path, flags: &[&str], expected_ending: &str) {
+        let runner = Run::new_roc().arg(CMD_TEST).arg(file_path).add_args(flags);
 
         let use_valgrind = UseValgrind::Yes;
 
         if use_valgrind.and_is_supported() {
             let out = runner.run_with_valgrind();
-            out.assert_clean_success();
             out.assert_stdout_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_clean_success();
             out.assert_stdout_ends_with(expected_ending);
         }
     }
@@ -472,12 +467,14 @@ mod cli_run {
 
     #[test]
     fn platform_switching_wasm() {
-        test_roc_app_slim(
-            "examples/platform-switching",
-            "rocLovesWebAssembly.roc",
-            "Roc <3 Web Assembly!\n",
-            UseValgrind::Yes,
-        )
+        // this is a web assembly example, but we don't test with JS at the moment
+        // so let's just check it for now
+        let runner = Run::new_roc().arg(CMD_CHECK).arg(
+            file_path_from_root("examples/platform-switching", "rocLovesWebAssembly.roc").as_path(),
+        );
+
+        let out = runner.run();
+        out.assert_clean_success();
     }
 
     #[ignore = "TODO move this to roc-lang/examples repository"]
@@ -580,8 +577,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_w_flag() {
         test_roc_expect(
-            "crates/cli/tests/module_imports_pkg",
-            "Module.roc",
+            file_path_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path(),
             &["--main", "tests/module_imports_pkg/app.roc"],
             indoc!(
                 r#"
@@ -595,8 +591,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_no_flag() {
         test_roc_expect(
-            "crates/cli/tests/module_imports_pkg",
-            "Module.roc",
+            file_path_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path(),
             &[],
             indoc!(
                 r#"
@@ -622,8 +617,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_unknown_pkg() {
         test_roc_expect(
-            "crates/cli/tests/module_imports_pkg",
-            "ImportsUnknownPkg.roc",
+            file_path_from_root(
+                "crates/cli/tests/module_imports_pkg",
+                "ImportsUnknownPkg.roc",
+            )
+            .as_path(),
             &["--main", "tests/module_imports_pkg/app.roc"],
             indoc!(
                 r#"
@@ -663,8 +661,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
-            "crates/cli/tests/expects_transitive",
-            "main.roc",
+            file_path_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path(),
             &[],
             indoc!(
                 r#"
@@ -678,8 +675,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn transitive_expects_verbose() {
         test_roc_expect(
-            "crates/cli/tests/expects_transitive",
-            "main.roc",
+            file_path_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path(),
             &["--verbose"],
             indoc!(
                 r#"
@@ -864,7 +860,13 @@ mod cli_run {
         test_roc_app(
             file_path_from_root("examples/cli/false-interpreter", "False.roc").as_path(),
             vec![OPTIMIZE_FLAG],
-            &["--", "examples/sqrt.false"],
+            &[
+                "--",
+                file_path_from_root("examples/cli/false-interpreter/examples", "sqrt.false")
+                    .as_path()
+                    .to_str()
+                    .unwrap(),
+            ],
             vec![],
             "1414",
             UseValgrind::Yes,

@@ -223,7 +223,10 @@ pub extern "C" fn roc_fx_openFile(name: &RocStr) -> *mut BufReader<File> {
             Box::into_raw(Box::new(br))
         }
         Err(_) => {
-            panic!("unable to open file {:?}", name)
+            panic!(
+                "false interpreter platform crashed, unable to open file {:?}",
+                name
+            )
         }
     }
 }
