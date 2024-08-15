@@ -12,7 +12,7 @@ main =
             file,
             count: numParam { name: "count" },
             doubled: numParam { name: "doubled" }
-                |> cliMap \d -> d * 2,
+            |> cliMap \d -> d * 2,
         }
 
     args = ["parse-args", "file.txt", "5", "7"]
@@ -58,7 +58,8 @@ cliMap : ArgParser a, (a -> b) -> ArgParser b
 cliMap = \{ params, parser }, mapper -> {
     params,
     parser: \args ->
-        (data, afterData) = parser? args
+        (data, afterData) <- parser args
+            |> Result.try
 
         Ok (mapper data, afterData),
 }
@@ -67,8 +68,10 @@ cliBuild : ArgParser a, ArgParser b, (a, b -> c) -> ArgParser c
 cliBuild = \firstWeaver, secondWeaver, combine ->
     allParams = List.concat firstWeaver.params secondWeaver.params
     combinedParser = \args ->
-        (firstValue, afterFirst) = firstWeaver.parser? args
-        (secondValue, afterSecond) = secondWeaver.parser? afterFirst
+        (firstValue, afterFirst) <- firstWeaver.parser args
+            |> Result.try
+        (secondValue, afterSecond) <- secondWeaver.parser afterFirst
+            |> Result.try
 
         Ok (combine firstValue secondValue, afterSecond)
 
