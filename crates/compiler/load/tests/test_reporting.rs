@@ -16,7 +16,7 @@ mod test_reporting {
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_packaging::cache::RocCacheDir;
-    use roc_parse::module::parse_header;
+    use roc_parse::header::parse_header;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_problem::Severity;
@@ -359,7 +359,7 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
 
-        match roc_parse::module::parse_header(arena, state) {
+        match roc_parse::header::parse_header(arena, state) {
             Err(fail) => {
                 let interns = Interns::default();
                 let home = crate::helpers::test_home();
@@ -3374,7 +3374,7 @@ mod test_reporting {
             f x y = x
             "
         ),
-        @r#"
+        @r###"
     ── ARGUMENTS BEFORE EQUALS in tmp/elm_function_syntax/Test.roc ─────────────────
 
     I am partway through parsing a definition, but I got stuck here:
@@ -3385,9 +3385,9 @@ mod test_reporting {
     4│      f x y = x
               ^^^
 
-    Looks like you are trying to define a function. In roc, functions are
+    Looks like you are trying to define a function. In Roc, functions are
     always written as a lambda, like increment = \n -> n + 1.
-    "#
+    "###
     );
 
     test_report!(
@@ -4320,16 +4320,26 @@ mod test_reporting {
             { x,  y }
             "
         ),
-        @r"
-    ── TOO MANY ARGS in /code/proj/Main.roc ────────────────────────────────────────
+        @r###"
+    ── STATEMENT AFTER EXPRESSION in tmp/double_equals_in_def/Test.roc ─────────────
 
-    This value is not a function, but it was given 3 arguments:
+    I just finished parsing an expression with a series of definitions,
 
+    and this line is indented as if it's intended to be part of that
+    expression:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      x = 3
+    5│      y =
     6│          x == 5
-                     ^
+    7│          Num.add 1 2
+                ^
 
-    Are there any missing commas? Or missing parentheses?
-    "
+    However, I already saw the final expression in that series of
+    definitions.
+    "###
     );
 
     test_report!(
@@ -5018,9 +5028,9 @@ mod test_reporting {
     I was partway through parsing an `import`, but I got stuck here:
 
     4│      import svg.Path a
-                            ^
+                           ^
 
-    I was expecting to see the `as` keyword, like:
+    I was expecting to see the `as` keyword next, like:
 
         import svg.Path as SvgPath
 
@@ -5417,14 +5427,25 @@ mod test_reporting {
              2 -> 2
             "
         ),
-        @r"
-    ── NOT END OF FILE in tmp/when_outdented_branch/Test.roc ───────────────────────
+        @r###"
+    ── UNKNOWN OPERATOR in tmp/when_outdented_branch/Test.roc ──────────────────────
 
-    I expected to reach the end of the file, but got stuck here:
+    This looks like an operator, but it's not one I recognize!
 
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      when 4 is
+    5│          5 -> 2
     6│       2 -> 2
-             ^
-    "
+               ^^
+
+    Looks like you are trying to define a function. 
+
+    In Roc, functions are always written as a lambda, like 
+
+        increment = \n -> n + 1
+    "###
     );
 
     test_report!(
@@ -5436,12 +5457,13 @@ mod test_reporting {
                  _ -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_underscore/Test.roc ──────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> 2
     6│           _ -> 2
                    ^^
@@ -5461,7 +5483,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     test_report!(
@@ -5473,12 +5495,13 @@ mod test_reporting {
                  2 -> 2
             "
         ),
-        @r"
+        @r###"
     ── UNEXPECTED ARROW in tmp/when_over_indented_int/Test.roc ─────────────────────
 
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    4│      when 4 is
     5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
@@ -5498,7 +5521,7 @@ mod test_reporting {
 
     Notice the indentation. All patterns are aligned, and each branch is
     indented a bit more than the corresponding pattern. That is important!
-    "
+    "###
     );
 
     // TODO I think we can do better here
@@ -6136,27 +6159,21 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "
         ),
-        |golden| pretty_assertions::assert_eq!(
-            golden,
-            &format!(
-                r#"── UNKNOWN OPERATOR in tmp/wild_case_arrow/Test.roc ────────────────────────────
+        @r###"
+    ── SYNTAX PROBLEM in tmp/wild_case_arrow/Test.roc ──────────────────────────────
 
-This looks like an operator, but it's not one I recognize!
+    I got stuck here:
 
-1│  app "test" provides [main] to "./platform"
-2│
-3│  main =
-4│      main = 5 -> 3
-                 ^^
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main = 5 -> 3
+                    ^
 
-Looks like you are trying to define a function.{}
-
-In roc, functions are always written as a lambda, like{}
-
-    increment = \n -> n + 1"#,
-                ' ', ' '
-            )
-        )
+    Whatever I am running into is confusing me a lot! Normally I can give
+    fairly specific hints, but something is really tripping me up this
+    time.
+    "###
     );
 
     #[test]
@@ -8240,10 +8257,8 @@ In roc, functions are always written as a lambda, like{}
 
         F Str
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "#
     );
 
@@ -8277,10 +8292,8 @@ In roc, functions are always written as a lambda, like{}
 
         Age
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "
     );
 
@@ -10403,10 +10416,8 @@ In roc, functions are always written as a lambda, like{}
 
         OList
 
-    Tip: Type comparisons between an opaque type are only ever equal if
-    both types are the same opaque type. Did you mean to create an opaque
-    type by wrapping it? If I have an opaque type Age := U32 I can create
-    an instance of this opaque type by doing @Age 23.
+    Tip: *Add type annotations* to functions or values to help you figure
+    this out.
     "
     );
 
@@ -10864,12 +10875,12 @@ In roc, functions are always written as a lambda, like{}
         ),
         @r#"
     ── EMPTY RECORD BUILDER in /code/proj/Main.roc ─────────────────────────────────
-    
+
     This record builder has no fields:
-    
+
     4│      { a <- }
             ^^^^^^^^
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10887,11 +10898,11 @@ In roc, functions are always written as a lambda, like{}
     ── NOT ENOUGH FIELDS IN RECORD BUILDER in /code/proj/Main.roc ──────────────────
 
     This record builder only has one field:
-    
+
     4│>      { a <-
     5│>          b: 123
     6│>      }
-    
+
     I need at least two fields to combine their values into a record.
     "#
     );
@@ -10908,14 +10919,14 @@ In roc, functions are always written as a lambda, like{}
         ),
         @r#"
     ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
-    
+
     Optional fields are not allowed to be used in record builders.
-    
+
     4│       { a <-
     5│           b: 123,
     6│>          c? 456
     7│       }
-    
+
     Record builders can only have required values for their fields.
     "#
     );
@@ -10971,13 +10982,13 @@ In roc, functions are always written as a lambda, like{}
             0
             "
         ),
-        @r"
+        @r###"
     ── UNNECESSARY DEFINITION in /code/proj/Main.roc ───────────────────────────────
 
     This destructure assignment doesn't introduce any new variables:
 
     4│      Pair _ _ = Pair 0 1
-            ^^^^
+            ^^^^^^^^
 
     If you don't need to use the value on the right-hand-side of this
     assignment, consider removing the assignment. Since Roc is purely
@@ -11019,7 +11030,7 @@ In roc, functions are always written as a lambda, like{}
     assignment, consider removing the assignment. Since Roc is purely
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
-    "
+    "###
     );
 
     test_report!(
@@ -14503,4 +14514,38 @@ In roc, functions are always written as a lambda, like{}
     make partial application explicit.
     "
     );
+
+    // TODO: add the following tests after built-in Tasks are added
+    // https://github.com/roc-lang/roc/pull/6836
+
+    // test_report!(
+    // suffixed_stmt_invalid_type,
+    //     indoc!(
+    //         r###"
+    //         app "test" provides [main] to "./platform"
+
+    //         main : Task U64 _ -> _
+    //         main = \task ->
+    //             task!
+    //             42
+    //         "###
+    //     ),
+    //     @r""
+    // );
+
+    // test_report!(
+    // suffixed_expr_invalid_type,
+    //     indoc!(
+    //         r###"
+    //         app "test" provides [main] to "./platform"
+
+    //         main : Task U64 _ -> _
+    //         main = \task ->
+    //             result : U32
+    //             result = task!
+    //             result
+    //         "###
+    //     ),
+    //     @r""
+    // );
 }

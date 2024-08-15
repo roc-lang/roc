@@ -627,67 +627,12 @@ impl ModuleIds {
     pub fn available_modules(&self) -> impl Iterator<Item = &ModuleName> {
         self.by_id.iter()
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct ScopeModules {
-    modules: VecMap<ModuleName, ModuleId>,
-    sources: VecMap<ModuleId, ScopeModuleSource>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScopeModuleSource {
-    Builtin,
-    Current,
-    Import(Region),
-}
-
-impl ScopeModules {
-    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
-        self.modules.get(module_name).copied()
-    }
-
-    pub fn has_id(&self, module_id: ModuleId) -> bool {
-        self.sources.contains_key(&module_id)
-    }
-
-    pub fn available_names(&self) -> impl Iterator<Item = &ModuleName> {
-        self.modules.keys()
-    }
-
-    pub fn insert(
-        &mut self,
-        module_name: ModuleName,
-        module_id: ModuleId,
-        region: Region,
-    ) -> Result<(), ScopeModuleSource> {
-        if let Some(existing_module_id) = self.modules.get(&module_name) {
-            if *existing_module_id == module_id {
-                return Ok(());
-            }
-
-            return Err(*self.sources.get(existing_module_id).unwrap());
-        }
-
-        self.modules.insert(module_name, module_id);
-        self.sources
-            .insert(module_id, ScopeModuleSource::Import(region));
-        Ok(())
-    }
-
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.modules.len(), self.sources.len());
-        self.modules.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        debug_assert_eq!(self.modules.is_empty(), self.sources.is_empty());
-        self.modules.is_empty()
-    }
-
-    pub fn truncate(&mut self, len: usize) {
-        self.modules.truncate(len);
-        self.sources.truncate(len);
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (ModuleId, &ModuleName)> {
+        self.by_id
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (ModuleId::from_zero_indexed(index), name))
     }
 }
 
@@ -1031,32 +976,6 @@ macro_rules! define_builtins {
             }
         }
 
-        impl ScopeModules {
-            pub fn new(home_id: ModuleId, home_name: ModuleName) -> Self {
-                // +1 because the user will be compiling at least 1 non-builtin module!
-                let capacity = $total + 1;
-
-                let mut modules = VecMap::with_capacity(capacity);
-                let mut sources = VecMap::with_capacity(capacity);
-
-                modules.insert(home_name, home_id);
-                sources.insert(home_id, ScopeModuleSource::Current);
-
-                let mut insert_both = |id: ModuleId, name_str: &'static str| {
-                    let name: ModuleName = name_str.into();
-
-                    modules.insert(name, id);
-                    sources.insert(id, ScopeModuleSource::Builtin);
-                };
-
-                $(
-                    insert_both(ModuleId::$module_const, $module_name);
-                )+
-
-                ScopeModules { modules, sources }
-            }
-        }
-
         impl<'a> Default for PackageModuleIds<'a> {
             fn default() -> Self {
                 // +1 because the user will be compiling at least 1 non-builtin module!
@@ -1175,41 +1094,42 @@ define_builtins! {
 
         16 GENERIC_EQ_REF: "#generic_eq_by_ref" // equality of arbitrary layouts, passed as an opaque pointer
         17 GENERIC_RC_REF: "#generic_rc_by_ref" // refcount of arbitrary layouts, passed as an opaque pointer
+        18 GENERIC_COPY_REF: "#generic_copy_by_ref" // copy of arbitrary layouts, passed as an opaque pointer
 
-        18 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
+        19 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
 
         // a user-defined function that we need to capture in a closure
         // see e.g. Set.walk
-        19 USER_FUNCTION: "#user_function"
+        20 USER_FUNCTION: "#user_function"
 
         // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
-        20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
+        21 ZIG_FUNCTION_CALLER: "#zig_function_caller"
 
         // a caller (wrapper) for comparison
-        21 GENERIC_COMPARE_REF: "#generic_compare_ref"
+        22 GENERIC_COMPARE_REF: "#generic_compare_ref"
 
         // used to initialize parameters in borrow.rs
-        22 EMPTY_PARAM: "#empty_param"
+        23 EMPTY_PARAM: "#empty_param"
 
         // used by the dev backend to store the pointer to where to store large return types
-        23 RET_POINTER: "#ret_pointer"
+        24 RET_POINTER: "#ret_pointer"
 
         // used in wasm dev backend to mark temporary values in the VM stack
-        24 WASM_TMP: "#wasm_tmp"
+        25 WASM_TMP: "#wasm_tmp"
 
         // the _ used in mono when a specialized symbol is deleted
-        25 REMOVED_SPECIALIZATION: "#removed_specialization"
+        26 REMOVED_SPECIALIZATION: "#removed_specialization"
 
         // used in dev backend
-        26 DEV_TMP: "#dev_tmp"
-        27 DEV_TMP2: "#dev_tmp2"
-        28 DEV_TMP3: "#dev_tmp3"
-        29 DEV_TMP4: "#dev_tmp4"
-        30 DEV_TMP5: "#dev_tmp5"
+        27 DEV_TMP: "#dev_tmp"
+        28 DEV_TMP2: "#dev_tmp2"
+        29 DEV_TMP3: "#dev_tmp3"
+        30 DEV_TMP4: "#dev_tmp4"
+        31 DEV_TMP5: "#dev_tmp5"
 
-        31 ATTR_INVALID: "#attr_invalid"
+        32 ATTR_INVALID: "#attr_invalid"
 
-        32 CLONE: "#clone" // internal function that clones a value into a buffer
+        33 CLONE: "#clone" // internal function that clones a value into a buffer
     }
     // Fake module for synthesizing and storing derived implementations
     1 DERIVED_SYNTH: "#Derived" => {
@@ -1555,6 +1475,8 @@ define_builtins! {
         5 RESULT_WITH_DEFAULT: "withDefault"
         6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
+        8 RESULT_MAP_BOTH: "mapBoth"
+        9 RESULT_MAP_TWO: "map2"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias

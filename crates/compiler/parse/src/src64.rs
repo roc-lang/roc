@@ -228,6 +228,7 @@ impl<'a> Src64<'a> {
                 // chunk(s) won't be a cache miss anymore because they'll already be in cache.
                 //
                 // We can do further prefetches in the actual tokenization loop.
+                #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
                 {
                     // We know capacity >= 64, so this will never wrap.
                     let last_chunk_offset = capacity - 64;
@@ -366,6 +367,7 @@ unsafe fn write_newlines(dest: *mut u8, len: usize) {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[inline(always)]
 fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
     // Use inline asm until this is stabilized:
@@ -386,8 +388,6 @@ fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
             in(reg) non_null_ptr.as_ptr().add(offset)
         );
     }
-
-    // If we're not on x64 or aarch64, just do nothing!
 }
 
 #[cfg(test)]

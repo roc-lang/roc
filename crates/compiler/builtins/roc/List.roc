@@ -746,6 +746,15 @@ keepErrs = \list, toResult ->
 ## expect List.map ["", "a", "bc"] Str.isEmpty == [Bool.true, Bool.false, Bool.false]
 ## ```
 map : List a, (a -> b) -> List b
+map = \list, mapper ->
+    # TODO: allow checking the refcounting and running the map inplace.
+    # Preferably allow it even if the types are different (must be same size with padding though).
+    length = List.len list
+    List.walk
+        list
+        (List.withCapacity length)
+        \state, elem ->
+            List.appendUnsafe state (mapper elem)
 
 ## Run a transformation function on the first element of each list,
 ## and use that as the first element in the returned list.
@@ -757,16 +766,56 @@ map : List a, (a -> b) -> List b
 ## zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
 ## ```
 map2 : List a, List b, (a, b -> c) -> List c
+map2 = \listA, listB, mapper ->
+    length = Num.min (List.len listA) (List.len listB)
+    map2Help listA listB (List.withCapacity length) mapper 0 length
+
+map2Help : List a, List b, List c, (a, b -> c), U64, U64 -> List c
+map2Help = \listA, listB, out, mapper, index, length ->
+    if index < length then
+        mapped = mapper (List.getUnsafe listA index) (List.getUnsafe listB index)
+
+        map2Help listA listB (List.appendUnsafe out mapped) mapper (Num.addWrap index 1) length
+    else
+        out
 
 ## Run a transformation function on the first element of each list,
 ## and use that as the first element in the returned list.
 ## Repeat until a list runs out of elements.
 map3 : List a, List b, List c, (a, b, c -> d) -> List d
+map3 = \listA, listB, listC, mapper ->
+    length = Num.min
+        (Num.min (List.len listA) (List.len listB))
+        (List.len listC)
+    map3Help listA listB listC (List.withCapacity length) mapper 0 length
+
+map3Help : List a, List b, List c, List d, (a, b, c -> d), U64, U64 -> List d
+map3Help = \listA, listB, listC, out, mapper, index, length ->
+    if index < length then
+        mapped = mapper (List.getUnsafe listA index) (List.getUnsafe listB index) (List.getUnsafe listC index)
+
+        map3Help listA listB listC (List.appendUnsafe out mapped) mapper (Num.addWrap index 1) length
+    else
+        out
 
 ## Run a transformation function on the first element of each list,
 ## and use that as the first element in the returned list.
 ## Repeat until a list runs out of elements.
 map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
+map4 = \listA, listB, listC, listD, mapper ->
+    length = Num.min
+        (Num.min (List.len listA) (List.len listB))
+        (Num.min (List.len listC) (List.len listD))
+    map4Help listA listB listC listD (List.withCapacity length) mapper 0 length
+
+map4Help : List a, List b, List c, List d, List e, (a, b, c, d -> e), U64, U64 -> List e
+map4Help = \listA, listB, listC, listD, out, mapper, index, length ->
+    if index < length then
+        mapped = mapper (List.getUnsafe listA index) (List.getUnsafe listB index) (List.getUnsafe listC index) (List.getUnsafe listD index)
+
+        map4Help listA listB listC listD (List.append out mapped) mapper (Num.addWrap index 1) length
+    else
+        out
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.

@@ -8,9 +8,6 @@ pub mod roc_type;
 pub mod structs;
 pub mod types;
 
-#[rustfmt::skip]
-pub mod glue;
-
 pub use load::generate;
 
 // required because we use roc_std here

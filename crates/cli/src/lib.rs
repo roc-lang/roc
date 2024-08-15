@@ -414,6 +414,14 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false)
             )
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Into::<&'static str>::into(Target::default()))
+                    .value_parser(build_target_values_parser.clone())
+                    .required(false),
+            )
         )
         .arg(flag_optimize)
         .arg(flag_max_threads)

@@ -1,37 +1,37 @@
-procedure Dict.1 (Dict.723):
-    let Dict.732 : List {U32, U32} = Array [];
-    let Dict.733 : List {[], []} = Array [];
-    let Dict.734 : U64 = 0i64;
-    let Dict.44 : Float32 = CallByName Dict.44;
-    let Dict.45 : U8 = CallByName Dict.45;
-    let Dict.731 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = Struct {Dict.732, Dict.733, Dict.734, Dict.44, Dict.45};
-    ret Dict.731;
-
-procedure Dict.4 (Dict.729):
-    let Dict.156 : List {[], []} = StructAtIndex 1 Dict.729;
-    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.729;
-    dec #Derived_gen.0;
-    let Dict.730 : U64 = CallByName List.6 Dict.156;
-    dec Dict.156;
-    ret Dict.730;
-
-procedure Dict.44 ():
-    let Dict.738 : Float32 = 0.8f64;
+procedure Dict.1 (Dict.730):
+    let Dict.739 : List {U32, U32} = Array [];
+    let Dict.740 : List {[], []} = Array [];
+    let Dict.741 : U64 = 0i64;
+    let Dict.51 : Float32 = CallByName Dict.51;
+    let Dict.52 : U8 = CallByName Dict.52;
+    let Dict.738 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = Struct {Dict.739, Dict.740, Dict.741, Dict.51, Dict.52};
     ret Dict.738;
 
-procedure Dict.45 ():
-    let Dict.736 : U8 = 64i64;
-    let Dict.737 : U8 = 3i64;
-    let Dict.735 : U8 = CallByName Num.75 Dict.736 Dict.737;
-    ret Dict.735;
+procedure Dict.4 (Dict.736):
+    let Dict.163 : List {[], []} = StructAtIndex 1 Dict.736;
+    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.736;
+    dec #Derived_gen.0;
+    let Dict.737 : U64 = CallByName List.6 Dict.163;
+    dec Dict.163;
+    ret Dict.737;
+
+procedure Dict.51 ():
+    let Dict.745 : Float32 = 0.8f64;
+    ret Dict.745;
+
+procedure Dict.52 ():
+    let Dict.743 : U8 = 64i64;
+    let Dict.744 : U8 = 3i64;
+    let Dict.742 : U8 = CallByName Num.75 Dict.743 Dict.744;
+    ret Dict.742;
 
 procedure List.6 (#Attr.2):
-    let List.574 : U64 = lowlevel ListLenU64 #Attr.2;
-    ret List.574;
+    let List.625 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.625;
 
 procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.279 : U8 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.279;
+    let Num.281 : U8 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.281;
 
 procedure Test.0 ():
     let Test.3 : {} = Struct {};

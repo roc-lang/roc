@@ -17,7 +17,6 @@ roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_serialize = { path = "../serialize" }
 roc_types = { path = "../types" }
-roc_test_utils = { path = "../../test_utils" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
@@ -27,4 +26,5 @@ static_assertions.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+insta.workspace = true
 pretty_assertions.workspace = true

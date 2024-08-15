@@ -77,6 +77,8 @@ mod cli_run {
     #[derive(Debug, PartialEq, Eq)]
     enum Arg<'a> {
         ExamplePath(&'a str),
+        // allow because we may need PlainText in the future
+        #[allow(dead_code)]
         PlainText(&'a str),
     }
 
@@ -568,16 +570,6 @@ mod cli_run {
 
     #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
-    fn platform_switching_swift() {
-        test_roc_app_slim(
-            "examples/platform-switching",
-            "rocLovesSwift.roc",
-            "Roc <3 Swift!\n",
-            UseValgrind::Yes,
-        )
-    }
-
-    #[test]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -748,6 +740,17 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn platform_requires_pkg() {
+        test_roc_app_slim(
+            "crates/cli/tests/platform_requires_pkg",
+            "app.roc",
+            "from app from package",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
@@ -813,11 +816,6 @@ mod cli_run {
 
     #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
-    fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
-    }
-
-    #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
@@ -826,45 +824,6 @@ mod cli_run {
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
         )
-    }
-
-    #[test]
-    #[ignore = "currently broken in basic-cli platform"]
-    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
-    #[serial(cli_platform)]
-    fn cli_args() {
-        test_roc_app(
-            "examples/cli",
-            "argsBROKEN.roc",
-            &[],
-            &[
-                Arg::PlainText("log"),
-                Arg::PlainText("-b"),
-                Arg::PlainText("3"),
-                Arg::PlainText("--num"),
-                Arg::PlainText("81"),
-            ],
-            &[],
-            "4\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
-    }
-
-    // TODO: remove in favor of cli_args once mono bugs are resolved in investigation
-    #[test]
-    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
-    #[serial(cli_platform)]
-    fn cli_args_check() {
-        Run::new_roc()
-            .add_args([
-                CMD_CHECK,
-                file_path_from_root("crates/cli/tests/cli", "argsBROKEN.roc")
-                    .to_str()
-                    .unwrap(),
-            ])
-            .run()
-            .assert_clean_success();
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -1026,11 +985,6 @@ mod cli_run {
 
     #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
-    fn swift_ui() {
-        test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
-    }
-
-    #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
@@ -1082,7 +1036,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "For multiple tasks: {a: 123, b: \"abc\", c: [123], d: [\"abc\"], e: {\"a\": \"b\"}}\n",
+            "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1114,7 +1068,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "27101\n",
+            "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1129,7 +1083,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "27101\n",
+            "6239\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1169,12 +1123,6 @@ mod cli_run {
 "#,
             UseValgrind::Yes,
         )
-    }
-
-    #[ignore = "TODO move this to roc-lang/examples repository"]
-    #[test]
-    fn inspect_gui() {
-        test_roc_app_slim("examples", "inspect-gui.roc", "", UseValgrind::No)
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
@@ -1636,10 +1584,8 @@ mod cli_run {
 
                     Effect.Effect (Result {} [])
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
+                Tip: Add type annotations to functions or values to help you figure
+                this out.
 
                 ────────────────────────────────────────────────────────────────────────────────
 

@@ -17,10 +17,10 @@ roc_command_utils = { path = "../utils/command" }
 
 bumpalo.workspace = true
 criterion.workspace = true
+regex.workspace = true
 serde-xml-rs.workspace = true
 serde.workspace = true
 tempfile.workspace = true
-regex.workspace = true
 lazy_static.workspace = true
 
 [target.'cfg(unix)'.dependencies]

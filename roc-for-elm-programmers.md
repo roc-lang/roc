@@ -931,6 +931,8 @@ foo 1 2 if something then 3 else 4
 
 ## Backpassing
 
+Note: the backpassing syntax will likely be removed from the language. The [`!` suffix](https://www.roc-lang.org/tutorial#the-!-suffix) can instead be used for `Task.await` and the `?` suffix is [planned](https://github.com/roc-lang/roc/issues/6828) for use with `Result.try`.
+
 Suppose I'm using a platform for making a CLI, and I want to run several
 `Task`s in a row which read some files from the disk. Here's one way I could do
 that, assuming `Task.await` is like Elm's `Task.andThen` with arguments flipped:

@@ -37,6 +37,8 @@ let
     ../Cargo.toml
     ../Cargo.lock
     ../version.txt
+    ../rust-toolchain.toml
+    ../.cargo/config.toml
     onlyCratesFolder
   ];
 

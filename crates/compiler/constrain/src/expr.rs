@@ -566,7 +566,12 @@ pub fn constrain_expr(
 
             constraints.exists([*ret_var], and)
         }
-        Var(symbol, variable) => {
+        Var(symbol, variable)
+        | ParamsVar {
+            symbol,
+            params: _,
+            var: variable,
+        } => {
             // Save the expectation in the variable, then lookup the symbol's type in the environment
             let expected_type = *constraints[expected].get_type_ref();
             let store_expected = constraints.store(expected_type, *variable, file!(), line!());
@@ -574,6 +579,22 @@ pub fn constrain_expr(
             let lookup_constr = constraints.lookup(*symbol, expected, region);
 
             constraints.and_constraint([store_expected, lookup_constr])
+        }
+        ImportParams(module_id, region, Some((var, params))) => {
+            let index = constraints.push_variable(*var);
+            let expected_params = constraints.push_expected_type(Expected::ForReason(
+                Reason::ImportParams(*module_id),
+                index,
+                *region,
+            ));
+            let expr_con =
+                constrain_expr(types, constraints, env, *region, params, expected_params);
+            let params_con = constraints.import_params(Some(index), *module_id, *region);
+            let expr_and_params = constraints.and_constraint([expr_con, params_con]);
+            constraints.exists([*var], expr_and_params)
+        }
+        ImportParams(module_id, region, None) => {
+            constraints.import_params(None, *module_id, *region)
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
             // Save the expectation in the `specialization_var` so we know what to specialize, then
@@ -4089,6 +4110,8 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 return true;
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
+            ImportParams(_, _, Some((_, params))) => expr = params,
+            ImportParams(_, _, None) => return false,
             Str(_)
             | IngestedFile(..)
             | List { .. }
@@ -4115,7 +4138,8 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ZeroArgumentTag { .. }
             | Tag { .. }
             | AbilityMember(..)
-            | Var(..) => return false,
+            | Var(..)
+            | ParamsVar { .. } => return false,
         }
     }
 }

@@ -4,7 +4,7 @@ Defs(
             Index(0),
         ],
         regions: [
-            @2-6,
+            @0-6,
         ],
         space_before: [
             Slice(start = 0, length = 0),

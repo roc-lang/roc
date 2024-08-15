@@ -6,8 +6,8 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Header, Implements,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, Module, OldRecordBuilderField,
-        Pattern, PatternAs, Spaced, StrLiteral, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        ImplementsAbilities, ImplementsAbility, ImplementsClause, OldRecordBuilderField, Pattern,
+        PatternAs, Spaced, StrLiteral, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
         WhenBranch,
     },
     header::{
@@ -189,16 +189,6 @@ impl<T: IterTokens, U: IterTokens> IterTokens for (T, U) {
     }
 }
 
-impl IterTokens for Module<'_> {
-    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        let Self {
-            comments: _,
-            header,
-        } = self;
-        header.iter_tokens(arena)
-    }
-}
-
 impl IterTokens for Header<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
@@ -243,12 +233,12 @@ where
 impl IterTokens for ModuleParams<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            params,
+            pattern,
             before_arrow: _,
             after_arrow: _,
         } = self;
 
-        params.iter_tokens(arena)
+        pattern.value.iter_tokens(arena)
     }
 }
 
@@ -446,7 +436,8 @@ where
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
             AssignedField::RequiredValue(field, _, ty)
-            | AssignedField::OptionalValue(field, _, ty) => (field_token(field.region, arena)
+            | AssignedField::OptionalValue(field, _, ty)
+            | AssignedField::IgnoredValue(field, _, ty) => (field_token(field.region, arena)
                 .into_iter())
             .chain(ty.iter_tokens(arena))
             .collect_in(arena),
@@ -627,7 +618,7 @@ impl IterTokens for ValueDef<'_> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => (ann_pattern.iter_tokens(arena).into_iter())

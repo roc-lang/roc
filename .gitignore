@@ -25,10 +25,12 @@
 target
 generated-docs
 zig-cache
+.zig-cache
 .direnv
 .envrc
 *.rs.bk
 *.o
+*.a
 *.so
 *.so.*
 *.obj

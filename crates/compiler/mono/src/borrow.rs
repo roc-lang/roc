@@ -393,7 +393,11 @@ impl<'state, 'a> State<'state, 'a> {
                 let borrow_signature =
                     match borrow_signatures.procs.get(&(name.name(), proc_layout)) {
                         Some(s) => s,
-                        None => unreachable!("no borrow signature for {name:?} layout"),
+                        None =>  unreachable!(
+                            "\n\tNo borrow signature for {name:?} layout.\n\n\t\
+                            Tip: This can happen when you call a function with less arguments than it expects.\n\t\
+                            Like `Arg.list!` instead of `Arg.list! {{}}`"
+                        )
                     };
 
                 for (argument, ownership) in arguments.iter().zip(borrow_signature.iter()) {

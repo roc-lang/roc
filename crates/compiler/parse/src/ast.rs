@@ -14,11 +14,23 @@ use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
 
+#[derive(Debug, Clone)]
+pub struct FullAst<'a> {
+    pub header: SpacesBefore<'a, Header<'a>>,
+    pub defs: Defs<'a>,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
     pub after: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SpacesBefore<'a, T> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -105,15 +117,9 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Module<'a> {
-    pub comments: &'a [CommentOrNewline<'a>],
-    pub header: Header<'a>,
-}
-
-impl<'a> Module<'a> {
+impl<'a> Header<'a> {
     pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
-        let (header, defs) = match self.header {
+        let (header, defs) = match self {
             Header::Module(header) => (
                 Header::Module(ModuleHeader {
                     interface_imports: None,
@@ -128,12 +134,10 @@ impl<'a> Module<'a> {
                 }),
                 Self::header_imports_to_defs(arena, header.old_imports),
             ),
-            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => {
-                (self.header, Defs::default())
-            }
+            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => (self, Defs::default()),
         };
 
-        (Module { header, ..self }, defs)
+        (header, defs)
     }
 
     pub fn header_imports_to_defs(
@@ -675,9 +679,9 @@ fn is_when_branch_suffixed(branch: &WhenBranch<'_>) -> bool {
 
 fn is_assigned_value_suffixed<'a>(value: &AssignedField<'a, Expr<'a>>) -> bool {
     match value {
-        AssignedField::RequiredValue(_, _, a) | AssignedField::OptionalValue(_, _, a) => {
-            is_expr_suffixed(&a.value)
-        }
+        AssignedField::RequiredValue(_, _, a)
+        | AssignedField::OptionalValue(_, _, a)
+        | AssignedField::IgnoredValue(_, _, a) => is_expr_suffixed(&a.value),
         AssignedField::LabelOnly(_) => false,
         AssignedField::SpaceBefore(a, _) | AssignedField::SpaceAfter(a, _) => {
             is_assigned_value_suffixed(a)
@@ -795,7 +799,7 @@ pub enum ValueDef<'a> {
     AnnotatedBody {
         ann_pattern: &'a Loc<Pattern<'a>>,
         ann_type: &'a Loc<TypeAnnotation<'a>>,
-        comment: Option<&'a str>,
+        lines_between: &'a [CommentOrNewline<'a>],
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
     },
@@ -863,9 +867,9 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         use AssignedField::*;
 
                         match current {
-                            RequiredValue(_, _, loc_val) | OptionalValue(_, _, loc_val) => {
-                                break expr_stack.push(&loc_val.value)
-                            }
+                            RequiredValue(_, _, loc_val)
+                            | OptionalValue(_, _, loc_val)
+                            | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
                             SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
                             LabelOnly(_) | Malformed(_) => break,
                         }
@@ -1038,7 +1042,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                         ValueDef::AnnotatedBody {
                             ann_pattern: _,
                             ann_type: _,
-                            comment: _,
+                            lines_between: _,
                             body_pattern: _,
                             body_expr,
                         } => self.push_pending_from_expr(&body_expr.value),
@@ -1064,7 +1068,7 @@ impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
                             params,
                         }) => {
                             if let Some(ModuleImportParams { before: _, params }) = params {
-                                for loc_assigned_field in params.items {
+                                for loc_assigned_field in params.value.items {
                                     if let Some(expr) = loc_assigned_field.value.value() {
                                         self.push_pending_from_expr(&expr.value);
                                     }
@@ -1112,7 +1116,7 @@ pub struct ModuleImport<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModuleImportParams<'a> {
     pub before: &'a [CommentOrNewline<'a>],
-    pub params: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    pub params: Loc<Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1202,6 +1206,21 @@ impl<'a> Defs<'a> {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    pub fn loc_defs<'b>(
+        &'b self,
+    ) -> impl Iterator<Item = Result<Loc<TypeDef<'a>>, Loc<ValueDef<'a>>>> + 'b {
+        self.tags
+            .iter()
+            .enumerate()
+            .map(|(i, tag)| match tag.split() {
+                Ok(type_index) => Ok(Loc::at(self.regions[i], self.type_defs[type_index.index()])),
+                Err(value_index) => Err(Loc::at(
+                    self.regions[i],
+                    self.value_defs[value_index.index()],
+                )),
+            })
     }
 
     pub fn list_value_defs(&self) -> impl Iterator<Item = (usize, &ValueDef<'a>)> {
@@ -1577,6 +1596,9 @@ pub enum AssignedField<'a, Val> {
     // and in destructuring patterns (e.g. `{ name ? "blah" }`)
     OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
+    // An ignored field, e.g. `{ _name: "blah" }` or `{ _ : Str }`
+    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
 
@@ -1594,7 +1616,9 @@ impl<'a, Val> AssignedField<'a, Val> {
 
         loop {
             match current {
-                Self::RequiredValue(_, _, val) | Self::OptionalValue(_, _, val) => break Some(val),
+                Self::RequiredValue(_, _, val)
+                | Self::OptionalValue(_, _, val)
+                | Self::IgnoredValue(_, _, val) => break Some(val),
                 Self::LabelOnly(_) | Self::Malformed(_) => break None,
                 Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
             }
@@ -2072,6 +2096,28 @@ pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
+    fn maybe_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).before(spaces)
+        }
+    }
+
+    fn maybe_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).after(spaces)
+        }
+    }
+
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,
@@ -2390,9 +2436,9 @@ pub trait Malformed {
     fn is_malformed(&self) -> bool;
 }
 
-impl<'a> Malformed for Module<'a> {
+impl<'a> Malformed for FullAst<'a> {
     fn is_malformed(&self) -> bool {
-        self.header.is_malformed()
+        self.header.item.is_malformed() || self.defs.is_malformed()
     }
 }
 
@@ -2409,6 +2455,12 @@ impl<'a> Malformed for Header<'a> {
 }
 
 impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for SpacesBefore<'a, T> {
     fn is_malformed(&self) -> bool {
         self.item.is_malformed()
     }
@@ -2534,9 +2586,9 @@ impl<T: Malformed> Malformed for Option<T> {
 impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     fn is_malformed(&self) -> bool {
         match self {
-            AssignedField::RequiredValue(_, _, val) | AssignedField::OptionalValue(_, _, val) => {
-                val.is_malformed()
-            }
+            AssignedField::RequiredValue(_, _, val)
+            | AssignedField::OptionalValue(_, _, val)
+            | AssignedField::IgnoredValue(_, _, val) => val.is_malformed(),
             AssignedField::LabelOnly(_) => false,
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
@@ -2683,7 +2735,7 @@ impl<'a> Malformed for ValueDef<'a> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => {

@@ -74,7 +74,7 @@ pub fn highlight(text: &str) -> Vec<Loc<Token>> {
     let header_keywords = HEADER_KEYWORDS.iter().copied().collect::<HashSet<_>>();
     let body_keywords = KEYWORDS.iter().copied().collect::<HashSet<_>>();
 
-    if let Ok((_prog, _, new_state)) = crate::module::header().parse(&arena, state.clone(), 0) {
+    if let Ok((_prog, _, new_state)) = crate::header::header().parse(&arena, state.clone(), 0) {
         let inner_state =
             State::new(text[..state.bytes().len() - new_state.bytes().len()].as_bytes());
         highlight_inner(&arena, inner_state, &mut tokens, &header_keywords);
