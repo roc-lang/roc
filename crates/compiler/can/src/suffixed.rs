@@ -71,7 +71,10 @@ fn init_unwrapped_err<'a>(
         Some(..) => {
             // we have a def pattern, so no need to generate a new pattern
             // as this should only be created in the first call from a def
-            Err(EUnwrapped::UnwrappedDefExpr { loc_expr: unwrapped_expr, target })
+            Err(EUnwrapped::UnwrappedDefExpr {
+                loc_expr: unwrapped_expr,
+                target,
+            })
         }
         None => {
             // Provide an intermediate answer expression and pattern when unwrapping a
@@ -165,10 +168,16 @@ pub fn unwrap_suffixed_expression<'a>(
                             .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
                         return Ok(new_expect);
                     }
-                    Err(EUnwrapped::UnwrappedDefExpr { loc_expr: unwrapped_expr, target, }) => {
+                    Err(EUnwrapped::UnwrappedDefExpr {
+                        loc_expr: unwrapped_expr,
+                        target,
+                    }) => {
                         let new_expect = arena
                             .alloc(Loc::at(loc_expr.region, Expect(condition, unwrapped_expr)));
-                        Err(EUnwrapped::UnwrappedDefExpr { loc_expr: new_expect, target })
+                        Err(EUnwrapped::UnwrappedDefExpr {
+                            loc_expr: new_expect,
+                            target,
+                        })
                     }
                     Err(EUnwrapped::UnwrappedSubExpr {
                         sub_arg: unwrapped_expr,
@@ -330,9 +339,8 @@ pub fn unwrap_suffixed_expression_apply_help<'a>(
                     Err(EUnwrapped::UnwrappedDefExpr { loc_expr: new_apply, target })
                 }
                 Err(EUnwrapped::UnwrappedSubExpr { sub_arg: unwrapped_function, sub_pat, sub_new, target }) => {
-
                     let new_apply = arena.alloc(Loc::at(loc_expr.region, Expr::Apply(sub_new, local_args, called_via)));
-                    
+
                     Err(EUnwrapped::UnwrappedSubExpr { sub_arg: unwrapped_function, sub_pat, sub_new:new_apply, target })
                 }
                 Err(err) => Err(err)
@@ -536,8 +544,15 @@ pub fn unwrap_suffixed_expression_if_then_else_help<'a>(
                     sub_new,
                     target,
                 }) => {
-                    let unwrapped_final_else =
-                        apply_try_function(arena, sub_arg.region, sub_arg, sub_pat, sub_new, None, target);
+                    let unwrapped_final_else = apply_try_function(
+                        arena,
+                        sub_arg.region,
+                        sub_arg,
+                        sub_pat,
+                        sub_new,
+                        None,
+                        target,
+                    );
 
                     let new_if = arena.alloc(Loc::at(
                         loc_expr.region,
@@ -673,7 +688,7 @@ pub fn unwrap_suffixed_expression_defs_help<'a>(
                                     return unwrap_suffixed_expression(
                                         arena,
                                         apply_try_function(
-                                            arena, 
+                                            arena,
                                             def_expr.region,
                                             unwrapped_expr,
                                             def_pattern,
@@ -840,12 +855,18 @@ fn unwrap_low_level_dbg<'a>(
                     ));
                     Ok(&*new_dbg)
                 }
-                Err(EUnwrapped::UnwrappedDefExpr { loc_expr: unwrapped_expr, target }) => {
+                Err(EUnwrapped::UnwrappedDefExpr {
+                    loc_expr: unwrapped_expr,
+                    target,
+                }) => {
                     let new_dbg = arena.alloc(Loc::at(
                         loc_expr.region,
                         LowLevelDbg(dbg_src, arg, unwrapped_expr),
                     ));
-                    Err(EUnwrapped::UnwrappedDefExpr { loc_expr: new_dbg, target })
+                    Err(EUnwrapped::UnwrappedDefExpr {
+                        loc_expr: new_dbg,
+                        target,
+                    })
                 }
                 Err(EUnwrapped::UnwrappedSubExpr {
                     sub_arg: unwrapped_expr,

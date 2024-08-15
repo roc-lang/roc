@@ -9,7 +9,8 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, OldRecordBuilderField, Pattern, TryTarget, WhenBranch
+    is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
+    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;

@@ -1,5 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, OldRecordBuilderField, Pattern, Spaceable, Spaced, Spaces, SpacesBefore, TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef
+    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
+    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
+    ModuleImportParams, OldRecordBuilderField, Pattern, Spaceable, Spaced, Spaces, SpacesBefore,
+    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -165,8 +169,12 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(TryTarget::Task)),
-        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(TryTarget::Result)),
+        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Task
+        )),
+        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Result
+        )),
     ))
 }
 

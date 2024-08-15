@@ -648,9 +648,7 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
-            canonicalize_record(env, var_store, scope, region, *fields)
-        }
+        ast::Expr::Record(fields) => canonicalize_record(env, var_store, scope, region, *fields),
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -1119,7 +1117,9 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TrySuffix { .. } => internal_error!("a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"),
+        ast::Expr::TrySuffix { .. } => internal_error!(
+            "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+        ),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1371,7 +1371,10 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
+            let problem = OptionalFieldInRecordBuilder {
+                record: region,
+                field: sub_region,
+            };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
