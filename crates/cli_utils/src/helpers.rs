@@ -96,7 +96,7 @@ pub struct Run {
     stdin_vals: Vec<&'static str>,
 }
 
-impl<'run> Run {
+impl Run {
     pub fn new<S>(exe: S) -> Self
     where
         S: AsRef<OsStr>,
@@ -189,7 +189,7 @@ impl<'run> Run {
     where
         I: IntoIterator<Item = &'static str>,
     {
-        self.stdin_vals.extend(stdin_vals.into_iter());
+        self.stdin_vals.extend(stdin_vals);
         self
     }
 

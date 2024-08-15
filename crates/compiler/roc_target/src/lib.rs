@@ -3,8 +3,8 @@
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::path::{PathBuf, Path};
 
 use roc_error_macros::user_error;
 use strum_macros::{EnumCount, EnumIter};
@@ -87,13 +87,11 @@ pub enum Target {
     Wasm32,
 }
 
-
 #[derive(Debug)]
 pub struct SurgicalHostArtifacts {
     pub metadata: PathBuf,
     pub preprocessed_host: PathBuf,
 }
-
 
 impl Target {
     pub const fn architecture(&self) -> Architecture {
@@ -257,7 +255,10 @@ impl Target {
     }
 
     /// Search for a prebuilt surgical host in the platform main directory.
-    pub fn find_surgical_host(&self, platform_main_roc: &Path) -> Result<SurgicalHostArtifacts, String> {
+    pub fn find_surgical_host(
+        &self,
+        platform_main_roc: &Path,
+    ) -> Result<SurgicalHostArtifacts, String> {
         let surgical_metadata = platform_main_roc.with_file_name(self.metadata_file_name());
         let surgical_host_path = platform_main_roc.with_file_name(self.prebuilt_surgical_host());
 
@@ -283,8 +284,6 @@ impl Target {
             .to_string())
         }
     }
-
-
 }
 
 pub enum ParseError {
