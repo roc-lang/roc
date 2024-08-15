@@ -892,7 +892,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
