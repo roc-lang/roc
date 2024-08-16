@@ -2506,7 +2506,6 @@ mod when {
 
             let pattern_indent = min_indent.max(pattern_indent.unwrap_or(min_indent));
 
-            let delimiter = byte(b'|', EWhen::Bar);
             let pattern_parser = branch_single_alternative();
 
             let (first_p, first_pattern, next_state) =
@@ -2518,28 +2517,21 @@ mod when {
             patterns.push(first_pattern);
 
             loop {
-                let old_state = state.clone();
-                match delimiter.parse(arena, state, pattern_indent) {
-                    Ok((_, (), next_state)) => {
-                        // If the delimiter passed parse the next pattern
-                        match pattern_parser.parse(arena, next_state, pattern_indent) {
-                            Ok((_, pattern, next_state)) => {
-                                state = next_state;
-                                patterns.push(pattern);
-                            }
-                            Err((_, fail)) => {
-                                return Err((MadeProgress, fail));
-                            }
+                let prev_state = state.clone();
+                if state.bytes().first() == Some(&b'|') {
+                    state.advance_mut(1);
+                    match pattern_parser.parse(arena, state, pattern_indent) {
+                        Ok((_, pattern, next_state)) => {
+                            state = next_state;
+                            patterns.push(pattern);
+                        }
+                        Err((_, fail)) => {
+                            return Err((MadeProgress, fail));
                         }
                     }
-                    Err((NoProgress, _)) => {
-                        state = old_state;
-                        break;
-                    }
-                    Err(fail) => {
-                        // fail if the delimiter made progress
-                        return Err(fail);
-                    }
+                } else {
+                    state = prev_state;
+                    break;
                 }
             }
 
