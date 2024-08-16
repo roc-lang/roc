@@ -1,5 +1,5 @@
 app "multi-dep-thunk"
-    packages { pf: "platform/main.roc" }
+    packages { pf: "../../test-platform-simple-zig/main.roc" }
     imports [Dep1]
     provides [main] to pf
 

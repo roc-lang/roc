@@ -894,7 +894,9 @@ fn build_loaded_file<'a>(
             )
         }
         (Err(legacy_paths), Err(surgical_paths), true, LinkType::Executable) => {
-            report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
+            if !supress_build_host_warning {
+                report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
+            }
             build_and_preprocess_host(
                 code_gen_options,
                 dll_stub_symbols,

@@ -461,7 +461,7 @@ pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     path
 }
 
-pub fn file_path_from_root(dir_name: &str, file_name: &str) -> PathBuf {
+pub fn from_root(dir_name: &str, file_name: &str) -> PathBuf {
     let mut path = dir_path_from_root(dir_name);
 
     path.push(file_name);

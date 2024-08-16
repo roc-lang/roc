@@ -1,4 +1,4 @@
-platform "multi-module"
+platform ""
     requires {}{ main : Str }
     exposes []
     packages {}
