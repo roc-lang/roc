@@ -112,7 +112,6 @@ const Unit = extern struct {};
 
 pub export fn main() u8 {
     const allocator = std.heap.page_allocator;
-    const stderr = std.io.getStdErr().writer();
 
     // NOTE the return size can be zero, which will segfault. Always allocate at least 8 bytes
     const size = @max(8, @as(usize, @intCast(roc__mainForHost_1_exposed_size())));
@@ -123,22 +122,11 @@ pub export fn main() u8 {
         allocator.free(raw_output);
     }
 
-    var timer = std.time.Timer.start() catch unreachable;
-
     roc__mainForHost_1_exposed_generic(output);
 
     call_the_closure(output);
 
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
-
-    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
-
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {

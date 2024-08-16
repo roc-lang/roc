@@ -810,15 +810,23 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
-        test_roc_app(
-            file_from_root("examples/cli", "effects.roc").as_path(),
-            vec!["hi there!"],
-            &[],
-            vec![],
-            "hi there!\nIt is known\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        )
+        let expected_ending = "hi there!\nIt is known\n🔨 Building host ...\n";
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+            .arg(file_from_root("crates/cli/tests/effects", "main.roc").as_path())
+            .with_stdin_vals(vec!["hi there!"]);
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
     }
 
     #[test]

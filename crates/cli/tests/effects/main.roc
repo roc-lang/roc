@@ -1,4 +1,4 @@
-app [main] { pf: platform "effects-platform/main.roc" }
+app [main] { pf: platform "platform/main.roc" }
 
 import pf.Effect
 
