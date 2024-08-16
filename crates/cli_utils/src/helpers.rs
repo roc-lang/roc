@@ -127,6 +127,7 @@ pub struct Run {
     args: Vec<OsString>,
     env: Vec<(String, String)>,
     stdin_vals: Vec<&'static str>,
+    cwd: Option<OsString>,
 }
 
 impl Run {
@@ -139,6 +140,7 @@ impl Run {
             args: vec![exe],
             stdin_vals: vec![],
             env: vec![],
+            cwd: None,
         }
     }
 
@@ -226,6 +228,14 @@ impl Run {
         self
     }
 
+    pub fn cwd<S>(mut self, arg: S) -> Self
+    where
+        S: Into<OsString>,
+    {
+        self.cwd = Some(arg.into());
+        self
+    }
+
     pub fn with_env<'a, I>(&mut self, env: I) -> &mut Self
     where
         I: IntoIterator<Item = (&'a str, &'a str)>,
@@ -238,14 +248,20 @@ impl Run {
 
     fn run_with_command(self, mut cmd: Command) -> Out {
         let cmd_str = pretty_command_string(&cmd);
-        let mut roc_cmd_child = cmd
+
+        let command = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap_or_else(|err| {
-                panic!("Failed to execute command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}",)
-            });
+            .stderr(Stdio::piped());
+
+        if let Some(cwd) = &self.cwd {
+            command.current_dir(cwd);
+        }
+
+        let mut roc_cmd_child = command.spawn().unwrap_or_else(|err| {
+            panic!("Failed to execute command\n\n  {cmd_str:?}\n\nwith error:\n\n  {err}",)
+        });
+
         let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
 
         for stdin_str in self.stdin_vals.iter() {
@@ -481,7 +497,7 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
 }
 
 #[allow(dead_code)]
-pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
+pub fn dir_from_root(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
     path.extend(dir_name.split('/')); // Make slashes cross-target
@@ -489,8 +505,8 @@ pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     path
 }
 
-pub fn from_root(dir_name: &str, file_name: &str) -> PathBuf {
-    let mut path = dir_path_from_root(dir_name);
+pub fn file_from_root(dir_name: &str, file_name: &str) -> PathBuf {
+    let mut path = dir_from_root(dir_name);
 
     path.push(file_name);
 

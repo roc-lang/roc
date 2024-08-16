@@ -9,10 +9,10 @@ extern crate roc_module;
 
 #[cfg(test)]
 mod cli_run {
-    use cli_utils::helpers::{dir_path_from_root, from_root, known_bad_file, Run};
+    use cli_utils::helpers::{dir_from_root, file_from_root, known_bad_file, Run};
     use const_format::concatcp;
     use indoc::indoc;
-    use roc_cli::{CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
@@ -44,7 +44,7 @@ mod cli_run {
 
     #[derive(Debug, Clone, Copy)]
     enum TestCliCommands {
-        Many,
+        // Many,
         Run,
         // Test,
         // Dev,
@@ -390,7 +390,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("examples", "helloWorld.roc").as_path());
+            .arg(file_from_root("examples", "helloWorld.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -417,7 +417,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("examples/platform-switching", "main.roc").as_path());
+            .arg(file_from_root("examples/platform-switching", "main.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -442,7 +442,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("examples/platform-switching", "rocLovesRust.roc").as_path());
+            .arg(file_from_root("examples/platform-switching", "rocLovesRust.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -465,7 +465,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("examples/platform-switching", "rocLovesZig.roc").as_path());
+            .arg(file_from_root("examples/platform-switching", "rocLovesZig.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -482,9 +482,9 @@ mod cli_run {
     fn platform_switching_wasm() {
         // this is a web assembly example, but we don't test with JS at the moment
         // so let's just check it for now
-        let runner = Run::new_roc()
-            .arg(CMD_CHECK)
-            .arg(from_root("examples/platform-switching", "rocLovesWebAssembly.roc").as_path());
+        let runner = Run::new_roc().arg(CMD_CHECK).arg(
+            file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc").as_path(),
+        );
 
         let out = runner.run();
         out.assert_clean_success();
@@ -501,7 +501,7 @@ mod cli_run {
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .add_args(&["--main", "tests/module_imports_pkg/app.roc"])
-            .arg(from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -534,7 +534,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .arg(from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -572,7 +572,7 @@ mod cli_run {
             .arg(CMD_TEST)
             .add_args(&["--main", "tests/module_imports_pkg/app.roc"])
             .arg(
-                from_root(
+                file_from_root(
                     "crates/cli/tests/module_imports_pkg",
                     "ImportsUnknownPkg.roc",
                 )
@@ -597,7 +597,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/platform_requires_pkg", "app.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/platform_requires_pkg", "app.roc").as_path());
 
         let out = runner.run();
         out.assert_clean_success();
@@ -614,7 +614,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .arg(from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -642,7 +642,7 @@ mod cli_run {
         let runner = Run::new_roc()
             .arg(CMD_TEST)
             .arg("--verbose")
-            .arg(from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -664,7 +664,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/algorithms", "fibonacci.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/algorithms", "fibonacci.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -686,7 +686,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/algorithms", "quicksort.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/algorithms", "quicksort.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -706,7 +706,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("examples/virtual-dom-wip", "example-server.roc")
+                file_from_root("examples/virtual-dom-wip", "example-server.roc")
                     .to_str()
                     .unwrap(),
             ])
@@ -721,7 +721,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("examples/virtual-dom-wip", "example-client.roc")
+                file_from_root("examples/virtual-dom-wip", "example-client.roc")
                     .to_str()
                     .unwrap(),
             ])
@@ -736,7 +736,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/basic-cli", "countdown.roc")
+                file_from_root("crates/cli/tests/basic-cli", "countdown.roc")
                     .to_str()
                     .unwrap(),
             ])
@@ -751,7 +751,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/basic-cli", "echo.roc")
+                file_from_root("crates/cli/tests/basic-cli", "echo.roc")
                     .to_str()
                     .unwrap(),
             ])
@@ -766,7 +766,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/basic-cli", "fileBROKEN.roc")
+                file_from_root("crates/cli/tests/basic-cli", "fileBROKEN.roc")
                     .as_os_str()
                     .to_str()
                     .unwrap(),
@@ -782,7 +782,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/basic-cli", "form.roc")
+                file_from_root("crates/cli/tests/basic-cli", "form.roc")
                     .as_os_str()
                     .to_str()
                     .unwrap(),
@@ -798,7 +798,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/basic-cli", "http-get.roc")
+                file_from_root("crates/cli/tests/basic-cli", "http-get.roc")
                     .as_os_str()
                     .to_str()
                     .unwrap(),
@@ -811,7 +811,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
         test_roc_app(
-            from_root("examples/cli", "effects.roc").as_path(),
+            file_from_root("examples/cli", "effects.roc").as_path(),
             vec!["hi there!"],
             &[],
             vec![],
@@ -826,7 +826,7 @@ mod cli_run {
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         test_roc_app(
-            from_root("examples/cli", "tui.roc").as_path(),
+            file_from_root("examples/cli", "tui.roc").as_path(),
             vec!["foo\n"], // NOTE: adding more lines leads to memory leaks
             &[],
             vec![],
@@ -839,30 +839,47 @@ mod cli_run {
     #[test]
     #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
-        test_roc_app(
-            from_root("examples/cli/false-interpreter", "False.roc").as_path(),
-            vec![OPTIMIZE_FLAG],
-            &[
+        // Test building
+        let build_runner = Run::new_roc()
+            .arg(CMD_BUILD)
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+            .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
+            .run();
+
+        build_runner.assert_clean_success();
+
+        // Test running
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
+            .add_args(&[
                 "--",
-                from_root("examples/cli/false-interpreter/examples", "sqrt.false")
+                file_from_root("crates/cli/tests/false-interpreter/examples", "sqrt.false")
                     .as_path()
                     .to_str()
                     .unwrap(),
-            ],
-            vec![],
-            "1414",
-            UseValgrind::Yes,
-            TestCliCommands::Many,
-        )
+            ]);
+
+        let expected_ending = "1414";
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
     }
 
-    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            from_root("crates/cli/tests/basic-cli", "env.roc").as_path(),
+            file_from_root("crates/cli/tests/basic-cli", "env.roc").as_path(),
             vec![],
             &[],
             vec![
@@ -883,7 +900,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            from_root("crates/cli/tests/basic-cli", "ingested-file.roc").as_path(),
+            file_from_root("crates/cli/tests/basic-cli", "ingested-file.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -902,7 +919,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn combine_tasks_with_record_builder() {
         test_roc_app(
-            from_root("crates/cli/tests/basic-cli", "combine-tasks.roc").as_path(),
+            file_from_root("crates/cli/tests/basic-cli", "combine-tasks.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -917,7 +934,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_args_with_record_builder() {
         test_roc_app(
-            from_root("crates/cli/tests/basic-cli", "parse-args.roc").as_path(),
+            file_from_root("crates/cli/tests/basic-cli", "parse-args.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -932,7 +949,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            from_root("crates/cli/tests/basic-cli", "ingested-file-bytes.roc").as_path(),
+            file_from_root("crates/cli/tests/basic-cli", "ingested-file-bytes.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -946,7 +963,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes_no_ann() {
         test_roc_app(
-            from_root(
+            file_from_root(
                 "crates/cli/tests/basic-cli",
                 "ingested-file-bytes-no-ann.roc",
             )
@@ -969,7 +986,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/basic-cli", "parser-movies-csv.roc").as_path());
+            .arg(file_from_root("crates/cli/tests/basic-cli", "parser-movies-csv.roc").as_path());
 
         let out = runner.run();
         out.assert_clean_success();
@@ -985,7 +1002,9 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/basic-cli", "parser-letter-counts.roc").as_path());
+            .arg(
+                file_from_root("crates/cli/tests/basic-cli", "parser-letter-counts.roc").as_path(),
+            );
 
         let out = runner.run();
         out.assert_clean_success();
@@ -1001,7 +1020,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("examples", "inspect-logging.roc").as_path());
+            .arg(file_from_root("examples", "inspect-logging.roc").as_path());
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
@@ -1018,7 +1037,7 @@ mod cli_run {
         use super::{
             ALLOW_VALGRIND, BUILD_HOST_FLAG, OPTIMIZE_FLAG, SUPPRESS_BUILD_HOST_WARNING_FLAG,
         };
-        use cli_utils::helpers::{from_root, Run};
+        use cli_utils::helpers::{file_from_root, Run};
         use indoc::indoc;
         use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
 
@@ -1033,7 +1052,8 @@ mod cli_run {
                     .arg(OPTIMIZE_FLAG)
                     .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
                     .arg(
-                        from_root("crates/cli/tests/test-platform-simple-zig", "app.roc").as_path(),
+                        file_from_root("crates/cli/tests/test-platform-simple-zig", "app.roc")
+                            .as_path(),
                     )
                     .run();
                 out.assert_clean_success();
@@ -1048,7 +1068,9 @@ mod cli_run {
             let expected_ending = "I am Dep2.str2\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(roc_cli::CMD_RUN)
-                .arg(from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path());
+                .arg(
+                    file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
+                );
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1070,7 +1092,9 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
-                .arg(from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path());
+                .arg(
+                    file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
+                );
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1089,9 +1113,9 @@ mod cli_run {
             build_platform_host();
 
             let expected_ending = "I am Dep2.value2\n";
-            let runner = cli_utils::helpers::Run::new_roc()
-                .arg(CMD_RUN)
-                .arg(from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path());
+            let runner = cli_utils::helpers::Run::new_roc().arg(CMD_RUN).arg(
+                file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path(),
+            );
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1116,7 +1140,10 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
-                .arg(from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc").as_path());
+                .arg(
+                    file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
+                        .as_path(),
+                );
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1138,7 +1165,7 @@ mod cli_run {
                 "Hello, World! This text came from a package! This text came from a CSV package!\n";
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
-                .arg(from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
+                .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1161,7 +1188,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
-                .arg(from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
+                .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1179,7 +1206,7 @@ mod cli_run {
         fn run_transitive_deps_app() {
             build_platform_host();
 
-            let file_path = from_root(
+            let file_path = file_from_root(
                 "crates/cli/tests/fixtures/transitive-deps",
                 "direct-one.roc",
             );
@@ -1205,7 +1232,7 @@ mod cli_run {
         fn run_transitive_and_direct_dep_app() {
             build_platform_host();
 
-            let file_path = from_root(
+            let file_path = file_from_root(
                 "crates/cli/tests/fixtures/transitive-deps",
                 "direct-one-and-two.roc",
             );
@@ -1231,7 +1258,7 @@ mod cli_run {
         fn run_double_transitive_dep_app() {
             build_platform_host();
 
-            let file_path = from_root(
+            let file_path = file_from_root(
                 "crates/cli/tests/fixtures/transitive-deps",
                 "direct-zero.roc",
             );
@@ -1282,7 +1309,7 @@ mod cli_run {
             );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_DEV)
-                .arg(from_root("crates/cli/tests/expects", "expects.roc").as_path());
+                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             dbg!(&runner);
 
@@ -1351,7 +1378,7 @@ mod cli_run {
             );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_TEST)
-                .arg(from_root("crates/cli/tests/expects", "expects.roc").as_path());
+                .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
@@ -1369,12 +1396,10 @@ mod cli_run {
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
         use super::{
-            UseValgrind, ALLOW_VALGRIND, BUILD_HOST_FLAG, OPTIMIZE_FLAG,
-            SUPPRESS_BUILD_HOST_WARNING_FLAG,
+            UseValgrind, BUILD_HOST_FLAG, OPTIMIZE_FLAG, SUPPRESS_BUILD_HOST_WARNING_FLAG,
         };
-        use cli_utils::helpers::{from_root, Run};
-        use indoc::indoc;
-        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
+        use cli_utils::helpers::{file_from_root, Run};
+        use roc_cli::CMD_BUILD;
 
         // #[allow(unused_imports)]
         use std::sync::Once;
@@ -1389,7 +1414,9 @@ mod cli_run {
                     .arg(BUILD_HOST_FLAG)
                     .arg(OPTIMIZE_FLAG)
                     .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-                    .arg(from_root("crates/cli/tests/benchmarks/platform", "app.roc").as_path())
+                    .arg(
+                        file_from_root("crates/cli/tests/benchmarks/platform", "app.roc").as_path(),
+                    )
                     .run();
                 out.assert_clean_success();
             });
@@ -1409,7 +1436,7 @@ mod cli_run {
             {
                 let runner = cli_utils::helpers::Run::new_roc()
                     .arg(roc_cli::CMD_RUN)
-                    .arg(from_root(dir_name, roc_filename).as_path())
+                    .arg(file_from_root(dir_name, roc_filename).as_path())
                     .with_stdin_vals(stdin);
 
                 if use_valgrind.and_is_supported() {
@@ -1774,7 +1801,7 @@ mod cli_run {
     #[test]
     fn format_check_good() {
         check_format_check_as_expected(
-            from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path(),
+            file_from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path(),
             true,
         );
     }
@@ -1782,7 +1809,7 @@ mod cli_run {
     #[test]
     fn format_check_reformatting_needed() {
         check_format_check_as_expected(
-            from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path(),
+            file_from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path(),
             false,
         );
     }
@@ -1791,13 +1818,13 @@ mod cli_run {
     fn format_check_folders() {
         // This fails, because "NotFormatted.roc" is present in this folder
         check_format_check_as_expected(
-            dir_path_from_root("crates/cli/tests/fixtures/format").as_path(),
+            dir_from_root("crates/cli/tests/fixtures/format").as_path(),
             false,
         );
 
         // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
         check_format_check_as_expected(
-            dir_path_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path(),
+            dir_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path(),
             true,
         );
     }
