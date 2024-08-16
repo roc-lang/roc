@@ -1188,6 +1188,51 @@ mod cli_run {
                 out.assert_stdout_ends_with(expected_ending);
             }
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn run_packages_unoptimized() {
+            build_platform_host();
+
+            let expected_ending =
+                "Hello, World! This text came from a package! This text came from a CSV package!\n";
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            }
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn run_packages_optimized() {
+            build_platform_host();
+
+            let expected_ending =
+                "Hello, World! This text came from a package! This text came from a CSV package!\n";
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(OPTIMIZE_FLAG)
+                .arg(from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            }
+        }
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
@@ -1456,36 +1501,6 @@ mod cli_run {
             //     UseValgrind::Yes,
             // )
         }
-    }
-
-    #[test]
-    #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
-    fn run_packages_unoptimized() {
-        test_roc_app(
-            from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            "Hello, World! This text came from a package! This text came from a CSV package!\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        );
-    }
-
-    #[test]
-    #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
-    fn run_packages_optimized() {
-        test_roc_app(
-            from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path(),
-            vec![OPTIMIZE_FLAG],
-            &[],
-            vec![],
-            "Hello, World! This text came from a package! This text came from a CSV package!\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        );
     }
 
     #[test]

@@ -1,7 +1,6 @@
-app "multi-dep-str"
-    packages { pf: "../../test-platform-simple-zig/main.roc" }
-    imports [Dep1]
-    provides [main] to pf
+app [main] { pf: platform "../../test-platform-simple-zig/main.roc" }
+
+import Dep1
 
 main : Str
 main = Dep1.str1

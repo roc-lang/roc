@@ -1,6 +1,4 @@
-interface Csv
-    exposes [example]
-    imports []
+module [example]
 
 example : Str
 example = "This text came from a CSV package!"
