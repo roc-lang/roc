@@ -353,10 +353,10 @@ mod cli_run {
 
         if use_valgrind.and_is_supported() {
             let out = runner.run_with_valgrind();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -382,11 +382,11 @@ mod cli_run {
         if use_valgrind.and_is_supported() {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -394,7 +394,7 @@ mod cli_run {
     #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn hello_world() {
-        let expected_ending = "Hello, World!\n";
+        let expected_ending = "Hello, World!\n🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -404,11 +404,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -431,11 +431,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -456,11 +456,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -479,11 +479,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -497,102 +497,6 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-    }
-
-    #[ignore = "TODO move this to roc-lang/examples repository"]
-    #[test]
-    fn expects_dev_and_test() {
-        // these are in the same test function so we don't have to worry about race conditions
-        // on the building of the platform
-
-        test_roc_app(
-            from_root("crates/cli/tests/expects", "expects.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            indoc!(
-                r#"
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                28│      expect words == []
-                                ^^^^^^^^^^^
-
-                When it failed, these variables had these values:
-
-                words : List Str
-                words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
-
-                [<ignored for tests>:31] x = 42
-                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:35] "this is line 24" = "this is line 24"
-                [<ignored for tests>:21] x = "abc"
-                [<ignored for tests>:21] x = 10
-                [<ignored for tests>:21] x = (A (B C))
-                Program finished!
-                "#
-            ),
-            UseValgrind::Yes,
-            TestCliCommands::Dev,
-        );
-
-        test_roc_app(
-            from_root("crates/cli/tests/expects", "expects.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            indoc!(
-                r#"
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                9│      expect a == 2
-                               ^^^^^^
-
-                When it failed, these variables had these values:
-
-                a : Num *
-                a = 1
-
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                10│      expect a == 3
-                                ^^^^^^
-
-                When it failed, these variables had these values:
-
-                a : Num *
-                a = 1
-
-                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
-
-                This expectation failed:
-
-                14│>  expect
-                15│>      a = makeA
-                16│>      b = 2i64
-                17│>
-                18│>      a == b
-
-                When it failed, these variables had these values:
-
-                a : Int Signed64
-                a = 1
-
-                b : I64
-                b = 2
-
-
-                1 failed and 0 passed in <ignored for test> ms.
-                "#
-            ),
-            UseValgrind::Yes,
-            TestCliCommands::Test,
-        );
     }
 
     #[test]
@@ -610,10 +514,10 @@ mod cli_run {
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -643,10 +547,10 @@ mod cli_run {
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -686,10 +590,10 @@ mod cli_run {
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -706,7 +610,7 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_ends_with(expected_ending);
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -723,10 +627,10 @@ mod cli_run {
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -751,10 +655,10 @@ mod cli_run {
 
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -774,11 +678,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -796,11 +700,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -1074,7 +978,7 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_ends_with(expected_ending);
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -1090,7 +994,7 @@ mod cli_run {
 
         let out = runner.run();
         out.assert_clean_success();
-        out.assert_stdout_ends_with(expected_ending);
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -1107,11 +1011,11 @@ mod cli_run {
         if ALLOW_VALGRIND {
             let out = runner.run_with_valgrind();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         } else {
             let out = runner.run();
             out.assert_clean_success();
-            out.assert_stdout_ends_with(expected_ending);
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -1120,7 +1024,8 @@ mod cli_run {
             ALLOW_VALGRIND, BUILD_HOST_FLAG, OPTIMIZE_FLAG, SUPPRESS_BUILD_HOST_WARNING_FLAG,
         };
         use cli_utils::helpers::{from_root, Run};
-        use roc_cli::{CMD_BUILD, CMD_RUN};
+        use indoc::indoc;
+        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
 
         static BUILD_PLATFORM_HOST: std::sync::Once = std::sync::Once::new();
 
@@ -1136,7 +1041,6 @@ mod cli_run {
                         from_root("crates/cli/tests/test-platform-simple-zig", "app.roc").as_path(),
                     )
                     .run();
-                dbg!(&out);
                 out.assert_clean_success();
             });
         }
@@ -1154,11 +1058,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1176,11 +1080,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1197,11 +1101,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1222,11 +1126,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1244,11 +1148,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1267,11 +1171,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1293,11 +1197,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1319,11 +1223,11 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
 
@@ -1345,11 +1249,123 @@ mod cli_run {
             if ALLOW_VALGRIND {
                 let out = runner.run_with_valgrind();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             } else {
                 let out = runner.run();
                 out.assert_clean_success();
-                out.assert_stdout_ends_with(expected_ending);
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
+            }
+        }
+
+        #[test]
+        fn expects_dev() {
+            build_platform_host();
+
+            let expected_ending = indoc!(
+                r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                25│      expect words == []
+                                ^^^^^^^^^^^
+
+                When it failed, these variables had these values:
+
+                words : List Str
+                words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
+
+                Program finished!
+
+                [<ignored for tests>:28] x = 42
+                [<ignored for tests>:30] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:32] "this is line 24" = "this is line 24"
+                [<ignored for tests>:18] x = "abc"
+                [<ignored for tests>:18] x = 10
+                [<ignored for tests>:18] x = (A (B C))
+                "#
+            );
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_DEV)
+                .arg(from_root("crates/cli/tests/expects", "expects.roc").as_path());
+
+            dbg!(&runner);
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                // out.assert_clean_success();
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                // out.assert_clean_success();
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
+            }
+        }
+
+        #[test]
+        fn expects_test() {
+            build_platform_host();
+
+            let expected_ending = indoc!(
+                r#"
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                9│      expect a == 2
+                               ^^^^^^
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                10│      expect a == 3
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                ── EXPECT FAILED in tests/expects/expects.roc ──────────────────────────────────
+
+                This expectation failed:
+
+                14│>  expect
+                15│>      a = makeA
+                16│>      b = 2i64
+                17│>
+                18│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Int Signed64
+                a = 1
+
+                b : I64
+                b = 2
+
+
+                1 failed and 0 passed in <ignored for test> ms.
+                "#
+            );
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_TEST)
+                .arg(from_root("crates/cli/tests/expects", "expects.roc").as_path());
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                out.assert_clean_success();
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
         }
     }
@@ -1391,11 +1407,11 @@ mod cli_run {
                 if use_valgrind.and_is_supported() {
                     let out = runner.run_with_valgrind();
                     out.assert_clean_success();
-                    out.assert_stdout_ends_with(expected_ending);
+                    out.assert_stdout_and_stderr_ends_with(expected_ending);
                 } else {
                     let out = runner.run();
                     out.assert_clean_success();
-                    out.assert_stdout_ends_with(expected_ending);
+                    out.assert_stdout_and_stderr_ends_with(expected_ending);
                 }
             }
 
@@ -1633,9 +1649,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                6│  main : Str -> Task {} []
-                7│  main = /_ ->
-                8│      "this is a string, not a Task {} [] function like the platform expects."
+                5│  main : Str -> Task {} []
+                6│  main = /_ ->
+                7│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:
@@ -1667,8 +1683,8 @@ mod cli_run {
 
                 Symbol is imported but not used.
 
-                3│      imports [Symbol.{ Ident }]
-                                 ^^^^^^^^^^^^^^^^
+                3│  import Symbol exposing [Ident]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
 
@@ -1711,8 +1727,8 @@ mod cli_run {
 
                 Symbol is imported but not used.
 
-                3│      imports [Symbol.{ Ident }]
-                                 ^^^^^^^^^^^^^^^^
+                3│  import Symbol exposing [Ident]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
 

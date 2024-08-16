@@ -6,6 +6,7 @@ extern crate tempfile;
 
 use regex::Regex;
 use roc_command_utils::{cargo, pretty_command_string, root_dir};
+use roc_reporting::report::ANSI_STYLE_CODES;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -56,10 +57,13 @@ impl std::fmt::Display for Out {
 }
 
 impl Out {
+    /// Assert that the command succeeded and that there are no unexpected errors in the stderr.
     pub fn assert_clean_success(&self) {
         self.assert_success_with_no_unexpected_errors(COMMON_STDERR.as_slice());
     }
 
+    /// Assert that the command succeeded and that there are no unexpected errors in the stderr.
+    /// This DOES NOT normalise the output, use assert_stdout_ends_with for that.
     pub fn assert_success_with_no_unexpected_errors(&self, expected_errors: &[ExpectedString]) {
         assert!(self.status.success(), "Command failed\n\n{self}");
         assert!(
@@ -69,23 +73,47 @@ impl Out {
         );
     }
 
-    /// Normalise the output for comparison in tests by stripping ANSI color codes
-    /// and replace test timings with a placeholder.
-    pub fn stdout_without_test_timings(&self) -> String {
+    /// Normalise the output for comparison in tests by replacing with a placeholder
+    fn normalize_for_tests(input: &String) -> String {
+        // remove ANSI color codes
         let ansi_regex = Regex::new(r"\x1b\[[0-9;]*[mGKH]").expect("Invalid ANSI regex pattern");
-        let without_ansi = ansi_regex.replace_all(&self.stdout, "");
+        let without_ansi = ansi_regex.replace_all(input, "");
 
+        // replace timings with a placeholder
         let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
         let replacement = " in <ignored for test> ms.";
-        regex.replace_all(&without_ansi, replacement).to_string()
+        let without_timings = regex.replace_all(&without_ansi, replacement);
+
+        // replace file paths with a placeholder
+        let filepath_regex =
+            Regex::new(r"\[([^:]+):(\d+)\]").expect("Invalid filepath regex pattern");
+        let filepath_replacement = "[<ignored for tests>:$2]";
+        filepath_regex
+            .replace_all(&without_timings, filepath_replacement)
+            .to_string()
     }
 
-    pub fn assert_stdout_ends_with(&self, expected: &str) {
+    /// Assert that the stdout ends with the expected string
+    /// This normalises the output for comparison in tests such as replacing timings
+    /// with a placeholder, or stripping ANSI colors
+    pub fn assert_stdout_and_stderr_ends_with(&self, expected: &str) {
+        let normalised_output = format!(
+            "{}{}",
+            Out::normalize_for_tests(&self.stdout),
+            Out::normalize_for_tests(&self.stderr)
+        );
+
         assert!(
-            dbg!(self.stdout_without_test_timings()).ends_with(expected),
-            "Expected stdout to end with:\n{}\n\nActual stdout:\n{}",
+            normalised_output.ends_with(expected),
+            "\n{}EXPECTED stdout and stderr after normalizing:\n----------------\n{}{}\n{}ACTUAL stdout and stderr after normalizing:\n----------------\n{}{}{}\n----------------\n{}",
+            ANSI_STYLE_CODES.cyan,
+            ANSI_STYLE_CODES.reset,
             expected,
-            self.stdout
+            ANSI_STYLE_CODES.cyan,
+            ANSI_STYLE_CODES.reset,
+            normalised_output,
+            ANSI_STYLE_CODES.cyan,
+            ANSI_STYLE_CODES.reset,
         );
     }
 }
