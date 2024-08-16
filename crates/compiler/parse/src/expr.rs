@@ -8,6 +8,7 @@ use crate::ast::{
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
+    with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -908,14 +909,7 @@ fn numeric_negate_expression<'a, T>(
     };
 
     let new_loc_expr = Loc::at(region, new_expr);
-
-    if spaces.is_empty() {
-        new_loc_expr
-    } else {
-        arena
-            .alloc(new_loc_expr.value)
-            .with_spaces_before(spaces, new_loc_expr.region)
-    }
+    with_spaces_before(new_loc_expr, spaces, arena)
 }
 
 fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
@@ -2362,7 +2356,10 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
 mod when {
     use super::*;
-    use crate::{ast::WhenBranch, blankspace::spaces_around_help};
+    use crate::{
+        ast::WhenBranch,
+        blankspace::{spaces_around_help, with_spaces_before},
+    };
 
     /// Parser for when expressions.
     /// If Ok it always returns MadeProgress
@@ -2548,11 +2545,7 @@ mod when {
 
             // tag spaces onto the first parsed pattern
             if let Some(first) = patterns.get_mut(0) {
-                if !spaces.is_empty() {
-                    *first = arena
-                        .alloc(first.value)
-                        .with_spaces_before(spaces, first.region);
-                }
+                *first = with_spaces_before(*first, spaces, arena);
             }
 
             let guard_parser = map(
@@ -2588,16 +2581,11 @@ mod when {
 
             let parser = specialize_err(EWhen::Pattern, crate::pattern::loc_pattern_help());
 
-            let (_, mut loc_pattern, state) =
+            let (_, pattern, state) =
                 space0_after_e(parser, EWhen::IndentPattern).parse(arena, state, min_indent)?;
 
-            if !spaces.is_empty() {
-                loc_pattern = arena
-                    .alloc(loc_pattern.value)
-                    .with_spaces_before(spaces, loc_pattern.region)
-            }
-
-            Ok((MadeProgress, loc_pattern, state))
+            let pattern = with_spaces_before(pattern, spaces, arena);
+            Ok((MadeProgress, pattern, state))
         }
     }
 
@@ -2872,27 +2860,13 @@ where
         let loc_expr = stmts_to_expr(&stmts, arena)
             .map_err(|e| (MadeProgress, wrap_error(arena.alloc(e), last_pos)))?;
 
-        let loc_expr = if first_space.value.is_empty() {
-            loc_expr
-        } else {
-            arena
-                .alloc(loc_expr.value)
-                .with_spaces_before(first_space.value, loc_expr.region)
-        };
-
+        let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
         Ok((MadeProgress, loc_expr, state))
     } else {
         let (progress, loc_expr, state) =
             specialize_err_ref(wrap_error, expr_start(options)).parse(arena, state, min_indent)?;
 
-        let loc_expr = if first_space.value.is_empty() {
-            loc_expr
-        } else {
-            arena
-                .alloc(loc_expr.value)
-                .with_spaces_before(first_space.value, loc_expr.region)
-        };
-
+        let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
         Ok((progress, loc_expr, state))
     }
 }
@@ -3602,15 +3576,9 @@ fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> 
         ),
         |arena: &'a bumpalo::Bump, (spaces, either)| match either {
             Either::First((_, loc_expr)) => RecordFieldExpr::Apply(spaces, loc_expr),
-            Either::Second(loc_expr) => RecordFieldExpr::Value({
-                if spaces.is_empty() {
-                    loc_expr
-                } else {
-                    arena
-                        .alloc(loc_expr.value)
-                        .with_spaces_before(spaces, loc_expr.region)
-                }
-            }),
+            Either::Second(loc_expr) => {
+                RecordFieldExpr::Value(with_spaces_before(loc_expr, spaces, arena))
+            }
         },
     )
 }

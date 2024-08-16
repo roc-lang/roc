@@ -160,6 +160,36 @@ where
     )
 }
 
+#[inline(always)]
+pub fn with_spaces_before<'a, T: 'a + Spaceable<'a>>(
+    value: Loc<T>,
+    spaces: &'a [CommentOrNewline],
+    arena: &'a Bump,
+) -> Loc<T> {
+    if spaces.is_empty() {
+        value
+    } else {
+        arena
+            .alloc(value.value)
+            .with_spaces_before(spaces, value.region)
+    }
+}
+
+#[inline(always)]
+pub fn with_spaces_after<'a, T: 'a + Spaceable<'a>>(
+    value: Loc<T>,
+    spaces: &'a [CommentOrNewline],
+    arena: &'a Bump,
+) -> Loc<T> {
+    if spaces.is_empty() {
+        value
+    } else {
+        arena
+            .alloc(value.value)
+            .with_spaces_after(spaces, value.region)
+    }
+}
+
 pub fn space0_after_e<'a, P, S, E>(
     parser: P,
     indent_problem: fn(Position) -> E,
@@ -172,13 +202,7 @@ where
     parser::map_with_arena(
         and(parser, space0_e(indent_problem)),
         |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_after(space_list, loc_expr.region)
-            }
+            with_spaces_after(loc_expr, space_list, arena)
         },
     )
 }
