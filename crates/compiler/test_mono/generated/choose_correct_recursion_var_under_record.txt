@@ -97,17 +97,17 @@ procedure Num.51 (#Attr.2, #Attr.3):
     let Num.283 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
     ret Num.283;
 
-procedure Result.5 (Result.11, Result.12):
-    let Result.38 : U8 = 1i64;
-    let Result.39 : U8 = GetTagId Result.11;
-    let Result.40 : Int1 = lowlevel Eq Result.38 Result.39;
-    if Result.40 then
-        dec Result.12;
-        let Result.13 : Str = UnionAtIndex (Id 1) (Index 0) Result.11;
-        ret Result.13;
+procedure Result.5 (Result.13, Result.14):
+    let Result.57 : U8 = 1i64;
+    let Result.58 : U8 = GetTagId Result.13;
+    let Result.59 : Int1 = lowlevel Eq Result.57 Result.58;
+    if Result.59 then
+        dec Result.14;
+        let Result.15 : Str = UnionAtIndex (Id 1) (Index 0) Result.13;
+        ret Result.15;
     else
-        dec Result.11;
-        ret Result.12;
+        dec Result.13;
+        ret Result.14;
 
 procedure Test.10 (Test.11):
     let Test.12 : Str = CallByName Test.2 Test.11;
