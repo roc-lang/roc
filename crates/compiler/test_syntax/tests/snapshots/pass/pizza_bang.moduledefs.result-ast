@@ -26,12 +26,13 @@ Defs {
                         (
                             @11-23 SpaceAfter(
                                 Apply(
-                                    @11-19 TaskAwaitBang(
-                                        Var {
+                                    @11-19 TrySuffix {
+                                        target: Task,
+                                        expr: Var {
                                             module_name: "Arg",
                                             ident: "list",
                                         },
-                                    ),
+                                    },
                                     [
                                         @21-23 Record(
                                             [],
@@ -88,12 +89,13 @@ Defs {
                         ),
                         (
                             @83-98 SpaceAfter(
-                                TaskAwaitBang(
-                                    Var {
+                                TrySuffix {
+                                    target: Task,
+                                    expr: Var {
                                         module_name: "Task",
                                         ident: "fromResult",
                                     },
-                                ),
+                                },
                                 [
                                     Newline,
                                 ],
@@ -152,12 +154,13 @@ Defs {
                             @174-176 Pizza,
                         ),
                     ],
-                    @177-188 TaskAwaitBang(
-                        Var {
+                    @177-188 TrySuffix {
+                        target: Task,
+                        expr: Var {
                             module_name: "Stdout",
                             ident: "line",
                         },
-                    ),
+                    },
                 ),
                 [
                     Newline,
