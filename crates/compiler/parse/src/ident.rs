@@ -1,3 +1,4 @@
+use crate::ast::TryTarget;
 use crate::parser::Progress::{self, *};
 use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
 use crate::state::State;
@@ -377,7 +378,7 @@ impl<'a> Accessor<'a> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Suffix<'a> {
     Accessor(Accessor<'a>),
-    TaskAwaitBang,
+    TrySuffix(TryTarget),
 }
 
 /// a `.foo` or `.1` accessor function

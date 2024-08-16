@@ -108,12 +108,13 @@ Full(
                                 ),
                             ],
                             @167-202 Apply(
-                                @167-178 TaskAwaitBang(
-                                    Var {
+                                @167-178 TrySuffix {
+                                    target: Task,
+                                    expr: Var {
                                         module_name: "Task",
                                         ident: "mapErr",
                                     },
-                                ),
+                                },
                                 [
                                     @180-202 Tag(
                                         "UnableToCheckJQVersion",

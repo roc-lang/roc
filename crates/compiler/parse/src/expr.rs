@@ -3,7 +3,7 @@ use crate::ast::{
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
     ModuleImportParams, OldRecordBuilderField, Pattern, Spaceable, Spaced, Spaces, SpacesBefore,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -168,7 +168,12 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
+        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Task
+        )),
+        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Result
+        )),
     ))
 }
 
@@ -2116,7 +2121,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
-        | Expr::TaskAwaitBang(..)
+        | Expr::TrySuffix { .. }
         | Expr::Crash
         | Expr::OldRecordBuilder(..)
         | Expr::RecordBuilder { .. } => return Err(()),
@@ -3789,7 +3794,10 @@ fn apply_expr_access_chain<'a>(
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
                 Expr::TupleAccess(arena.alloc(value), field)
             }
-            Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
+            Suffix::TrySuffix(target) => Expr::TrySuffix {
+                target,
+                expr: arena.alloc(value),
+            },
         })
 }
 
