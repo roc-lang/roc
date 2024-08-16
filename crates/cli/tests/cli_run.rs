@@ -833,15 +833,23 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
-        test_roc_app(
-            file_from_root("examples/cli", "tui.roc").as_path(),
-            vec!["foo\n"], // NOTE: adding more lines leads to memory leaks
-            &[],
-            vec![],
-            "Hello Worldfoo!\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        )
+        let expected_ending = "Hello Worldfoo!\n🔨 Building host ...\n";
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(BUILD_HOST_FLAG)
+            .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+            .arg(file_from_root("crates/cli/tests/tui", "main.roc").as_path())
+            .with_stdin_vals(vec!["foo\n"]);
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+        }
     }
 
     #[test]

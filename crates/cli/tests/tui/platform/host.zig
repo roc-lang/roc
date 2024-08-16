@@ -171,23 +171,11 @@ comptime {
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
-    var timer = std.time.Timer.start() catch unreachable;
-
     const program = roc__mainForHost_1_exposed();
 
     call_the_closure(program);
 
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
-
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
-
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }
 
 fn call_the_closure(program: Program) void {
