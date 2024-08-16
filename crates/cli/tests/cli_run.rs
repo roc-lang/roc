@@ -1368,13 +1368,32 @@ mod cli_run {
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
-        use super::UseValgrind;
+        use super::{
+            UseValgrind, ALLOW_VALGRIND, BUILD_HOST_FLAG, OPTIMIZE_FLAG,
+            SUPPRESS_BUILD_HOST_WARNING_FLAG,
+        };
         use cli_utils::helpers::{from_root, Run};
+        use indoc::indoc;
+        use roc_cli::{CMD_BUILD, CMD_DEV, CMD_RUN, CMD_TEST};
 
         // #[allow(unused_imports)]
         use std::sync::Once;
 
-        static BUILD_BENCHMARKS_PLATFORM_HOST: Once = Once::new();
+        static BUILD_PLATFORM_HOST: Once = Once::new();
+
+        /// Build the platform host once for all tests in this module
+        fn build_platform_host() {
+            BUILD_PLATFORM_HOST.call_once(|| {
+                let out = Run::new_roc()
+                    .arg(CMD_BUILD)
+                    .arg(BUILD_HOST_FLAG)
+                    .arg(OPTIMIZE_FLAG)
+                    .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
+                    .arg(from_root("crates/cli/tests/benchmarks/platform", "app.roc").as_path())
+                    .run();
+                out.assert_clean_success();
+            });
+        }
 
         fn test_benchmark(
             roc_filename: &str,
@@ -1384,13 +1403,7 @@ mod cli_run {
         ) {
             let dir_name = "crates/cli/tests/benchmarks";
 
-            // Build the bechmark host once, and use it for all benchmark tests
-            BUILD_BENCHMARKS_PLATFORM_HOST.call_once(|| {
-                Run::new_roc()
-                    .arg(roc_cli::CMD_BUILD)
-                    .arg(from_root(dir_name, roc_filename).as_path())
-                    .run();
-            });
+            build_platform_host();
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
             {
