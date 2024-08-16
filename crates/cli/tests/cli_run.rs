@@ -1233,6 +1233,84 @@ mod cli_run {
                 out.assert_stdout_ends_with(expected_ending);
             }
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn run_transitive_deps_app() {
+            build_platform_host();
+
+            let file_path = from_root(
+                "crates/cli/tests/fixtures/transitive-deps",
+                "direct-one.roc",
+            );
+
+            let expected_ending = "[One imports Two: From two]\n";
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(file_path.as_path());
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            }
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn run_transitive_and_direct_dep_app() {
+            build_platform_host();
+
+            let file_path = from_root(
+                "crates/cli/tests/fixtures/transitive-deps",
+                "direct-one-and-two.roc",
+            );
+
+            let expected_ending = "[One imports Two: From two] | From two\n";
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(file_path.as_path());
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            }
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn run_double_transitive_dep_app() {
+            build_platform_host();
+
+            let file_path = from_root(
+                "crates/cli/tests/fixtures/transitive-deps",
+                "direct-zero.roc",
+            );
+
+            let expected_ending = "[Zero imports One: [One imports Two: From two]]\n";
+            let runner = cli_utils::helpers::Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(file_path.as_path());
+
+            if ALLOW_VALGRIND {
+                let out = runner.run_with_valgrind();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            } else {
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_ends_with(expected_ending);
+            }
+        }
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
@@ -1501,66 +1579,6 @@ mod cli_run {
             //     UseValgrind::Yes,
             // )
         }
-    }
-
-    #[test]
-    #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
-    fn run_transitive_deps_app() {
-        let file_path = from_root(
-            "crates/cli/tests/fixtures/transitive-deps",
-            "direct-one.roc",
-        );
-
-        test_roc_app(
-            file_path.as_path(),
-            vec![],
-            &[],
-            vec![],
-            "[One imports Two: From two]\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        );
-    }
-
-    #[test]
-    #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
-    fn run_transitive_and_direct_dep_app() {
-        let file_path = from_root(
-            "crates/cli/tests/fixtures/transitive-deps",
-            "direct-one-and-two.roc",
-        );
-
-        test_roc_app(
-            file_path.as_path(),
-            vec![],
-            &[],
-            vec![],
-            "[One imports Two: From two] | From two\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        );
-    }
-
-    #[test]
-    #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
-    fn run_double_transitive_dep_app() {
-        let file_path = from_root(
-            "crates/cli/tests/fixtures/transitive-deps",
-            "direct-zero.roc",
-        );
-
-        test_roc_app(
-            file_path.as_path(),
-            vec![],
-            &[],
-            vec![],
-            "[Zero imports One: [One imports Two: From two]]\n",
-            UseValgrind::Yes,
-            TestCliCommands::Run,
-        );
     }
 
     #[test]

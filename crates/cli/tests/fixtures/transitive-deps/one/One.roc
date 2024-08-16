@@ -1,4 +1,4 @@
-module [example] 
+module [example]
 
 import two.Two
 

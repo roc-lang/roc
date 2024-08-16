@@ -1,3 +1,3 @@
 package [Zero] {
-  one: "../one/main.roc"
+    one: "../one/main.roc",
 }
