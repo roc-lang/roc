@@ -1,7 +1,4 @@
-app "stub"
-    packages { pf: "main.roc" }
-    imports []
-    provides [main] to pf
+app [main] { pf: platform "main.roc" }
 
 main : Str
 main = "STUBBED APP"

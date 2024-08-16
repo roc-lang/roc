@@ -1,5 +1,5 @@
 app [main] {
-    pkg: "./pkg/main.roc"
+    pkg: "./pkg/main.roc",
 }
 
 import Module

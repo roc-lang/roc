@@ -1,3 +1,1 @@
-interface ExposedNotDefined
-    exposes [bar]
-    imports []
+module [bar]

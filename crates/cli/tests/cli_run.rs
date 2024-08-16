@@ -598,78 +598,104 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_w_flag() {
-        test_roc_expect(
-            from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path(),
-            &["--main", "tests/module_imports_pkg/app.roc"],
-            indoc!(
-                r#"
-                0 failed and 1 passed in <ignored for test> ms.
-                "#
-            ),
-        )
+        let expected_ending = indoc!(
+            r#"
+            0 failed and 1 passed in <ignored for test> ms.
+            "#
+        );
+        let runner = Run::new_roc()
+            .arg(CMD_TEST)
+            .add_args(&["--main", "tests/module_imports_pkg/app.roc"])
+            .arg(from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_pkg_no_flag() {
-        test_roc_expect(
-            from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path(),
-            &[],
-            indoc!(
-                r#"
-                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
+        let expected_ending = indoc!(
+            r#"
+            ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/Module.roc ─────────────────
 
-                This module is trying to import from `pkg`:
+            This module is trying to import from `pkg`:
 
-                3│  import pkg.Foo
-                           ^^^^^^^
+            3│  import pkg.Foo
+                       ^^^^^^^
 
-                A lowercase name indicates a package shorthand, but I don't know which
-                packages are available.
+            A lowercase name indicates a package shorthand, but I don't know which
+            packages are available.
 
-                When checking a module directly, I look for a `main.roc` app or
-                package to resolve shorthands from.
+            When checking a module directly, I look for a `main.roc` app or
+            package to resolve shorthands from.
 
-                You can create it, or specify an existing one with the --main flag."#
-            ),
-        )
+            You can create it, or specify an existing one with the --main flag."#
+        );
+        let runner = Run::new_roc()
+            .arg(CMD_TEST)
+            .arg(from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn test_module_imports_unknown_pkg() {
-        test_roc_expect(
-            from_root(
-                "crates/cli/tests/module_imports_pkg",
-                "ImportsUnknownPkg.roc",
-            )
-            .as_path(),
-            &["--main", "tests/module_imports_pkg/app.roc"],
-            indoc!(
-                r#"
-                ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
+        let expected_ending = indoc!(
+            r#"
+            ── UNRECOGNIZED PACKAGE in tests/module_imports_pkg/ImportsUnknownPkg.roc ──────
 
-                This module is trying to import from `cli`:
+            This module is trying to import from `cli`:
 
-                3│  import cli.Foo
-                           ^^^^^^^
+            3│  import cli.Foo
+                       ^^^^^^^
 
-                A lowercase name indicates a package shorthand, but I don't recognize
-                this one. Did you mean one of these?
+            A lowercase name indicates a package shorthand, but I don't recognize
+            this one. Did you mean one of these?
 
-                    pkg
+                pkg
 
-                Note: I'm using the following module to resolve package shorthands:
+            Note: I'm using the following module to resolve package shorthands:
 
-                    tests/module_imports_pkg/app.roc
+                tests/module_imports_pkg/app.roc
 
-                You can specify a different one with the --main flag."#
-            ),
-        )
+            You can specify a different one with the --main flag."#
+        );
+        let runner = Run::new_roc()
+            .arg(CMD_TEST)
+            .add_args(&["--main", "tests/module_imports_pkg/app.roc"])
+            .arg(
+                from_root(
+                    "crates/cli/tests/module_imports_pkg",
+                    "ImportsUnknownPkg.roc",
+                )
+                .as_path(),
+            );
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    /// this tests that a platform can correctly import a package
     fn platform_requires_pkg() {
         let expected_ending = "from app from package";
         let runner = Run::new_roc()
@@ -686,35 +712,50 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
-        test_roc_expect(
-            from_root("crates/cli/tests/expects_transitive", "main.roc").as_path(),
-            &[],
-            indoc!(
-                r#"
-                0 failed and 3 passed in <ignored for test> ms.
-                "#
-            ),
+        let expected_ending = indoc!(
+            r#"
+            0 failed and 3 passed in <ignored for test> ms.
+            "#
         );
+        let runner = Run::new_roc()
+            .arg(CMD_TEST)
+            .arg(from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
     #[test]
     #[cfg_attr(windows, ignore)]
     fn transitive_expects_verbose() {
-        test_roc_expect(
-            from_root("crates/cli/tests/expects_transitive", "main.roc").as_path(),
-            &["--verbose"],
-            indoc!(
-                r#"
-                Compiled in <ignored for test> ms.
+        let expected_ending = indoc!(
+            r#"
+            Compiled in <ignored for test> ms.
 
-                Direct.roc:
-                    0 failed and 2 passed in <ignored for test> ms.
+            Direct.roc:
+                0 failed and 2 passed in <ignored for test> ms.
 
-                Transitive.roc:
-                    0 failed and 1 passed in <ignored for test> ms.
-                "#
-            ),
+            Transitive.roc:
+                0 failed and 1 passed in <ignored for test> ms.
+            "#
         );
+        let runner = Run::new_roc()
+            .arg(CMD_TEST)
+            .arg("--verbose")
+            .arg(from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
+
+        if ALLOW_VALGRIND {
+            let out = runner.run_with_valgrind();
+            out.assert_stdout_ends_with(expected_ending);
+        } else {
+            let out = runner.run();
+            out.assert_stdout_ends_with(expected_ending);
+        }
     }
 
     #[test]

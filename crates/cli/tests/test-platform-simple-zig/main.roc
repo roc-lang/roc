@@ -1,5 +1,5 @@
 platform ""
-    requires {}{ main : Str }
+    requires {} { main : Str }
     exposes []
     packages {}
     imports []

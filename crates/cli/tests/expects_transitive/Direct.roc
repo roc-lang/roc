@@ -1,10 +1,8 @@
-interface Direct
-    exposes [
-        addAndStringify,
-    ]
-    imports [
-        Transitive,
-    ]
+module [
+    addAndStringify,
+]
+
+import Transitive
 
 addAndStringify = \num1, num2 ->
     Num.toStr (Transitive.add num1 num2)
