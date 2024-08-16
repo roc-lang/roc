@@ -9,20 +9,13 @@ extern crate roc_module;
 
 #[cfg(test)]
 mod cli_run {
-    use cli_utils::helpers::{
-        dir_path_from_root, extract_valgrind_errors, from_root, known_bad_file, ExpectedString,
-        Out, Run, ValgrindError, ValgrindErrorXWhat, COMMON_STDERR,
-    };
+    use cli_utils::helpers::{dir_path_from_root, from_root, known_bad_file, Run};
     use const_format::concatcp;
     use indoc::indoc;
-    use regex::Regex;
-    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
-    use roc_parse::keyword::CRASH;
+    use roc_cli::{CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_reporting::report::strip_colors;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
-    use std::io::Read;
-    use std::iter;
     use std::path::Path;
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -53,12 +46,12 @@ mod cli_run {
     enum TestCliCommands {
         Many,
         Run,
-        Test,
-        Dev,
+        // Test,
+        // Dev,
     }
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
+    // const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const BUILD_HOST_FLAG: &str = concatcp!("--", roc_cli::FLAG_BUILD_HOST);
     const SUPPRESS_BUILD_HOST_WARNING_FLAG: &str =
         concatcp!("--", roc_cli::FLAG_SUPPRESS_BUILD_HOST_WARNING);
@@ -66,29 +59,27 @@ mod cli_run {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    #[derive(Debug, Clone, Copy)]
-    enum CliMode {
-        Roc,      // buildAndRunIfNoErrors
-        RocBuild, // buildOnly
-        RocRun,   // buildAndRun
-        RocTest,
-        RocDev,
-    }
+    // #[derive(Debug, Clone, Copy)]
+    // enum CliMode {
+    //     Roc,      // buildAndRunIfNoErrors
+    //     RocBuild, // buildOnly
+    //     RocRun,   // buildAndRun
+    //     RocTest,
+    //     RocDev,
+    // }
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const TEST_LEGACY_LINKER: bool = true;
+    // TODO confirm we we need this
+    // #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    // const TEST_LEGACY_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux x86_64,
-    // so we're always testing the legacy linker on other targets.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    const TEST_LEGACY_LINKER: bool = false;
+    // // Surgical linker currently only supports linux x86_64,
+    // // so we're always testing the legacy linker on other targets.
+    // #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    // const TEST_LEGACY_LINKER: bool = false;
 
     /// Run `roc check` on a file and check that the output matches the expected string.
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let runner = Run::new_roc()
-            .arg(CMD_CHECK)
-            .arg(file)
-            .add_args(flags.clone());
+        let runner = Run::new_roc().arg(CMD_CHECK).arg(file).add_args(flags);
 
         let out = runner.run();
 
@@ -344,31 +335,31 @@ mod cli_run {
     //     output
     // }
 
-    /// Run `roc test` to execute `expect`s, perhaps on a library rather than an application
-    /// will use valgrind if it's supported
-    fn test_roc_expect(file_path: &Path, flags: &[&str], expected_ending: &str) {
-        let runner = Run::new_roc().arg(CMD_TEST).arg(file_path).add_args(flags);
+    // /// Run `roc test` to execute `expect`s, perhaps on a library rather than an application
+    // /// will use valgrind if it's supported
+    // fn test_roc_expect(file_path: &Path, flags: &[&str], expected_ending: &str) {
+    //     let runner = Run::new_roc().arg(CMD_TEST).arg(file_path).add_args(flags);
 
-        let use_valgrind = UseValgrind::Yes;
+    //     let use_valgrind = UseValgrind::Yes;
 
-        if use_valgrind.and_is_supported() {
-            let out = runner.run_with_valgrind();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
-    }
+    //     if use_valgrind.and_is_supported() {
+    //         let out = runner.run_with_valgrind();
+    //         out.assert_stdout_and_stderr_ends_with(expected_ending);
+    //     } else {
+    //         let out = runner.run();
+    //         out.assert_stdout_and_stderr_ends_with(expected_ending);
+    //     }
+    // }
 
     #[allow(clippy::too_many_arguments)]
     fn test_roc_app(
         file_path: &Path,
         stdin: Vec<&'static str>,
         args: &[&str],
-        extra_env: Vec<(&str, &str)>,
+        _extra_env: Vec<(&str, &str)>,
         expected_ending: &str,
         use_valgrind: UseValgrind,
-        test_cli_commands: TestCliCommands,
+        _test_cli_commands: TestCliCommands,
     ) {
         let runner = Run::new_roc()
             .arg(CMD_RUN)
@@ -1377,7 +1368,7 @@ mod cli_run {
         use cli_utils::helpers::{from_root, Run};
 
         // #[allow(unused_imports)]
-        use std::{path::Path, sync::Once};
+        use std::sync::Once;
 
         static BUILD_BENCHMARKS_PLATFORM_HOST: Once = Once::new();
 
@@ -1424,43 +1415,43 @@ mod cli_run {
             // check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
         }
 
-        #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-        fn check_output_regular(
-            file_name: &Path,
-            stdin: &[&str],
-            expected_ending: &str,
-            use_valgrind: UseValgrind,
-        ) {
-            let mut ran_without_optimizations = false;
+        // #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
+        // fn check_output_regular(
+        //     file_name: &Path,
+        //     stdin: &[&str],
+        //     expected_ending: &str,
+        //     use_valgrind: UseValgrind,
+        // ) {
+        //     let mut ran_without_optimizations = false;
 
-            // now we can pass the `PREBUILT_PLATFORM` flag, because the
-            // `call_once` will have built the platform
+        //     // now we can pass the `PREBUILT_PLATFORM` flag, because the
+        //     // `call_once` will have built the platform
 
-            if !ran_without_optimizations {
-                // Check with and without optimizations
-                // check_output_with_stdin(
-                //     file_name,
-                //     stdin,
-                //     &[],
-                //     &[],
-                //     &[],
-                //     expected_ending,
-                //     use_valgrind,
-                //     TestCliCommands::Run,
-                // );
-            }
+        //     if !ran_without_optimizations {
+        //         // Check with and without optimizations
+        //         // check_output_with_stdin(
+        //         //     file_name,
+        //         //     stdin,
+        //         //     &[],
+        //         //     &[],
+        //         //     &[],
+        //         //     expected_ending,
+        //         //     use_valgrind,
+        //         //     TestCliCommands::Run,
+        //         // );
+        //     }
 
-            // check_output_with_stdin(
-            //     file_name,
-            //     stdin,
-            //     &[FLAG_OPTIMIZE],
-            //     &[],
-            //     &[],
-            //     expected_ending,
-            //     use_valgrind,
-            //     TestCliCommands::Run,
-            // );
-        }
+        //     // check_output_with_stdin(
+        //     //     file_name,
+        //     //     stdin,
+        //     //     &[FLAG_OPTIMIZE],
+        //     //     &[],
+        //     //     &[],
+        //     //     expected_ending,
+        //     //     use_valgrind,
+        //     //     TestCliCommands::Run,
+        //     // );
+        // }
 
         #[cfg(feature = "wasm32-cli-run")]
         fn check_output_wasm(file_name: &Path, stdin: &[&str], expected_ending: &str) {
