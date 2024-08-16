@@ -2606,7 +2606,6 @@ dependencies = [
 name = "roc_glue"
 version = "0.0.1"
 dependencies = [
- "backtrace",
  "bumpalo",
  "cli_utils",
  "dircpy",
