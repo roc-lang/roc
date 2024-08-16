@@ -75,9 +75,12 @@ impl Out {
 
     /// Normalise the output for comparison in tests by replacing with a placeholder
     fn normalize_for_tests(input: &String) -> String {
+        // normalise from windows line endings to unix line endings
+        let without_clrf = input.replace("\r\n", "\n");
+
         // remove ANSI color codes
         let ansi_regex = Regex::new(r"\x1b\[[0-9;]*[mGKH]").expect("Invalid ANSI regex pattern");
-        let without_ansi = ansi_regex.replace_all(input, "");
+        let without_ansi = ansi_regex.replace_all(without_clrf.as_str(), "");
 
         // replace timings with a placeholder
         let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
@@ -88,8 +91,15 @@ impl Out {
         let filepath_regex =
             Regex::new(r"\[([^:]+):(\d+)\]").expect("Invalid filepath regex pattern");
         let filepath_replacement = "[<ignored for tests>:$2]";
-        filepath_regex
-            .replace_all(&without_timings, filepath_replacement)
+        let without_filepaths = filepath_regex.replace_all(&without_timings, filepath_replacement);
+
+        // replace error summary timings
+        let error_summary_regex =
+            Regex::new(r"(\d+) error(?:s)? and (\d+) warning(?:s)? found in \d+ ms")
+                .expect("Invalid error summary regex pattern");
+        let error_summary_replacement = "$1 error and $2 warning found in <ignored for test> ms";
+        error_summary_regex
+            .replace_all(&without_filepaths, error_summary_replacement)
             .to_string()
     }
 

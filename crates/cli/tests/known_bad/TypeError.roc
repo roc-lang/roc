@@ -1,4 +1,4 @@
-app [main] { pf: platform "../../../../examples/cli/false-interpreter/platform/main.roc" }
+app [main] { pf: platform "../false-interpreter/platform/main.roc" }
 
 import pf.Task exposing [Task]
 

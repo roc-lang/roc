@@ -146,7 +146,7 @@ pub fn build_app() -> Command {
         .action(ArgAction::SetTrue)
         .required(false);
 
-    let flag_supress_build_host_warning = Arg::new(FLAG_SUPPRESS_BUILD_HOST_WARNING)
+    let flag_suppress_build_host_warning = Arg::new(FLAG_SUPPRESS_BUILD_HOST_WARNING)
         .long(FLAG_SUPPRESS_BUILD_HOST_WARNING)
         .help("WARNING: platforms are responsible for building hosts, this flag will be removed when internal test platforms have a build script")
         .action(ArgAction::SetTrue)
@@ -206,7 +206,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_build_host.clone())
-            .arg(flag_supress_build_host_warning.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(flag_wasm_stack_size_kb)
             .arg(
@@ -259,7 +259,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_build_host.clone())
-            .arg(flag_supress_build_host_warning.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(
                 Arg::new(FLAG_VERBOSE)
@@ -291,7 +291,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_build_host.clone())
-            .arg(flag_supress_build_host_warning.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
@@ -307,7 +307,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_build_host.clone())
-            .arg(flag_supress_build_host_warning.clone())
+            .arg(flag_suppress_build_host_warning.clone())
             .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
@@ -443,7 +443,7 @@ pub fn build_app() -> Command {
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_build_host)
-        .arg(flag_supress_build_host_warning)
+        .arg(flag_suppress_build_host_warning)
         .arg(flag_fuzz)
         .arg(roc_file_to_run)
         .arg(args_for_app.trailing_var_arg(true))
@@ -859,7 +859,7 @@ pub fn build(
     // All hosts should be prebuilt, this flag keeps the rebuilding behvaiour
     // as required for internal tests
     let build_host = matches.get_flag(FLAG_BUILD_HOST);
-    let supress_build_host_warning = matches.get_flag(FLAG_SUPPRESS_BUILD_HOST_WARNING);
+    let suppress_build_host_warning = matches.get_flag(FLAG_SUPPRESS_BUILD_HOST_WARNING);
 
     let fuzz = matches.get_flag(FLAG_FUZZ);
     if fuzz && !matches!(code_gen_backend, CodeGenBackend::Llvm(_)) {
@@ -896,7 +896,7 @@ pub fn build(
         link_type,
         linking_strategy,
         build_host,
-        supress_build_host_warning,
+        suppress_build_host_warning,
         wasm_dev_stack_bytes,
         roc_cache_dir,
         load_config,
