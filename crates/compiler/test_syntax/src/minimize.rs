@@ -106,10 +106,10 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
 
     let reparsed_ast2 = match output2.as_ref().parse_in(&arena) {
         Ok(r) => r,
-        Err(e) => return Some(format!("Reparse2 failed: {:?}", e.remove_spaces(&arena))),
+        Err(e) => return Some(format!("Reparse2 failed: {:?}", e.normalize(&arena))),
     };
 
-    let reparsed_ast2_normalized = reparsed_ast2.remove_spaces(&arena);
+    let reparsed_ast2_normalized = reparsed_ast2.normalize(&arena);
 
     if format!("{ast_normalized:?}") != format!("{reparsed_ast2_normalized:?}") {
         return Some("Different ast2".to_string());

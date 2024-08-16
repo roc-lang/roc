@@ -2,7 +2,7 @@ use std::{collections::VecDeque, fmt::Display};
 
 use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
-use roc_parse::ast::SpacesBefore;
+use roc_parse::ast::{SpacesBefore, TryTarget};
 use roc_parse::{
     ast::{
         AbilityImpls, AssignedField, Base, Collection, CommentOrNewline, Defs, EscapedChar, Expr,
@@ -487,9 +487,12 @@ impl<'a> Docify<'a> for Expr<'a> {
                 doc.copy(name);
             }
 
-            Expr::TaskAwaitBang(inner) => {
-                inner.docify(doc);
-                doc.literal("!");
+            Expr::TrySuffix { target, expr } => {
+                expr.docify(doc);
+                match target {
+                    TryTarget::Task => doc.literal("!"),
+                    TryTarget::Result => doc.literal("?"),
+                }
             }
 
             Expr::List(items) => {

@@ -300,8 +300,8 @@ impl<'a> Input<'a> {
             );
         });
 
-        let ast_normalized = actual.remove_spaces(&arena);
-        let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+        let ast_normalized = actual.normalize(&arena);
+        let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
         if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
             panic!(
