@@ -891,106 +891,104 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
-        test_roc_app(
-            file_from_root("crates/cli/tests/basic-cli", "env.roc").as_path(),
-            vec![],
-            &[],
-            vec![
-                ("EDITOR", "roc-editor"),
-                ("SHLVL", "3"),
-                ("LETTERS", "a,c,e,j"),
-            ],
-            "Your favorite editor is roc-editor!\n\
-            Your current shell level is 3!\n\
-            Your favorite letters are: a c e j\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
+        let expected_ending = "Your favorite editor is roc-editor!\n\
+        Your current shell level is 3!\n\
+        Your favorite letters are: a c e j\n";
+
+        let mut runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_from_root("crates/cli/tests/basic-cli", "env.roc").as_path());
+
+        runner.with_env(vec![
+            ("EDITOR", "roc-editor"),
+            ("SHLVL", "3"),
+            ("LETTERS", "a,c,e,j"),
+        ]);
+
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
-    #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
-        test_roc_app(
-            file_from_root("crates/cli/tests/basic-cli", "ingested-file.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            format!(
-                "\nThis roc file can print its own source code. The source is:\n\n{}\n",
-                include_str!("basic-cli/ingested-file.roc")
-            )
-            .as_str(),
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
+        let expected_ending = format!(
+            "\nThis roc file can print its own source code. The source is:\n\n{}\n",
+            include_str!("basic-cli/ingested-file.roc")
+        );
+
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_from_root("crates/cli/tests/basic-cli", "ingested-file.roc").as_path());
+
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending.as_str());
     }
 
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn combine_tasks_with_record_builder() {
-        test_roc_app(
-            file_from_root("crates/cli/tests/basic-cli", "combine-tasks.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
+        let expected_ending = "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n";
+
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_from_root("crates/cli/tests/basic-cli", "combine-tasks.roc").as_path());
+
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
     #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn parse_args_with_record_builder() {
-        test_roc_app(
-            file_from_root("crates/cli/tests/basic-cli", "parse-args.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            "Success: {count: 5, doubled: 14, file: \"file.txt\"}\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
+        let expected_ending = "Success: {count: 5, doubled: 14, file: \"file.txt\"}\n";
+
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_from_root("crates/cli/tests/basic-cli", "parse-args.roc").as_path());
+
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
-    #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
-        test_roc_app(
-            file_from_root("crates/cli/tests/basic-cli", "ingested-file-bytes.roc").as_path(),
-            vec![],
-            &[],
-            vec![],
-            "6239\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
+        let expected_ending = "6239\n";
+
+        let runner = Run::new_roc()
+            .arg(CMD_RUN)
+            .arg(file_from_root("crates/cli/tests/basic-cli", "ingested-file-bytes.roc").as_path());
+
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
+
     #[test]
-    #[serial(cli_platform)]
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes_no_ann() {
-        test_roc_app(
+        let expected_ending = "6239\n";
+
+        let runner = Run::new_roc().arg(CMD_RUN).arg(
             file_from_root(
                 "crates/cli/tests/basic-cli",
                 "ingested-file-bytes-no-ann.roc",
             )
             .as_path(),
-            vec![],
-            &[],
-            vec![],
-            "6239\n",
-            UseValgrind::No,
-            TestCliCommands::Run,
-        )
+        );
+
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
