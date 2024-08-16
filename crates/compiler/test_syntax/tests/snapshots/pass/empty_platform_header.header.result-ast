@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Platform(
+SpacesBefore {
+    before: [],
+    item: Platform(
         PlatformHeader {
             before_name: [],
             name: @9-25 PackageName(

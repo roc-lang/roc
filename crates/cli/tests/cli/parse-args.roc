@@ -1,8 +1,7 @@
 app [main] {
-    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br",
+    pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br",
 }
 
-import pf.Arg
 import pf.Stdout
 import pf.Task exposing [Task]
 
@@ -13,7 +12,7 @@ main =
             file,
             count: numParam { name: "count" },
             doubled: numParam { name: "doubled" }
-                |> cliMap \d -> d * 2,
+            |> cliMap \d -> d * 2,
         }
 
     args = ["parse-args", "file.txt", "5", "7"]

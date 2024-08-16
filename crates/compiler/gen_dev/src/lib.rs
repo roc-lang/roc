@@ -111,6 +111,7 @@ struct ListArgument<'a> {
 
     alignment: Symbol,
     element_width: Symbol,
+    element_refcounted: Symbol,
 }
 
 // Track when a variable is last used (and hence when it can be disregarded). This is non-trivial
@@ -408,10 +409,19 @@ trait Backend<'a> {
         let element_width = self.debug_symbol("element_width");
         self.load_literal_i64(&element_width, element_width_int as i64);
 
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        let refcounted = self.interner().contains_refcounted(element_layout);
+        self.load_literal(
+            &element_refcounted,
+            &Layout::BOOL,
+            &Literal::Bool(refcounted),
+        );
+
         ListArgument {
             element_layout,
             alignment,
             element_width,
+            element_refcounted,
         }
     }
 
@@ -426,6 +436,26 @@ trait Backend<'a> {
         let element_increment_string = self.lambda_name_to_string(
             LambdaName::no_niche(element_increment_symbol),
             [box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_increment, element_increment_string);
+
+        element_increment
+    }
+
+    fn increment_n_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self
+            .interner_mut()
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
+
+        let element_increment = self.debug_symbol("element_increment_n");
+        let element_increment_symbol = self.build_indirect_inc_n(layout);
+
+        let element_increment_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_increment_symbol),
+            [box_layout, Layout::I64].into_iter(),
             None,
             Layout::UNIT,
         );
@@ -453,6 +483,26 @@ trait Backend<'a> {
         self.build_fn_pointer(&element_decrement, element_decrement_string);
 
         element_decrement
+    }
+
+    fn copy_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self
+            .interner_mut()
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
+
+        let element_copy = self.debug_symbol("element_copy");
+        let element_copy_symbol = self.build_indirect_copy(layout);
+
+        let element_copy_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_copy_symbol),
+            [box_layout, box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_copy, element_copy_string);
+
+        element_copy
     }
 
     fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
@@ -556,22 +606,29 @@ trait Backend<'a> {
                 let dst = Symbol::DEV_TMP;
 
                 let layout = *self.layout_map().get(symbol).unwrap();
+                debug_assert!(!matches!(self.interner().get_repr(layout), LayoutRepr::Builtin(Builtin::List(_))), "List are no longer safe to refcount through pointer alone. They must go through the zig bitcode functions");
+
                 let alignment_bytes = self.interner().allocation_alignment_bytes(layout);
                 let alignment = self.debug_symbol("alignment");
                 self.load_literal_i32(&alignment, alignment_bytes as i32);
+
+                // elems_refcounted (always false except for list which are refcounted differently)
+                let elems_refcounted = self.debug_symbol("elems_refcounted");
+                self.load_literal(&elems_refcounted, &Layout::BOOL, &Literal::Bool(false));
 
                 // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
 
                 self.build_fn_call(
                     &dst,
                     bitcode::UTILS_FREE_DATA_PTR.to_string(),
-                    &[*symbol, alignment],
-                    &[Layout::I64, Layout::I32],
+                    &[*symbol, alignment, elems_refcounted],
+                    &[Layout::I64, Layout::I32, Layout::BOOL],
                     &Layout::UNIT,
                 );
 
                 self.free_symbol(&dst);
                 self.free_symbol(&alignment);
+                self.free_symbol(&elems_refcounted);
 
                 self.build_stmt(layout_ids, following, ret_layout)
             }
@@ -784,6 +841,9 @@ trait Backend<'a> {
                         for arg in *arguments {
                             if let Some(layout) = layout_map.get(arg) {
                                 arg_layouts.push(*layout);
+                            } else if matches!(lowlevel, LowLevel::ListDecref) {
+                                // The last arg of ListDecref has no layout. It is a proc symbol.
+                                continue;
                             } else {
                                 internal_error!("the argument, {:?}, has no know layout", arg);
                             }
@@ -1883,6 +1943,7 @@ trait Backend<'a> {
                     list,
                     list_argument.alignment,
                     list_argument.element_width,
+                    list_argument.element_refcounted,
                     start,
                     len,
                     self.decrement_fn_pointer(element_layout),
@@ -1894,6 +1955,7 @@ trait Backend<'a> {
                     arg_layouts[0],
                     Layout::U32,
                     layout_usize,
+                    Layout::BOOL,
                     Layout::U64,
                     Layout::U64,
                     layout_usize,
@@ -1913,6 +1975,10 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
+                let inc_fn_ptr = self.increment_fn_pointer(list_argument.element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(list_argument.element_layout);
+                let copy_fn_ptr = self.copy_fn_pointer(list_argument.element_layout);
+
                 let layout_usize = Layout::U64;
 
                 //    list: RocList,
@@ -1920,7 +1986,11 @@ trait Backend<'a> {
                 //    element_width: usize,
                 //    index_1: u64,
                 //    index_2: u64,
+                //    element_refcounted: bool,
+                //    inc: Inc
+                //    dec: Dec
                 //    update_mode: UpdateMode,
+                //    copy: CopyFn
 
                 self.build_fn_call(
                     sym,
@@ -1931,7 +2001,11 @@ trait Backend<'a> {
                         list_argument.element_width,
                         i,
                         j,
+                        list_argument.element_refcounted,
+                        inc_fn_ptr,
+                        dec_fn_ptr,
                         update_mode,
+                        copy_fn_ptr,
                     ],
                     &[
                         list_layout,
@@ -1939,7 +2013,11 @@ trait Backend<'a> {
                         layout_usize,
                         Layout::U64,
                         Layout::U64,
+                        Layout::BOOL,
+                        layout_usize,
+                        layout_usize,
                         Layout::U8,
+                        layout_usize,
                     ],
                     ret_layout,
                 );
@@ -1953,11 +2031,17 @@ trait Backend<'a> {
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
+                let inc_fn_ptr = self.increment_fn_pointer(list_argument.element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(list_argument.element_layout);
+
                 let layout_usize = Layout::U64;
 
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
+                //    element_refcounted: bool,
+                //    inc_fn_ptr: Inc,
+                //    dec_fn_ptr: Dec,
                 //    update_mode: UpdateMode,
 
                 self.build_fn_call(
@@ -1967,9 +2051,88 @@ trait Backend<'a> {
                         list,
                         list_argument.alignment,
                         list_argument.element_width,
+                        list_argument.element_refcounted,
+                        inc_fn_ptr,
+                        dec_fn_ptr,
                         update_mode,
                     ],
-                    &[list_layout, Layout::U32, layout_usize, Layout::U8],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        Layout::BOOL,
+                        layout_usize,
+                        layout_usize,
+                        Layout::U8,
+                    ],
+                    ret_layout,
+                );
+            }
+
+            LowLevel::ListIncref => {
+                let list = args[0];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+
+                let layout_isize = Layout::I64;
+
+                let amount = if args.len() == 2 {
+                    // amount explicitly specified,
+                    args[1]
+                } else {
+                    // amount implicit 1.
+                    let sym = self.debug_symbol("amount");
+                    self.load_literal_i64(&sym, 1);
+                    sym
+                };
+
+                //    list: RocList,
+                //    amount: isize,
+                //    element_refcounted: bool,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_INCREF.to_string(),
+                    &[list, amount, list_argument.element_refcounted],
+                    &[list_layout, layout_isize, Layout::BOOL],
+                    ret_layout,
+                );
+            }
+
+            LowLevel::ListDecref => {
+                let list = args[0];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+
+                let dec_fn_ptr = self.decrement_fn_pointer(list_argument.element_layout);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    element_refcounted: bool,
+                //    dec_fn_ptr: Dec,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_DECREF.to_string(),
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        list_argument.element_refcounted,
+                        dec_fn_ptr,
+                    ],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        Layout::BOOL,
+                        layout_usize,
+                    ],
                     ret_layout,
                 );
             }
@@ -1986,12 +2149,15 @@ trait Backend<'a> {
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 let layout_usize = Layout::U64;
+                let element_increment = self.increment_fn_pointer(element_layout);
                 let element_decrement = self.decrement_fn_pointer(element_layout);
 
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
+                //    element_refcounted: bool,
                 //    drop_index: u64,
+                //    inc: Inc,
                 //    dec: Dec,
 
                 self.build_fn_call(
@@ -2001,14 +2167,18 @@ trait Backend<'a> {
                         list,
                         list_argument.alignment,
                         list_argument.element_width,
+                        list_argument.element_refcounted,
                         drop_index,
+                        element_increment,
                         element_decrement,
                     ],
                     &[
                         list_layout,
                         Layout::U32,
                         layout_usize,
+                        Layout::BOOL,
                         Layout::U64,
+                        layout_usize,
                         layout_usize,
                     ],
                     ret_layout,
@@ -2434,7 +2604,9 @@ trait Backend<'a> {
     );
 
     fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_inc_n(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_copy(&mut self, layout: InLayout<'a>) -> Symbol;
 
     fn build_list_clone(
         &mut self,

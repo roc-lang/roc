@@ -48,11 +48,11 @@ use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
+use roc_parse::header::parse_module_defs;
 use roc_parse::header::{
     self, AppHeader, ExposedName, HeaderType, ImportsKeywordItem, PackageEntry, PackageHeader,
     PlatformHeader, To, TypedIdent,
 };
-use roc_parse::module::parse_module_defs;
 use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
@@ -1327,8 +1327,8 @@ fn load_packages_from_main<'a>(
 
     let parse_state = roc_parse::state::State::new(arena.alloc(src_bytes));
 
-    let (parsed_module, _) =
-        roc_parse::module::parse_header(arena, parse_state.clone()).map_err(|fail| {
+    let (parsed_header, _) =
+        roc_parse::header::parse_header(arena, parse_state.clone()).map_err(|fail| {
             LoadingProblem::ParsingFailed(
                 fail.map_problem(SyntaxError::Header)
                     .into_file_error(filename.clone()),
@@ -1337,7 +1337,7 @@ fn load_packages_from_main<'a>(
 
     use ast::Header::*;
 
-    let packages = match parsed_module.header {
+    let packages = match parsed_header.item {
         App(AppHeader { packages, .. }) | Package(PackageHeader { packages, .. }) => {
             unspace(arena, packages.value.items)
         }
@@ -2395,6 +2395,13 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
+            if let Some(params_pattern) = constrained_module.module.params_pattern.clone() {
+                state
+                    .module_cache
+                    .param_patterns
+                    .insert(module_id, params_pattern);
+            }
+
             state
                 .module_cache
                 .constrained
@@ -2986,8 +2993,10 @@ fn update<'a>(
 fn register_package_shorthands<'a>(
     shorthands: &mut MutMap<&'a str, ShorthandPath>,
     package_entries: &MutMap<&'a str, header::PackageName<'a>>,
+    #[allow(unused_variables)] // for wasm
     module_path: &Path,
     src_dir: &Path,
+    #[allow(unused_variables)] // for wasm
     cache_dir: &Path,
 ) -> Result<(), LoadingProblem<'a>> {
     for (shorthand, package_name) in package_entries.iter() {
@@ -3347,7 +3356,7 @@ fn load_package_from_disk<'a>(
             let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+            let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
             let parse_header_duration = parse_start.elapsed();
 
             // Insert the first entries for this module's timings
@@ -3358,8 +3367,8 @@ fn load_package_from_disk<'a>(
 
             match parsed {
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Module(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Module(header),
                         ..
                     },
                     _parse_state,
@@ -3367,8 +3376,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Hosted(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Hosted(header),
                         ..
                     },
                     _parse_state,
@@ -3376,8 +3385,8 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got Hosted module with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::App(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::App(header),
                         ..
                     },
                     _parse_state,
@@ -3385,9 +3394,9 @@ fn load_package_from_disk<'a>(
                     "expected platform/package module, got App with header\n{header:?}"
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Package(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Package(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3428,9 +3437,9 @@ fn load_package_from_disk<'a>(
                     Ok(Msg::Many(messages))
                 }
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Platform(header),
-                        comments,
+                    ast::SpacesBefore {
+                        item: ast::Header::Platform(header),
+                        before: comments,
                     },
                     parser_state,
                 )) => {
@@ -3528,13 +3537,13 @@ fn load_builtin_module_help<'a>(
     let opt_shorthand = None;
     let filename = PathBuf::from(filename);
     let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3549,6 +3558,7 @@ fn load_builtin_module_help<'a>(
                     name: header::ModuleName::new(name_stem),
                     exposes: unspace(arena, header.exposes.items),
                     generates_with: &[],
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3650,6 +3660,8 @@ fn load_module<'a>(
 #[derive(Debug)]
 enum ShorthandPath {
     /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
+    #[allow(dead_code)]
+    // wasm warns FromHttpsUrl is unused, but errors if it is removed ¯\_(ツ)_/¯
     FromHttpsUrl {
         /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
         root_module_dir: PathBuf,
@@ -3782,7 +3794,7 @@ fn parse_header<'a>(
 ) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+    let parsed = roc_parse::header::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
 
     if let Err(problem) = ensure_roc_file(&filename, src_bytes) {
@@ -3811,9 +3823,9 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Module(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Module(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3833,6 +3845,7 @@ fn parse_header<'a>(
                 header_type: HeaderType::Module {
                     name: roc_parse::header::ModuleName::new(module_name),
                     exposes: unspace(arena, header.exposes.items),
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3848,9 +3861,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Hosted(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Hosted(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3879,9 +3892,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::App(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::App(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -3984,9 +3997,9 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Package(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Package(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4011,9 +4024,9 @@ fn parse_header<'a>(
         }
 
         Ok((
-            ast::Module {
-                header: ast::Header::Platform(header),
-                comments,
+            ast::SpacesBefore {
+                item: ast::Header::Platform(header),
+                before: comments,
             },
             parse_state,
         )) => {
@@ -4060,6 +4073,7 @@ fn load_packages<'a>(
     app_module_id: Option<ModuleId>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    #[allow(unused_variables)] // for wasm
     filename: PathBuf,
 ) {
     // Load all the packages
@@ -4375,7 +4389,7 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     imported_rigid_vars: &mut Vec<Variable>,
     imported_flex_vars: &mut Vec<Variable>,
-) -> (Vec<Variable>, AbilitiesStore) {
+) -> (Vec<Variable>, VecMap<ModuleId, Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -4482,7 +4496,31 @@ pub fn add_imports(
         },
     );
 
-    (import_variables, abilities_store)
+    let mut imported_param_vars = VecMap::default();
+
+    for (module_id, _) in exposed_for_module.exposed_by_module.iter_all() {
+        let ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            ..
+        } = exposed_for_module.exposed_by_module.get(module_id).unwrap();
+
+        if let Some(stored_aprams_var) = exposed_types.stored_params_var {
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, stored_aprams_var);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                &mut import_variables,
+                imported_rigid_vars,
+                imported_flex_vars,
+            );
+
+            imported_param_vars.insert(*module_id, copied_import_var);
+        }
+    }
+
+    (import_variables, imported_param_vars, abilities_store)
 }
 
 enum OnSymbolNotFound {
@@ -4604,6 +4642,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
+        params_pattern,
         ..
     } = module;
 
@@ -4613,7 +4652,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    let (import_variables, abilities_store) = add_imports(
+    let (import_variables, imported_param_vars, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
         &mut subs,
@@ -4651,6 +4690,8 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
+            params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
+            module_params_vars: imported_param_vars,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4735,6 +4776,11 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
+    let opt_params_var = module
+        .params_pattern
+        .as_ref()
+        .map(|(params_var, _, _)| *params_var);
+
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
     let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
@@ -4806,6 +4852,7 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
+        opt_params_var,
         &solved_implementations,
         &abilities_store,
     );
@@ -4917,6 +4964,7 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let packages = unspace(arena, header.packages.item.items);
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -4938,7 +4986,7 @@ fn build_platform_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         header_type,
         module_comments: comments,
         header_imports: Some(header.imports),
@@ -5054,6 +5102,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
+            &module_output.params_pattern,
             module_id,
         )
     };
@@ -5110,6 +5159,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
+        params_pattern: module_output.params_pattern,
     };
 
     let constrained_module = ConstrainedModule {
@@ -5147,7 +5197,7 @@ fn parse<'a>(
     let parse_state = header.parse_state;
 
     let header_import_defs =
-        roc_parse::ast::Module::header_imports_to_defs(arena, header.header_imports);
+        roc_parse::ast::Header::header_imports_to_defs(arena, header.header_imports);
 
     let parsed_defs = match parse_module_defs(arena, parse_state.clone(), header_import_defs) {
         Ok(success) => success,
@@ -5453,6 +5503,7 @@ fn make_specializations<'a>(
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
+
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,

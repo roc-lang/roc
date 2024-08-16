@@ -3912,7 +3912,6 @@ fn list_range_length_overflow() {
     );
 }
 
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 mod pattern_match {
     #[allow(unused_imports)]
     use crate::helpers::with_larger_debug_stack;
@@ -3926,9 +3925,10 @@ mod pattern_match {
     #[cfg(feature = "gen-dev")]
     use crate::helpers::dev::assert_evals_to;
 
-    use super::RocList;
+    use super::{RocList, RocStr};
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
     fn unary_exact_size_match() {
         assert_evals_to!(
             r"
@@ -3944,6 +3944,7 @@ mod pattern_match {
     }
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
     fn many_exact_size_match() {
         assert_evals_to!(
             r"
@@ -3962,6 +3963,7 @@ mod pattern_match {
     }
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn ranged_matches_head() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -3994,6 +3996,7 @@ mod pattern_match {
     }
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn ranged_matches_tail() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -4026,6 +4029,7 @@ mod pattern_match {
     }
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
     fn bind_variables() {
         assert_evals_to!(
             r"
@@ -4054,6 +4058,7 @@ mod pattern_match {
     }
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn order_list_size_tests_issue_4732() {
         assert_evals_to!(
             r"
@@ -4101,6 +4106,7 @@ mod pattern_match {
     }
 
     #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
     fn rest_as() {
         assert_evals_to!(
             r"
@@ -4120,6 +4126,20 @@ mod pattern_match {
             ",
             RocList::from_slice(&[0, 4, 6, 11]),
             RocList<u8>
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+    fn list_str() {
+        assert_evals_to!(
+            r#"
+            when ["d"] is
+                [alone] -> [alone]
+                other -> other
+            "#,
+            RocList::from_slice(&[RocStr::from("d")]),
+            RocList<RocStr>
         )
     }
 }

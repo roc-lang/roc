@@ -7,9 +7,10 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
+use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::Scope;
+use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
@@ -17,7 +18,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
@@ -107,6 +108,12 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol, Variable),
+    /// Like Var, but from a module with params
+    ParamsVar {
+        symbol: Symbol,
+        params: Symbol,
+        var: Variable,
+    },
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -176,6 +183,9 @@ pub enum Expr {
         tuple_var: Variable,
         elems: Vec<(Variable, Box<Loc<Expr>>)>,
     },
+
+    /// Module params expression in import
+    ImportParams(ModuleId, Region, Option<(Variable, Box<Expr>)>),
 
     /// The "crash" keyword
     Crash {
@@ -308,6 +318,11 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
+            &Self::ParamsVar {
+                symbol,
+                params: _,
+                var: _,
+            } => Category::Lookup(symbol),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -324,6 +339,8 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
+            Self::ImportParams(_, _, Some((_, expr))) => expr.category(),
+            Self::ImportParams(_, _, None) => Category::Unknown,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -631,34 +648,7 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
-            if fields.is_empty() {
-                (EmptyRecord, Output::default())
-            } else {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
-                    Ok((can_fields, output)) => (
-                        Record {
-                            record_var: var_store.fresh(),
-                            fields: can_fields,
-                        },
-                        output,
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
-            }
-        }
-
+        ast::Expr::Record(fields) => canonicalize_record(env, var_store, scope, region, *fields),
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -1127,7 +1117,9 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
+        ast::Expr::TrySuffix { .. } => internal_error!(
+            "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+        ),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1379,7 +1371,10 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
+            let problem = OptionalFieldInRecordBuilder {
+                record: region,
+                field: sub_region,
+            };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -1450,6 +1445,42 @@ pub fn canonicalize_expr<'a>(
         },
         output,
     )
+}
+
+pub fn canonicalize_record<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    fields: ast::Collection<'a, Loc<ast::AssignedField<'a, ast::Expr<'a>>>>,
+) -> (Expr, Output) {
+    use Expr::*;
+
+    if fields.is_empty() {
+        (EmptyRecord, Output::default())
+    } else {
+        match canonicalize_fields(env, var_store, scope, region, fields.items) {
+            Ok((can_fields, output)) => (
+                Record {
+                    record_var: var_store.fresh(),
+                    fields: can_fields,
+                },
+                output,
+            ),
+            Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+        }
+    }
 }
 
 pub fn canonicalize_closure<'a>(
@@ -1846,6 +1877,11 @@ fn canonicalize_field<'a>(
             field_region: Region::span_across(&label.region, &loc_expr.region),
         }),
 
+        // An ignored value, e.g. `{ _name: 123 }`
+        IgnoredValue(_, _, _) => {
+            internal_error!("Somehow an IgnoredValue record field was not desugared!");
+        }
+
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
             internal_error!("Somehow a LabelOnly record field was not desugared!");
@@ -1876,19 +1912,19 @@ fn canonicalize_var_lookup(
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Unqualified);
+                    .insert_value_lookup(lookup.symbol, QualifiedReference::Unqualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(lookup, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1901,19 +1937,19 @@ fn canonicalize_var_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => {
+            Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(symbol, QualifiedReference::Qualified);
+                    .insert_value_lookup(lookup.symbol, QualifiedReference::Qualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(lookup, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1929,6 +1965,24 @@ fn canonicalize_var_lookup(
     // If it's valid, this ident should be in scope already.
 
     (can_expr, output)
+}
+
+fn lookup_to_expr(
+    SymbolLookup {
+        symbol,
+        module_params: params,
+    }: SymbolLookup,
+    var: Variable,
+) -> Expr {
+    if let Some(params) = params {
+        Expr::ParamsVar {
+            symbol,
+            params,
+            var,
+        }
+    } else {
+        Expr::Var(symbol, var)
+    }
 }
 
 /// Currently uses the heuristic of "only inline if it's a builtin"
@@ -1949,6 +2003,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RecordAccessor { .. }
         | other @ RecordUpdate { .. }
         | other @ Var(..)
+        | other @ ParamsVar { .. }
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
@@ -2212,6 +2267,14 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
+        ImportParams(module_id, region, Some((var, expr))) => ImportParams(
+            module_id,
+            region,
+            Some((var, Box::new(inline_calls(var_store, *expr)))),
+        ),
+
+        ImportParams(module_id, region, None) => ImportParams(module_id, region, None),
+
         RecordAccess {
             record_var,
             ext_var,
@@ -2433,7 +2496,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
             ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
             ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2454,7 +2518,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
-        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
+        | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
@@ -2481,7 +2545,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&update.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
                     ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -2514,7 +2579,8 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&mapper.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
                     ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
@@ -3133,6 +3199,11 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Var(symbol, var)
+            | Expr::ParamsVar {
+                symbol,
+                params: _,
+                var,
+            }
             | Expr::RecordUpdate {
                 symbol,
                 record_var: var,
@@ -3237,6 +3308,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
+            Expr::ImportParams(_, _, Some((_, expr))) => {
+                stack.push(expr);
+            }
             Expr::Expect {
                 loc_continuation, ..
             }
@@ -3263,6 +3337,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
+            | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}
         }
     }

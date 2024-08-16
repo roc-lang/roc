@@ -203,7 +203,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
-                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.reflow("In Roc, functions are always written as a lambda, like "),
                     alloc.parser_suggestion("increment = \\n -> n + 1"),
                     alloc.reflow("."),
                 ]),
@@ -257,7 +257,7 @@ fn to_expr_report<'a>(
                     Context::InDef(_pos) => {
                         vec![alloc.stack([
                             alloc.reflow("Looks like you are trying to define a function. "),
-                            alloc.reflow("In roc, functions are always written as a lambda, like "),
+                            alloc.reflow("In Roc, functions are always written as a lambda, like "),
                             alloc
                                 .parser_suggestion("increment = \\n -> n + 1")
                                 .indent(4),
@@ -509,7 +509,7 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
-                    alloc.reflow("In roc, functions are always written as a lambda, like "),
+                    alloc.reflow("In Roc, functions are always written as a lambda, like "),
                     alloc.parser_suggestion("increment = \\n -> n + 1"),
                     alloc.reflow("."),
                 ]),
@@ -545,7 +545,7 @@ fn to_expr_report<'a>(
             to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
 
-        EExpr::OptionalValueInRecordBuilder(region) => {
+        EExpr::OptionalValueInOldRecordBuilder(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
@@ -565,7 +565,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::RecordUpdateAccumulator(region) => {
+        EExpr::RecordUpdateOldBuilderField(region) => {
             let surroundings = Region::new(start, region.end());
             let region = lines.convert_region(*region);
 
@@ -692,6 +692,29 @@ fn to_expr_report<'a>(
                 filename,
                 doc,
                 title: "UNEXPECTED COMMA".to_string(),
+                severity,
+            }
+        }
+        EExpr::StmtAfterExpr(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc
+                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
+                alloc.reflow(
+                    r"and this line is indented as if it's intended to be part of that expression:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([alloc.reflow(
+                    "However, I already saw the final expression in that series of definitions.",
+                )]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "STATEMENT AFTER EXPRESSION".to_string(),
                 severity,
             }
         }
@@ -1518,7 +1541,7 @@ fn to_import_report<'a>(
                 alloc.concat([
                     alloc.reflow("I was expecting to see the "),
                     alloc.keyword("as"),
-                    alloc.reflow(" keyword, like:"),
+                    alloc.reflow(" keyword next, like:"),
                 ]),
                 alloc
                     .parser_suggestion("import svg.Path as SvgPath")
@@ -1554,6 +1577,25 @@ fn to_import_report<'a>(
                 filename,
                 doc,
                 title: "OLD-STYLE RECORD BUILDER IN MODULE PARAMS".to_string(),
+                severity,
+            }
+        }
+        Params(EImportParams::RecordIgnoredFieldFound(region), _) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow("I was partway through parsing module params, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.reflow(
+                    "This is an ignored record field, but those are not allowed in module params.",
+                ),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "IGNORED RECORD FIELD IN MODULE PARAMS".to_string(),
                 severity,
             }
         }

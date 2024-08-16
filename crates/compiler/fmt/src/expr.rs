@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    OldRecordBuilderField, Pattern, WhenBranch,
+    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -47,7 +47,7 @@ impl<'a> Formattable for Expr<'a> {
             | OpaqueRef(_)
             | Crash => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
             }
 
@@ -520,9 +520,12 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            TaskAwaitBang(expr) => {
+            TrySuffix { expr, target } => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('!');
+                match target {
+                    TryTarget::Task => buf.push('!'),
+                    TryTarget::Result => buf.push('?'),
+                }
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
@@ -543,7 +546,7 @@ impl<'a> Formattable for Expr<'a> {
     }
 }
 
-fn is_str_multiline(literal: &StrLiteral) -> bool {
+pub fn is_str_multiline(literal: &StrLiteral) -> bool {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -671,10 +674,6 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
-        called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::IsAliasType => unreachable!(),
-        called_via::BinOp::IsOpaqueType => unreachable!(),
-        called_via::BinOp::Backpassing => unreachable!(),
     }
 }
 
@@ -1533,6 +1532,23 @@ fn format_assigned_field_multiline<T>(
             ann.value.format(buf, indent);
             buf.push(',');
         }
+        IgnoredValue(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push('_');
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
         LabelOnly(name) => {
             buf.newline();
             buf.indent(indent);
@@ -1708,10 +1724,6 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::And
                     | BinOp::Or
                     | BinOp::Pizza => true,
-                    BinOp::Assignment
-                    | BinOp::IsAliasType
-                    | BinOp::IsOpaqueType
-                    | BinOp::Backpassing => false,
                 })
         }
         Expr::If(_, _) => true,

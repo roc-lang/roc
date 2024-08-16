@@ -1,10 +1,11 @@
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br" }
+app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.12.0/Lb8EgiejTUzbggO2HVVuPJFkwvvsfW6LojkLR20kTVE.tar.br" }
 
 import pf.Stdout
-import "ingested-file.roc" as license
+import "test-file.txt" as testFile
 
 main =
-    license
+    # Due to the functions we apply on testFile, it will be inferred as a List U8.
+    testFile
         |> List.map Num.toU64
         |> List.sum
         |> Num.toStr

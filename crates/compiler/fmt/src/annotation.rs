@@ -428,9 +428,9 @@ fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T
     use self::AssignedField::*;
 
     match afield {
-        RequiredValue(_, spaces, ann) | OptionalValue(_, spaces, ann) => {
-            !spaces.is_empty() || ann.value.is_multiline()
-        }
+        RequiredValue(_, spaces, ann)
+        | OptionalValue(_, spaces, ann)
+        | IgnoredValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
         LabelOnly(_) => false,
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
@@ -480,6 +480,24 @@ fn format_assigned_field_help<T>(
 
             buf.spaces(separator_spaces);
             buf.push('?');
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+        }
+        IgnoredValue(name, spaces, ann) => {
+            if is_multiline {
+                buf.newline();
+            }
+
+            buf.indent(indent);
+            buf.push('_');
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
+
+            buf.spaces(separator_spaces);
+            buf.push(':');
             buf.spaces(1);
             ann.value.format(buf, indent);
         }

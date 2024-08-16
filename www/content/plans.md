@@ -16,19 +16,17 @@ As an example, we had [a discussion](https://roc.zulipchat.com/#narrow/stream/30
 
 This has been consistently happening a few times per year. It's hard to predict exactly what the next one will be, but it's a safe bet that it will happen again.
 
-### [Glue](#glue) {#glue}
-
-This one only applies to platform authors.
-
-Much like with builtins, we periodically make changes to code generation or to the `roc glue` API that aren't backwards compatible. When this happens, relevant glue scripts need to be updated and then `roc glue` needs to be re-run on platforms to regenerate their host glue.
-
-As with builtins, it's hard to predict when these will happen and what they'll be, but right now it's a safe bet that they will happen from time to time.
-
 ### [Import syntax](#import-syntax) {#import-syntax}
 
 Implementing the very important [module params](https://docs.google.com/document/d/110MwQi7Dpo1Y69ECFXyyvDWzF4OYv1BLojIm08qDTvg/edit?usp=sharing) feature requires a breaking syntax change to how imports work. This plan is not at all tentative; there is a high degree of confidence that it will happen!
 
 Work has not started on this yet, but we'd like to have the project completed sometime in 2024.
+
+### [Shadowing](#shadowing) {#shadowing}
+
+Shadowing is [currently disallowed](https://www.roc-lang.org/functional#no-reassignment), which means that once a name has been assigned to a value, nothing in the same scope can assign it again.
+
+The plan is to enable shadowing in a future re-write of the [Canonicalization](https://en.wikipedia.org/wiki/Canonicalization) pass as a trial to see if it's a good idea. If it turns out that shadowing isn't the best fit for Roc, we'll remove it as we've done for other experiments, e.g. backpassing.
 
 ### Platform Author Specific Breaking Changes
 

@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::procedure::{QualifiedReference, References};
-use crate::scope::{PendingAbilitiesInScope, Scope};
+use crate::scope::{PendingAbilitiesInScope, Scope, SymbolLookup};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -386,7 +386,10 @@ pub(crate) fn make_apply_symbol(
         // Look it up in scope!
 
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
+            Ok(SymbolLookup {
+                symbol,
+                module_params: _,
+            }) => {
                 references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
                 Ok(symbol)
             }
@@ -398,7 +401,10 @@ pub(crate) fn make_apply_symbol(
         }
     } else {
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => {
+            Ok(SymbolLookup {
+                symbol,
+                module_params: _,
+            }) => {
                 references.insert_type_lookup(symbol, QualifiedReference::Qualified);
                 Ok(symbol)
             }
@@ -467,7 +473,8 @@ pub fn find_type_def_symbols(
                 while let Some(assigned_field) = inner_stack.pop() {
                     match assigned_field {
                         AssignedField::RequiredValue(_, _, t)
-                        | AssignedField::OptionalValue(_, _, t) => {
+                        | AssignedField::OptionalValue(_, _, t)
+                        | AssignedField::IgnoredValue(_, _, t) => {
                             stack.push(&t.value);
                         }
                         AssignedField::LabelOnly(_) => {}
@@ -1386,6 +1393,7 @@ fn can_assigned_fields<'a>(
 
                     break 'inner label;
                 }
+                IgnoredValue(_, _, _) => unreachable!(),
                 LabelOnly(loc_field_name) => {
                     // Interpret { a, b } as { a : a, b : b }
                     let field_name = Lowercase::from(loc_field_name.value);
