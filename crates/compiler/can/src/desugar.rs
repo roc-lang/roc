@@ -489,8 +489,9 @@ pub fn desugar_expr<'a>(
                 }),
                 fields: Collection::with_items(
                     Vec::from_iter_in(
-                        [
-                            Loc::at(region, AssignedField::RequiredValue(
+                        [Loc::at(
+                            region,
+                            AssignedField::RequiredValue(
                                 Loc::at(region, field_name),
                                 &[],
                                 &*arena.alloc(Loc {
@@ -500,12 +501,12 @@ pub fn desugar_expr<'a>(
                                         ident: "#record_updater_field",
                                     },
                                 }),
-                            ))
-                        ],
+                            ),
+                        )],
                         arena,
                     )
                     .into_bump_slice(),
-                )
+                ),
             };
 
             arena.alloc(Loc {
