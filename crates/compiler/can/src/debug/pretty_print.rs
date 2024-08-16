@@ -3,12 +3,14 @@
 use crate::def::Def;
 use crate::expr::Expr::{self, *};
 use crate::expr::{
-    ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+    ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData,
+    StructAccessorData, WhenBranch,
 };
 use crate::pattern::{Pattern, RecordDestruct, TupleDestruct};
 
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
+use roc_types::types::IndexOrField;
 use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
@@ -381,7 +383,10 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             text!(f, "@{}", opaque_name.as_str(c.interns))
         }
-        RecordAccessor(_) => todo!(),
+        RecordAccessor(StructAccessorData { field, .. }) => match field {
+            IndexOrField::Index(index) => text!(f, ".{}", index),
+            IndexOrField::Field(name) => text!(f, ".{}", name),
+        },
         RecordUpdate {
             symbol, updates, ..
         } => f
