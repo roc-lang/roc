@@ -736,7 +736,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/cli", "countdown.roc")
+                from_root("crates/cli/tests/basic-cli", "countdown.roc")
                     .to_str()
                     .unwrap(),
             ])
@@ -751,7 +751,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/cli", "echo.roc")
+                from_root("crates/cli/tests/basic-cli", "echo.roc")
                     .to_str()
                     .unwrap(),
             ])
@@ -766,7 +766,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/cli", "fileBROKEN.roc")
+                from_root("crates/cli/tests/basic-cli", "fileBROKEN.roc")
                     .as_os_str()
                     .to_str()
                     .unwrap(),
@@ -782,7 +782,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/cli", "form.roc")
+                from_root("crates/cli/tests/basic-cli", "form.roc")
                     .as_os_str()
                     .to_str()
                     .unwrap(),
@@ -798,7 +798,7 @@ mod cli_run {
         Run::new_roc()
             .add_args([
                 CMD_CHECK,
-                from_root("crates/cli/tests/cli", "http-get.roc")
+                from_root("crates/cli/tests/basic-cli", "http-get.roc")
                     .as_os_str()
                     .to_str()
                     .unwrap(),
@@ -862,7 +862,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
-            from_root("crates/cli/tests/cli", "env.roc").as_path(),
+            from_root("crates/cli/tests/basic-cli", "env.roc").as_path(),
             vec![],
             &[],
             vec![
@@ -883,13 +883,13 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file() {
         test_roc_app(
-            from_root("crates/cli/tests/cli", "ingested-file.roc").as_path(),
+            from_root("crates/cli/tests/basic-cli", "ingested-file.roc").as_path(),
             vec![],
             &[],
             vec![],
             format!(
                 "\nThis roc file can print its own source code. The source is:\n\n{}\n",
-                include_str!("cli/ingested-file.roc")
+                include_str!("basic-cli/ingested-file.roc")
             )
             .as_str(),
             UseValgrind::No,
@@ -902,7 +902,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn combine_tasks_with_record_builder() {
         test_roc_app(
-            from_root("crates/cli/tests/cli", "combine-tasks.roc").as_path(),
+            from_root("crates/cli/tests/basic-cli", "combine-tasks.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -917,7 +917,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_args_with_record_builder() {
         test_roc_app(
-            from_root("crates/cli/tests/cli", "parse-args.roc").as_path(),
+            from_root("crates/cli/tests/basic-cli", "parse-args.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -932,7 +932,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes() {
         test_roc_app(
-            from_root("crates/cli/tests/cli", "ingested-file-bytes.roc").as_path(),
+            from_root("crates/cli/tests/basic-cli", "ingested-file-bytes.roc").as_path(),
             vec![],
             &[],
             vec![],
@@ -946,7 +946,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn ingested_file_bytes_no_ann() {
         test_roc_app(
-            from_root("crates/cli/tests/cli", "ingested-file-bytes-no-ann.roc").as_path(),
+            from_root(
+                "crates/cli/tests/basic-cli",
+                "ingested-file-bytes-no-ann.roc",
+            )
+            .as_path(),
             vec![],
             &[],
             vec![],
@@ -965,7 +969,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/cli", "parser-movies-csv.roc").as_path());
+            .arg(from_root("crates/cli/tests/basic-cli", "parser-movies-csv.roc").as_path());
 
         let out = runner.run();
         out.assert_clean_success();
@@ -981,7 +985,7 @@ mod cli_run {
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
-            .arg(from_root("crates/cli/tests/cli", "parser-letter-counts.roc").as_path());
+            .arg(from_root("crates/cli/tests/basic-cli", "parser-letter-counts.roc").as_path());
 
         let out = runner.run();
         out.assert_clean_success();
