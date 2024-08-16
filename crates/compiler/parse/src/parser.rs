@@ -487,8 +487,6 @@ pub enum EWhen<'a> {
     Is(Position),
     Pattern(EPattern<'a>, Position),
     Arrow(Position),
-    // todo: @wip @remove it as never produced as Err result (found when inlining byte('|', EWhen::Bar) in the branch_alternatives)
-    Bar(Position),
 
     IfToken(Position),
     IfGuard(&'a EExpr<'a>, Position),

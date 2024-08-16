@@ -1914,19 +1914,6 @@ fn to_when_report<'a>(
             pos,
         ),
 
-        EWhen::Bar(pos) => to_unfinished_when_report(
-            alloc,
-            lines,
-            filename,
-            pos,
-            start,
-            alloc.concat([
-                alloc.reflow(r"I just saw a "),
-                alloc.parser_suggestion(r"|"),
-                alloc.reflow(r" so I was expecting to see a pattern next."),
-            ]),
-        ),
-
         EWhen::IfToken(_pos) => unreachable!("the if-token is optional"),
         EWhen::When(_pos) => unreachable!("another branch would be taken"),
 

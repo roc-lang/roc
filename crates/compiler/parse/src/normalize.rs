@@ -1536,7 +1536,6 @@ impl<'a> Normalize<'a> for EWhen<'a> {
                 EWhen::Pattern(inner_err.normalize(arena), Position::zero())
             }
             EWhen::Arrow(_) => EWhen::Arrow(Position::zero()),
-            EWhen::Bar(_) => EWhen::Bar(Position::zero()),
             EWhen::IfToken(_) => EWhen::IfToken(Position::zero()),
             EWhen::IfGuard(inner_err, _) => {
                 EWhen::IfGuard(arena.alloc(inner_err.normalize(arena)), Position::zero())
