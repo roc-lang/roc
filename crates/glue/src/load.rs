@@ -77,6 +77,11 @@ pub fn generate(
 
             let tempdir_res = tempfile::tempdir();
 
+            // TODO confirm these are the correct parameters to pass down.
+            // are we building a host here in glue generation?
+            let build_host = true;
+            let supress_build_host_warning = true;
+
             let res_binary_path = match tempdir_res {
                 Ok(dylib_dir) => build_file(
                     &arena,
@@ -86,7 +91,8 @@ pub fn generate(
                     false,
                     link_type,
                     linking_strategy,
-                    true,
+                    build_host,
+                    supress_build_host_warning,
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     load_config,

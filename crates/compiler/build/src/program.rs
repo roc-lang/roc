@@ -714,6 +714,7 @@ pub fn build_file<'a>(
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
     build_host: bool,
+    supress_build_host_warning: bool,
     wasm_dev_stack_bytes: Option<u32>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
@@ -739,6 +740,7 @@ pub fn build_file<'a>(
         link_type,
         linking_strategy,
         build_host,
+        supress_build_host_warning,
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
@@ -811,6 +813,7 @@ fn build_loaded_file<'a>(
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
     build_host_requested: bool,
+    supress_build_host_warning: bool,
     wasm_dev_stack_bytes: Option<u32>,
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
@@ -856,7 +859,9 @@ fn build_loaded_file<'a>(
         // The following 3 cases we currently support for host rebuilding. Emit a deprecation
         // warning and rebuild the host.
         (Ok(existing_legacy_host), _, true, LinkType::Executable) => {
-            report_rebuilding_existing_host(&existing_legacy_host.to_string_lossy());
+            if !supress_build_host_warning {
+                report_rebuilding_existing_host(&existing_legacy_host.to_string_lossy());
+            }
             build_and_preprocess_host(
                 code_gen_options,
                 dll_stub_symbols,
@@ -875,7 +880,9 @@ fn build_loaded_file<'a>(
             true,
             LinkType::Executable,
         ) => {
-            report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
+            if !supress_build_host_warning {
+                report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
+            }
             build_and_preprocess_host(
                 code_gen_options,
                 dll_stub_symbols,
@@ -1425,6 +1432,9 @@ pub fn build_str_test<'a>(
     )
     .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
 
+    // we are in a test, so we don't need to provide a warning about rebuilding the host
+    let supress_build_host_warning = true;
+
     build_loaded_file(
         arena,
         target,
@@ -1434,6 +1444,7 @@ pub fn build_str_test<'a>(
         link_type,
         linking_strategy,
         build_host_requested,
+        supress_build_host_warning,
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
