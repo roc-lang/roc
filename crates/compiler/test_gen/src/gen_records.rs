@@ -887,6 +887,38 @@ fn update_single_element_record() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn update_record_shorthand() {
+    assert_evals_to!(
+        indoc!(
+            r"
+                rec = { foo: 42, bar: 2.46f64 }
+
+                rec |> &foo (rec.foo + 1)
+                "
+        ),
+        (2.46, 43),
+        (f64, i64)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn update_single_element_record_shorthand() {
+    assert_evals_to!(
+        indoc!(
+            r"
+                rec = { foo: 42}
+
+                &foo rec (rec.foo + 1)
+                "
+        ),
+        43,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn booleans_in_record() {
     assert_evals_to!(
         indoc!("{ x: 1 == 1, y: 1 == 1 }"),

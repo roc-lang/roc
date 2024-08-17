@@ -476,6 +476,60 @@ pub fn desugar_expr<'a>(
                 },
             })
         }
+        RecordUpdater(field_name) => {
+            let region = loc_expr.region;
+
+            let closure_body = RecordUpdate {
+                update: arena.alloc(Loc {
+                    region,
+                    value: Expr::Var {
+                        module_name: "",
+                        ident: "#record_updater_record",
+                    },
+                }),
+                fields: Collection::with_items(
+                    Vec::from_iter_in(
+                        [Loc::at(
+                            region,
+                            AssignedField::RequiredValue(
+                                Loc::at(region, field_name),
+                                &[],
+                                &*arena.alloc(Loc {
+                                    region,
+                                    value: Expr::Var {
+                                        module_name: "",
+                                        ident: "#record_updater_field",
+                                    },
+                                }),
+                            ),
+                        )],
+                        arena,
+                    )
+                    .into_bump_slice(),
+                ),
+            };
+
+            arena.alloc(Loc {
+                region,
+                value: Closure(
+                    arena.alloc_slice_copy(&[
+                        Loc::at(
+                            region,
+                            Pattern::Identifier {
+                                ident: "#record_updater_record",
+                            },
+                        ),
+                        Loc::at(
+                            region,
+                            Pattern::Identifier {
+                                ident: "#record_updater_field",
+                            },
+                        ),
+                    ]),
+                    arena.alloc(Loc::at(region, closure_body)),
+                ),
+            })
+        }
         Closure(loc_patterns, loc_ret) => arena.alloc(Loc {
             region: loc_expr.region,
             value: Closure(
