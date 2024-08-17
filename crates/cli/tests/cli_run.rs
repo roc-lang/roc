@@ -741,6 +741,8 @@ mod cli_run {
                 App2.getPost 2: http://api.example.com/two/posts/2
                 App1.getPostComments 1: https://api.example.com/one/posts/1/comments
                 App2.getPostComments 2: http://api.example.com/two/posts/2/comments
+                App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
+                App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
                 "#
             ),
             UseValgrind::No,

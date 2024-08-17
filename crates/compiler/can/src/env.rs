@@ -38,6 +38,8 @@ pub struct Env<'a> {
 
     pub top_level_symbols: VecSet<Symbol>,
 
+    pub home_param_symbols: VecSet<Symbol>,
+
     pub arena: &'a Bump,
 
     pub opt_shorthand: Option<&'a str>,
@@ -64,6 +66,7 @@ impl<'a> Env<'a> {
             qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
             top_level_symbols: VecSet::default(),
+            home_param_symbols: VecSet::default(),
             opt_shorthand,
         }
     }

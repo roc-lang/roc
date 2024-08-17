@@ -1569,6 +1569,9 @@ fn canonicalize_closure_body<'a>(
         // filter out functions that don't close over anything
         .filter(|s| !new_output.non_closures.contains(s))
         .filter(|s| !output.non_closures.contains(s))
+        // module params are not captured by top-level defs, because they are passed in as arguments
+        // nested defs, however, do capture them
+        .filter(|s| scope.depth > 1 || !env.home_param_symbols.contains(s))
         .map(|s| (s, var_store.fresh()))
         .collect();
 

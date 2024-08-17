@@ -18,4 +18,6 @@ main =
     App2.getPost 2: $(App2.getPost 2)
     App1.getPostComments 1: $(App1.getPostComments 1)
     App2.getPostComments 2: $(App2.getPostComments 2)
+    App1.getCompanies [1, 2]: $(Inspect.toStr (App1.getCompanies [1, 2]))
+    App2.getCompanies [3, 4]: $(Inspect.toStr (App2.getCompanies [3, 4]))
     """

@@ -431,8 +431,10 @@ pub fn canonicalize_module_defs<'a>(
                 PermitShadows(false),
             );
 
+            env.home_param_symbols.reserve(destructs.len());
+
             for destruct in destructs.iter() {
-                env.top_level_symbols.insert(destruct.value.symbol);
+                env.home_param_symbols.insert(destruct.value.symbol);
             }
 
             let whole_symbol = scope.gen_unique_symbol();

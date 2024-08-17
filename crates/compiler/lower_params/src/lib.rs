@@ -161,17 +161,15 @@ impl<'a> LowerParams<'a> {
                     }
                 }
                 Closure(ClosureData {
+                    loc_body,
+                    captured_symbols: _,
+                    name: _,
                     function_type: _,
                     closure_type: _,
                     return_type: _,
-                    name: _,
-                    captured_symbols: _,
                     recursive: _,
                     arguments: _,
-                    loc_body,
                 }) => {
-                    // todo: capture params?
-
                     expr_stack.push(&mut loc_body.value);
                 }
 

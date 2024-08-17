@@ -1,4 +1,4 @@
-module { appId, protocol } -> [baseUrl, getUser, getPost, getPostComments]
+module { appId, protocol } -> [baseUrl, getUser, getPost, getPostComments, getCompanies]
 
 baseUrl : Str
 baseUrl =
@@ -18,3 +18,11 @@ getPost = \postId ->
 getPostComments : U32 -> Str
 getPostComments = \postId ->
     "$(getPost postId)/comments"
+
+
+getCompanies : List U32 -> List Str
+getCompanies = \ids ->
+    getCompany = \id ->
+        protocol "api.example.com/$(appId)/companies/$(Num.toStr id)"
+
+    List.map ids getCompany
