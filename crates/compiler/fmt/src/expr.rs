@@ -39,6 +39,7 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | AccessorFunction(_)
+            | RecordUpdater(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -509,6 +510,11 @@ impl<'a> Formattable for Expr<'a> {
                     Accessor::RecordField(key) => buf.push_str(key),
                     Accessor::TupleIndex(key) => buf.push_str(key),
                 }
+            }
+            RecordUpdater(key) => {
+                buf.indent(indent);
+                buf.push('&');
+                buf.push_str(key);
             }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);

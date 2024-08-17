@@ -731,6 +731,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::Str(a) => Expr::Str(a.normalize(arena)),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.normalize(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
+            Expr::RecordUpdater(a) => Expr::RecordUpdater(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b),
             Expr::TrySuffix { expr: a, target } => Expr::TrySuffix {
                 expr: arena.alloc(a.normalize(arena)),
@@ -850,6 +851,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
         BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
         BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
+        BadIdent::StrayAmpersand(_) => BadIdent::StrayAmpersand(Position::zero()),
         BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
         BadIdent::QualifiedTupleAccessor(_) => BadIdent::QualifiedTupleAccessor(Position::zero()),
     }
@@ -1237,6 +1239,7 @@ impl<'a> Normalize<'a> for EPattern<'a> {
             EPattern::IndentEnd(_) => EPattern::IndentEnd(Position::zero()),
             EPattern::AsIndentStart(_) => EPattern::AsIndentStart(Position::zero()),
             EPattern::AccessorFunction(_) => EPattern::AccessorFunction(Position::zero()),
+            EPattern::RecordUpdaterFunction(_) => EPattern::RecordUpdaterFunction(Position::zero()),
         }
     }
 }

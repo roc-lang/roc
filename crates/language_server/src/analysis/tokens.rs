@@ -666,6 +666,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::SingleQuote(_) => onetoken(Token::String, region, arena),
             Expr::RecordAccess(rcd, _field) => Loc::at(region, *rcd).iter_tokens(arena),
             Expr::AccessorFunction(accessor) => Loc::at(region, accessor).iter_tokens(arena),
+            Expr::RecordUpdater(updater) => Loc::at(region, updater).iter_tokens(arena),
             Expr::TupleAccess(tup, _field) => Loc::at(region, *tup).iter_tokens(arena),
             Expr::TrySuffix { expr: inner, .. } => Loc::at(region, *inner).iter_tokens(arena),
             Expr::List(lst) => lst.iter_tokens(arena),
