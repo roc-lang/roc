@@ -2108,28 +2108,6 @@ pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
-    fn maybe_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
-    where
-        Self: Sized + 'a,
-    {
-        if spaces.is_empty() {
-            self
-        } else {
-            arena.alloc(self).before(spaces)
-        }
-    }
-
-    fn maybe_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
-    where
-        Self: Sized + 'a,
-    {
-        if spaces.is_empty() {
-            self
-        } else {
-            arena.alloc(self).after(spaces)
-        }
-    }
-
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,

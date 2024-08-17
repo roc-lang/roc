@@ -1,5 +1,5 @@
-use crate::ast::{Collection, Implements, Pattern, PatternAs, Spaceable};
-use crate::blankspace::{space0_e, spaces, spaces_before};
+use crate::ast::{Collection, Implements, Pattern, PatternAs};
+use crate::blankspace::{space0_e, spaces, spaces_before, with_spaces_after};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
@@ -74,13 +74,7 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
             Ok((_, pattern_as, state)) => {
                 let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
 
-                let mut pattern = pattern;
-                if !pattern_spaces.is_empty() {
-                    pattern = arena
-                        .alloc(pattern.value)
-                        .with_spaces_after(pattern_spaces, pattern.region)
-                }
-
+                let pattern = with_spaces_after(pattern, pattern_spaces, arena);
                 let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
 
                 Ok((MadeProgress, Loc::at(region, as_pattern), state))

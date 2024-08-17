@@ -1240,11 +1240,7 @@ fn parse_stmt_alias_or_opaque<'a>(
                     Err((_, fail)) => return Err((MadeProgress, fail)),
                     Ok((_, mut ann_type, state)) => {
                         // put the spaces from after the operator in front of the call
-                        if !spaces_after_operator.is_empty() {
-                            ann_type = arena
-                                .alloc(ann_type.value)
-                                .with_spaces_before(spaces_after_operator, ann_type.region);
-                        }
+                        ann_type = with_spaces_before(ann_type, spaces_after_operator, arena);
 
                         let value_def = ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
 
@@ -1273,7 +1269,7 @@ mod ability {
 
     use super::*;
     use crate::{
-        ast::{AbilityMember, Spaceable, Spaced},
+        ast::{AbilityMember, Spaced},
         parser::EAbility,
     };
 
@@ -1367,11 +1363,7 @@ mod ability {
 
                                 Ok((_, mut demand, state)) => {
                                     // Tag spaces onto the parsed demand name
-                                    if !spaces.is_empty() {
-                                        demand.name = arena
-                                            .alloc(demand.name.value)
-                                            .with_spaces_before(spaces, demand.name.region);
-                                    }
+                                    demand.name = with_spaces_before(demand.name, spaces, arena);
 
                                     Ok((MadeProgress, (indent_column, demand), state))
                                 }
@@ -1557,11 +1549,7 @@ fn parse_after_binop<'a>(
             let initial_state = state.clone();
 
             // put the spaces from after the operator in front of the new_expr
-            if !spaces_after_operator.is_empty() {
-                new_expr = arena
-                    .alloc(new_expr.value)
-                    .with_spaces_before(spaces_after_operator, new_expr.region);
-            }
+            new_expr = with_spaces_before(new_expr, spaces_after_operator, arena);
 
             match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
                 Err((_, _)) => {
@@ -1626,11 +1614,7 @@ fn parse_stmt_backpassing<'a>(
                     expr_start(options).parse(arena, state, call_min_indent)?;
 
                 // put the spaces from after the operator in front of the call
-                if !spaces_after_operator.is_empty() {
-                    ann_type = arena
-                        .alloc(ann_type.value)
-                        .with_spaces_before(spaces_after_operator, ann_type.region);
-                }
+                ann_type = with_spaces_before(ann_type, spaces_after_operator, &arena);
 
                 (Loc::at(expr_region, good), ann_type, state)
             }
@@ -1831,10 +1815,7 @@ fn parse_expr_end<'a>(
 
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
             if !expr_state.spaces_after.is_empty() {
-                arg = arena
-                    .alloc(arg.value)
-                    .with_spaces_before(expr_state.spaces_after, arg.region);
-
+                arg = with_spaces_before(arg, expr_state.spaces_after, arena);
                 expr_state.spaces_after = &[];
             }
             let initial_state = state.clone();
@@ -1947,13 +1928,8 @@ fn parse_ability_def<'a>(
     }
 
     // Attach any spaces to the `implements` keyword
-    let implements = if !expr_state.spaces_after.is_empty() {
-        arena
-            .alloc(Implements::Implements)
-            .with_spaces_before(expr_state.spaces_after, implements.region)
-    } else {
-        Loc::at(implements.region, Implements::Implements)
-    };
+    let implements = Loc::at(implements.region, Implements::Implements);
+    let implements = with_spaces_before(implements, expr_state.spaces_after, arena);
 
     let args = arguments.into_bump_slice();
     let (_, (type_def, _), state) =

@@ -93,28 +93,8 @@ where
     S: 'a + Spaceable<'a>,
 {
     let (spaces_before, (loc_val, spaces_after)) = tuples;
-
-    if spaces_before.is_empty() {
-        if spaces_after.is_empty() {
-            loc_val
-        } else {
-            arena
-                .alloc(loc_val.value)
-                .with_spaces_after(spaces_after, loc_val.region)
-        }
-    } else if spaces_after.is_empty() {
-        arena
-            .alloc(loc_val.value)
-            .with_spaces_before(spaces_before, loc_val.region)
-    } else {
-        let wrapped_expr = arena
-            .alloc(loc_val.value)
-            .with_spaces_after(spaces_after, loc_val.region);
-
-        arena
-            .alloc(wrapped_expr.value)
-            .with_spaces_before(spaces_before, wrapped_expr.region)
-    }
+    let loc_val = with_spaces_after(loc_val, spaces_after, &arena);
+    with_spaces_before(loc_val, spaces_before, &arena)
 }
 
 pub fn spaces_before<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
@@ -126,13 +106,7 @@ where
     parser::map_with_arena(
         and(spaces(), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(space_list, loc_expr.region)
-            }
+            with_spaces_before(loc_expr, space_list, arena)
         },
     )
 }
@@ -149,44 +123,36 @@ where
     parser::map_with_arena(
         and(space0_e(indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
-            if space_list.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(space_list, loc_expr.region)
-            }
+            with_spaces_before(loc_expr, space_list, arena)
         },
     )
 }
 
 #[inline(always)]
 pub fn with_spaces_before<'a, T: 'a + Spaceable<'a>>(
-    value: Loc<T>,
+    loc: Loc<T>,
     spaces: &'a [CommentOrNewline],
     arena: &'a Bump,
 ) -> Loc<T> {
     if spaces.is_empty() {
-        value
+        loc
     } else {
         arena
-            .alloc(value.value)
-            .with_spaces_before(spaces, value.region)
+            .alloc(loc.value)
+            .with_spaces_before(spaces, loc.region)
     }
 }
 
 #[inline(always)]
 pub fn with_spaces_after<'a, T: 'a + Spaceable<'a>>(
-    value: Loc<T>,
+    loc: Loc<T>,
     spaces: &'a [CommentOrNewline],
     arena: &'a Bump,
 ) -> Loc<T> {
     if spaces.is_empty() {
-        value
+        loc
     } else {
-        arena
-            .alloc(value.value)
-            .with_spaces_after(spaces, value.region)
+        arena.alloc(loc.value).with_spaces_after(spaces, loc.region)
     }
 }
 
