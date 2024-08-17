@@ -5089,10 +5089,9 @@ fn canonicalize_and_constrain<'a>(
     let _before = roc_types::types::get_type_clone_count();
 
     // lower module params
-    roc_lower_params::lower(
+    roc_lower_params::lower::lower(
         module_id,
-        // todo(agus): borrow params?
-        module_output.module_params.clone(),
+        &module_output.module_params,
         &mut module_output.declarations,
         &mut var_store,
     );
