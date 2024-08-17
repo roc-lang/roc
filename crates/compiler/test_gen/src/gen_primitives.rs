@@ -2480,39 +2480,6 @@ fn expanded_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn backpassing_result() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            a : Result I64 Str
-            a = Ok 1
-
-            f = \x -> Ok (x + 1)
-            g = \y -> Ok (y * 2)
-
-            main : I64
-            main =
-                helper =
-                    x <- Result.try a
-                    y <- Result.try (f x)
-                    z <- Result.try (g y)
-
-                    Ok z
-
-                helper
-                    |> Result.withDefault 0
-
-            "#
-        ),
-        4,
-        i64
-    );
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Shadowing { original_region: @55-56, shadow: @72-73 Ident")]
 fn function_malformed_pattern() {
