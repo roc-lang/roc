@@ -19,30 +19,30 @@ procedure Decode.26 (Decode.109, Decode.110):
     ret Decode.126;
 
 procedure Str.12 (#Attr.2):
-    let Str.245 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.245;
+    let Str.255 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.255;
 
-procedure Str.27 (Str.82):
-    let Str.236 : [C {}, C I64] = CallByName Str.64 Str.82;
-    ret Str.236;
+procedure Str.27 (Str.84):
+    let Str.246 : [C {}, C I64] = CallByName Str.66 Str.84;
+    ret Str.246;
 
 procedure Str.42 (#Attr.2):
-    let Str.244 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    ret Str.244;
+    let Str.254 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    ret Str.254;
 
-procedure Str.64 (Str.189):
-    let Str.190 : {I64, U8} = CallByName Str.42 Str.189;
-    let Str.242 : U8 = StructAtIndex 1 Str.190;
-    let Str.243 : U8 = 0i64;
-    let Str.239 : Int1 = CallByName Bool.11 Str.242 Str.243;
-    if Str.239 then
-        let Str.241 : I64 = StructAtIndex 0 Str.190;
-        let Str.240 : [C {}, C I64] = TagId(1) Str.241;
-        ret Str.240;
+procedure Str.66 (Str.191):
+    let Str.192 : {I64, U8} = CallByName Str.42 Str.191;
+    let Str.252 : U8 = StructAtIndex 1 Str.192;
+    let Str.253 : U8 = 0i64;
+    let Str.249 : Int1 = CallByName Bool.11 Str.252 Str.253;
+    if Str.249 then
+        let Str.251 : I64 = StructAtIndex 0 Str.192;
+        let Str.250 : [C {}, C I64] = TagId(1) Str.251;
+        ret Str.250;
     else
-        let Str.238 : {} = Struct {};
-        let Str.237 : [C {}, C I64] = TagId(0) Str.238;
-        ret Str.237;
+        let Str.248 : {} = Struct {};
+        let Str.247 : [C {}, C I64] = TagId(0) Str.248;
+        ret Str.247;
 
 procedure Test.103 ():
     let Test.101 : [C Str, C {List U8, I64}] = CallByName Test.19;
