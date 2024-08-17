@@ -627,8 +627,8 @@ fn fmt_str_body(body: &str, buf: &mut Buf) {
             '\u{200c}' => buf.push_str("\\u(200c)"),
             '\u{feff}' => buf.push_str("\\u(feff)"),
             // Don't change anything else in the string
-            ' ' => buf.spaces(1),
-            '\n' => buf.newline(),
+            ' ' => buf.push_str_allow_spaces(" "),
+            '\n' => buf.push_str_allow_spaces("\n"),
             _ => buf.push(c),
         }
     }
