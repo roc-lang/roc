@@ -2334,7 +2334,7 @@ mod when {
     use super::*;
     use crate::{
         ast::WhenBranch,
-        blankspace::{spaces_around_help, with_spaces_before},
+        blankspace::{spaces_around_help, with_spaces_after, with_spaces_before},
     };
 
     /// Parser for when expressions.
@@ -2358,12 +2358,9 @@ mod when {
             state.advance_mut(when_width);
 
             let cond_parser = specialize_err_ref(EWhen::Condition, expr_start(options));
-            let spaced_cond_parser = map_with_arena(
-                and(space0_e(EWhen::IndentCondition), and(cond_parser, spaces())),
-                spaces_around_help,
-            );
+            let cond_parser = and(space0_e(EWhen::IndentCondition), and(cond_parser, spaces()));
 
-            match spaced_cond_parser.parse(arena, state, cond_indent) {
+            match cond_parser.parse(arena, state, cond_indent) {
                 Ok((_, cond, mut state)) => {
                     if !state.bytes().starts_with(keyword::IS.as_bytes()) {
                         return Err((MadeProgress, EWhen::Is(state.pos())));
@@ -2438,6 +2435,7 @@ mod when {
                         }
                     }
 
+                    let cond = spaces_around_help(arena, cond);
                     let out = Expr::When(arena.alloc(cond), branches.into_bump_slice());
                     Ok((MadeProgress, out, state))
                 }
@@ -2516,28 +2514,36 @@ mod when {
                 *first = with_spaces_before(*first, spaces, arena);
             }
 
-            let guard_parser = map(
-                skip_first(
-                    parser::keyword(keyword::IF, EWhen::IfToken),
-                    // TODO we should require space before the expression but not after
-                    space0_around_ee(
-                        specialize_err_ref(
-                            EWhen::IfGuard,
-                            increment_min_indent(expr_start(options)),
-                        ),
-                        EWhen::IndentIfGuard,
-                        EWhen::IndentArrow,
-                    ),
-                ),
-                Some,
-            );
-
             let column_patterns = (pattern_column, patterns);
             let original_state = state.clone();
+
+            if !state.bytes().starts_with(keyword::IF.as_bytes()) {
+                return Ok((MadeProgress, (column_patterns, None), original_state));
+            }
+
+            let if_width = keyword::IF.len();
+            match state.bytes().get(if_width) {
+                Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
+                None => {}
+                _ => return Ok((MadeProgress, (column_patterns, None), original_state)),
+            }
+
+            state.advance_mut(if_width);
+
+            // TODO we should require space before the expression but not after
+            let guard_parser =
+                specialize_err_ref(EWhen::IfGuard, increment_min_indent(expr_start(options)));
+
+            let guard_parser = and(guard_parser, space0_e(EWhen::IndentArrow));
+            let guard_parser = and(space0_e(EWhen::IndentIfGuard), guard_parser);
+
             match guard_parser.parse(arena, state, min_indent) {
-                Ok((_, guard, state)) => Ok((MadeProgress, (column_patterns, guard), state)),
-                Err((NoProgress, _)) => Ok((MadeProgress, (column_patterns, None), original_state)),
-                Err(fail) => Err(fail),
+                Ok((_, (spaces_before, (guard, spaces_after)), state)) => {
+                    let guard = with_spaces_after(guard, spaces_after, &arena);
+                    let guard = with_spaces_before(guard, spaces_before, &arena);
+                    Ok((MadeProgress, (column_patterns, Some(guard)), state))
+                }
+                Err((_, fail)) => Err((MadeProgress, fail)),
             }
         }
     }
