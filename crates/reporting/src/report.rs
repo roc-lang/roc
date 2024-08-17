@@ -886,6 +886,7 @@ pub enum Annotation {
     Ellipsis,
     Tag,
     RecordField,
+    RecordUpdater,
     TupleElem,
     TypeVariable,
     Alias,
@@ -1125,7 +1126,8 @@ where
             Warning => {
                 self.write_str(self.palette.warning)?;
             }
-            TypeBlock | InlineTypeBlock | Tag | RecordField | TupleElem => { /* nothing yet */ }
+            TypeBlock | InlineTypeBlock | Tag | RecordField | RecordUpdater | TupleElem => { /* nothing yet */
+            }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1144,8 +1146,8 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | TupleElem => { /* nothing yet */
-                }
+                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | RecordUpdater
+                | TupleElem => { /* nothing yet */ }
             },
         }
         Ok(())

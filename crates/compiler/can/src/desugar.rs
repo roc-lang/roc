@@ -1,6 +1,6 @@
 #![allow(clippy::manual_map)]
 
-use crate::suffixed::{apply_task_await, unwrap_suffixed_expression, EUnwrapped};
+use crate::suffixed::{apply_try_function, unwrap_suffixed_expression, EUnwrapped};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
@@ -220,11 +220,20 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_arg,
                     sub_pat,
                     sub_new,
+                    target,
                 }) => desugar_value_def_suffixed(
                     arena,
                     Body(
                         loc_pattern,
-                        apply_task_await(arena, loc_expr.region, sub_arg, sub_pat, sub_new, None),
+                        apply_try_function(
+                            arena,
+                            loc_expr.region,
+                            sub_arg,
+                            sub_pat,
+                            sub_new,
+                            None,
+                            target,
+                        ),
                     ),
                 ),
                 Err(..) => Body(
@@ -254,6 +263,7 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                     sub_arg,
                     sub_pat,
                     sub_new,
+                    target,
                 }) => desugar_value_def_suffixed(
                     arena,
                     AnnotatedBody {
@@ -261,13 +271,14 @@ pub fn desugar_value_def_suffixed<'a>(arena: &'a Bump, value_def: ValueDef<'a>) 
                         ann_type,
                         lines_between,
                         body_pattern,
-                        body_expr: apply_task_await(
+                        body_expr: apply_try_function(
                             arena,
                             body_expr.region,
                             sub_arg,
                             sub_pat,
                             sub_new,
                             Some((ann_pattern, ann_type)),
+                            target,
                         ),
                     },
                 ),
@@ -371,14 +382,23 @@ pub fn desugar_expr<'a>(
 
             arena.alloc(Loc { region, value })
         }
-        // desugar the sub_expression, but leave the TaskAwaitBang as this will
+        // desugar the sub_expression, but leave the TrySuffix as this will
         // be unwrapped later in desugar_value_def_suffixed
-        TaskAwaitBang(sub_expr) => {
+        TrySuffix {
+            expr: sub_expr,
+            target,
+        } => {
             let intermediate = arena.alloc(Loc::at(loc_expr.region, **sub_expr));
             let new_sub_loc_expr = desugar_expr(arena, intermediate, src, line_info, module_path);
             let new_sub_expr = arena.alloc(new_sub_loc_expr.value);
 
-            arena.alloc(Loc::at(loc_expr.region, TaskAwaitBang(new_sub_expr)))
+            arena.alloc(Loc::at(
+                loc_expr.region,
+                TrySuffix {
+                    expr: new_sub_expr,
+                    target: *target,
+                },
+            ))
         }
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -454,6 +474,60 @@ pub fn desugar_expr<'a>(
                     update: new_update,
                     fields: new_fields,
                 },
+            })
+        }
+        RecordUpdater(field_name) => {
+            let region = loc_expr.region;
+
+            let closure_body = RecordUpdate {
+                update: arena.alloc(Loc {
+                    region,
+                    value: Expr::Var {
+                        module_name: "",
+                        ident: "#record_updater_record",
+                    },
+                }),
+                fields: Collection::with_items(
+                    Vec::from_iter_in(
+                        [Loc::at(
+                            region,
+                            AssignedField::RequiredValue(
+                                Loc::at(region, field_name),
+                                &[],
+                                &*arena.alloc(Loc {
+                                    region,
+                                    value: Expr::Var {
+                                        module_name: "",
+                                        ident: "#record_updater_field",
+                                    },
+                                }),
+                            ),
+                        )],
+                        arena,
+                    )
+                    .into_bump_slice(),
+                ),
+            };
+
+            arena.alloc(Loc {
+                region,
+                value: Closure(
+                    arena.alloc_slice_copy(&[
+                        Loc::at(
+                            region,
+                            Pattern::Identifier {
+                                ident: "#record_updater_record",
+                            },
+                        ),
+                        Loc::at(
+                            region,
+                            Pattern::Identifier {
+                                ident: "#record_updater_field",
+                            },
+                        ),
+                    ]),
+                    arena.alloc(Loc::at(region, closure_body)),
+                ),
             })
         }
         Closure(loc_patterns, loc_ret) => arena.alloc(Loc {

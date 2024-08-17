@@ -648,9 +648,7 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
-            canonicalize_record(env, var_store, scope, region, *fields)
-        }
+        ast::Expr::Record(fields) => canonicalize_record(env, var_store, scope, region, *fields),
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -1022,6 +1020,9 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Backpassing(_, _, _) => {
             internal_error!("Backpassing should have been desugared by now")
         }
+        ast::Expr::RecordUpdater(_) => {
+            internal_error!("Record updater should have been desugared by now")
+        }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
                 canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr, None);
@@ -1119,7 +1120,9 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TaskAwaitBang(..) => internal_error!("a Expr::TaskAwaitBang expression was not completely removed in desugar_value_def_suffixed"),
+        ast::Expr::TrySuffix { .. } => internal_error!(
+            "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+        ),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1371,7 +1374,10 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInRecordBuilder {record: region, field: sub_region };
+            let problem = OptionalFieldInRecordBuilder {
+                record: region,
+                field: sub_region,
+            };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -2462,6 +2468,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Num(_)
         | ast::Expr::NonBase10Int { .. }
         | ast::Expr::AccessorFunction(_)
+        | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
@@ -2515,7 +2522,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
-        | ast::Expr::TaskAwaitBang(sub_expr) => is_valid_interpolation(sub_expr),
+        | ast::Expr::TrySuffix { expr: sub_expr, .. } => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
             is_valid_interpolation(&loc_expr.value)
                 && args

@@ -392,6 +392,15 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
+/// Values that can be tried, extracting success values or "returning early" on failure
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TryTarget {
+    /// Tasks suffixed with ! are `Task.await`ed
+    Task,
+    /// Results suffixed with ? are `Result.try`ed
+    Result,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -423,11 +432,17 @@ pub enum Expr<'a> {
     /// e.g. `.foo` or `.0`
     AccessorFunction(Accessor<'a>),
 
+    /// Update the value of a field in a record, e.g. `&foo`
+    RecordUpdater(&'a str),
+
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
 
-    /// Task await bang - i.e. the ! in `File.readUtf8! path`
-    TaskAwaitBang(&'a Expr<'a>),
+    /// Early return on failures - e.g. the ! in `File.readUtf8! path`
+    TrySuffix {
+        target: TryTarget,
+        expr: &'a Expr<'a>,
+    },
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -555,9 +570,9 @@ pub fn split_loc_exprs_around<'a>(
 
 /// Checks if the bang suffix is applied only at the top level of expression
 pub fn is_top_level_suffixed(expr: &Expr) -> bool {
-    // TODO: should we check BinOps with pizza where the last expression is TaskAwaitBang?
+    // TODO: should we check BinOps with pizza where the last expression is TrySuffix?
     match expr {
-        Expr::TaskAwaitBang(..) => true,
+        Expr::TrySuffix { .. } => true,
         Expr::Apply(a, _, _) => is_top_level_suffixed(&a.value),
         Expr::SpaceBefore(a, _) => is_top_level_suffixed(a),
         Expr::SpaceAfter(a, _) => is_top_level_suffixed(a),
@@ -571,7 +586,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         // expression without arguments, `read!`
         Expr::Var { .. } => false,
 
-        Expr::TaskAwaitBang(..) => true,
+        Expr::TrySuffix { .. } => true,
 
         // expression with arguments, `line! "Foo"`
         Expr::Apply(sub_loc_expr, apply_args, _) => {
@@ -624,6 +639,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::SingleQuote(_) => false,
         Expr::RecordAccess(a, _) => is_expr_suffixed(a),
         Expr::AccessorFunction(_) => false,
+        Expr::RecordUpdater(_) => false,
         Expr::TupleAccess(a, _) => is_expr_suffixed(a),
         Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
         Expr::RecordUpdate { update, fields } => {
@@ -995,7 +1011,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 }
                 RecordAccess(expr, _)
                 | TupleAccess(expr, _)
-                | TaskAwaitBang(expr)
+                | TrySuffix { expr, .. }
                 | SpaceBefore(expr, _)
                 | SpaceAfter(expr, _)
                 | ParensAround(expr) => expr_stack.push(expr),
@@ -1012,6 +1028,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Str(_)
                 | SingleQuote(_)
                 | AccessorFunction(_)
+                | RecordUpdater(_)
                 | Var { .. }
                 | Underscore(_)
                 | Crash
@@ -2475,6 +2492,7 @@ impl<'a> Malformed for Expr<'a> {
             Num(_) |
             NonBase10Int { .. } |
             AccessorFunction(_) |
+            RecordUpdater(_) |
             Var { .. } |
             Underscore(_) |
             Tag(_) |
@@ -2486,7 +2504,7 @@ impl<'a> Malformed for Expr<'a> {
 
             RecordAccess(inner, _) |
             TupleAccess(inner, _) |
-            TaskAwaitBang(inner) => inner.is_malformed(),
+            TrySuffix { expr: inner, .. } => inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 

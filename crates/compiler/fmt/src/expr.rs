@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    OldRecordBuilderField, Pattern, WhenBranch,
+    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -39,6 +39,7 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | AccessorFunction(_)
+            | RecordUpdater(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -47,7 +48,7 @@ impl<'a> Formattable for Expr<'a> {
             | OpaqueRef(_)
             | Crash => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
             }
 
@@ -510,6 +511,11 @@ impl<'a> Formattable for Expr<'a> {
                     Accessor::TupleIndex(key) => buf.push_str(key),
                 }
             }
+            RecordUpdater(key) => {
+                buf.indent(indent);
+                buf.push('&');
+                buf.push_str(key);
+            }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
@@ -520,9 +526,12 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            TaskAwaitBang(expr) => {
+            TrySuffix { expr, target } => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('!');
+                match target {
+                    TryTarget::Task => buf.push('!'),
+                    TryTarget::Result => buf.push('?'),
+                }
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
