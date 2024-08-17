@@ -367,6 +367,8 @@ module [
     withCapacity,
     withPrefix,
     contains,
+    dropPrefix,
+    dropSuffix,
 ]
 
 import Bool exposing [Bool]
@@ -752,6 +754,7 @@ countUtf8Bytes : Str -> U64
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, U64, U64 -> Str
+#               = RocStr, start, len -> RocStr
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
 ## If the substring is not found, returns the original string.
@@ -1052,3 +1055,37 @@ contains = \haystack, needle ->
     when firstMatch haystack needle is
         Some _index -> Bool.true
         None -> Bool.false
+
+## Drops the given prefix [Str] from the start of a [Str]
+## If the prefix is not found, returns the original string.
+##
+## ```roc
+## expect Str.dropPrefix "bar" "foo" == "bar"
+## expect Str.dropPrefix "foobar" "foo" == "bar"
+## ```
+dropPrefix : Str, Str -> Str
+dropPrefix = \haystack, prefix ->
+    if Str.startsWith haystack prefix then
+        start = Str.countUtf8Bytes prefix
+        len = Num.subSaturated (Str.countUtf8Bytes haystack) start
+
+        substringUnsafe haystack start len
+    else
+        haystack
+
+## Drops the given suffix [Str] from the end of a [Str]
+## If the suffix is not found, returns the original string.
+##
+## ```roc
+## expect Str.dropSuffix "bar" "foo" == "bar"
+## expect Str.dropSuffix "barfoo" "foo" == "bar"
+## ```
+dropSuffix : Str, Str -> Str
+dropSuffix = \haystack, suffix ->
+    if Str.endsWith haystack suffix then
+        start = 0
+        len = Num.subSaturated (Str.countUtf8Bytes haystack) (Str.countUtf8Bytes suffix)
+
+        substringUnsafe haystack start len
+    else
+        haystack

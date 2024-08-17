@@ -1988,3 +1988,75 @@ fn str_contains_self() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn str_drop_prefix() {
+    assert_evals_to!(
+        r#"
+        Str.dropPrefix "" "foo"
+        "#,
+        RocResult::ok(RocStr::from("")),
+        RocResult<RocStr, ()>
+    );
+
+    assert_evals_to!(
+        r#"
+        Str.dropPrefix "bar" "foo"
+        "#,
+        RocResult::ok(RocStr::from("bar")),
+        RocResult<RocStr, ()>
+    );
+
+    assert_evals_to!(
+        r#"
+        Str.dropPrefix "foobar" "foo"
+        "#,
+        RocResult::ok(RocStr::from("bar")),
+        RocResult<RocStr, ()>
+    );
+
+    assert_evals_to!(
+        r#"
+        Str.dropPrefix "fooBarThisIsDefinitelyAReallyLongAndNotaShortString" "foo"
+        "#,
+        RocResult::ok(RocStr::from("BarThisIsDefinitelyAReallyLongAndNotaShortString")),
+        RocResult<RocStr, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn str_drop_suffix() {
+    assert_evals_to!(
+        r#"
+        Str.dropSuffix "" "foo"
+        "#,
+        RocResult::ok(RocStr::from("")),
+        RocResult<RocStr, ()>
+    );
+
+    assert_evals_to!(
+        r#"
+        Str.dropSuffix "bar" "foo"
+        "#,
+        RocResult::ok(RocStr::from("bar")),
+        RocResult<RocStr, ()>
+    );
+
+    assert_evals_to!(
+        r#"
+        Str.dropSuffix "barfoo" "foo"
+        "#,
+        RocResult::ok(RocStr::from("bar")),
+        RocResult<RocStr, ()>
+    );
+
+    assert_evals_to!(
+        r#"
+        Str.dropSuffix "BarThisIsDefinitelyAReallyLongAndNotaShortStringfoo" "foo"
+        "#,
+        RocResult::ok(RocStr::from("BarThisIsDefinitelyAReallyLongAndNotaShortString")),
+        RocResult<RocStr, ()>
+    );
+}
