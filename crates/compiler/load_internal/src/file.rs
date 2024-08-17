@@ -5032,7 +5032,7 @@ fn canonicalize_and_constrain<'a>(
 
     let mut var_store = VarStore::default();
 
-    let module_output = canonicalize_module_defs(
+    let mut module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
         &header_type,
@@ -5090,6 +5090,13 @@ fn canonicalize_and_constrain<'a>(
 
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
+
+    // lower module params
+    roc_lower_params::lower(
+        module_output.params_pattern.clone(),
+        &mut module_output.declarations,
+        &mut var_store,
+    );
 
     let mut constraints = Constraints::new();
 

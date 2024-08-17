@@ -2795,6 +2795,7 @@ dependencies = [
  "roc_derive_key",
  "roc_error_macros",
  "roc_late_solve",
+ "roc_lower_params",
  "roc_module",
  "roc_mono",
  "roc_packaging",
@@ -2813,6 +2814,17 @@ dependencies = [
  "roc_worker",
  "tempfile",
  "ven_pretty",
+]
+
+[[package]]
+name = "roc_lower_params"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "roc_can",
+ "roc_module",
+ "roc_region",
+ "roc_types",
 ]
 
 [[package]]

@@ -724,6 +724,26 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_fn() {
+        test_roc_app(
+            "crates/cli/tests/module_params",
+            "fn.roc",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                App1: api.example.com/one/users/1
+                App2: api.example.com/two/users/2
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
