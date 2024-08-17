@@ -14,4 +14,6 @@ main =
     App2.baseUrl: $(App2.baseUrl)
     App1.getUser 1: $(App1.getUser 1)
     App2.getUser 2: $(App2.getUser 2)
+    App1.getPost 1: $(App1.getPost 1)
+    App2.getPost 2: $(App2.getPost 2)
     """

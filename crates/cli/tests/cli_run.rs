@@ -737,6 +737,8 @@ mod cli_run {
                 App2.baseUrl: http://api.example.com/two
                 App1.getUser 1: https://api.example.com/one/users/1
                 App2.getUser 2: http://api.example.com/two/users/2
+                App1.getPost 1: https://api.example.com/one/posts/1
+                App2.getPost 2: http://api.example.com/two/posts/2
                 "#
             ),
             UseValgrind::No,

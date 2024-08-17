@@ -8,23 +8,39 @@ use roc_can::{
     module::ModuleParams,
     pattern::Pattern,
 };
+use roc_module::symbol::{IdentId, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
 
 struct LowerParams<'a> {
-    // todo: remove var as we can't use it
+    home_id: ModuleId,
+    /// Top-level idents that we need to extend in a module with params. Empty if no params.
+    home_top_level_idents: Vec<IdentId>,
     home_params: Option<ModuleParams>,
     var_store: &'a mut VarStore,
 }
 
 pub fn lower(
+    home_id: ModuleId,
     home_params: Option<ModuleParams>,
     decls: &mut Declarations,
     var_store: &mut VarStore,
 ) {
+    let home_top_level_idents = if home_params.is_some() {
+        decls
+            .symbols
+            .iter()
+            .map(|loc_sym| loc_sym.value.ident_id())
+            .collect()
+    } else {
+        vec![]
+    };
+
     let mut env = LowerParams {
+        home_id,
         home_params,
+        home_top_level_idents,
         var_store,
     };
 
@@ -76,20 +92,6 @@ pub fn lower(
 }
 
 impl<'a> LowerParams<'a> {
-    fn home_params_argument(&mut self) -> Option<(Variable, AnnotatedMark, Loc<Pattern>)> {
-        match &self.home_params {
-            Some(module_params) => {
-                let new_var = self.var_store.fresh();
-                Some((
-                    new_var,
-                    AnnotatedMark::new(self.var_store),
-                    module_params.pattern(),
-                ))
-            }
-            None => None,
-        }
-    }
-
     fn lower_expr(&mut self, expr: &mut Expr) {
         match expr {
             ParamsVar {
@@ -98,19 +100,18 @@ impl<'a> LowerParams<'a> {
                 params_symbol,
                 params_var,
             } => {
-                let params_arg = (*params_var, Loc::at_zero(Var(*params_symbol, *params_var)));
-
-                *expr = Call(
-                    Box::new((
-                        self.var_store.fresh(),
-                        Loc::at_zero(Var(*symbol, *var)),
-                        self.var_store.fresh(),
-                        self.var_store.fresh(),
-                    )),
-                    vec![params_arg],
-                    // todo: custom called via
-                    roc_module::called_via::CalledVia::Space,
-                );
+                // A referece to a top-level value def in an imported module with params
+                *expr = self.call_params_var(*symbol, *var, *params_symbol, *params_var);
+            }
+            Var(symbol, var) => {
+                if symbol.module_id() == self.home_id
+                    && self.home_top_level_idents.contains(&symbol.ident_id())
+                {
+                    // A reference to a top-level value def in the home module with params
+                    let params = self.home_params.as_ref().unwrap();
+                    *expr =
+                        self.call_params_var(*symbol, *var, params.whole_symbol, params.whole_var);
+                }
             }
             Call(fun, args, _called_via) => {
                 for arg in args.iter_mut() {
@@ -119,6 +120,7 @@ impl<'a> LowerParams<'a> {
                 }
 
                 match fun.1.value {
+                    // A call to a function in an imported module with params
                     ParamsVar {
                         symbol,
                         var,
@@ -146,6 +148,41 @@ impl<'a> LowerParams<'a> {
                 self.lower_expr(&mut loc_body.value);
             }
             _ => { /* todo */ }
+        }
+    }
+
+    fn call_params_var(
+        &mut self,
+        symbol: Symbol,
+        var: Variable,
+        params_symbol: Symbol,
+        params_var: Variable,
+    ) -> Expr {
+        let params_arg = (params_var, Loc::at_zero(Var(params_symbol, params_var)));
+
+        Call(
+            Box::new((
+                self.var_store.fresh(),
+                Loc::at_zero(Var(symbol, var)),
+                self.var_store.fresh(),
+                self.var_store.fresh(),
+            )),
+            vec![params_arg],
+            // todo: custom called via
+            roc_module::called_via::CalledVia::Space,
+        )
+    }
+    fn home_params_argument(&mut self) -> Option<(Variable, AnnotatedMark, Loc<Pattern>)> {
+        match &self.home_params {
+            Some(module_params) => {
+                let new_var = self.var_store.fresh();
+                Some((
+                    new_var,
+                    AnnotatedMark::new(self.var_store),
+                    module_params.pattern(),
+                ))
+            }
+            None => None,
         }
     }
 }

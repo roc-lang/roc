@@ -5090,6 +5090,8 @@ fn canonicalize_and_constrain<'a>(
 
     // lower module params
     roc_lower_params::lower(
+        module_id,
+        // todo(agus): borrow params?
         module_output.module_params.clone(),
         &mut module_output.declarations,
         &mut var_store,
