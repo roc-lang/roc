@@ -6,6 +6,7 @@ module [
     map,
     onFail,
     attempt,
+    result,
     fromResult,
     loop,
 ]
@@ -22,7 +23,7 @@ loop = \state, step ->
             \res ->
                 when res is
                     Ok (Step newState) -> Step newState
-                    Ok (Done result) -> Done (Ok result)
+                    Ok (Done res2) -> Done (Ok res2)
                     Err e -> Done (Err e)
 
     Effect.loop state looper
@@ -36,8 +37,8 @@ fail = \val ->
     Effect.always (Err val)
 
 fromResult : Result a e -> Task a e
-fromResult = \result ->
-    when result is
+fromResult = \res ->
+    when res is
         Ok a -> succeed a
         Err e -> fail e
 
@@ -45,8 +46,8 @@ attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \effect, transform ->
     Effect.after
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok ok -> transform (Ok ok)
                 Err err -> transform (Err err)
 
@@ -54,8 +55,8 @@ await : Task a err, (a -> Task b err) -> Task b err
 await = \effect, transform ->
     Effect.after
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok a -> transform a
                 Err err -> Task.fail err
 
@@ -63,8 +64,8 @@ onFail : Task ok a, (a -> Task ok b) -> Task ok b
 onFail = \effect, transform ->
     Effect.after
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok a -> Task.succeed a
                 Err err -> transform err
 
@@ -72,8 +73,8 @@ map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
     Effect.after
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok a -> Task.succeed (transform a)
                 Err err -> Task.fail err
 
@@ -81,4 +82,4 @@ result : Task ok err -> Task (Result ok err) *
 result = \effect ->
     Effect.after
         effect
-        \result -> Task.succeed result
+        \res -> Task.succeed res

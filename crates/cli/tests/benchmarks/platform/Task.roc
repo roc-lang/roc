@@ -38,7 +38,7 @@ loop = \state, step ->
             \res ->
                 when res is
                     Ok (Step newState) -> Step newState
-                    Ok (Done result) -> Done (Ok result)
+                    Ok (Done res2) -> Done (Ok res2)
                     Err e -> Done (Err e)
 
     Effect.loop state looper
@@ -55,8 +55,8 @@ after : Task a err, (a -> Task b err) -> Task b err
 after = \effect, transform ->
     Effect.after
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok a -> transform a
                 Err err -> Task.fail err
 
@@ -64,8 +64,8 @@ await : Task a err, (a -> Task b err) -> Task b err
 await = \effect, transform ->
     Effect.after
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok a -> transform a
                 Err err -> Task.fail err
 
@@ -73,8 +73,8 @@ attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \task, transform ->
     Effect.after
         task
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok ok -> transform (Ok ok)
                 Err err -> transform (Err err)
 
@@ -82,8 +82,8 @@ map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
     Effect.map
         effect
-        \result ->
-            when result is
+        \res ->
+            when res is
                 Ok a -> Ok (transform a)
                 Err err -> Err err
 
@@ -91,7 +91,7 @@ result : Task ok err -> Task (Result ok err) *
 result = \effect ->
     Effect.after
         effect
-        \result -> Task.succeed result
+        \res -> Task.succeed res
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
