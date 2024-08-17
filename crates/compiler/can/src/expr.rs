@@ -3079,6 +3079,60 @@ impl Declarations {
         }
     }
 
+    /// Convert a value def to a function def with the given arguments
+    /// Currently used in lower_params
+    pub fn convert_value_to_function(
+        &mut self,
+        index: usize,
+        new_arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
+        var_store: &mut VarStore,
+    ) {
+        match self.declarations[index] {
+            DeclarationTag::Value => {
+                let new_args_len = new_arguments.len();
+
+                let loc_body = self.expressions[index].clone();
+                let region = loc_body.region;
+
+                let closure_data = ClosureData {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: self.symbols[index].value,
+                    captured_symbols: vec![],
+                    recursive: Recursive::NotRecursive,
+                    arguments: new_arguments,
+                    loc_body: Box::new(loc_body),
+                };
+
+                let loc_closure_data = Loc::at(region, closure_data);
+
+                let function_def = FunctionDef {
+                    closure_type: loc_closure_data.value.closure_type,
+                    return_type: loc_closure_data.value.return_type,
+                    captured_symbols: loc_closure_data.value.captured_symbols,
+                    arguments: loc_closure_data.value.arguments,
+                };
+
+                let loc_function_def = Loc::at(region, function_def);
+
+                let function_def_index =
+                    Index::push_new(&mut self.function_bodies, loc_function_def);
+
+                if let Some(annotation) = &mut self.annotations[index] {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                if let Some((_var, annotation)) = self.host_exposed_annotations.get_mut(&index) {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                self.declarations[index] = DeclarationTag::Function(function_def_index);
+            }
+            _ => internal_error!("Expected value declaration"),
+        };
+    }
+
     pub fn len(&self) -> usize {
         self.declarations.len()
     }

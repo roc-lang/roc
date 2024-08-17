@@ -111,6 +111,23 @@ impl Annotation {
 
         self
     }
+
+    pub fn convert_to_fn(&mut self, argument_count: usize, var_store: &mut VarStore) {
+        let mut arg_types = Vec::with_capacity(argument_count);
+
+        for _ in 0..argument_count {
+            let var = var_store.fresh();
+            self.introduced_variables.insert_inferred(Loc::at_zero(var));
+
+            arg_types.push(Type::Variable(var));
+        }
+
+        self.signature = Type::Function(
+            arg_types,
+            Box::new(Type::Variable(var_store.fresh())),
+            Box::new(self.signature.clone()),
+        );
+    }
 }
 
 #[derive(Debug)]

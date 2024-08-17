@@ -724,17 +724,19 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn module_params_fn() {
+    fn module_params() {
         test_roc_app(
             "crates/cli/tests/module_params",
-            "fn.roc",
+            "app.roc",
             &[],
             &[],
             &[],
             indoc!(
                 r#"
-                App1: https://api.example.com/one/users/1
-                App2: https://api.example.com/two/users/2
+                App1.baseUrl: https://api.example.com/one
+                App2.baseUrl: http://api.example.com/two
+                App1.getUser 1: https://api.example.com/one/users/1
+                App2.getUser 2: http://api.example.com/two/users/2
                 "#
             ),
             UseValgrind::No,

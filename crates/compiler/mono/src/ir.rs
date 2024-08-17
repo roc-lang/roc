@@ -4444,7 +4444,7 @@ pub fn with_hole<'a>(
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         ParamsVar { .. } => {
-            unimplemented!("module params code generation")
+            internal_error!("ParamsVar should've been lowered to Var")
         }
         ImportParams(_, _, Some((_, value))) => {
             with_hole(env, *value, variable, procs, layout_cache, assigned, hole)
