@@ -104,9 +104,7 @@ impl<'a> LowerParams<'a> {
                 *expr = self.call_params_var(*symbol, *var, *params_symbol, *params_var);
             }
             Var(symbol, var) => {
-                if symbol.module_id() == self.home_id
-                    && self.home_top_level_idents.contains(&symbol.ident_id())
-                {
+                if self.is_params_extended_home_symbol(symbol) {
                     // A reference to a top-level value def in the home module with params
                     let params = self.home_params.as_ref().unwrap();
                     *expr =
@@ -130,6 +128,16 @@ impl<'a> LowerParams<'a> {
                         args.push((params_var, Loc::at_zero(Var(params_symbol, params_var))));
                         fun.1.value = Var(symbol, var);
                     }
+                    Var(symbol, _var) => {
+                        if self.is_params_extended_home_symbol(&symbol) {
+                            // A call to a top-level function in the home module with params
+                            let params = self.home_params.as_ref().unwrap();
+                            args.push((
+                                params.whole_var,
+                                Loc::at_zero(Var(params.whole_symbol, params.whole_var)),
+                            ));
+                        }
+                    }
                     _ => self.lower_expr(&mut fun.1.value),
                 }
             }
@@ -149,6 +157,11 @@ impl<'a> LowerParams<'a> {
             }
             _ => { /* todo */ }
         }
+    }
+
+    fn is_params_extended_home_symbol(&self, symbol: &Symbol) -> bool {
+        symbol.module_id() == self.home_id
+            && self.home_top_level_idents.contains(&symbol.ident_id())
     }
 
     fn call_params_var(

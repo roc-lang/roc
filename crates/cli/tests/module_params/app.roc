@@ -16,4 +16,6 @@ main =
     App2.getUser 2: $(App2.getUser 2)
     App1.getPost 1: $(App1.getPost 1)
     App2.getPost 2: $(App2.getPost 2)
+    App1.getPostComments 1: $(App1.getPostComments 1)
+    App2.getPostComments 2: $(App2.getPostComments 2)
     """

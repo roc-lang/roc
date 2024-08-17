@@ -1,4 +1,4 @@
-module { appId, protocol } -> [baseUrl, getUser, getPost]
+module { appId, protocol } -> [baseUrl, getUser, getPost, getPostComments]
 
 baseUrl : Str
 baseUrl =
@@ -13,3 +13,8 @@ getUser = \userId ->
 getPost : U32 -> Str
 getPost = \postId ->
     "$(baseUrl)/posts/$(Num.toStr postId)"
+
+
+getPostComments : U32 -> Str
+getPostComments = \postId ->
+    "$(getPost postId)/comments"
