@@ -488,9 +488,6 @@ pub enum EWhen<'a> {
     Pattern(EPattern<'a>, Position),
     Arrow(Position),
 
-    // todo: @wip @remove never produced
-    IfToken(Position),
-
     IfGuard(&'a EExpr<'a>, Position),
 
     Condition(&'a EExpr<'a>, Position),
