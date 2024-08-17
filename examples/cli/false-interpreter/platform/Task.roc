@@ -1,4 +1,14 @@
-module [Task, succeed, fail, await, map, onFail, attempt, fromResult, loop]
+module [
+    Task,
+    succeed,
+    fail,
+    await,
+    map,
+    onFail,
+    attempt,
+    fromResult,
+    loop,
+]
 
 import pf.Effect
 
@@ -66,3 +76,9 @@ map = \effect, transform ->
             when result is
                 Ok a -> Task.succeed (transform a)
                 Err err -> Task.fail err
+
+result : Task ok err -> Task (Result ok err) *
+result = \effect ->
+    Effect.after
+        effect
+        \result -> Task.succeed result

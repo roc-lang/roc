@@ -1,6 +1,20 @@
-interface Task
-    exposes [Task, succeed, fail, after, map, putLine, putInt, getInt, forever, loop, attempt]
-    imports [pf.Effect]
+module [
+    Task,
+    await,
+    succeed,
+    fail,
+    after,
+    map,
+    result,
+    putLine,
+    putInt,
+    getInt,
+    forever,
+    loop,
+    attempt,
+]
+
+import pf.Effect
 
 Task ok err : Effect.Effect (Result ok err)
 
@@ -46,6 +60,15 @@ after = \effect, transform ->
                 Ok a -> transform a
                 Err err -> Task.fail err
 
+await : Task a err, (a -> Task b err) -> Task b err
+await = \effect, transform ->
+    Effect.after
+        effect
+        \result ->
+            when result is
+                Ok a -> transform a
+                Err err -> Task.fail err
+
 attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \task, transform ->
     Effect.after
@@ -63,6 +86,12 @@ map = \effect, transform ->
             when result is
                 Ok a -> Ok (transform a)
                 Err err -> Err err
+
+result : Task ok err -> Task (Result ok err) *
+result = \effect ->
+    Effect.after
+        effect
+        \result -> Task.succeed result
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})

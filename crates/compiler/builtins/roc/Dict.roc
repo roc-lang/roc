@@ -129,8 +129,8 @@ hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 
 toInspectorDict : Dict k v -> Inspector f where k implements Inspect & Hash & Eq, v implements Inspect, f implements InspectFormatter
 toInspectorDict = \dict ->
-    fmt <- Inspect.custom
-    Inspect.apply (Inspect.dict dict walk Inspect.toInspector Inspect.toInspector) fmt
+    Inspect.custom \fmt ->
+        Inspect.apply (Inspect.dict dict walk Inspect.toInspector Inspect.toInspector) fmt
 
 ## Return an empty dictionary.
 ## ```roc
@@ -894,9 +894,9 @@ calcNumBuckets = \shifts ->
         maxBucketCount
 
 fillBucketsFromData = \buckets0, data, shifts ->
-    buckets1, (key, _), dataIndex <- List.walkWithIndex data buckets0
-    (bucketIndex, distAndFingerprint) = nextWhileLess buckets1 key shifts
-    placeAndShiftUp buckets1 { distAndFingerprint, dataIndex: Num.toU32 dataIndex } bucketIndex
+    List.walkWithIndex data buckets0 \buckets1, (key, _), dataIndex ->
+        (bucketIndex, distAndFingerprint) = nextWhileLess buckets1 key shifts
+        placeAndShiftUp buckets1 { distAndFingerprint, dataIndex: Num.toU32 dataIndex } bucketIndex
 
 nextWhileLess : List Bucket, k, U8 -> (U64, U32) where k implements Hash & Eq
 nextWhileLess = \buckets, key, shifts ->
@@ -1213,15 +1213,15 @@ expect
     ]
 
     dict =
-        acc, k <- List.walk badKeys (Dict.empty {})
-        Dict.update acc k \val ->
-            when val is
-                Present p -> Present (p |> Num.addWrap 1)
-                Missing -> Present 0
+        List.walk badKeys (Dict.empty {}) \acc, k ->
+            Dict.update acc k \val ->
+                when val is
+                    Present p -> Present (p |> Num.addWrap 1)
+                    Missing -> Present 0
 
     allInsertedCorrectly =
-        acc, k <- List.walk badKeys Bool.true
-        acc && Dict.contains dict k
+        List.walk badKeys Bool.true \acc, k ->
+            acc && Dict.contains dict k
 
     allInsertedCorrectly
 
