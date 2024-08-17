@@ -2531,17 +2531,25 @@ mod when {
             state.advance_mut(if_width);
 
             // TODO we should require space before the expression but not after
-            let guard_parser =
-                specialize_err_ref(EWhen::IfGuard, increment_min_indent(expr_start(options)));
+            match space0_e(EWhen::IndentIfGuard).parse(arena, state, min_indent) {
+                Ok((_, spaces_before, state)) => {
+                    let guard_pos = state.pos();
 
-            let guard_parser = and(guard_parser, space0_e(EWhen::IndentArrow));
-            let guard_parser = and(space0_e(EWhen::IndentIfGuard), guard_parser);
-
-            match guard_parser.parse(arena, state, min_indent) {
-                Ok((_, (spaces_before, (guard, spaces_after)), state)) => {
-                    let guard = with_spaces_after(guard, spaces_after, &arena);
-                    let guard = with_spaces_before(guard, spaces_before, &arena);
-                    Ok((MadeProgress, (column_patterns, Some(guard)), state))
+                    match expr_start(options).parse(arena, state, min_indent + 1) {
+                        Ok((_, guard, state)) => {
+                            match space0_e(EWhen::IndentArrow).parse(arena, state, min_indent) {
+                                Ok((_, spaces_after, state)) => {
+                                    let guard = with_spaces_after(guard, spaces_after, &arena);
+                                    let guard = with_spaces_before(guard, spaces_before, &arena);
+                                    Ok((MadeProgress, (column_patterns, Some(guard)), state))
+                                }
+                                Err((_, fail)) => Err((MadeProgress, fail)),
+                            }
+                        }
+                        Err((_, fail)) => {
+                            Err((MadeProgress, EWhen::IfGuard(arena.alloc(fail), guard_pos)))
+                        }
+                    }
                 }
                 Err((_, fail)) => Err((MadeProgress, fail)),
             }
