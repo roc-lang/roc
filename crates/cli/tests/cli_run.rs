@@ -735,14 +735,19 @@ mod cli_run {
                 r#"
                 App1.baseUrl: https://api.example.com/one
                 App2.baseUrl: http://api.example.com/two
+                App3.baseUrl: https://api.example.com/three
                 App1.getUser 1: https://api.example.com/one/users/1
                 App2.getUser 2: http://api.example.com/two/users/2
+                App3.getUser 3: https://api.example.com/three/users/3
                 App1.getPost 1: https://api.example.com/one/posts/1
                 App2.getPost 2: http://api.example.com/two/posts/2
+                App3.getPost 3: https://api.example.com/three/posts/3
                 App1.getPostComments 1: https://api.example.com/one/posts/1/comments
                 App2.getPostComments 2: http://api.example.com/two/posts/2/comments
+                App2.getPostComments 3: http://api.example.com/two/posts/3/comments
                 App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
                 App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
+                App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
                 "#
             ),
             UseValgrind::No,
