@@ -642,6 +642,12 @@ impl<'a> Normalize<'a> for StrLiteral<'a> {
                     new_segments.push(StrSegment::Plaintext(last_text.into_bump_str()));
                 }
 
+                if new_segments.len() == 1 {
+                    if let StrSegment::Plaintext(t) = new_segments[0] {
+                        return StrLiteral::PlainLine(t);
+                    }
+                }
+
                 StrLiteral::Line(new_segments.into_bump_slice())
             }
         }
