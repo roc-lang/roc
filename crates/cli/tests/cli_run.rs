@@ -733,8 +733,8 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                App1: api.example.com/one/users/1
-                App2: api.example.com/two/users/2
+                App1: https://api.example.com/one/users/1
+                App2: https://api.example.com/two/users/2
                 "#
             ),
             UseValgrind::No,
