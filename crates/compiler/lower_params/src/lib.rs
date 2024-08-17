@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use roc_can::{
     expr::{
         AnnotatedMark, ClosureData,
@@ -44,14 +46,14 @@ pub fn lower(
         var_store,
     };
 
-    env.lower_decls(decls);
+    env.lower_decls(decls, 0..decls.len());
 }
 
 impl<'a> LowerParams<'a> {
-    fn lower_decls(&mut self, decls: &mut Declarations) {
-        let mut index = 0;
+    fn lower_decls(&mut self, decls: &mut Declarations, range: Range<usize>) {
+        let mut index = range.start;
 
-        while index < decls.len() {
+        while index < range.end {
             let tag = decls.declarations[index];
 
             match tag {
@@ -62,7 +64,7 @@ impl<'a> LowerParams<'a> {
                         decls.convert_value_to_function(index, vec![new_arg], self.var_store);
                     }
                 }
-                Function(fn_def_index) => {
+                Function(fn_def_index) | Recursive(fn_def_index) | TailRecursive(fn_def_index) => {
                     if let Some((_, mark, pattern)) = self.home_params_argument() {
                         let var = self.var_store.fresh();
 
@@ -81,15 +83,19 @@ impl<'a> LowerParams<'a> {
                     self.lower_expr(&mut decls.expressions[index].value)
                 }
 
-                Recursive(_) => { /* todo */ }
-                MutualRecursion { length, .. } => {
-                    /* todo */
-                    index += length as usize;
+                MutualRecursion {
+                    length,
+                    cycle_mark: _,
+                } => {
+                    let length = length as usize;
+
+                    self.lower_decls(decls, index + 1..index + 1 + length);
+
+                    index += length;
                 }
-                TailRecursive(_) => { /* todo */ }
-                Destructure(_) => { /* todo */ }
-                Expectation => { /* todo */ }
-                ExpectationFx => { /* todo */ }
+                Destructure(_) | Expectation | ExpectationFx => {
+                    self.lower_expr(&mut decls.expressions[index].value)
+                }
             }
 
             index += 1;
