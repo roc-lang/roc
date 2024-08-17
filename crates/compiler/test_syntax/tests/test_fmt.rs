@@ -6380,6 +6380,30 @@ mod test_fmt {
     }
 
     #[test]
+    fn make_blank_chars_explicit_in_multiline_string() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x =
+                        \"\"\"
+                        foo:\u{200B} $(bar).
+                        \"\"\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x =
+                        """
+                        foo:\u(200b) $(bar).
+                        """
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn preserve_multiline_string_trailing_whitespace() {
         expr_formats_same(indoc!(
             "x =\n    \"\"\"\n    foo\n    bar                \n    baz\n    \"\"\"\nx"
