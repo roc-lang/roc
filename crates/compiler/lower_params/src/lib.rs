@@ -5,6 +5,7 @@ use roc_can::{
         Declarations,
         Expr::{self, *},
     },
+    module::ModuleParams,
     pattern::Pattern,
 };
 use roc_region::all::Loc;
@@ -13,13 +14,15 @@ use roc_types::types::Type;
 
 struct LowerParams<'a> {
     // todo: remove var as we can't use it
-    home_params: Option<HomeParams>,
+    home_params: Option<ModuleParams>,
     var_store: &'a mut VarStore,
 }
 
-type HomeParams = (Variable, AnnotatedMark, Loc<Pattern>);
-
-pub fn lower(home_params: Option<HomeParams>, decls: &mut Declarations, var_store: &mut VarStore) {
+pub fn lower(
+    home_params: Option<ModuleParams>,
+    decls: &mut Declarations,
+    var_store: &mut VarStore,
+) {
     let mut env = LowerParams {
         home_params,
         var_store,
@@ -75,9 +78,13 @@ pub fn lower(home_params: Option<HomeParams>, decls: &mut Declarations, var_stor
 impl<'a> LowerParams<'a> {
     fn home_params_argument(&mut self) -> Option<(Variable, AnnotatedMark, Loc<Pattern>)> {
         match &self.home_params {
-            Some((_, mark, pattern)) => {
+            Some(module_params) => {
                 let new_var = self.var_store.fresh();
-                Some((new_var, *mark, pattern.clone()))
+                Some((
+                    new_var,
+                    AnnotatedMark::new(self.var_store),
+                    module_params.pattern(),
+                ))
             }
             None => None,
         }

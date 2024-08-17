@@ -2395,11 +2395,11 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
-            if let Some(params_pattern) = constrained_module.module.params_pattern.clone() {
+            if let Some(module_params) = constrained_module.module.module_params.clone() {
                 state
                     .module_cache
-                    .param_patterns
-                    .insert(module_id, params_pattern);
+                    .module_params
+                    .insert(module_id, module_params);
             }
 
             state
@@ -4642,7 +4642,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
-        params_pattern,
+        module_params,
         ..
     } = module;
 
@@ -4690,7 +4690,7 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
-            params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
+            module_params,
             module_params_vars: imported_param_vars,
         };
 
@@ -4776,10 +4776,7 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let opt_params_var = module
-        .params_pattern
-        .as_ref()
-        .map(|(params_var, _, _)| *params_var);
+    let opt_params_var = module.module_params.as_ref().map(|params| params.whole_var);
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
@@ -5093,7 +5090,7 @@ fn canonicalize_and_constrain<'a>(
 
     // lower module params
     roc_lower_params::lower(
-        module_output.params_pattern.clone(),
+        module_output.module_params.clone(),
         &mut module_output.declarations,
         &mut var_store,
     );
@@ -5109,7 +5106,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
-            &module_output.params_pattern,
+            &module_output.module_params,
             module_id,
         )
     };
@@ -5166,7 +5163,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
-        params_pattern: module_output.params_pattern,
+        module_params: module_output.module_params,
     };
 
     let constrained_module = ConstrainedModule {
