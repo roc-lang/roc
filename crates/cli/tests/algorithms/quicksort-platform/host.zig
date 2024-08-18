@@ -127,17 +127,12 @@ pub export fn main() u8 {
 
     var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS, .capacity = NUM_NUMS };
 
-    var timer = std.time.Timer.start() catch unreachable;
-
     // actually call roc to populate the callresult
     const callresult: RocList = roc__mainForHost_1_exposed(roc_list);
 
     // stdout the result
     const length = @min(20, callresult.length);
     var result = callresult.elements[0..length];
-
-    const nanos = timer.read();
-    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
     for (result, 0..) |x, i| {
         if (i == 0) {
@@ -149,12 +144,5 @@ pub export fn main() u8 {
         }
     }
 
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
-
     return 0;
-}
-
-fn to_seconds(tms: std.os.timespec) f64 {
-    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }

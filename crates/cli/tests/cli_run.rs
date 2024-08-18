@@ -13,11 +13,6 @@ mod cli_run {
     use indoc::indoc;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
 
-    // TODO -- we may need to keep this to prevent race conditions...
-    // but we shouldn't be building a host more than once now, so it should be all good
-    //
-    // use serial_test::serial;
-
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
     // Disallow valgrind on macOS by default, because it reports a ton
@@ -51,55 +46,6 @@ mod cli_run {
     // so we're always testing the legacy linker on other targets.
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
-
-    // TODO -- confirm we are using Valgrind correctly
-    // leaving this here for now as a reminder
-    //                 if matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND {
-    //                     let out = runner.run_with_valgrind();
-
-    //                     let mut raw_xml = String::new();
-
-    //                     out.valgrind_xml
-    //                         .as_ref()
-    //                         .unwrap()
-    //                         .read_to_string(&mut raw_xml)
-    //                         .unwrap();
-
-    //                     if out.status.success() {
-    //                         let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-    //                             panic!("failed to parse the `valgrind` xml output:\n\n  Error was:\n\n    {:?}\n\n  valgrind xml was:\n\n    \"{}\"\n\n  valgrind stdout was:\n\n    \"{}\"\n\n  valgrind stderr was:\n\n    \"{}\"", err, raw_xml, out.stdout, out.stderr);
-    //                         });
-
-    //                         if !memory_errors.is_empty() {
-    //                             for error in memory_errors {
-    //                                 let ValgrindError {
-    //                                     kind,
-    //                                     what: _,
-    //                                     xwhat,
-    //                                 } = error;
-    //                                 println!("Valgrind Error: {kind}\n");
-
-    //                                 if let Some(ValgrindErrorXWhat {
-    //                                     text,
-    //                                     leakedbytes: _,
-    //                                     leakedblocks: _,
-    //                                 }) = xwhat
-    //                                 {
-    //                                     println!("    {text}");
-    //                                 }
-    //                             }
-    //                             panic!("Valgrind reported memory errors");
-    //                         }
-    //                     } else {
-    //                         let exit_code = match out.status.code() {
-    //                             Some(code) => format!("exit code {code}"),
-    //                             None => "no exit code".to_string(),
-    //                         };
-
-    //                         panic!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, out.stdout, out.stderr);
-    //                     }
-
-    //                     output.push((cli_mode, out));
 
     #[test]
     #[cfg_attr(windows, ignore)]
@@ -390,11 +336,11 @@ mod cli_run {
         }
     }
 
-    #[ignore = "TODO move this to roc-lang/examples repository"]
     #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
-        let expected_ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
+        let expected_ending =
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n🔨 Building host ...\n";
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .arg(BUILD_HOST_FLAG)
@@ -1141,6 +1087,7 @@ mod cli_run {
             use_valgrind: UseValgrind,
         ) {
             let dir_name = "crates/cli/tests/benchmarks";
+            let file_path = file_from_root(dir_name, roc_filename);
 
             build_platform_host();
 
@@ -1148,7 +1095,7 @@ mod cli_run {
             {
                 let runner = cli_utils::helpers::Run::new_roc()
                     .arg(roc_cli::CMD_RUN)
-                    .arg(file_from_root(dir_name, roc_filename).as_path())
+                    .arg(file_path.as_path())
                     .with_stdin_vals(stdin);
 
                 if matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND {
@@ -1162,87 +1109,40 @@ mod cli_run {
                 }
             }
 
-            // TODO RESTORE
-            // #[cfg(feature = "wasm32-cli-run")]
-            // check_output_wasm(&file_name, stdin, expected_ending);
+            #[cfg(feature = "wasm32-cli-run")]
+            check_output_wasm(file_path.as_path(), stdin, expected_ending);
 
-            // TODO RESTORE
-            // #[cfg(feature = "i386-cli-run")]
-            // check_output_i386(&file_name, stdin, expected_ending, _use_valgrind);
+            #[cfg(feature = "i386-cli-run")]
+            check_output_i386(file_path.as_path(), stdin, expected_ending);
         }
 
-        // #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-        // fn check_output_regular(
-        //     file_name: &Path,
-        //     stdin: &[&str],
-        //     expected_ending: &str,
-        //     use_valgrind: UseValgrind,
-        // ) {
-        //     let mut ran_without_optimizations = false;
-
-        //     // now we can pass the `PREBUILT_PLATFORM` flag, because the
-        //     // `call_once` will have built the platform
-
-        //     if !ran_without_optimizations {
-        //         // Check with and without optimizations
-        //         // check_output_with_stdin(
-        //         //     file_name,
-        //         //     stdin,
-        //         //     &[],
-        //         //     &[],
-        //         //     &[],
-        //         //     expected_ending,
-        //         //     use_valgrind,
-        //         //     TestCliCommands::Run,
-        //         // );
-        //     }
-
-        //     // check_output_with_stdin(
-        //     //     file_name,
-        //     //     stdin,
-        //     //     &[FLAG_OPTIMIZE],
-        //     //     &[],
-        //     //     &[],
-        //     //     expected_ending,
-        //     //     use_valgrind,
-        //     //     TestCliCommands::Run,
-        //     // );
-        // }
-
         #[cfg(feature = "wasm32-cli-run")]
-        fn check_output_wasm(file_name: &Path, stdin: &[&str], expected_ending: &str) {
+        fn check_output_wasm(file_name: &std::path::Path, stdin: Vec<&str>, expected_ending: &str) {
             // Check with and without optimizations
-            check_wasm_output_with_stdin(file_name, stdin, &[], expected_ending);
+            check_wasm_output_with_stdin(file_name, stdin.clone(), &[], expected_ending);
 
             check_wasm_output_with_stdin(file_name, stdin, &[OPTIMIZE_FLAG], expected_ending);
         }
 
         #[cfg(feature = "wasm32-cli-run")]
         fn check_wasm_output_with_stdin(
-            file: &Path,
-            stdin: &[&str],
+            file: &std::path::Path,
+            stdin: Vec<&str>,
             flags: &[&str],
             expected_ending: &str,
         ) {
-            use super::{concatcp, run_roc, CMD_BUILD, TARGET_FLAG};
+            use super::{concatcp, TARGET_FLAG};
 
             let mut flags = flags.to_vec();
             flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
 
-            let compile_out = run_roc(
-                [CMD_BUILD, file.to_str().unwrap()]
-                    .iter()
-                    .chain(flags.as_slice()),
-                &[],
-                &[],
-            );
+            let out = Run::new_roc()
+                .arg(CMD_BUILD)
+                .arg(file)
+                .add_args(flags)
+                .run();
 
-            assert!(
-                compile_out.status.success(),
-                "bad status stderr:\n{}\nstdout:\n{}",
-                compile_out.stderr,
-                compile_out.stdout
-            );
+            out.assert_clean_success();
 
             let stdout = crate::run_wasm(&file.with_extension("wasm"), stdin);
 
@@ -1256,34 +1156,34 @@ mod cli_run {
 
         #[cfg(feature = "i386-cli-run")]
         fn check_output_i386(
-            file_name: &Path,
-            stdin: &[&str],
+            file_path: &std::path::Path,
+            stdin: Vec<&'static str>,
             expected_ending: &str,
-            use_valgrind: UseValgrind,
         ) {
-            use super::{concatcp, CMD_BUILD, TARGET_FLAG};
+            use super::{concatcp, TARGET_FLAG};
 
-            check_output_with_stdin(
-                &file_name,
-                stdin,
-                &[concatcp!(TARGET_FLAG, "=x86_32")],
-                &[],
-                &[],
-                expected_ending,
-                use_valgrind,
-                TestCliCommands::Run,
-            );
+            let i386_target_arg = concatcp!(TARGET_FLAG, "=x86_32");
 
-            check_output_with_stdin(
-                &file_name,
-                stdin,
-                &[concatcp!(TARGET_FLAG, "=x86_32"), OPTIMIZE_FLAG],
-                &[],
-                &[],
-                expected_ending,
-                use_valgrind,
-                TestCliCommands::Run,
-            );
+            let runner = Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(i386_target_arg)
+                .arg(file_path)
+                .with_stdin_vals(stdin.clone());
+
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
+
+            let run_optimized = Run::new_roc()
+                .arg(CMD_RUN)
+                .arg(i386_target_arg)
+                .arg(OPTIMIZE_FLAG)
+                .arg(file_path)
+                .with_stdin_vals(stdin.clone());
+
+            let out_optimized = run_optimized.run();
+            out_optimized.assert_clean_success();
+            out_optimized.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -1585,7 +1485,7 @@ mod cli_run {
 }
 
 #[cfg(feature = "wasm32-cli-run")]
-fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+fn run_wasm(wasm_path: &std::path::Path, stdin: Vec<&str>) -> String {
     use bumpalo::Bump;
     use roc_wasm_interp::{DefaultImportDispatcher, Instance, Value, WasiFile};
 
