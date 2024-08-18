@@ -62,6 +62,10 @@ impl Out {
         self.assert_success_with_no_unexpected_errors(COMMON_STDERR.as_slice());
     }
 
+    pub fn assert_nonzero_exit(&self) {
+        assert_eq!(self.status.success(), false);
+    }
+
     /// Assert that the command succeeded and that there are no unexpected errors in the stderr.
     /// This DOES NOT normalise the output, use assert_stdout_ends_with for that.
     pub fn assert_success_with_no_unexpected_errors(&self, expected_errors: &[ExpectedString]) {
@@ -79,8 +83,7 @@ impl Out {
         let without_clrf = input.replace("\r\n", "\n");
 
         // remove ANSI color codes
-        let ansi_regex = Regex::new(r"\x1b\[[0-9;]*[mGKH]").expect("Invalid ANSI regex pattern");
-        let without_ansi = ansi_regex.replace_all(without_clrf.as_str(), "");
+        let without_ansi = roc_reporting::report::strip_colors(without_clrf.as_str());
 
         // replace timings with a placeholder
         let regex = Regex::new(r" in (\d+) ms\.").expect("Invalid regex pattern");
@@ -518,20 +521,6 @@ pub fn dir_from_root(dir_name: &str) -> PathBuf {
 pub fn file_from_root(dir_name: &str, file_name: &str) -> PathBuf {
     let mut path = dir_from_root(dir_name);
 
-    path.push(file_name);
-
-    path
-}
-
-#[allow(dead_code)]
-pub fn known_bad_file(file_name: &str) -> PathBuf {
-    let mut path = root_dir();
-
-    // Descend into cli/tests/known_bad/{file_name}
-    path.push("crates");
-    path.push("cli");
-    path.push("tests");
-    path.push("known_bad");
     path.push(file_name);
 
     path

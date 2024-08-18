@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate pretty_assertions;
 
 extern crate bumpalo;
@@ -9,18 +8,15 @@ extern crate roc_module;
 
 #[cfg(test)]
 mod cli_run {
-    use cli_utils::helpers::{dir_from_root, file_from_root, known_bad_file, Run};
+    use cli_utils::helpers::{dir_from_root, file_from_root, Run};
     use const_format::concatcp;
     use indoc::indoc;
     use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
-    use roc_reporting::report::strip_colors;
-    use roc_test_utils::assert_multiline_str_eq;
 
     // TODO -- we may need to keep this to prevent race conditions...
     // but we shouldn't be building a host more than once now, so it should be all good
     //
     // use serial_test::serial;
-    use std::path::Path;
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
@@ -48,50 +44,13 @@ mod cli_run {
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
-    // TODO confirm we we need this
-    // were we testing using Legacy linker anywhere? probably will get
-    // to this when I start fixing things on linux
-    //
-    // #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    // const TEST_LEGACY_LINKER: bool = true;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TEST_LEGACY_LINKER: bool = true;
 
-    // // Surgical linker currently only supports linux x86_64,
-    // // so we're always testing the legacy linker on other targets.
-    // #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    // const TEST_LEGACY_LINKER: bool = false;
-
-    /// Run `roc check` on a file and check that the output matches the expected string.
-    fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let runner = Run::new_roc().arg(CMD_CHECK).arg(file).add_args(flags);
-
-        let out = runner.run();
-
-        let err = out.stdout.trim();
-        let err = strip_colors(err);
-
-        // e.g. "1 error and 0 warnings found in 123 ms."
-        let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
-        let err = format!("{before_first_digit}found in <ignored for test> ms.");
-
-        // make paths consistent
-        let err = err.replace('\\', "/");
-
-        // consistency with typewriters, very important
-        let err = err.replace('\r', "");
-
-        assert_multiline_str_eq!(err.as_str(), expected);
-    }
-
-    fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
-        let runner = Run::new_roc()
-            .arg(CMD_FORMAT)
-            .arg(CHECK_FLAG)
-            .arg(file.to_str().unwrap());
-
-        let out = runner.run();
-
-        assert_eq!(out.status.success(), expects_success_exit_code);
-    }
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    const TEST_LEGACY_LINKER: bool = false;
 
     // TODO -- confirm we are using Valgrind correctly
     // leaving this here for now as a reminder
@@ -1468,124 +1427,160 @@ mod cli_run {
 
     #[test]
     fn known_type_error_with_long_path() {
-        check_compile_error(
-            &known_bad_file("UnusedImportButWithALongFileNameForTesting.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
+        let expected_ending = indoc!(
+            r#"
 
-                Symbol is imported but not used.
+            ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
 
-                3│  import Symbol exposing [Ident]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            Symbol is imported but not used.
 
-                Since Symbol isn't used, you don't need to import it.
+            3│  import Symbol exposing [Ident]
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                ────────────────────────────────────────────────────────────────────────────────
+            Since Symbol isn't used, you don't need to import it.
 
-                0 errors and 1 warning found in <ignored for test> ms."#
-            ),
+            ────────────────────────────────────────────────────────────────────────────────
+
+            0 error and 1 warning found in <ignored for test> ms
+            "#
         );
+
+        Run::new_roc()
+            .arg(CMD_CHECK)
+            .arg(file_from_root(
+                "crates/cli/tests/known_bad",
+                "UnusedImportButWithALongFileNameForTesting.roc",
+            ))
+            .run()
+            .assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
     fn exposed_not_defined() {
-        check_compile_error(
-            &known_bad_file("ExposedNotDefined.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
+        let expected_ending = indoc!(
+            r#"
 
-                bar is listed as exposed, but it isn't defined in this module.
+            ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
 
-                You can fix this by adding a definition for bar, or by removing it
-                from exposes.
+            bar is listed as exposed, but it isn't defined in this module.
 
-                ────────────────────────────────────────────────────────────────────────────────
+            You can fix this by adding a definition for bar, or by removing it
+            from exposes.
 
-                1 error and 0 warnings found in <ignored for test> ms."#
-            ),
+            ────────────────────────────────────────────────────────────────────────────────
+
+            1 error and 0 warning found in <ignored for test> ms
+            "#
         );
+
+        Run::new_roc()
+            .arg(CMD_CHECK)
+            .arg(file_from_root(
+                "crates/cli/tests/known_bad",
+                "ExposedNotDefined.roc",
+            ))
+            .run()
+            .assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
     fn unused_import() {
-        check_compile_error(
-            &known_bad_file("UnusedImport.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
+        let expected_ending = indoc!(
+            r#"
 
-                Symbol is imported but not used.
+            ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
-                3│  import Symbol exposing [Ident]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            Symbol is imported but not used.
 
-                Since Symbol isn't used, you don't need to import it.
+            3│  import Symbol exposing [Ident]
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                ────────────────────────────────────────────────────────────────────────────────
+            Since Symbol isn't used, you don't need to import it.
 
-                0 errors and 1 warning found in <ignored for test> ms."#
-            ),
+            ────────────────────────────────────────────────────────────────────────────────
+
+            0 error and 1 warning found in <ignored for test> ms
+            "#
         );
+
+        Run::new_roc()
+            .arg(CMD_CHECK)
+            .arg(file_from_root(
+                "crates/cli/tests/known_bad",
+                "UnusedImport.roc",
+            ))
+            .run()
+            .assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
     fn unknown_generates_with() {
-        check_compile_error(
-            &known_bad_file("UnknownGeneratesWith.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
+        let expected_ending = indoc!(
+            r#"
 
-                I don't know how to generate the foobar function.
+            ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
 
-                4│      generates Effect with [after, map, always, foobar]
-                                                                   ^^^^^^
+            I don't know how to generate the foobar function.
 
-                Only specific functions like `after` and `map` can be generated.Learn
-                more about hosted modules at TODO.
+            4│      generates Effect with [after, map, always, foobar]
+                                                               ^^^^^^
 
-                ────────────────────────────────────────────────────────────────────────────────
+            Only specific functions like `after` and `map` can be generated.Learn
+            more about hosted modules at TODO.
 
-                1 error and 0 warnings found in <ignored for test> ms."#
-            ),
+            ────────────────────────────────────────────────────────────────────────────────
+
+            1 error and 0 warning found in <ignored for test> ms
+            "#
         );
+
+        Run::new_roc()
+            .arg(CMD_CHECK)
+            .arg(file_from_root(
+                "crates/cli/tests/known_bad",
+                "UnknownGeneratesWith.roc",
+            ))
+            .run()
+            .assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
     fn format_check_good() {
-        check_format_check_as_expected(
-            file_from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path(),
-            true,
-        );
+        Run::new_roc()
+            .arg(CMD_FORMAT)
+            .arg(CHECK_FLAG)
+            .arg(file_from_root("crates/cli/tests/fixtures/format", "Formatted.roc").as_path())
+            .run()
+            .assert_clean_success();
     }
 
     #[test]
     fn format_check_reformatting_needed() {
-        check_format_check_as_expected(
-            file_from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path(),
-            false,
-        );
+        Run::new_roc()
+            .arg(CMD_FORMAT)
+            .arg(CHECK_FLAG)
+            .arg(file_from_root("crates/cli/tests/fixtures/format", "NotFormatted.roc").as_path())
+            .run()
+            .assert_nonzero_exit();
     }
 
     #[test]
     fn format_check_folders() {
         // This fails, because "NotFormatted.roc" is present in this folder
-        check_format_check_as_expected(
-            dir_from_root("crates/cli/tests/fixtures/format").as_path(),
-            false,
-        );
+        Run::new_roc()
+            .arg(CMD_FORMAT)
+            .arg(CHECK_FLAG)
+            .arg(dir_from_root("crates/cli/tests/fixtures/format").as_path())
+            .run()
+            .assert_nonzero_exit();
 
         // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
-        check_format_check_as_expected(
-            dir_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path(),
-            true,
-        );
+        Run::new_roc()
+            .arg(CMD_FORMAT)
+            .arg(CHECK_FLAG)
+            .arg(dir_from_root("crates/cli/tests/fixtures/format/formatted_directory").as_path())
+            .run()
+            .assert_clean_success();
     }
 }
 
