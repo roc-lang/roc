@@ -23,6 +23,7 @@ mod cli_run {
     use serial_test::serial;
     use std::iter;
     use std::path::Path;
+    use std::process::ExitStatus;
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
@@ -104,6 +105,11 @@ mod cli_run {
         let err = err.replace('\r', "");
 
         assert_multiline_str_eq!(err.as_str(), expected);
+    }
+
+    fn assert_valid_roc_check_status(status: ExitStatus) {
+        // 0 means no errors or warnings, 2 means just warnings
+        assert!(status.code().is_some_and(|code| code == 0 || code == 2))
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
@@ -803,7 +809,7 @@ mod cli_run {
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -812,7 +818,7 @@ mod cli_run {
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -821,7 +827,7 @@ mod cli_run {
     fn cli_countdown_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "countdown.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -830,7 +836,7 @@ mod cli_run {
     fn cli_echo_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "echo.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -839,7 +845,7 @@ mod cli_run {
     fn cli_file_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -848,7 +854,8 @@ mod cli_run {
     fn cli_form_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        dbg!(out.stdout, out.stderr);
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -857,7 +864,7 @@ mod cli_run {
     fn cli_http_get_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -1482,9 +1489,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                6│  main : Str -> Task {} []
-                7│  main = /_ ->
-                8│      "this is a string, not a Task {} [] function like the platform expects."
+                5│  main : Str -> Task {} []
+                6│  main = /_ ->
+                7│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:

@@ -4816,7 +4816,7 @@ mod test_reporting {
         expression_indentation_end,
         indoc!(
             r"
-            f <- Foo.foo
+            f = Foo.foo
             "
         ),
         @r#"
@@ -4827,8 +4827,8 @@ mod test_reporting {
     1│  app "test" provides [main] to "./platform"
     2│
     3│  main =
-    4│      f <- Foo.foo
-                        ^
+    4│      f = Foo.foo
+                       ^
 
     Looks like the indentation ends prematurely here. Did you mean to have
     another expression after this line?
@@ -6615,34 +6615,6 @@ All branches in an `if` must have the same type!
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
     "
-    );
-
-    test_report!(
-        backpassing_type_error,
-        indoc!(
-            r#"
-            x <- List.map ["a", "b"]
-
-            x + 1
-            "#
-        ),
-        @r#"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This 2nd argument to `map` has an unexpected type:
-
-    4│>      x <- List.map ["a", "b"]
-    5│>
-    6│>      x + 1
-
-    The argument is an anonymous function of type:
-
-        Num * -> Num *
-
-    But `map` needs its 2nd argument to be:
-
-        Str -> Num *
-    "#
     );
 
     test_report!(
@@ -10198,9 +10170,9 @@ All branches in an `if` must have the same type!
 
             withOpen : (Handle -> Result {} *) -> Result {} *
             withOpen = \callback ->
-                handle <- await (open {})
-                {} <- await (callback handle)
-                close handle
+                await (open {}) \handle ->
+                    await (callback handle) \_ ->
+                        close handle
 
             withOpen
             "
@@ -10212,9 +10184,9 @@ All branches in an `if` must have the same type!
 
         10│       withOpen : (Handle -> Result {} *) -> Result {} *
         11│       withOpen = \callback ->
-        12│>          handle <- await (open {})
-        13│>          {} <- await (callback handle)
-        14│>          close handle
+        12│>          await (open {}) \handle ->
+        13│>              await (callback handle) \_ ->
+        14│>                  close handle
 
         The type annotation on `withOpen` says this `await` call should have the
         type:
@@ -10227,6 +10199,7 @@ All branches in an `if` must have the same type!
         Tip: Any connection between types must use a named type variable, not
         a `*`! Maybe the annotation  on `withOpen` should have a named type
         variable in place of the `*`?
+
         "
     );
 
@@ -10830,7 +10803,7 @@ All branches in an `if` must have the same type!
     7│          a: <- "a",
                       ^^^
 
-    Tip: Remove `<-` to assign the field directly.
+    Tip: Remove <- to assign the field directly.
     "#
     );
 
@@ -10962,7 +10935,7 @@ All branches in an `if` must have the same type!
     6│      { xyz <-
               ^^^
 
-    Note: Record builders need a mapper function before the `<-` to combine
+    Note: Record builders need a mapper function before the <- to combine
     fields together with.
     "#
     );
@@ -11844,6 +11817,32 @@ All branches in an `if` must have the same type!
     @r"
     "
     );
+
+    test_report!(
+        deprecated_backpassing,
+        indoc!(
+            r#"
+            foo = \bar ->
+                baz <- Result.try bar
+
+                Ok (baz * 3)
+
+            foo (Ok 123)
+            "#
+        ),
+        @r###"
+    ── BACKPASSING DEPRECATED in /code/proj/Main.roc ───────────────────────────────
+
+    Backpassing (<-) like this will soon be deprecated:
+
+    5│          baz <- Result.try bar
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    You should use a ! for awaiting tasks or a ? for trying results, and
+    functions everywhere else.
+    "###
+    );
+
     test_report!(
         unknown_shorthand_no_deps,
         indoc!(
@@ -13881,7 +13880,7 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13890,6 +13889,7 @@ All branches in an `if` must have the same type!
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 
@@ -13953,7 +13953,7 @@ All branches in an `if` must have the same type!
             "#
         ),
     @r#"
-    ── DEFINITIONs ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
+    ── DEFINITIONS ONLY USED IN RECURSION in /code/proj/Main.roc ───────────────────
 
     These 2 definitions are only used in mutual recursion with themselves:
 
@@ -13962,6 +13962,7 @@ All branches in an `if` must have the same type!
 
     If you don't intend to use or export any of them, they should all be
     removed!
+
     "#
     );
 

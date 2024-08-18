@@ -1,4 +1,4 @@
-interface Base64.Decode exposes [fromBytes] imports []
+module [fromBytes]
 
 import Bytes.Decode exposing [ByteDecoder, DecodeProblem]
 
@@ -12,40 +12,39 @@ decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string: 
 loopHelp : { remaining : U64, string : Str } -> ByteDecoder (Bytes.Decode.Step { remaining : U64, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
-        x, y, z <- Bytes.Decode.map3 Bytes.Decode.u8 Bytes.Decode.u8 Bytes.Decode.u8
+        Bytes.Decode.map3 Bytes.Decode.u8 Bytes.Decode.u8 Bytes.Decode.u8 \x, y, z ->
+            a : U32
+            a = Num.intCast x
+            b : U32
+            b = Num.intCast y
+            c : U32
+            c = Num.intCast z
+            combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy a 16) (Num.shiftLeftBy b 8)) c
 
-        a : U32
-        a = Num.intCast x
-        b : U32
-        b = Num.intCast y
-        c : U32
-        c = Num.intCast z
-        combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy a 16) (Num.shiftLeftBy b 8)) c
-
-        Loop {
-            remaining: remaining - 3,
-            string: Str.concat string (bitsToChars combined 0),
-        }
+            Loop {
+                remaining: remaining - 3,
+                string: Str.concat string (bitsToChars combined 0),
+            }
     else if remaining == 0 then
         Bytes.Decode.succeed (Done string)
     else if remaining == 2 then
-        x, y <- Bytes.Decode.map2 Bytes.Decode.u8 Bytes.Decode.u8
+        Bytes.Decode.map2 Bytes.Decode.u8 Bytes.Decode.u8 \x, y ->
 
-        a : U32
-        a = Num.intCast x
-        b : U32
-        b = Num.intCast y
-        combined = Num.bitwiseOr (Num.shiftLeftBy a 16) (Num.shiftLeftBy b 8)
+            a : U32
+            a = Num.intCast x
+            b : U32
+            b = Num.intCast y
+            combined = Num.bitwiseOr (Num.shiftLeftBy a 16) (Num.shiftLeftBy b 8)
 
-        Done (Str.concat string (bitsToChars combined 1))
+            Done (Str.concat string (bitsToChars combined 1))
     else
         # remaining = 1
-        x <- Bytes.Decode.map Bytes.Decode.u8
+        Bytes.Decode.map Bytes.Decode.u8 \x ->
 
-        a : U32
-        a = Num.intCast x
+            a : U32
+            a = Num.intCast x
 
-        Done (Str.concat string (bitsToChars (Num.shiftLeftBy a 16) 2))
+            Done (Str.concat string (bitsToChars (Num.shiftLeftBy a 16) 2))
 
 bitsToChars : U32, Int * -> Str
 bitsToChars = \bits, missing ->

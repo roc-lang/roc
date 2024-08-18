@@ -88,13 +88,12 @@ initClientApp = \json, app ->
         initClientAppHelp json app
 
     # Call out to JS to patch the DOM, attaching the event listeners
-    _ <- applyPatches patches |> Effect.after
-
-    Effect.always {
-        app,
-        state,
-        rendered,
-    }
+    Effect.after (applyPatches patches) \_ ->
+        Effect.always {
+            app,
+            state,
+            rendered,
+        }
 
 # Testable helper function to initialise the app
 initClientAppHelp : List U8, App state initData -> { state, rendered : RenderedTree state, patches : List Patch } where initData implements Decoding
@@ -222,16 +221,16 @@ dispatchEvent = \platformState, eventData, handlerId ->
             { rendered: newRendered, patches } =
                 diff { rendered, patches: [] } newViewUnrendered
 
-            _ <- applyPatches patches |> Effect.after
-            Effect.always {
-                platformState: {
-                    app,
-                    state: newState,
-                    rendered: newRendered,
-                },
-                stopPropagation,
-                preventDefault,
-            }
+            Effect.after (applyPatches patches) \_ ->
+                Effect.always {
+                    platformState: {
+                        app,
+                        state: newState,
+                        rendered: newRendered,
+                    },
+                    stopPropagation,
+                    preventDefault,
+                }
 
         None ->
             Effect.always { platformState, stopPropagation, preventDefault }
