@@ -32,7 +32,7 @@ mod cli_run {
     }
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
+    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER, "=", "legacy");
     const BUILD_HOST_FLAG: &str = concatcp!("--", roc_cli::FLAG_BUILD_HOST);
     const SUPPRESS_BUILD_HOST_WARNING_FLAG: &str =
         concatcp!("--", roc_cli::FLAG_SUPPRESS_BUILD_HOST_WARNING);
