@@ -77,9 +77,9 @@ pub fn generate(
 
             let tempdir_res = tempfile::tempdir();
 
-            // TODO confirm these are the correct parameters to pass down.
-            // are we building a host here in glue generation?
-            let build_host = true;
+            // we don't need a host for glue, we will generate a dylib
+            // that will be loaded by the roc compiler/cli
+            let build_host = false;
             let suppress_build_host_warning = true;
 
             let res_binary_path = match tempdir_res {

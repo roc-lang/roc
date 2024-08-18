@@ -45,7 +45,7 @@ mod glue_cli_run {
                 fn $test_name() {
                     let dir = fixtures_dir($fixture_dir);
 
-                    // generate_glue_for(&dir, std::iter::empty());
+                    generate_glue_for(&dir, std::iter::empty());
 
                     fn validate<'a, I: IntoIterator<Item = &'a str>>(dir: PathBuf, args: I) {
                         let out = run_app(&dir.join("app.roc"), args);
@@ -70,11 +70,11 @@ mod glue_cli_run {
 
                     // Validate linux with the default linker.
                     if !(cfg!(target_os = "linux") && (skip_on_linux_surgical_linker.contains(&test_name_str))) {
-                        validate(dir.clone(), ["--build-host"]);
+                        validate(dir.clone(), ["--build-host", "--suppress-build-host-warning"]);
                     }
 
                     if TEST_LEGACY_LINKER {
-                        validate(dir, ["--build-host", "--linker=legacy"]);
+                        validate(dir, ["--build-host", "--suppress-build-host-warning", "--linker=legacy"]);
                     }
                 }
             )*
@@ -197,63 +197,56 @@ mod glue_cli_run {
         assert_eq!(all_fixtures, &mut VecSet::default());
     }
 
-    // fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
-    //     platform_dir: &'a Path,
-    //     args: I,
-    // ) -> Out {
-    //     let platform_module_path = platform_dir.join("platform.roc");
-    //     let glue_dir = platform_dir.join("test_glue");
-    //     let fixture_templates_dir = platform_dir
-    //         .parent()
-    //         .unwrap()
-    //         .parent()
-    //         .unwrap()
-    //         .join("fixture-templates");
+    fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
+        platform_dir: &'a Path,
+        args: I,
+    ) -> Out {
+        let platform_module_path = platform_dir.join("platform.roc");
+        let glue_dir = platform_dir.join("test_glue");
+        let fixture_templates_dir = platform_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixture-templates");
 
-    //     // Copy the rust template from the templates directory into the fixture dir.
-    //     dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
-    //         .overwrite(true) // overwrite any files that were already present
-    //         .run()
-    //         .unwrap();
+        // Copy the rust template from the templates directory into the fixture dir.
+        dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
+            .overwrite(true) // overwrite any files that were already present
+            .run()
+            .unwrap();
 
-    //     // Delete the glue file to make sure we're actually regenerating it!
-    //     if glue_dir.exists() {
-    //         fs::remove_dir_all(&glue_dir)
-    //             .expect("Unable to remove test_glue dir in order to regenerate it in the test");
-    //     }
+        // Delete the glue file to make sure we're actually regenerating it!
+        if glue_dir.exists() {
+            std::fs::remove_dir_all(&glue_dir)
+                .expect("Unable to remove test_glue dir in order to regenerate it in the test");
+        }
 
-    //     let rust_glue_spec = fixture_templates_dir
-    //         .parent()
-    //         .unwrap()
-    //         .parent()
-    //         .unwrap()
-    //         .join("src")
-    //         .join("RustGlue.roc");
+        let rust_glue_spec = fixture_templates_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("src")
+            .join("RustGlue.roc");
 
-    //     // Generate a fresh test_glue for this platform
-    //     let parts : Vec<_> =
-    //         // converting these all to String avoids lifetime issues
-    //         std::iter::once("glue".to_string()).chain(
-    //             args.into_iter().map(|arg| arg.to_string()).chain([
-    //                 rust_glue_spec.to_str().unwrap().to_string(),
-    //                 glue_dir.to_str().unwrap().to_string(),
-    //                 platform_module_path.to_str().unwrap().to_string(),
-    //             ]),
-    //         ).collect();
-    //     let glue_out = run_glue(parts.iter());
+        // Generate a fresh test_glue for this platform
+        let parts : Vec<_> =
+            // converting these all to String avoids lifetime issues
+            std::iter::once("glue".to_string()).chain(
+                args.into_iter().map(|arg| arg.to_string()).chain([
+                    rust_glue_spec.to_str().unwrap().to_string(),
+                    glue_dir.to_str().unwrap().to_string(),
+                    platform_module_path.to_str().unwrap().to_string(),
+                ]),
+            ).collect();
 
-    //     if has_error(&glue_out.stderr) {
-    //         panic!(
-    //             "`roc {}` command had unexpected stderr: {}",
-    //             parts.join(" "),
-    //             glue_out.stderr
-    //         );
-    //     }
+        let glue_out = Run::new_roc().add_args(parts.iter()).run_glue();
 
-    //     assert!(glue_out.status.success(), "bad status {glue_out:?}");
+        glue_out.assert_clean_success();
 
-    //     glue_out
-    // }
+        glue_out
+    }
 
     fn run_app<'a, 'b, I: IntoIterator<Item = &'a str>>(app_file: &'b Path, args: I) -> Out {
         // Generate test_glue for this platform

@@ -433,12 +433,20 @@ fn gen_from_mono_module_dev<'a>(
 ) -> GenFromMono<'a> {
     match (preprocessed_host_path, target.architecture()) {
         (PrebuiltHost::Additive(host_path), Architecture::Wasm32) => {
-            gen_from_mono_module_dev_wasm32(arena, loaded, host_path, wasm_dev_stack_bytes)
+            #[cfg(feature = "target-wasm32")]
+            {
+                gen_from_mono_module_dev_wasm32(arena, loaded, host_path, wasm_dev_stack_bytes)
+            }
+
+            #[cfg(not(feature = "target-wasm32"))]
+            {
+                internal_error!();
+            }
         }
         (PrebuiltHost::None, Architecture::Wasm32) => {
-            todo!("Cannot compile wasm32 without a host on the dev compiler backend")
+            internal_error!("Cannot compile wasm32 without a host on the dev compiler backend")
         }
-        (PrebuiltHost::Legacy(host_path), Architecture::Wasm32) => todo!(
+        (PrebuiltHost::Legacy(host_path), Architecture::Wasm32) => internal_error!(
             "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
             host_path.display()
         ),
@@ -447,18 +455,26 @@ fn gen_from_mono_module_dev<'a>(
                 preprocessed_host, ..
             }),
             Architecture::Wasm32,
-        ) => todo!(
+        ) => internal_error!(
             "Unsupported host files found for use with wasm32 dev compiler backend\n    {}",
             preprocessed_host.display()
         ),
         (_, Architecture::X86_64 | Architecture::Aarch64) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
+            #[cfg(not(feature = "target-wasm32"))]
+            {
+                gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
+            }
+
+            #[cfg(feature = "target-wasm32")]
+            {
+                internal_error!()
+            }
         }
         (_, Architecture::Aarch32) => {
-            todo!("Dev compiler backend does not support 32 bit ARM architectures")
+            internal_error!("Dev compiler backend does not support 32 bit ARM architectures")
         }
         (_, Architecture::X86_32) => {
-            todo!("Dev compiler backend does not support 32 bit x86 architectures")
+            internal_error!("Dev compiler backend does not support 32 bit x86 architectures")
         }
     }
 }
@@ -930,13 +946,11 @@ fn build_loaded_file<'a>(
             ));
             std::process::exit(1);
         }
-        (Err(legacy_paths), Err(surgical_paths), true, LinkType::Dylib) => {
-            report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
+        (Err(..), Err(..), true, LinkType::Dylib) => {
             eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
             std::process::exit(1);
         }
-        (Err(legacy_paths), Err(surgical_paths), true, LinkType::None) => {
-            report_rebuilding_missing_host(&format!("{legacy_paths}\n    {surgical_paths}"));
+        (Err(..), Err(..), true, LinkType::None) => {
             eprintln!("You asked me to build the host, but I don't know how to rebuild a host for an unlinked object.");
             std::process::exit(1);
         }
@@ -1055,7 +1069,8 @@ fn build_loaded_file<'a>(
                 host_path.push_str(&p.to_string_lossy());
                 inputs.push(&host_path);
             } else {
-                panic!("incompatible host path: {:?}", built_host_path);
+                // we may be compiling a Dylib, which doesn't have a host
+                // for example, we could be generating glue using `roc glue`
             }
 
             let builtins_host_tempfile = roc_bitcode::host_tempfile()
