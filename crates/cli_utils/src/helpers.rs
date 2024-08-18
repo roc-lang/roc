@@ -74,7 +74,7 @@ impl Out {
     }
 
     /// Normalise the output for comparison in tests by replacing with a placeholder
-    fn normalize_for_tests(input: &String) -> String {
+    fn normalize_for_tests(input: &str) -> String {
         // normalise from windows line endings to unix line endings
         let without_clrf = input.replace("\r\n", "\n");
 

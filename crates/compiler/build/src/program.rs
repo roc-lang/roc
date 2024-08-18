@@ -429,7 +429,8 @@ fn gen_from_mono_module_dev<'a>(
     target: Target,
     preprocessed_host_path: &PrebuiltHost,
     wasm_dev_stack_bytes: Option<u32>,
-    backend_mode: AssemblyBackendMode,
+
+    #[allow(unused_variables)] backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     match (preprocessed_host_path, target.architecture()) {
         (PrebuiltHost::Additive(host_path), Architecture::Wasm32) => {
@@ -553,6 +554,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
     )
 }
 
+#[allow(dead_code)]
 fn gen_from_mono_module_dev_assembly<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
