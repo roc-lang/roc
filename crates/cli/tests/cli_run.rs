@@ -57,17 +57,12 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("examples", "helloWorld.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -80,17 +75,12 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("examples/platform-switching", "main.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     // We exclude the C platforming switching example
@@ -107,17 +97,12 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("examples/platform-switching", "rocLovesRust.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -129,17 +114,12 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("examples/platform-switching", "rocLovesZig.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -164,16 +144,12 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .add_args(&["--main", "tests/module_imports_pkg/app.roc"])
+            .with_valigrind(ALLOW_VALGRIND)
+            .add_args(["--main", "tests/module_imports_pkg/app.roc"])
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -198,15 +174,11 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -234,7 +206,8 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .add_args(&["--main", "tests/module_imports_pkg/app.roc"])
+            .with_valigrind(ALLOW_VALGRIND)
+            .add_args(["--main", "tests/module_imports_pkg/app.roc"])
             .arg(
                 file_from_root(
                     "crates/cli/tests/module_imports_pkg",
@@ -243,13 +216,8 @@ mod cli_run {
                 .as_path(),
             );
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -279,15 +247,11 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -306,16 +270,12 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg("--verbose")
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -330,17 +290,12 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/algorithms", "fibonacci.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -353,17 +308,12 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/algorithms", "quicksort.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -478,18 +428,13 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/effects", "main.roc").as_path())
             .with_stdin_vals(vec!["hi there!"]);
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -502,18 +447,13 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/tui", "main.roc").as_path())
             .with_stdin_vals(vec!["foo\n"]);
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -534,8 +474,9 @@ mod cli_run {
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
-            .add_args(&[
+            .add_args([
                 "--",
                 file_from_root("crates/cli/tests/false-interpreter/examples", "sqrt.false")
                     .as_path()
@@ -545,15 +486,9 @@ mod cli_run {
 
         let expected_ending = "1414";
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     #[test]
@@ -701,18 +636,13 @@ mod cli_run {
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+            .with_valigrind(ALLOW_VALGRIND)
             // uses basic-cli release
             .arg(file_from_root("examples", "inspect-logging.roc").as_path());
 
-        if ALLOW_VALGRIND {
-            let out = runner.run_with_valgrind();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        } else {
-            let out = runner.run();
-            out.assert_clean_success();
-            out.assert_stdout_and_stderr_ends_with(expected_ending);
-        }
+        let out = runner.run();
+        out.assert_clean_success();
+        out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
     mod test_platform_simple_zig {
@@ -753,19 +683,14 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(roc_cli::CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
                 );
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -778,19 +703,14 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
                 );
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -802,20 +722,15 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
                         .as_path(),
                 );
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -831,20 +746,15 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
                         .as_path(),
                 );
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -857,17 +767,12 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -881,17 +786,12 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -908,17 +808,12 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_path.as_path());
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -935,17 +830,12 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_path.as_path());
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -962,17 +852,12 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_path.as_path());
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_clean_success();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -1006,19 +891,11 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_DEV)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
-            dbg!(&runner);
-
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                // out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                // out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
 
         #[test]
@@ -1075,17 +952,11 @@ mod cli_run {
             );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_TEST)
+                .with_valigrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
-            if ALLOW_VALGRIND {
-                let out = runner.run_with_valgrind();
-                // out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            } else {
-                let out = runner.run();
-                // out.assert_clean_success();
-                out.assert_stdout_and_stderr_ends_with(expected_ending);
-            }
+            let out = runner.run();
+            out.assert_stdout_and_stderr_ends_with(expected_ending);
         }
     }
 
@@ -1138,17 +1009,12 @@ mod cli_run {
                     .arg(roc_cli::CMD_RUN)
                     .add_arg_if(super::LINKER_FLAG, super::TEST_LEGACY_LINKER)
                     .arg(file_path.as_path())
+                    .with_valigrind(matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND)
                     .with_stdin_vals(stdin);
 
-                if matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND {
-                    let out = runner.run_with_valgrind();
-                    out.assert_clean_success();
-                    out.assert_stdout_and_stderr_ends_with(expected_ending);
-                } else {
-                    let out = runner.run();
-                    out.assert_clean_success();
-                    out.assert_stdout_and_stderr_ends_with(expected_ending);
-                }
+                let out = runner.run();
+                out.assert_clean_success();
+                out.assert_stdout_and_stderr_ends_with(expected_ending);
             }
 
             #[cfg(feature = "wasm32-cli-run")]
@@ -1289,7 +1155,6 @@ mod cli_run {
         fn astar() {
             if cfg!(feature = "wasm32-cli-run") {
                 eprintln!("WARNING: skipping testing benchmark testAStar.roc because it currently does not work on wasm32 due to dictionaries.");
-                return;
             } else {
                 test_benchmark("testAStar.roc", vec![], "True\n", UseValgrind::No)
             }

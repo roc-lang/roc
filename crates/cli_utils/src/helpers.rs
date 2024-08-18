@@ -141,6 +141,7 @@ pub struct Run {
     env: Vec<(String, String)>,
     stdin_vals: Vec<&'static str>,
     cwd: Option<OsString>,
+    run_with_valgrind: bool,
 }
 
 impl Run {
@@ -154,6 +155,7 @@ impl Run {
             stdin_vals: vec![],
             env: vec![],
             cwd: None,
+            run_with_valgrind: false,
         }
     }
 
@@ -251,6 +253,11 @@ impl Run {
         self
     }
 
+    pub fn with_valigrind(mut self, use_valgrind: bool) -> Self {
+        self.run_with_valgrind = use_valgrind;
+        self
+    }
+
     pub fn cwd<S>(mut self, arg: S) -> Self
     where
         S: Into<OsString>,
@@ -309,6 +316,10 @@ impl Run {
     }
 
     pub fn run(self) -> Out {
+        if self.run_with_valgrind {
+            return self.run_with_valgrind();
+        }
+
         let command = self.command();
         self.run_with_command(command)
     }
