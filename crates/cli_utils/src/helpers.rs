@@ -63,7 +63,7 @@ impl Out {
     }
 
     pub fn assert_nonzero_exit(&self) {
-        assert_eq!(self.status.success(), false);
+        assert!(!self.status.success());
     }
 
     /// Assert that the command succeeded and that there are no unexpected errors in the stderr.
@@ -221,6 +221,16 @@ impl Run {
     {
         for arg in args {
             self = self.arg(&arg);
+        }
+        self
+    }
+
+    pub fn add_arg_if<S>(mut self, arg: S, enabled: bool) -> Self
+    where
+        S: Into<OsString>,
+    {
+        if enabled {
+            self.args.push(arg.into());
         }
         self
     }
