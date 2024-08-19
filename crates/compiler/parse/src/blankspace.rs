@@ -92,9 +92,23 @@ pub fn spaces_around_help<'a, S>(
 where
     S: 'a + Spaceable<'a>,
 {
-    let (spaces_before, (loc_val, spaces_after)) = tuples;
-    let loc_val = with_spaces_after(loc_val, spaces_after, &arena);
-    with_spaces_before(loc_val, spaces_before, &arena)
+    let (spaces_before, (loc, spaces_after)) = tuples;
+    let loc_with_after = with_spaces_after(loc, spaces_after, &arena);
+    with_spaces_before(loc_with_after, spaces_before, &arena)
+}
+
+#[inline(always)]
+pub fn with_spaces<'a, S>(
+    arena: &'a Bump,
+    spaces_before: &'a [CommentOrNewline<'a>],
+    loc: Loc<S>,
+    spaces_after: &'a [CommentOrNewline<'a>],
+) -> Loc<S>
+where
+    S: 'a + Spaceable<'a>,
+{
+    let loc_with_after = with_spaces_after(loc, spaces_after, &arena);
+    with_spaces_before(loc_with_after, spaces_before, &arena)
 }
 
 pub fn spaces_before<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
@@ -306,15 +320,13 @@ where
 {
     move |arena, state: State<'a>, min_indent: u32| {
         let start = state.pos();
-        match spaces().parse(arena, state, min_indent) {
-            Ok((progress, spaces, state)) => {
-                if spaces.is_empty() || state.column() >= min_indent {
-                    Ok((progress, spaces, state))
-                } else {
-                    Err((progress, indent_problem(start)))
-                }
-            }
-            Err((progress, err)) => Err((progress, err)),
+        let mut newlines = Vec::new_in(arena);
+        let (progress, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
+        let spaces = newlines.into_bump_slice();
+        if spaces.is_empty() || state.column() >= min_indent {
+            Ok((progress, spaces, state))
+        } else {
+            Err((progress, indent_problem(start)))
         }
     }
 }

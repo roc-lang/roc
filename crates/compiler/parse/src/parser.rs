@@ -1802,10 +1802,10 @@ where
     Y: 'a,
 {
     move |a, state: State<'a>, min_indent| {
-        let original_state = state.clone();
+        let original_pos = state.pos();
         match parser.parse(a, state, min_indent) {
             Ok(t) => Ok(t),
-            Err((p, error)) => Err((p, map_error(error, original_state.pos()))),
+            Err((p, error)) => Err((p, map_error(error, original_pos))),
         }
     }
 }

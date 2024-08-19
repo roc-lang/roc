@@ -54,6 +54,7 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     }
 }
 
+/// If Ok it always returns MadeProgress
 pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state: State<'a>, min_indent| {
         let (_, pattern, state) = loc_pattern_help_help(true).parse(arena, state, min_indent)?;
