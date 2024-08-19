@@ -602,6 +602,7 @@ pub enum EPattern<'a> {
     AsIndentStart(Position),
 
     AccessorFunction(Position),
+    RecordUpdaterFunction(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

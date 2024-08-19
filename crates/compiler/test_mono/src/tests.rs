@@ -3389,8 +3389,8 @@ fn inspect_custom_type() {
 
         myToInspector : HelloWorld -> Inspector f where f implements InspectFormatter
         myToInspector = \@HellowWorld {} ->
-            fmt <- Inspect.custom
-            Inspect.apply (Inspect.str "Hello, World!\n") fmt
+            Inspect.custom \fmt ->
+                Inspect.apply (Inspect.str "Hello, World!\n") fmt
 
         main =
             Inspect.inspect (@HelloWorld {})

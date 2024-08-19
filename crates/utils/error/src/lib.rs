@@ -1,38 +1,54 @@
 //! Provides utility functions used all over the code base.
-use snafu::{Backtrace, OptionExt, Snafu};
 use std::{collections::HashMap, slice::SliceIndex};
 
-#[derive(Debug, Snafu)]
-#[snafu(visibility(pub))]
+#[derive(Debug)]
 pub enum UtilError {
-    #[snafu(display(
-        "IndexOfFailed: Element {} was not found in collection {}.",
-        elt_str,
-        collection_str
-    ))]
     IndexOfFailed {
         elt_str: String,
         collection_str: String,
-        backtrace: Backtrace,
     },
-    #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
     KeyNotFound {
         key_str: String,
-        backtrace: Backtrace,
     },
-    #[snafu(display(
-        "OutOfBounds: index {} was out of bounds for {} with length {}.",
-        index,
-        collection_name,
-        len
-    ))]
     OutOfBounds {
         index: usize,
         collection_name: String,
         len: usize,
-        backtrace: Backtrace,
     },
 }
+
+impl std::fmt::Display for UtilError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IndexOfFailed {
+                elt_str,
+                collection_str,
+            } => {
+                write!(
+                    f,
+                    "IndexOfFailed: Element {} was not found in collection {}.",
+                    elt_str, collection_str
+                )
+            }
+            Self::KeyNotFound { key_str } => {
+                write!(f, "KeyNotFound: key {} was not found in HashMap.", key_str)
+            }
+            Self::OutOfBounds {
+                index,
+                collection_name,
+                len,
+            } => {
+                write!(
+                    f,
+                    "OutOfBounds: index {} was out of bounds for {} with length {}.",
+                    index, collection_name, len
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for UtilError {}
 
 pub type UtilResult<T, E = UtilError> = std::result::Result<T, E>;
 
@@ -41,7 +57,7 @@ pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(
     hash_map: &'a HashMap<K, V>,
     key: &K,
 ) -> UtilResult<&'a V> {
-    let value = hash_map.get(key).context(KeyNotFoundSnafu {
+    let value = hash_map.get(key).ok_or_else(|| UtilError::KeyNotFound {
         key_str: format!("{key:?}"),
     })?;
 
@@ -52,11 +68,11 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> Uti
     let index = slice
         .iter()
         .position(|slice_elt| *slice_elt == elt)
-        .with_context(|| {
+        .ok_or_else(|| {
             let elt_str = format!("{elt:?}");
             let collection_str = format!("{slice:?}");
 
-            IndexOfFailedSnafu {
+            UtilError::IndexOfFailed {
                 elt_str,
                 collection_str,
             }
@@ -67,9 +83,9 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> Uti
 
 // replaces slice method that return Option with one that return Result and proper Error
 pub fn slice_get<T>(index: usize, slice: &[T]) -> UtilResult<&<usize as SliceIndex<[T]>>::Output> {
-    let elt_ref = slice.get(index).context(OutOfBoundsSnafu {
+    let elt_ref = slice.get(index).ok_or_else(|| UtilError::OutOfBounds {
         index,
-        collection_name: "Slice",
+        collection_name: "Slice".to_owned(),
         len: slice.len(),
     })?;
 
@@ -82,9 +98,9 @@ pub fn slice_get_mut<T>(
 ) -> UtilResult<&mut <usize as SliceIndex<[T]>>::Output> {
     let slice_len = slice.len();
 
-    let elt_ref = slice.get_mut(index).context(OutOfBoundsSnafu {
+    let elt_ref = slice.get_mut(index).ok_or_else(|| UtilError::OutOfBounds {
         index,
-        collection_name: "Slice",
+        collection_name: "Slice".to_owned(),
         len: slice_len,
     })?;
 
@@ -118,10 +134,9 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
         let elt_str = format!("{elt:?}");
         let collection_str = format!("{slice:?}");
 
-        IndexOfFailedSnafu {
+        Err(UtilError::IndexOfFailed {
             elt_str,
             collection_str,
-        }
-        .fail()
+        })
     }
 }

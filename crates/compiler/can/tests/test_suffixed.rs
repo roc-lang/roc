@@ -12,7 +12,15 @@ mod suffixed_tests {
         ($src:expr) => {{
             let arena = &Bump::new();
             let mut defs = parse_defs_with(arena, indoc!($src)).unwrap();
-            desugar_defs_node_values(arena, &mut defs, $src, &mut None, "test.roc", true);
+            desugar_defs_node_values(
+                arena,
+                &mut defs,
+                $src,
+                &mut None,
+                "test.roc",
+                true,
+                &mut Default::default(),
+            );
 
             let snapshot = format!("{:#?}", &defs);
             println!("{}", snapshot);

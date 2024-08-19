@@ -138,203 +138,203 @@ dbgInit = \{} -> @DbgFormatter { data: "" }
 
 dbgList : list, ElemWalker (DbgFormatter, Bool) list elem, (elem -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbgList = \content, walkFn, toDbgInspector ->
-    f0 <- custom
-    dbgWrite f0 "["
-    |> \f1 ->
-        (f2, prependSep), elem <- walkFn content (f1, Bool.false)
-        f3 =
-            if prependSep then
-                dbgWrite f2 ", "
-            else
-                f2
+    custom \f0 ->
+        dbgWrite f0 "["
+        |> \f1 ->
+            walkFn content (f1, Bool.false) \(f2, prependSep), elem ->
+                f3 =
+                    if prependSep then
+                        dbgWrite f2 ", "
+                    else
+                        f2
 
-        elem
-        |> toDbgInspector
-        |> apply f3
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> dbgWrite "]"
+                elem
+                |> toDbgInspector
+                |> apply f3
+                |> \f4 -> (f4, Bool.true)
+        |> .0
+        |> dbgWrite "]"
 
 dbgSet : set, ElemWalker (DbgFormatter, Bool) set elem, (elem -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbgSet = \content, walkFn, toDbgInspector ->
-    f0 <- custom
-    dbgWrite f0 "{"
-    |> \f1 ->
-        (f2, prependSep), elem <- walkFn content (f1, Bool.false)
-        f3 =
-            if prependSep then
-                dbgWrite f2 ", "
-            else
-                f2
+    custom \f0 ->
+        dbgWrite f0 "{"
+        |> \f1 ->
+            walkFn content (f1, Bool.false) \(f2, prependSep), elem ->
+                f3 =
+                    if prependSep then
+                        dbgWrite f2 ", "
+                    else
+                        f2
 
-        elem
-        |> toDbgInspector
-        |> apply f3
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> dbgWrite "}"
+                elem
+                |> toDbgInspector
+                |> apply f3
+                |> \f4 -> (f4, Bool.true)
+        |> .0
+        |> dbgWrite "}"
 
 dbgDict : dict, KeyValWalker (DbgFormatter, Bool) dict key value, (key -> Inspector DbgFormatter), (value -> Inspector DbgFormatter) -> Inspector DbgFormatter
 dbgDict = \d, walkFn, keyToInspector, valueToInspector ->
-    f0 <- custom
-    dbgWrite f0 "{"
-    |> \f1 ->
-        (f2, prependSep), key, value <- walkFn d (f1, Bool.false)
-        f3 =
-            if prependSep then
-                dbgWrite f2 ", "
-            else
-                f2
+    custom \f0 ->
+        dbgWrite f0 "{"
+        |> \f1 ->
+            walkFn d (f1, Bool.false) \(f2, prependSep), key, value ->
+                f3 =
+                    if prependSep then
+                        dbgWrite f2 ", "
+                    else
+                        f2
 
-        apply (keyToInspector key) f3
-        |> dbgWrite ": "
-        |> \x -> apply (valueToInspector value) x
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> dbgWrite "}"
+                apply (keyToInspector key) f3
+                |> dbgWrite ": "
+                |> \x -> apply (valueToInspector value) x
+                |> \f4 -> (f4, Bool.true)
+        |> .0
+        |> dbgWrite "}"
 
 dbgTag : Str, List (Inspector DbgFormatter) -> Inspector DbgFormatter
 dbgTag = \name, fields ->
     if List.isEmpty fields then
-        f0 <- custom
-        dbgWrite f0 name
+        custom \f0 ->
+            dbgWrite f0 name
     else
-        f0 <- custom
-        dbgWrite f0 "("
-        |> dbgWrite name
-        |> \f1 ->
-            f2, inspector <- List.walk fields f1
-            dbgWrite f2 " "
-            |> \x -> apply inspector x
-        |> dbgWrite ")"
+        custom \f0 ->
+            dbgWrite f0 "("
+            |> dbgWrite name
+            |> \f1 ->
+                List.walk fields f1 \f2, inspector ->
+                    dbgWrite f2 " "
+                    |> \x -> apply inspector x
+            |> dbgWrite ")"
 
 dbgTuple : List (Inspector DbgFormatter) -> Inspector DbgFormatter
 dbgTuple = \fields ->
-    f0 <- custom
-    dbgWrite f0 "("
-    |> \f1 ->
-        (f2, prependSep), inspector <- List.walk fields (f1, Bool.false)
-        f3 =
-            if prependSep then
-                dbgWrite f2 ", "
-            else
-                f2
+    custom \f0 ->
+        dbgWrite f0 "("
+        |> \f1 ->
+            List.walk fields (f1, Bool.false) \(f2, prependSep), inspector ->
+                f3 =
+                    if prependSep then
+                        dbgWrite f2 ", "
+                    else
+                        f2
 
-        apply inspector f3
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> dbgWrite ")"
+                apply inspector f3
+                |> \f4 -> (f4, Bool.true)
+        |> .0
+        |> dbgWrite ")"
 
 dbgRecord : List { key : Str, value : Inspector DbgFormatter } -> Inspector DbgFormatter
 dbgRecord = \fields ->
-    f0 <- custom
-    dbgWrite f0 "{"
-    |> \f1 ->
-        (f2, prependSep), { key, value } <- List.walk fields (f1, Bool.false)
-        f3 =
-            if prependSep then
-                dbgWrite f2 ", "
-            else
-                f2
+    custom \f0 ->
+        dbgWrite f0 "{"
+        |> \f1 ->
+            List.walk fields (f1, Bool.false) \(f2, prependSep), { key, value } ->
+                f3 =
+                    if prependSep then
+                        dbgWrite f2 ", "
+                    else
+                        f2
 
-        dbgWrite f3 key
-        |> dbgWrite ": "
-        |> \x -> apply value x
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> dbgWrite "}"
+                dbgWrite f3 key
+                |> dbgWrite ": "
+                |> \x -> apply value x
+                |> \f4 -> (f4, Bool.true)
+        |> .0
+        |> dbgWrite "}"
 
 dbgBool : Bool -> Inspector DbgFormatter
 dbgBool = \b ->
     if b then
-        f0 <- custom
-        dbgWrite f0 "Bool.true"
+        custom \f0 ->
+            dbgWrite f0 "Bool.true"
     else
-        f0 <- custom
-        dbgWrite f0 "Bool.false"
+        custom \f0 ->
+            dbgWrite f0 "Bool.false"
 
 dbgStr : Str -> Inspector DbgFormatter
 dbgStr = \s ->
-    f0 <- custom
-    f0
-    |> dbgWrite "\""
-    |> dbgWrite s # TODO: Should we be escaping strings for dbg/logging?
-    |> dbgWrite "\""
+    custom \f0 ->
+        f0
+        |> dbgWrite "\""
+        |> dbgWrite s # TODO: Should we be escaping strings for dbg/logging?
+        |> dbgWrite "\""
 
 dbgOpaque : * -> Inspector DbgFormatter
 dbgOpaque = \_ ->
-    f0 <- custom
-    dbgWrite f0 "<opaque>"
+    custom \f0 ->
+        dbgWrite f0 "<opaque>"
 
 dbgFunction : * -> Inspector DbgFormatter
 dbgFunction = \_ ->
-    f0 <- custom
-    dbgWrite f0 "<function>"
+    custom \f0 ->
+        dbgWrite f0 "<function>"
 
 dbgU8 : U8 -> Inspector DbgFormatter
 dbgU8 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgI8 : I8 -> Inspector DbgFormatter
 dbgI8 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgU16 : U16 -> Inspector DbgFormatter
 dbgU16 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgI16 : I16 -> Inspector DbgFormatter
 dbgI16 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgU32 : U32 -> Inspector DbgFormatter
 dbgU32 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgI32 : I32 -> Inspector DbgFormatter
 dbgI32 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgU64 : U64 -> Inspector DbgFormatter
 dbgU64 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgI64 : I64 -> Inspector DbgFormatter
 dbgI64 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgU128 : U128 -> Inspector DbgFormatter
 dbgU128 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgI128 : I128 -> Inspector DbgFormatter
 dbgI128 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgF32 : F32 -> Inspector DbgFormatter
 dbgF32 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgF64 : F64 -> Inspector DbgFormatter
 dbgF64 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgDec : Dec -> Inspector DbgFormatter
 dbgDec = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
+    custom \f0 ->
+        dbgWrite f0 (num |> Num.toStr)
 
 dbgWrite : DbgFormatter, Str -> DbgFormatter
 dbgWrite = \@DbgFormatter { data }, added ->

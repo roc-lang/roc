@@ -432,6 +432,9 @@ pub enum Expr<'a> {
     /// e.g. `.foo` or `.0`
     AccessorFunction(Accessor<'a>),
 
+    /// Update the value of a field in a record, e.g. `&foo`
+    RecordUpdater(&'a str),
+
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
 
@@ -636,6 +639,7 @@ pub fn is_expr_suffixed(expr: &Expr) -> bool {
         Expr::SingleQuote(_) => false,
         Expr::RecordAccess(a, _) => is_expr_suffixed(a),
         Expr::AccessorFunction(_) => false,
+        Expr::RecordUpdater(_) => false,
         Expr::TupleAccess(a, _) => is_expr_suffixed(a),
         Expr::List(items) => items.iter().any(|x| is_expr_suffixed(&x.value)),
         Expr::RecordUpdate { update, fields } => {
@@ -1024,6 +1028,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Str(_)
                 | SingleQuote(_)
                 | AccessorFunction(_)
+                | RecordUpdater(_)
                 | Var { .. }
                 | Underscore(_)
                 | Crash
@@ -2465,6 +2470,7 @@ impl<'a> Malformed for Expr<'a> {
             Num(_) |
             NonBase10Int { .. } |
             AccessorFunction(_) |
+            RecordUpdater(_) |
             Var { .. } |
             Underscore(_) |
             Tag(_) |

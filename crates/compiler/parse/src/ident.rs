@@ -46,40 +46,10 @@ pub enum Ident<'a> {
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
+    /// `&foo { foo: 42 } 3`
+    RecordUpdaterFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
-}
-
-impl<'a> Ident<'a> {
-    pub fn len(&self) -> usize {
-        use self::Ident::*;
-
-        match self {
-            Tag(string) | OpaqueRef(string) => string.len(),
-            Access {
-                module_name, parts, ..
-            } => {
-                let mut len = if module_name.is_empty() {
-                    0
-                } else {
-                    module_name.len() + 1
-                    // +1 for the dot
-                };
-
-                for part in parts.iter() {
-                    len += part.len() + 1 // +1 for the dot
-                }
-
-                len - 1
-            }
-            AccessorFunction(string) => string.len(),
-            Malformed(string, _) => string.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// This could be:
@@ -272,6 +242,7 @@ pub enum BadIdent {
     WeirdDotAccess(Position),
     WeirdDotQualified(Position),
     StrayDot(Position),
+    StrayAmpersand(Position),
     BadOpaqueRef(Position),
     QualifiedTupleAccessor(Position),
 }
@@ -416,6 +387,18 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     }
 }
 
+/// a `&foo` record updater function
+fn chomp_record_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
+    // assumes the leading `&` has been chomped already
+    match chomp_lowercase_part(buffer) {
+        Ok(name) => Ok(name),
+        Err(_) => {
+            // we've already made progress with the initial `&`
+            Err(BadIdent::StrayAmpersand(pos.bump_column(1)))
+        }
+    }
+}
+
 /// a `@Token` opaque
 fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
@@ -457,6 +440,14 @@ fn chomp_identifier_chain<'a>(
                     return Ok((bytes_parsed as u32, Ident::AccessorFunction(accessor)));
                 }
                 Err(fail) => return Err((1, fail)),
+            },
+            '&' => match chomp_record_updater(&buffer[1..], pos) {
+                Ok(updater) => {
+                    let bytes_parsed = 1 + updater.len();
+                    return Ok((bytes_parsed as u32, Ident::RecordUpdaterFunction(updater)));
+                }
+                // return 0 bytes consumed on failure to allow parsing &&
+                Err(fail) => return Err((0, fail)),
             },
             '@' => match chomp_opaque_ref(buffer, pos) {
                 Ok(tagname) => {

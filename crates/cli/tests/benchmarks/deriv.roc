@@ -1,14 +1,13 @@
-app "deriv"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
+
+import pf.Task
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
 IO a : Task.Task a []
 
 main : Task.Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    inputResult = Task.getInt |> Task.result!
 
     when inputResult is
         Ok n ->
@@ -25,11 +24,12 @@ main =
             Task.putLine "Error: Failed to get Integer from stdin."
 
 nestHelp : I64, (I64, Expr -> IO Expr), I64, Expr -> IO Expr
-nestHelp = \s, f, m, x -> when m is
-    0 -> Task.succeed x
-    _ ->
-        w <- Task.after (f (s - m) x)
-        nestHelp s f (m - 1) w
+nestHelp = \s, f, m, x ->
+    when m is
+        0 -> Task.succeed x
+        _ ->
+            Task.after (f (s - m) x) \w ->
+                nestHelp s f (m - 1) w
 
 nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nest = \f, n, e -> nestHelp n f n e
