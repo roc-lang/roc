@@ -1065,7 +1065,7 @@ where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    move |_, mut state: State<'a>, _min_indent| {
+    move |_, state: State<'a>, _min_indent| {
         let width = keyword_str.len();
 
         if !state.bytes().starts_with(keyword_str.as_bytes()) {
@@ -1075,13 +1075,8 @@ where
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
-            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' || *next == b'\r' => {
-                state = state.advance(width);
-                Ok((MadeProgress, (), state))
-            }
-            None => {
-                state = state.advance(width);
-                Ok((MadeProgress, (), state))
+            None | Some(b' ' | b'#' | b'\n' | b'\r') => {
+                Ok((MadeProgress, (), state.advance(width)))
             }
             Some(_) => Err((NoProgress, if_error(state.pos()))),
         }

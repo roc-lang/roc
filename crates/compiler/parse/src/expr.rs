@@ -2402,8 +2402,7 @@ mod when {
             // to prevent treating `whence` as a keyword
             let when_width = keyword::WHEN.len();
             match state.bytes().get(when_width) {
-                Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
-                None => {}
+                None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
                 _ => return Err((NoProgress, EWhen::When(state.pos()))),
             };
 
@@ -2422,8 +2421,7 @@ mod when {
 
                     let is_width = keyword::IS.len();
                     match state.bytes().get(is_width) {
-                        Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
-                        None => {}
+                        None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
                         _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
                     };
 
@@ -2588,8 +2586,7 @@ mod when {
 
             let if_width = keyword::IF.len();
             match state.bytes().get(if_width) {
-                Some(b) if *b == b' ' || *b == b'#' || *b == b'\n' || *b == b'\r' => {}
-                None => {}
+                None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
                 _ => return Ok((MadeProgress, (column_patterns, None), original_state)),
             }
 
