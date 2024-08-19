@@ -331,15 +331,16 @@ where
     }
 }
 
+// todo: @wip inline, just do it
 pub fn require_newline_or_eof<'a, E>(newline_problem: fn(Position) -> E) -> impl Parser<'a, (), E>
 where
     E: 'a + SpaceProblem,
 {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
         // TODO: we can do this more efficiently by stopping as soon as we see a '#' or a newline
-        let (_, res, _) = space0_e(newline_problem).parse(arena, state.clone(), min_indent)?;
+        let (_, spaces, _) = space0_e(newline_problem).parse(arena, state.clone(), min_indent)?;
 
-        if !res.is_empty() || state.has_reached_end() {
+        if !spaces.is_empty() || state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
             Err((NoProgress, newline_problem(state.pos())))
@@ -359,7 +360,7 @@ where
         let mut comment_start = None;
         let mut comment_end = None;
 
-        let res = consume_spaces(state, |start, space, end| {
+        let (progress, state) = consume_spaces(state, |start, space, end| {
             newlines.push(space);
             if !matches!(space, CommentOrNewline::Newline) {
                 if comment_start.is_none() {
@@ -367,20 +368,15 @@ where
                 }
                 comment_end = Some(end);
             }
-        });
+        })?;
 
-        match res {
-            Ok((progress, state)) => {
-                if newlines.is_empty() || state.column() >= min_indent {
-                    let start = comment_start.unwrap_or(state.pos());
-                    let end = comment_end.unwrap_or(state.pos());
-                    let region = Region::new(start, end);
-                    Ok((progress, Loc::at(region, newlines.into_bump_slice()), state))
-                } else {
-                    Err((progress, indent_problem(start)))
-                }
-            }
-            Err((progress, err)) => Err((progress, err)),
+        if newlines.is_empty() || state.column() >= min_indent {
+            let start = comment_start.unwrap_or(state.pos());
+            let end = comment_end.unwrap_or(state.pos());
+            let region = Region::new(start, end);
+            Ok((progress, Loc::at(region, newlines.into_bump_slice()), state))
+        } else {
+            Err((progress, indent_problem(start)))
         }
     }
 }

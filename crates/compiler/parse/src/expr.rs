@@ -2389,9 +2389,8 @@ mod when {
                             .map_err(|(_, fail)| (MadeProgress, fail))?;
 
                     // Parse the first "->" and the expression after it.
-                    let (_, value, mut state) = branch_result(pattern_indent + 1)
-                        .parse(arena, state, pattern_indent + 1)
-                        .map_err(|(_, fail)| (MadeProgress, fail))?;
+                    let (_, value, mut state) =
+                        branch_result_help(pattern_indent + 1).parse(arena, state, 0)?;
 
                     // Record this as the first branch, then optionally parse additional branches.
                     let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
@@ -2402,26 +2401,22 @@ mod when {
                     }));
 
                     let branch_alts = branch_alternatives(options, Some(pattern_indent));
-                    let branch_block = branch_result(pattern_indent + 1);
 
                     while !state.bytes().is_empty() {
                         match branch_alts.parse(arena, state.clone(), branch_indent) {
                             Ok((_, ((indent_column, patterns), guard), m_state)) => {
                                 if pattern_indent == indent_column {
-                                    match branch_block.parse(arena, m_state, branch_indent) {
-                                        Ok((_, value, next_state)) => {
-                                            let branch = WhenBranch {
-                                                patterns: patterns.into_bump_slice(),
-                                                value,
-                                                guard,
-                                            };
-                                            branches.push(arena.alloc(branch));
-                                            state = next_state;
-                                        }
-                                        Err((_, fail)) => {
-                                            return Err((MadeProgress, fail));
-                                        }
-                                    }
+                                    let (_, value, next_state) =
+                                        branch_result_help(pattern_indent + 1)
+                                            .parse(arena, m_state, 0)?;
+
+                                    let branch = WhenBranch {
+                                        patterns: patterns.into_bump_slice(),
+                                        value,
+                                        guard,
+                                    };
+                                    branches.push(arena.alloc(branch));
+                                    state = next_state;
                                 } else {
                                     let indent = pattern_indent - indent_column;
                                     let fail = EWhen::PatternAlignment(indent, m_state.pos());
@@ -2549,43 +2544,44 @@ mod when {
             state.advance_mut(if_width);
 
             // TODO we should require space before the expression but not after
-            match space0_e(EWhen::IndentIfGuard).parse(arena, state, min_indent) {
-                Ok((_, spaces_before, state)) => {
-                    let guard_pos = state.pos();
+            let (_, spaces_before, state) = space0_e(EWhen::IndentIfGuard)
+                .parse(arena, state, min_indent)
+                .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-                    match expr_start(options).parse(arena, state, min_indent + 1) {
-                        Ok((_, guard, state)) => {
-                            match space0_e(EWhen::IndentArrow).parse(arena, state, min_indent) {
-                                Ok((_, spaces_after, state)) => {
-                                    let guard =
-                                        with_spaces(arena, spaces_before, guard, spaces_after);
-                                    Ok((MadeProgress, (column_patterns, Some(guard)), state))
-                                }
-                                Err((_, fail)) => Err((MadeProgress, fail)),
-                            }
-                        }
-                        Err((_, fail)) => {
-                            Err((MadeProgress, EWhen::IfGuard(arena.alloc(fail), guard_pos)))
-                        }
-                    }
-                }
-                Err((_, fail)) => Err((MadeProgress, fail)),
-            }
+            let guard_pos = state.pos();
+            let (_, guard, state) = expr_start(options)
+                .parse(arena, state, min_indent + 1)
+                .map_err(|(_, fail)| {
+                    (MadeProgress, EWhen::IfGuard(arena.alloc(fail), guard_pos))
+                })?;
+
+            let (_, spaces_after, state) = space0_e(EWhen::IndentArrow)
+                .parse(arena, state, min_indent)
+                .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+            let guard = with_spaces(arena, spaces_before, guard, spaces_after);
+            Ok((MadeProgress, (column_patterns, Some(guard)), state))
         }
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
-    fn branch_result<'a>(indent: u32) -> impl Parser<'a, Loc<Expr<'a>>, EWhen<'a>> {
+    /// Always makes progress because called in the middle of parsing when and does not make sense alone
+    fn branch_result_help<'a>(indent: u32) -> impl Parser<'a, Loc<Expr<'a>>, EWhen<'a>> {
         let options = ExprParseOptions {
             accept_multi_backpassing: true,
             check_for_arrow: true,
         };
-        move |arena, state, _min_indent| {
-            skip_first(
-                two_bytes(b'-', b'>', EWhen::Arrow),
-                block(options, true, EWhen::IndentBranch, EWhen::Branch),
-            )
-            .parse(arena, state, indent)
+        move |arena, mut state: State<'a>, _| {
+            if state.bytes().starts_with(b"->") {
+                state.advance_mut(2);
+                let parser = block(options, true, EWhen::IndentBranch, EWhen::Branch);
+                match parser.parse(arena, state, indent) {
+                    Ok((_, value, state)) => Ok((MadeProgress, value, state)),
+                    Err((_, fail)) => Err((MadeProgress, fail)),
+                }
+            } else {
+                Err((MadeProgress, EWhen::Arrow(state.pos())))
+            }
         }
     }
 }
