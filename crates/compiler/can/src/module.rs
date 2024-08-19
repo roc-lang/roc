@@ -337,7 +337,15 @@ pub fn canonicalize_module_defs<'a>(
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
 
-    crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path, true);
+    crate::desugar::desugar_defs_node_values(
+        arena,
+        loc_defs,
+        src,
+        &mut None,
+        module_path,
+        true,
+        &mut env.problems,
+    );
 
     let mut rigid_variables = RigidVariables::default();
 
