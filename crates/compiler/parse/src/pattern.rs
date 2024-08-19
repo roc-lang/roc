@@ -5,7 +5,7 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
     optional, specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more,
-    EPattern, PInParens, PList, PRecord, Parser,
+    EPattern, PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::parser::{either, Progress::*};
 use crate::state::State;
@@ -28,30 +28,32 @@ pub enum PatternType {
     ModuleParams,
 }
 
-pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    move |arena, state: State<'a>, min_indent| {
-        // An ident is the most common param, e.g. \foo -> ...
-        match loc_ident_pattern_help(true).parse(arena, state.clone(), min_indent) {
-            Ok(ok) => return Ok(ok),
-            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-            Err(_) => {}
-        }
-        // Underscore is also common, e.g. \_ -> ...
-        match loc_underscore_pattern_help().parse(arena, state.clone(), min_indent) {
-            Ok(ok) => return Ok(ok),
-            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-            Err(_) => {}
-        }
-        // You can destructure records in params, e.g. \{ x, y } -> ...
-        match loc_record_pattern_help().parse(arena, state.clone(), min_indent) {
-            Ok(ok) => return Ok(ok),
-            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-            Err(_) => {}
-        }
-        // If you wrap it in parens, you can match any arbitrary pattern at all.
-        // e.g. \User.UserId userId -> ...
-        loc_pattern_in_parens_help().parse(arena, state.clone(), min_indent)
+pub fn parse_closure_param<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    // An ident is the most common param, e.g. \foo -> ...
+    match loc_ident_pattern_help(true).parse(arena, state.clone(), min_indent) {
+        Ok(ok) => return Ok(ok),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        Err(_) => {}
     }
+    // Underscore is also common, e.g. \_ -> ...
+    match loc_underscore_pattern_help().parse(arena, state.clone(), min_indent) {
+        Ok(ok) => return Ok(ok),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        Err(_) => {}
+    }
+    // You can destructure records in params, e.g. \{ x, y } -> ...
+    match loc_record_pattern_help().parse(arena, state.clone(), min_indent) {
+        Ok(ok) => return Ok(ok),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        Err(_) => {}
+    }
+    // If you wrap it in parens, you can match any arbitrary pattern at all.
+    // e.g. \User.UserId userId -> ...
+    loc_pattern_in_parens_help().parse(arena, state.clone(), min_indent)
 }
 
 /// If Ok it always returns MadeProgress

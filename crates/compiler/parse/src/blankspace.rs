@@ -355,12 +355,13 @@ where
     E: 'a + SpaceProblem,
 {
     move |arena, state: State<'a>, min_indent: u32| {
+        let initial_pos = state.pos();
+
         let mut newlines = Vec::new_in(arena);
-        let start = state.pos();
         let mut comment_start = None;
         let mut comment_end = None;
 
-        let (progress, state) = consume_spaces(state, |start, space, end| {
+        let (p, state) = consume_spaces(state, |start, space, end| {
             newlines.push(space);
             if !matches!(space, CommentOrNewline::Newline) {
                 if comment_start.is_none() {
@@ -373,10 +374,9 @@ where
         if newlines.is_empty() || state.column() >= min_indent {
             let start = comment_start.unwrap_or(state.pos());
             let end = comment_end.unwrap_or(state.pos());
-            let region = Region::new(start, end);
-            Ok((progress, Loc::at(region, newlines.into_bump_slice()), state))
+            Ok((p, Loc::pos(start, end, newlines.into_bump_slice()), state))
         } else {
-            Err((progress, indent_problem(start)))
+            Err((p, indent_problem(initial_pos)))
         }
     }
 }
