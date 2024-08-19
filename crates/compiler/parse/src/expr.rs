@@ -2434,8 +2434,7 @@ mod when {
                     // 1. Parse the first branch and get its indentation level (it must be >= branch_indent).
                     // 2. Parse the other branches. Their indentation levels must be == the first branch's.
                     let (_, ((pattern_indent, first_patterns), guard), state) =
-                        branch_alternatives(options, None)
-                            .parse(arena, state, branch_indent)
+                        parse_branch_alternatives(options, None, arena, state, branch_indent)
                             .map_err(|(_, fail)| (MadeProgress, fail))?;
 
                     // Parse the first "->" and the expression after it.
@@ -2450,10 +2449,14 @@ mod when {
                         guard,
                     }));
 
-                    let branch_alts = branch_alternatives(options, Some(pattern_indent));
-
                     while !state.bytes().is_empty() {
-                        match branch_alts.parse(arena, state.clone(), branch_indent) {
+                        match parse_branch_alternatives(
+                            options,
+                            Some(pattern_indent),
+                            arena,
+                            state.clone(),
+                            branch_indent,
+                        ) {
                             Ok((_, ((indent_column, patterns), guard), m_state)) => {
                                 if pattern_indent == indent_column {
                                     let (_, value, next_state) =
@@ -2492,124 +2495,122 @@ mod when {
     }
 
     /// Parsing alternative patterns in `when` branches.
-    fn branch_alternatives<'a>(
+    fn parse_branch_alternatives<'a>(
         options: ExprParseOptions,
         pattern_indent: Option<u32>,
-    ) -> impl Parser<'a, ((u32, Vec<'a, Loc<Pattern<'a>>>), Option<Loc<Expr<'a>>>), EWhen<'a>> {
+        arena: &'a Bump,
+        state: State<'a>,
+        min_indent: u32,
+    ) -> ParseResult<'a, ((u32, Vec<'a, Loc<Pattern<'a>>>), Option<Loc<Expr<'a>>>), EWhen<'a>> {
         let options = ExprParseOptions {
             check_for_arrow: false,
             ..options
         };
 
-        move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| {
-            // put no restrictions on the indent after the spaces; we'll check it manually
-            let (_, indent_spaces, state) =
-                space0_e(EWhen::IndentPattern).parse(arena, state, 0)?;
+        // put no restrictions on the indent after the spaces; we'll check it manually
+        let (_, indent_spaces, state) = space0_e(EWhen::IndentPattern).parse(arena, state, 0)?;
 
-            // the region is not reliable for the indent column in the case of
-            // parentheses around patterns
-            let pattern_column = state.column();
+        // the region is not reliable for the indent column in the case of
+        // parentheses around patterns
+        let pattern_column = state.column();
 
-            if let Some(wanted) = pattern_indent {
-                if pattern_column > wanted {
-                    let err_progress = if state.bytes().starts_with(b"->") {
-                        MadeProgress
-                    } else {
-                        NoProgress
-                    };
-                    return Err((err_progress, EWhen::IndentPattern(state.pos())));
-                }
-                if pattern_column < wanted {
-                    let indent = wanted - pattern_column;
-                    return Err((NoProgress, EWhen::PatternAlignment(indent, state.pos())));
-                }
-            }
-
-            let pattern_indent = min_indent.max(pattern_indent.unwrap_or(min_indent));
-
-            let (p1, spaces_before, state) = space0_e(EWhen::IndentPattern)
-                .parse(arena, state, pattern_indent)
-                .map_err(|(_, fail)| (NoProgress, fail))?;
-
-            let pattern_pos = state.pos();
-            let (_, pattern, state) = crate::pattern::loc_pattern_help()
-                .parse(arena, state, pattern_indent)
-                .map_err(|(p2, fail)| (p1.or(p2), EWhen::Pattern(fail, pattern_pos)))?;
-
-            let (_, spaces_after, mut state) = space0_e(EWhen::IndentPattern)
-                .parse(arena, state, pattern_indent)
-                .map_err(|(_, fail)| (MadeProgress, fail))?;
-
-            let first_pattern = with_spaces(arena, spaces_before, pattern, spaces_after);
-            let mut patterns = Vec::with_capacity_in(1, arena);
-            patterns.push(first_pattern);
-
-            loop {
-                let prev_state = state.clone();
-                if state.bytes().first() == Some(&b'|') {
-                    state.advance_mut(1);
-
-                    let (_, spaces_before, next_state) = space0_e(EWhen::IndentPattern)
-                        .parse(arena, state, pattern_indent)
-                        .map_err(|(_, fail)| (MadeProgress, fail))?;
-
-                    let pattern_pos = next_state.pos();
-                    let (_, pat, next_state) = crate::pattern::loc_pattern_help()
-                        .parse(arena, next_state, pattern_indent)
-                        .map_err(|(_, fail)| (MadeProgress, EWhen::Pattern(fail, pattern_pos)))?;
-
-                    let (_, spaces_after, next_state) = space0_e(EWhen::IndentPattern)
-                        .parse(arena, next_state, pattern_indent)
-                        .map_err(|(_, fail)| (MadeProgress, fail))?;
-
-                    let pattern = with_spaces(arena, spaces_before, pat, spaces_after);
-                    state = next_state;
-                    patterns.push(pattern);
+        if let Some(wanted) = pattern_indent {
+            if pattern_column > wanted {
+                let err_progress = if state.bytes().starts_with(b"->") {
+                    MadeProgress
                 } else {
-                    state = prev_state;
-                    break;
-                }
+                    NoProgress
+                };
+                return Err((err_progress, EWhen::IndentPattern(state.pos())));
             }
-
-            // tag spaces onto the first parsed pattern
-            if let Some(first) = patterns.get_mut(0) {
-                *first = with_spaces_before(*first, indent_spaces, arena);
+            if pattern_column < wanted {
+                let indent = wanted - pattern_column;
+                return Err((NoProgress, EWhen::PatternAlignment(indent, state.pos())));
             }
-
-            let column_patterns = (pattern_column, patterns);
-            let original_state = state.clone();
-
-            if !state.bytes().starts_with(keyword::IF.as_bytes()) {
-                return Ok((MadeProgress, (column_patterns, None), original_state));
-            }
-
-            let if_width = keyword::IF.len();
-            match state.bytes().get(if_width) {
-                None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
-                _ => return Ok((MadeProgress, (column_patterns, None), original_state)),
-            }
-
-            state.advance_mut(if_width);
-
-            // TODO we should require space before the expression but not after
-            let (_, spaces_before, state) = space0_e(EWhen::IndentIfGuard)
-                .parse(arena, state, min_indent)
-                .map_err(|(_, fail)| (MadeProgress, fail))?;
-
-            let guard_pos = state.pos();
-            let (_, guard, state) = expr_start(options)
-                .parse(arena, state, min_indent + 1)
-                .map_err(|(_, fail)| {
-                    (MadeProgress, EWhen::IfGuard(arena.alloc(fail), guard_pos))
-                })?;
-
-            let (_, spaces_after, state) = space0_e(EWhen::IndentArrow)
-                .parse(arena, state, min_indent)
-                .map_err(|(_, fail)| (MadeProgress, fail))?;
-
-            let guard = with_spaces(arena, spaces_before, guard, spaces_after);
-            Ok((MadeProgress, (column_patterns, Some(guard)), state))
         }
+
+        let pattern_indent = min_indent.max(pattern_indent.unwrap_or(min_indent));
+
+        let (p1, spaces_before, state) = space0_e(EWhen::IndentPattern)
+            .parse(arena, state, pattern_indent)
+            .map_err(|(_, fail)| (NoProgress, fail))?;
+
+        let pattern_pos = state.pos();
+        let (_, pattern, state) = crate::pattern::loc_pattern_help()
+            .parse(arena, state, pattern_indent)
+            .map_err(|(p2, fail)| (p1.or(p2), EWhen::Pattern(fail, pattern_pos)))?;
+
+        let (_, spaces_after, mut state) = space0_e(EWhen::IndentPattern)
+            .parse(arena, state, pattern_indent)
+            .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+        let first_pattern = with_spaces(arena, spaces_before, pattern, spaces_after);
+        let mut patterns = Vec::with_capacity_in(1, arena);
+        patterns.push(first_pattern);
+
+        loop {
+            let prev_state = state.clone();
+            if state.bytes().first() == Some(&b'|') {
+                state.advance_mut(1);
+
+                let (_, spaces_before, next_state) = space0_e(EWhen::IndentPattern)
+                    .parse(arena, state, pattern_indent)
+                    .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+                let pattern_pos = next_state.pos();
+                let (_, pat, next_state) = crate::pattern::loc_pattern_help()
+                    .parse(arena, next_state, pattern_indent)
+                    .map_err(|(_, fail)| (MadeProgress, EWhen::Pattern(fail, pattern_pos)))?;
+
+                let (_, spaces_after, next_state) = space0_e(EWhen::IndentPattern)
+                    .parse(arena, next_state, pattern_indent)
+                    .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+                let pattern = with_spaces(arena, spaces_before, pat, spaces_after);
+                state = next_state;
+                patterns.push(pattern);
+            } else {
+                state = prev_state;
+                break;
+            }
+        }
+
+        // tag spaces onto the first parsed pattern
+        if let Some(first) = patterns.get_mut(0) {
+            *first = with_spaces_before(*first, indent_spaces, arena);
+        }
+
+        let column_patterns = (pattern_column, patterns);
+        let original_state = state.clone();
+
+        if !state.bytes().starts_with(keyword::IF.as_bytes()) {
+            return Ok((MadeProgress, (column_patterns, None), original_state));
+        }
+
+        let if_width = keyword::IF.len();
+        match state.bytes().get(if_width) {
+            None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
+            _ => return Ok((MadeProgress, (column_patterns, None), original_state)),
+        }
+
+        state.advance_mut(if_width);
+
+        // TODO we should require space before the expression but not after
+        let (_, spaces_before, state) = space0_e(EWhen::IndentIfGuard)
+            .parse(arena, state, min_indent)
+            .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+        let guard_pos = state.pos();
+        let (_, guard, state) = expr_start(options)
+            .parse(arena, state, min_indent + 1)
+            .map_err(|(_, fail)| (MadeProgress, EWhen::IfGuard(arena.alloc(fail), guard_pos)))?;
+
+        let (_, spaces_after, state) = space0_e(EWhen::IndentArrow)
+            .parse(arena, state, min_indent)
+            .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+        let guard = with_spaces(arena, spaces_before, guard, spaces_after);
+        Ok((MadeProgress, (column_patterns, Some(guard)), state))
     }
 
     /// Parsing the righthandside of a branch in a when conditional.
