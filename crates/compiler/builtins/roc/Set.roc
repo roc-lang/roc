@@ -62,8 +62,8 @@ hashSet = \hasher, @Set inner -> Hash.hash hasher inner
 
 toInspectorSet : Set k -> Inspector f where k implements Inspect & Hash & Eq, f implements InspectFormatter
 toInspectorSet = \set ->
-    fmt <- Inspect.custom
-    Inspect.apply (Inspect.set set walk Inspect.toInspector) fmt
+    Inspect.custom \fmt ->
+        Inspect.apply (Inspect.set set walk Inspect.toInspector) fmt
 
 ## Creates a new empty `Set`.
 ## ```roc

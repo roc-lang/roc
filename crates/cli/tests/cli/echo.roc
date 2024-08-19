@@ -5,7 +5,7 @@ import pf.Stdout
 import pf.Task exposing [Task]
 
 main =
-    _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
+    Stdout.line! "🗣  Shout into this cave and hear the echo! 👂👂👂"
 
     Task.loop {} tick
 

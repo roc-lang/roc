@@ -92,9 +92,8 @@ astar = \costFn, moveFn, goal, model ->
 
                 modelWithNeighbors : Model position
                 modelWithNeighbors =
-                    { modelPopped &
-                        openSet: Set.union modelPopped.openSet newNeighbors,
-                    }
+                    modelPopped
+                    |> &openSet (Set.union modelPopped.openSet newNeighbors)
 
                 walker : Model position, position -> Model position
                 walker = \amodel, n -> updateCost current n amodel

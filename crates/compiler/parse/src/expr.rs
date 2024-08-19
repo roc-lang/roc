@@ -2181,6 +2181,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::SingleFieldRecordBuilder(_)
         | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
+        | Expr::RecordUpdater(_)
         | Expr::UnaryOp(_, _)
         | Expr::TrySuffix { .. }
         | Expr::Crash
@@ -3251,7 +3252,7 @@ pub fn join_alias_to_body<'a>(
 /// 2. The beginning of a function call (e.g. `foo bar baz`)
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
-/// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
+/// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
     parse_ident
@@ -3313,6 +3314,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::RecordUpdaterFunction(string) => Expr::RecordUpdater(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }

@@ -28,47 +28,47 @@ main = \filename ->
 
 interpretFile : Str -> Task {} [StringErr Str]
 interpretFile = \filename ->
-    ctx <- Context.with filename
-    result <- Task.attempt (interpretCtx ctx)
-    when result is
-        Ok _ ->
-            Task.succeed {}
+    Context.with filename \ctx ->
+        result = interpretCtx ctx |> Task.result!
+        when result is
+            Ok _ ->
+                Task.succeed {}
 
-        Err BadUtf8 ->
-            Task.fail (StringErr "Failed to convert string from Utf8 bytes")
+            Err BadUtf8 ->
+                Task.fail (StringErr "Failed to convert string from Utf8 bytes")
 
-        Err DivByZero ->
-            Task.fail (StringErr "Division by zero")
+            Err DivByZero ->
+                Task.fail (StringErr "Division by zero")
 
-        Err EmptyStack ->
-            Task.fail (StringErr "Tried to pop a value off of the stack when it was empty")
+            Err EmptyStack ->
+                Task.fail (StringErr "Tried to pop a value off of the stack when it was empty")
 
-        Err InvalidBooleanValue ->
-            Task.fail (StringErr "Ran into an invalid boolean that was neither false (0) or true (-1)")
+            Err InvalidBooleanValue ->
+                Task.fail (StringErr "Ran into an invalid boolean that was neither false (0) or true (-1)")
 
-        Err (InvalidChar char) ->
-            Task.fail (StringErr "Ran into an invalid character with ascii code: $(char)")
+            Err (InvalidChar char) ->
+                Task.fail (StringErr "Ran into an invalid character with ascii code: $(char)")
 
-        Err MaxInputNumber ->
-            Task.fail (StringErr "Like the original false compiler, the max input number is 320,000")
+            Err MaxInputNumber ->
+                Task.fail (StringErr "Like the original false compiler, the max input number is 320,000")
 
-        Err NoLambdaOnStack ->
-            Task.fail (StringErr "Tried to run a lambda when no lambda was on the stack")
+            Err NoLambdaOnStack ->
+                Task.fail (StringErr "Tried to run a lambda when no lambda was on the stack")
 
-        Err NoNumberOnStack ->
-            Task.fail (StringErr "Tried to run a number when no number was on the stack")
+            Err NoNumberOnStack ->
+                Task.fail (StringErr "Tried to run a number when no number was on the stack")
 
-        Err NoVariableOnStack ->
-            Task.fail (StringErr "Tried to load a variable when no variable was on the stack")
+            Err NoVariableOnStack ->
+                Task.fail (StringErr "Tried to load a variable when no variable was on the stack")
 
-        Err NoScope ->
-            Task.fail (StringErr "Tried to run code when not in any scope")
+            Err NoScope ->
+                Task.fail (StringErr "Tried to run code when not in any scope")
 
-        Err OutOfBounds ->
-            Task.fail (StringErr "Tried to load from an offset that was outside of the stack")
+            Err OutOfBounds ->
+                Task.fail (StringErr "Tried to load from an offset that was outside of the stack")
 
-        Err UnexpectedEndOfData ->
-            Task.fail (StringErr "Hit end of data while still parsing something")
+            Err UnexpectedEndOfData ->
+                Task.fail (StringErr "Hit end of data while still parsing something")
 
 isDigit : U8 -> Bool
 isDigit = \char ->
@@ -129,11 +129,11 @@ interpretCtxLoop = \ctx ->
                     Task.fail NoScope
 
         Executing ->
-            # {} <- Task.await (Stdout.line (Context.toStr ctx))
-            result <- Task.attempt (Context.getChar ctx)
+            # Stdout.line! (Context.toStr ctx)
+            result = Context.getChar ctx |> Task.result!
             when result is
                 Ok (T val newCtx) ->
-                    execCtx <- Task.await (stepExecCtx newCtx val)
+                    execCtx = stepExecCtx! newCtx val
                     Task.succeed (Step execCtx)
 
                 Err NoScope ->
@@ -151,7 +151,7 @@ interpretCtxLoop = \ctx ->
                         Task.succeed (Step dropCtx)
 
         InComment ->
-            result <- Task.attempt (Context.getChar ctx)
+            result = Context.getChar ctx |> Task.result!
             when result is
                 Ok (T val newCtx) ->
                     if val == 0x7D then
@@ -167,7 +167,7 @@ interpretCtxLoop = \ctx ->
                     Task.fail UnexpectedEndOfData
 
         InNumber accum ->
-            result <- Task.attempt (Context.getChar ctx)
+            result = Context.getChar ctx |> Task.result!
             when result is
                 Ok (T val newCtx) ->
                     if isDigit val then
@@ -182,7 +182,7 @@ interpretCtxLoop = \ctx ->
                         # outside of number now, this needs to be executed.
                         pushCtx = Context.pushStack newCtx (Number accum)
 
-                        execCtx <- Task.await (stepExecCtx { pushCtx & state: Executing } val)
+                        execCtx = stepExecCtx! { pushCtx & state: Executing } val
                         Task.succeed (Step execCtx)
 
                 Err NoScope ->
@@ -192,14 +192,14 @@ interpretCtxLoop = \ctx ->
                     Task.fail UnexpectedEndOfData
 
         InString bytes ->
-            result <- Task.attempt (Context.getChar ctx)
+            result = Context.getChar ctx |> Task.result!
             when result is
                 Ok (T val newCtx) ->
                     if val == 0x22 then
                         # `"` end of string
                         when Str.fromUtf8 bytes is
                             Ok str ->
-                                {} <- Task.await (Stdout.raw str)
+                                Stdout.raw! str
                                 Task.succeed (Step { newCtx & state: Executing })
 
                             Err _ ->
@@ -214,7 +214,7 @@ interpretCtxLoop = \ctx ->
                     Task.fail UnexpectedEndOfData
 
         InLambda depth bytes ->
-            result <- Task.attempt (Context.getChar ctx)
+            result = Context.getChar ctx |> Task.result!
             when result is
                 Ok (T val newCtx) ->
                     if val == 0x5B then
@@ -238,7 +238,7 @@ interpretCtxLoop = \ctx ->
                     Task.fail UnexpectedEndOfData
 
         InSpecialChar ->
-            result <- Task.attempt (Context.getChar { ctx & state: Executing })
+            result = Context.getChar { ctx & state: Executing } |> Task.result!
             when result is
                 Ok (T 0xB8 newCtx) ->
                     result2 =
@@ -273,7 +273,7 @@ interpretCtxLoop = \ctx ->
                     Task.fail UnexpectedEndOfData
 
         LoadChar ->
-            result <- Task.attempt (Context.getChar { ctx & state: Executing })
+            result = Context.getChar { ctx & state: Executing } |> Task.result!
             when result is
                 Ok (T x newCtx) ->
                     Task.succeed (Step (Context.pushStack newCtx (Number (Num.intCast x))))
@@ -472,7 +472,7 @@ stepExecCtx = \ctx, char ->
                 Ok (T popCtx num) ->
                     when Str.fromUtf8 [Num.intCast num] is
                         Ok str ->
-                            {} <- Task.await (Stdout.raw str)
+                            Stdout.raw! str
                             Task.succeed popCtx
 
                         Err _ ->
@@ -485,7 +485,7 @@ stepExecCtx = \ctx, char ->
             # `.` write int
             when popNumber ctx is
                 Ok (T popCtx num) ->
-                    {} <- Task.await (Stdout.raw (Num.toStr (Num.intCast num)))
+                    Stdout.raw! (Num.toStr (Num.intCast num))
                     Task.succeed popCtx
 
                 Err e ->
@@ -493,7 +493,7 @@ stepExecCtx = \ctx, char ->
 
         0x5E ->
             # `^` read char as int
-            in <- Task.await Stdin.char
+            in = Stdin.char!
             if in == 255 then
                 # max char sent on EOF. Change to -1
                 Task.succeed (Context.pushStack ctx (Number -1))

@@ -1,7 +1,6 @@
-app "rbtree-del"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
+
+import pf.Task
 
 Color : [Red, Black]
 
@@ -13,7 +12,7 @@ ConsList a : [Nil, Cons a (ConsList a)]
 
 main : Task.Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    inputResult = Task.getInt |> Task.result!
 
     when inputResult is
         Ok n ->
