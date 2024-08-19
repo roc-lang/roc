@@ -2881,14 +2881,11 @@ where
             indent_problem,
         )?;
 
-        if stmts.is_empty() {
-            return Err((
-                NoProgress,
-                wrap_error(arena.alloc(EExpr::Start(state.pos())), state.pos()),
-            ));
-        }
-
         let last_pos = state.pos();
+        if stmts.is_empty() {
+            let fail = wrap_error(arena.alloc(EExpr::Start(last_pos)), last_pos);
+            return Err((NoProgress, fail));
+        }
 
         let loc_expr = stmts_to_expr(&stmts, arena)
             .map_err(|e| (MadeProgress, wrap_error(arena.alloc(e), last_pos)))?;
@@ -2896,8 +2893,10 @@ where
         let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
         Ok((MadeProgress, loc_expr, state))
     } else {
-        let (progress, loc_expr, state) =
-            specialize_err_ref(wrap_error, expr_start(options)).parse(arena, state, min_indent)?;
+        let last_pos = state.pos();
+        let (progress, loc_expr, state) = expr_start(options)
+            .parse(arena, state, min_indent)
+            .map_err(|(p, e)| (p, wrap_error(arena.alloc(e), last_pos)))?;
 
         let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
         Ok((progress, loc_expr, state))
@@ -2929,51 +2928,46 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
             state = state_before_space;
             break;
         }
-
-        let loc_stmt = match specialize_err_ref(wrap_error, stmt_start(options, last_space.region))
-            .parse(arena, state.clone(), min_indent)
-        {
-            Ok((_p, s, new_state)) => {
-                state_before_space = new_state.clone();
-                state = new_state;
-                s
-            }
-            Err((NoProgress, _)) => {
-                if stmts.is_empty() {
-                    return Err((
-                        NoProgress,
-                        wrap_error(arena.alloc(EExpr::Start(state.pos())), state.pos()),
-                    ));
+        let start = state.pos();
+        let stmt =
+            match stmt_start(options, last_space.region).parse(arena, state.clone(), min_indent) {
+                Ok((_, stmt, new_state)) => {
+                    state_before_space = new_state.clone();
+                    state = new_state;
+                    stmt
                 }
+                Err((NoProgress, _)) => {
+                    if stmts.is_empty() {
+                        let fail = wrap_error(arena.alloc(EExpr::Start(start)), start);
+                        return Err((NoProgress, fail));
+                    }
 
-                state = state_before_space;
-                break;
-            }
-            Err((MadeProgress, e)) => {
-                return Err((MadeProgress, e));
-            }
-        };
+                    state = state_before_space;
+                    break;
+                }
+                Err((_, fail)) => {
+                    return Err((MadeProgress, wrap_error(arena.alloc(fail), start)));
+                }
+            };
 
         stmts.push(SpacesBefore {
             before: last_space.value,
-            item: loc_stmt,
+            item: stmt,
         });
 
         match loc_space0_e(indent_problem).parse(arena, state.clone(), min_indent) {
-            Ok((_p, s_loc, new_state)) => {
-                if s_loc.value.is_empty() {
+            Ok((_, space, new_state)) => {
+                if space.value.is_empty() {
                     // require a newline or a terminator after the statement
                     if at_terminator(&new_state) {
                         state = state_before_space;
                         break;
                     }
-
-                    return Err((
-                        MadeProgress,
-                        wrap_error(arena.alloc(EExpr::BadExprEnd(state.pos())), state.pos()),
-                    ));
+                    let last_pos = state.pos();
+                    let fail = wrap_error(arena.alloc(EExpr::BadExprEnd(last_pos)), last_pos);
+                    return Err((MadeProgress, fail));
                 }
-                last_space = s_loc;
+                last_space = space;
                 state = new_state;
             }
             Err(_) => {
