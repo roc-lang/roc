@@ -1,1 +1,1 @@
-Bookmark a := { chapter : Str, stanza : Str, notes : a }
+Bookmark a := { chapter: Str, stanza: Str, notes: a }

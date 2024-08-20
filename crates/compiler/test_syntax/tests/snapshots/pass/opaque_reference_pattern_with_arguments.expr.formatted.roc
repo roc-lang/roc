@@ -1,2 +1,4 @@
-when n is
+when
+    n
+is
     @Add n m -> n + m

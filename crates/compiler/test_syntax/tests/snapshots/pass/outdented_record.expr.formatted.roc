@@ -1,4 +1,2 @@
-x = foo {
-    bar: blah,
-}
+x = foo { bar: blah }
 x

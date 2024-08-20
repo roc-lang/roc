@@ -1,3 +1,1 @@
-package [Foo, Bar] {
-    foo: "./foo",
-}
+package [Foo, Bar]{ foo : "./foo" }

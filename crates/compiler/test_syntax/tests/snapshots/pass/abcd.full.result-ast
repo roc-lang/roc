@@ -1,122 +1,124 @@
-Full {
-    header: Module {
-        comments: [],
-        header: Module(
-            ModuleHeader {
-                after_keyword: [],
-                params: None,
-                exposes: [],
-                interface_imports: None,
-            },
-        ),
-    },
-    module_defs: Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @9-66,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 1),
-        ],
-        spaces: [
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @9-10 Identifier {
-                    ident: "e",
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: Module(
+                ModuleHeader {
+                    after_keyword: [],
+                    params: None,
+                    exposes: [],
+                    interface_imports: None,
                 },
-                @11-66 Closure(
-                    [
-                        @12-13 Identifier {
-                            ident: "r",
-                        },
-                    ],
-                    @15-66 When(
-                        @20-21 Var {
-                            module_name: "",
-                            ident: "t",
-                        },
+            ),
+        },
+        defs: Defs {
+            tags: [
+                Index(2147483648),
+            ],
+            regions: [
+                @9-66,
+            ],
+            space_before: [
+                Slice(start = 0, length = 0),
+            ],
+            space_after: [
+                Slice(start = 0, length = 1),
+            ],
+            spaces: [
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @9-10 Identifier {
+                        ident: "e",
+                    },
+                    @11-66 Closure(
                         [
-                            WhenBranch {
-                                patterns: [
-                                    @25-26 SpaceBefore(
-                                        Tag(
-                                            "E",
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                ],
-                                value: @28-66 When(
-                                    @33-34 Var {
-                                        module_name: "",
-                                        ident: "g",
-                                    },
-                                    [
-                                        WhenBranch {
-                                            patterns: [
-                                                @38-39 SpaceBefore(
-                                                    Tag(
-                                                        "P",
-                                                    ),
-                                                    [
-                                                        Newline,
-                                                    ],
-                                                ),
+                            @12-13 Identifier {
+                                ident: "r",
+                            },
+                        ],
+                        @15-66 When(
+                            @20-21 Var {
+                                module_name: "",
+                                ident: "t",
+                            },
+                            [
+                                WhenBranch {
+                                    patterns: [
+                                        @25-26 SpaceBefore(
+                                            Tag(
+                                                "E",
+                                            ),
+                                            [
+                                                Newline,
                                             ],
-                                            value: @41-66 If(
-                                                [
-                                                    (
-                                                        @44-45 Var {
-                                                            module_name: "",
-                                                            ident: "y",
-                                                        },
-                                                        @51-52 SpaceBefore(
-                                                            SpaceAfter(
-                                                                Var {
-                                                                    module_name: "",
-                                                                    ident: "e",
-                                                                },
+                                        ),
+                                    ],
+                                    value: @28-66 When(
+                                        @33-34 Var {
+                                            module_name: "",
+                                            ident: "g",
+                                        },
+                                        [
+                                            WhenBranch {
+                                                patterns: [
+                                                    @38-39 SpaceBefore(
+                                                        Tag(
+                                                            "P",
+                                                        ),
+                                                        [
+                                                            Newline,
+                                                        ],
+                                                    ),
+                                                ],
+                                                value: @41-66 If(
+                                                    [
+                                                        (
+                                                            @44-45 Var {
+                                                                module_name: "",
+                                                                ident: "y",
+                                                            },
+                                                            @51-52 SpaceBefore(
+                                                                SpaceAfter(
+                                                                    Var {
+                                                                        module_name: "",
+                                                                        ident: "e",
+                                                                    },
+                                                                    [
+                                                                        Newline,
+                                                                    ],
+                                                                ),
                                                                 [
                                                                     Newline,
                                                                 ],
                                                             ),
-                                                            [
-                                                                Newline,
-                                                            ],
-                                                        ),
-                                                    ),
-                                                ],
-                                                @65-66 SpaceBefore(
-                                                    Var {
-                                                        module_name: "",
-                                                        ident: "s",
-                                                    },
-                                                    [
-                                                        LineComment(
-                                                            ".t=",
                                                         ),
                                                     ],
+                                                    @65-66 SpaceBefore(
+                                                        Var {
+                                                            module_name: "",
+                                                            ident: "s",
+                                                        },
+                                                        [
+                                                            LineComment(
+                                                                ".t=",
+                                                            ),
+                                                        ],
+                                                    ),
                                                 ),
-                                            ),
-                                            guard: None,
-                                        },
-                                    ],
-                                ),
-                                guard: None,
-                            },
-                        ],
+                                                guard: None,
+                                            },
+                                        ],
+                                    ),
+                                    guard: None,
+                                },
+                            ],
+                        ),
                     ),
                 ),
-            ),
-        ],
+            ],
+        },
     },
-}
+)

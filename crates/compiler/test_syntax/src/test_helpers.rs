@@ -262,7 +262,7 @@ impl<'a> Input<'a> {
 
         // Now verify that the resultant formatting is _idempotent_ - i.e. that it doesn't change again if re-formatted
         if check_idempotency {
-            let reformatted = reparsed_ast.format();
+            let reformatted = reparsed_ast.format2();
 
             if output != reformatted {
                 eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",

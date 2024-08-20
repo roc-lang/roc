@@ -1,1 +1,1 @@
-app [quicksort] { pf: platform "./platform" }
+app [quicksort]{ pf : platform "./platform" }

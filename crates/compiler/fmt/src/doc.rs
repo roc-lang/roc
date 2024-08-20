@@ -173,7 +173,8 @@ impl<'a> Doc<'a> {
                     // TODO: differentiate doc comments!
                     self.comment(comment)
                 }
-                CommentOrNewline::Newline => self.push(Node::OptionalNewline),
+                // CommentOrNewline::Newline => self.push(Node::OptionalNewline),
+                CommentOrNewline::Newline => {}
             }
         }
     }
@@ -529,6 +530,7 @@ impl<'a> Docify<'a> for Expr<'a> {
                     doc.literal("{");
 
                     indent!(doc, {
+                        doc.push(Node::OptionalNewline);
                         for (i, field) in fields.iter().enumerate() {
                             if i > 0 {
                                 doc.literal(",");
@@ -637,21 +639,23 @@ impl<'a> Docify<'a> for Expr<'a> {
                         body.value.docify(doc);
                     });
                 });
-                doc.push(Node::ForcedNewline); // outside the group!
+                // doc.push(Node::ForcedNewline); // outside the group!
             }
             Expr::Defs(defs, final_expr) => {
-                let begin = doc.begin();
-                for def in defs.defs() {
-                    match def {
-                        Ok(ty) => ty.docify(doc),
-                        Err(val) => val.docify(doc),
-                    };
+                group!(doc, {
                     doc.push(Node::ForcedNewline);
-                }
-                final_expr.value.docify(doc);
-                doc.group_to(begin)
+                    for def in defs.defs() {
+                        match def {
+                            Ok(ty) => ty.docify(doc),
+                            Err(val) => val.docify(doc),
+                        };
+                        doc.push(Node::ForcedNewline);
+                    }
+                    final_expr.value.docify(doc);
+                });
             }
             Expr::Backpassing(pats, call, body) => {
+                doc.push(Node::ForcedNewline);
                 for (i, pat) in pats.iter().enumerate() {
                     if i > 0 {
                         doc.literal(",");
@@ -728,9 +732,11 @@ impl<'a> Docify<'a> for Expr<'a> {
                     if multiline {
                         doc.literal("(");
                         indent!(doc, {
+                            doc.push(Node::OptionalNewline);
                             expr.value.docify(doc);
-                            doc.literal(")");
                         });
+                        doc.push(Node::OptionalNewline);
+                        doc.literal(")");
                     } else {
                         expr.value.docify(doc);
                     }
@@ -766,9 +772,11 @@ impl<'a> Docify<'a> for Expr<'a> {
             Expr::When(cond, branches) => {
                 let begin = doc.begin();
                 doc.literal("when");
-                doc.space();
-                cond.value.docify(doc);
-                doc.space();
+                indent!(doc, {
+                    doc.push(Node::OptionalNewline);
+                    cond.value.docify(doc);
+                    doc.push(Node::OptionalNewline);
+                });
                 doc.literal("is");
                 let begin_indent = doc.begin();
                 for branch in branches.iter() {
@@ -815,10 +823,10 @@ impl<'a> Docify<'a> for Expr<'a> {
                 group!(doc, {
                     doc.literal("(");
                     indent!(doc, {
-                        doc.push(Node::OptionalNewline);
+                        // doc.push(Node::OptionalNewline);
                         expr.docify(doc);
                     });
-                    doc.push(Node::OptionalNewline);
+                    // doc.push(Node::OptionalNewline);
                     doc.literal(")");
                 });
             }
@@ -1143,15 +1151,23 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
             TypeAnnotation::Record { fields, ext } => {
                 group!(doc, {
                     doc.literal("{");
-                    let begin_indent = doc.begin();
-                    for (i, field) in fields.iter().enumerate() {
-                        if i > 0 {
-                            doc.literal(",");
-                            doc.space();
+
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        for (i, field) in fields.iter().enumerate() {
+                            if i > 0 {
+                                doc.literal(",");
+                                doc.push(Node::OptionalNewline);
+                            }
+                            field.value.docify(doc);
                         }
-                        field.value.docify(doc);
+                    });
+
+                    if !fields.is_empty() {
+                        doc.push(Node::WhenMultiline(","));
+                        doc.push(Node::OptionalNewline);
                     }
-                    doc.indent_to(begin_indent);
+
                     doc.literal("}");
                     if let Some(ext) = ext {
                         ext.value.docify(doc);
@@ -1221,8 +1237,14 @@ impl<'a> Docify<'a> for TypeAnnotation<'a> {
                     }
                 }
             }
-            TypeAnnotation::SpaceBefore(ty, _comments)
-            | TypeAnnotation::SpaceAfter(ty, _comments) => ty.docify(doc),
+            TypeAnnotation::SpaceBefore(ty, comments) => {
+                doc.comments(comments);
+                ty.docify(doc);
+            }
+            TypeAnnotation::SpaceAfter(ty, comments) => {
+                ty.docify(doc);
+                doc.comments(comments);
+            }
             TypeAnnotation::Malformed(_) => todo!(),
         }
     }
@@ -1360,6 +1382,10 @@ impl<'a> Docify<'a> for ValueDef<'a> {
                 doc.space();
                 import.name.value.docify(doc);
 
+                if let Some(params) = &import.params {
+                    docify_collection(&params.params.value, Braces::Curly, doc);
+                }
+
                 if let Some(alias) = &import.alias {
                     doc.space();
                     alias.docify(doc);
@@ -1462,7 +1488,6 @@ impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
     fn docify(&'a self, doc: &mut Doc<'a>) {
         match self {
             AssignedField::RequiredValue(name, comments, value) => {
-                let begin = doc.begin();
                 doc.push(Node::Copy(name.value));
                 doc.literal(":");
                 doc.space();
@@ -1470,7 +1495,6 @@ impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
                 value.value.docify(doc);
             }
             AssignedField::OptionalValue(name, comments, value) => {
-                let begin = doc.begin();
                 doc.push(Node::Copy(name.value));
                 doc.literal("?");
                 doc.space();
@@ -1946,14 +1970,14 @@ impl<'a> Doc<'a> {
         );
         let honor_newlines = self.compute_honor_newlines(&is_multiline);
 
-        // debug_print_doc(
-        //     self,
-        //     &must_be_multiline,
-        //     &width_without_newlines,
-        //     &indents,
-        //     &is_multiline,
-        //     &honor_newlines,
-        // );
+        debug_print_doc(
+            self,
+            &must_be_multiline,
+            &width_without_newlines,
+            &indents,
+            &is_multiline,
+            &honor_newlines,
+        );
 
         for ((node, honor_newlines), indent) in self
             .nodes
@@ -2024,6 +2048,7 @@ fn debug_print_doc(
     is_multiline: &[bool],
     honor_newlines: &VecDeque<bool>,
 ) {
+    println!("=== DEBUG PRINT DOC ===");
     let depths = doc.compute_depths();
     println!("mb |  w | im |  i | hn");
     let indent_levels = "| ; ! : ".repeat(10);

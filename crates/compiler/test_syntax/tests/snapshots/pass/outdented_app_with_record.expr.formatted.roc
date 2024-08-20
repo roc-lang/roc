@@ -1,7 +1,2 @@
-x = foo
-    (
-        baz {
-            bar: blah,
-        }
-    )
+x = foo (baz { bar: blah })
 x

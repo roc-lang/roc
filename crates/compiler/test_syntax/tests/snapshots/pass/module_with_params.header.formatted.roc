@@ -1,1 +1,1 @@
-module { echo, read } -> [menu]
+module [menu]

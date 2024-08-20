@@ -1,3 +1,5 @@
-when x is
+when
+    x
+is
     { y } -> 2
     { z, w } -> 4

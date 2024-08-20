@@ -1,3 +1,2 @@
-app [main] { pf: platform "path" }
-
+app [main]{ pf : platform "path" }
 main = Stdout.line "Hello"

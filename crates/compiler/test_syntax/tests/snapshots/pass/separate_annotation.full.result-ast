@@ -1,56 +1,58 @@
-Full {
-    header: Module {
-        comments: [],
-        header: Module(
-            ModuleHeader {
-                after_keyword: [],
-                params: None,
-                exposes: [],
-                interface_imports: None,
-            },
-        ),
-    },
-    module_defs: Defs {
-        tags: [
-            Index(2147483648),
-            Index(2147483649),
-        ],
-        regions: [
-            @10-13,
-            @15-18,
-        ],
-        space_before: [
-            Slice(start = 0, length = 1),
-            Slice(start = 1, length = 2),
-        ],
-        space_after: [
-            Slice(start = 1, length = 0),
-            Slice(start = 3, length = 1),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @10-11 Identifier {
-                    ident: "i",
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: Module(
+                ModuleHeader {
+                    after_keyword: [],
+                    params: None,
+                    exposes: [],
+                    interface_imports: None,
                 },
-                @12-13 BoundVariable(
-                    "q",
-                ),
             ),
-            Body(
-                @15-16 Identifier {
-                    ident: "t",
-                },
-                @17-18 Tag(
-                    "F",
+        },
+        defs: Defs {
+            tags: [
+                Index(2147483648),
+                Index(2147483649),
+            ],
+            regions: [
+                @10-13,
+                @15-18,
+            ],
+            space_before: [
+                Slice(start = 0, length = 1),
+                Slice(start = 1, length = 2),
+            ],
+            space_after: [
+                Slice(start = 1, length = 0),
+                Slice(start = 3, length = 1),
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @10-11 Identifier {
+                        ident: "i",
+                    },
+                    @12-13 BoundVariable(
+                        "q",
+                    ),
                 ),
-            ),
-        ],
+                Body(
+                    @15-16 Identifier {
+                        ident: "t",
+                    },
+                    @17-18 Tag(
+                        "F",
+                    ),
+                ),
+            ],
+        },
     },
-}
+)

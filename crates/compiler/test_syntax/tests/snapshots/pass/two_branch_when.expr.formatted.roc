@@ -1,3 +1,5 @@
-when x is
+when
+    x
+is
     "" -> 1
     "mise" -> 2

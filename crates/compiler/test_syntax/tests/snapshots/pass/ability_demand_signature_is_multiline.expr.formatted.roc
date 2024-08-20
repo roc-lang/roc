@@ -1,5 +1,2 @@
-Hash implements
-    hash : a
-        -> U64
-
+Hash implements hash: a -> U64
 1

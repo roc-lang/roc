@@ -1,60 +1,62 @@
-Full {
-    header: Module {
-        comments: [],
-        header: Module(
-            ModuleHeader {
-                after_keyword: [],
-                params: None,
-                exposes: [],
-                interface_imports: None,
-            },
-        ),
-    },
-    module_defs: Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @10-20,
-        ],
-        space_before: [
-            Slice(start = 0, length = 1),
-        ],
-        space_after: [
-            Slice(start = 1, length = 1),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @10-11 Identifier {
-                    ident: "f",
-                },
-                @12-20 TagUnion {
-                    ext: None,
-                    tags: [
-                        @13-19 Apply {
-                            name: @13-14 "L",
-                            args: [
-                                @15-18 Apply(
-                                    "",
-                                    "L",
-                                    [
-                                        @17-18 Apply(
-                                            "",
-                                            "U",
-                                            [],
-                                        ),
-                                    ],
-                                ),
-                            ],
-                        },
-                    ],
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: Module(
+                ModuleHeader {
+                    after_keyword: [],
+                    params: None,
+                    exposes: [],
+                    interface_imports: None,
                 },
             ),
-        ],
+        },
+        defs: Defs {
+            tags: [
+                Index(2147483648),
+            ],
+            regions: [
+                @10-20,
+            ],
+            space_before: [
+                Slice(start = 0, length = 1),
+            ],
+            space_after: [
+                Slice(start = 1, length = 1),
+            ],
+            spaces: [
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @10-11 Identifier {
+                        ident: "f",
+                    },
+                    @12-20 TagUnion {
+                        ext: None,
+                        tags: [
+                            @13-19 Apply {
+                                name: @13-14 "L",
+                                args: [
+                                    @15-18 Apply(
+                                        "",
+                                        "L",
+                                        [
+                                            @17-18 Apply(
+                                                "",
+                                                "U",
+                                                [],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            },
+                        ],
+                    },
+                ),
+            ],
+        },
     },
-}
+)

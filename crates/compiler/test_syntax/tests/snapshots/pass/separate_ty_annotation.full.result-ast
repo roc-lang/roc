@@ -1,59 +1,61 @@
-Full {
-    header: Module {
-        comments: [],
-        header: Module(
-            ModuleHeader {
-                after_keyword: [],
-                params: None,
-                exposes: [],
-                interface_imports: None,
-            },
-        ),
-    },
-    module_defs: Defs {
-        tags: [
-            Index(0),
-            Index(2147483648),
-        ],
-        regions: [
-            @10-14,
-            @16-20,
-        ],
-        space_before: [
-            Slice(start = 0, length = 1),
-            Slice(start = 1, length = 2),
-        ],
-        space_after: [
-            Slice(start = 1, length = 0),
-            Slice(start = 3, length = 1),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-        ],
-        type_defs: [
-            Alias {
-                header: TypeHeader {
-                    name: @10-11 "B",
-                    vars: [],
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: Module(
+                ModuleHeader {
+                    after_keyword: [],
+                    params: None,
+                    exposes: [],
+                    interface_imports: None,
                 },
-                ann: @12-14 Record {
-                    fields: [],
-                    ext: None,
-                },
-            },
-        ],
-        value_defs: [
-            Body(
-                @16-17 Identifier {
-                    ident: "e",
-                },
-                @18-20 Record(
-                    [],
-                ),
             ),
-        ],
+        },
+        defs: Defs {
+            tags: [
+                Index(0),
+                Index(2147483648),
+            ],
+            regions: [
+                @10-14,
+                @16-20,
+            ],
+            space_before: [
+                Slice(start = 0, length = 1),
+                Slice(start = 1, length = 2),
+            ],
+            space_after: [
+                Slice(start = 1, length = 0),
+                Slice(start = 3, length = 1),
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @10-11 "B",
+                        vars: [],
+                    },
+                    ann: @12-14 Record {
+                        fields: [],
+                        ext: None,
+                    },
+                },
+            ],
+            value_defs: [
+                Body(
+                    @16-17 Identifier {
+                        ident: "e",
+                    },
+                    @18-20 Record(
+                        [],
+                    ),
+                ),
+            ],
+        },
     },
-}
+)
