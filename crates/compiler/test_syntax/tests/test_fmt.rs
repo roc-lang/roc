@@ -63,7 +63,7 @@ mod test_fmt {
 
         match header::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
-                use roc_parse::remove_spaces::RemoveSpaces;
+                use roc_parse::normalize::Normalize;
 
                 let mut buf = Buf::new_in(&arena);
 
@@ -77,8 +77,8 @@ mod test_fmt {
                     );
                 });
 
-                let ast_normalized = actual.remove_spaces(&arena);
-                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+                let ast_normalized = actual.normalize(&arena);
+                let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
                 // HACK!
                 // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -6326,6 +6326,83 @@ mod test_fmt {
             "
             ),
         );
+    }
+
+    #[test]
+    fn keep_explicit_blank_chars() {
+        expr_formats_same(indoc!(
+            r#"
+                x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn make_blank_chars_explicit() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"a\u{200A}b\u{200B}c\u{200C}d\u{FEFF}e\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "a\u(200a)b\u(200b)c\u(200c)d\u(feff)e"
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_when_interpolating() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x = \"foo:\u{200B} $(bar).\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x = "foo:\u(200b) $(bar)."
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn make_blank_chars_explicit_in_multiline_string() {
+        expr_formats_to(
+            indoc!(
+                "
+                    x =
+                        \"\"\"
+                        foo:\u{200B} $(bar).
+                        \"\"\"
+                    x
+                "
+            ),
+            indoc!(
+                r#"
+                    x =
+                        """
+                        foo:\u(200b) $(bar).
+                        """
+                    x
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn preserve_multiline_string_trailing_whitespace() {
+        expr_formats_same(indoc!(
+            "x =\n    \"\"\"\n    foo\n    bar                \n    baz\n    \"\"\"\nx"
+        ));
     }
 
     // this is a parse error atm

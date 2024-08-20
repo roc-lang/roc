@@ -4,12 +4,13 @@ use crate::module::{
     ModuleHeader, ParsedModule, TypeCheckedModule,
 };
 use roc_can::abilities::PendingAbilitiesStore;
+use roc_can::expr::AnnotatedMark;
 use roc_collections::{MutMap, MutSet, VecMap};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{ModuleId, PQModuleName, Symbol};
 use roc_mono::ir::ExternalSpecializations;
 use roc_problem::Severity;
-use roc_region::all::Region;
+use roc_region::all::{Loc, Region};
 use roc_solve_problem::TypeError;
 use roc_types::subs::Variable;
 use roc_types::types::Alias;
@@ -26,6 +27,8 @@ pub(crate) struct ModuleCache<'a> {
     pub(crate) aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
     pub(crate) pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
     pub(crate) constrained: MutMap<ModuleId, ConstrainedModule>,
+    pub(crate) param_patterns:
+        MutMap<ModuleId, (Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     pub(crate) typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     pub(crate) checked: MutMap<ModuleId, CheckedModule>,
     pub(crate) found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -101,6 +104,7 @@ impl Default for ModuleCache<'_> {
             aliases: Default::default(),
             pending_abilities: Default::default(),
             constrained: Default::default(),
+            param_patterns: Default::default(),
             typechecked: Default::default(),
             checked: Default::default(),
             found_specializations: Default::default(),

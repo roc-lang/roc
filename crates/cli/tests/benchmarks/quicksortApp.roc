@@ -5,7 +5,12 @@ import Quicksort
 
 main : Task.Task {} []
 main =
-    inputResult = PlatformTask.getInt!
+    { value, isError } = PlatformTask.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->

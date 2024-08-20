@@ -1,0 +1,13 @@
+TrySuffix {
+    target: Result,
+    expr: TrySuffix {
+        target: Result,
+        expr: TrySuffix {
+            target: Result,
+            expr: Var {
+                module_name: "Stdout",
+                ident: "line",
+            },
+        },
+    },
+}

@@ -95,6 +95,10 @@ pub enum CalledVia {
     /// This call is the result of desugaring a Task.await from `!` syntax
     /// e.g. Stdout.line! "Hello" becomes Task.await (Stdout.line "Hello") \{} -> ...
     BangSuffix,
+
+    /// This call is the result of desugaring a Result.try from `?` syntax
+    /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...
+    QuestionSuffix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +114,23 @@ impl std::fmt::Display for UnaryOp {
         match self {
             UnaryOp::Negate => write!(f, "-"),
             UnaryOp::Not => write!(f, "!"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Suffix {
+    /// (!), e.g. (Stdin.line!)
+    Bang,
+    /// (?), e.g. (parseData? data)
+    Question,
+}
+
+impl std::fmt::Display for Suffix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Suffix::Bang => write!(f, "!"),
+            Suffix::Question => write!(f, "?"),
         }
     }
 }

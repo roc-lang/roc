@@ -202,10 +202,10 @@ fromResult = \res ->
 ## }
 ## ```
 batch : Task a c -> (Task (a -> b) c -> Task b c)
-batch = \current -> \next ->
-        f <- next |> await
-
-        map current f
+batch = \current ->
+    \next ->
+        await next \f ->
+            map current f
 
 ## Apply each task in a list sequentially, and return a list of the resulting values.
 ## Each task will be awaited before beginning the next task.

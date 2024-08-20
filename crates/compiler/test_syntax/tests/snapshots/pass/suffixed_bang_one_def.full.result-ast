@@ -123,12 +123,13 @@ Full(
                                                     @126-128 Pizza,
                                                 ),
                                             ],
-                                            @129-132 TaskAwaitBang(
-                                                Var {
+                                            @129-132 TrySuffix {
+                                                target: Task,
+                                                expr: Var {
                                                     module_name: "A",
                                                     ident: "x",
                                                 },
-                                            ),
+                                            },
                                         ),
                                     ),
                                     Stmt(
@@ -144,12 +145,13 @@ Full(
                                                 ),
                                             ],
                                             @171-205 Apply(
-                                                @171-174 TaskAwaitBang(
-                                                    Var {
+                                                @171-174 TrySuffix {
+                                                    target: Task,
+                                                    expr: Var {
                                                         module_name: "B",
                                                         ident: "y",
                                                     },
-                                                ),
+                                                },
                                                 [
                                                     @185-205 SpaceBefore(
                                                         Record(

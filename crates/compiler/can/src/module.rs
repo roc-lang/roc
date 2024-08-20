@@ -5,9 +5,11 @@ use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::env::Env;
 use crate::expr::{
-    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
+    AnnotatedMark, ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
-use crate::pattern::{BindingsFromPattern, Pattern};
+use crate::pattern::{
+    canonicalize_record_destructure, BindingsFromPattern, Pattern, PermitShadows,
+};
 use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -17,7 +19,7 @@ use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::HeaderType;
+use roc_parse::header::{HeaderType, ModuleParams};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -135,6 +137,7 @@ pub struct Module {
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
     pub loc_dbgs: VecMap<Symbol, DbgLookup>,
+    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
 
 #[derive(Debug, Default)]
@@ -148,6 +151,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
+    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
@@ -181,7 +185,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
     loc_defs: &'a mut Defs<'a>,
-    header_type: &roc_parse::header::HeaderType,
+    header_type: &'a roc_parse::header::HeaderType,
     home: ModuleId,
     module_path: &'a str,
     src: &'a str,
@@ -197,6 +201,7 @@ pub fn canonicalize_module_defs<'a>(
     opt_shorthand: Option<&'a str>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
+
     let mut scope = Scope::new(
         home,
         qualified_module_ids
@@ -235,7 +240,15 @@ pub fn canonicalize_module_defs<'a>(
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
 
-    crate::desugar::desugar_defs_node_values(arena, loc_defs, src, &mut None, module_path, true);
+    crate::desugar::desugar_defs_node_values(
+        arena,
+        loc_defs,
+        src,
+        &mut None,
+        module_path,
+        true,
+        &mut env.problems,
+    );
 
     let mut rigid_variables = RigidVariables::default();
 
@@ -286,9 +299,42 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
+    let mut output = Output::default();
+
+    let params_pattern = header_type.get_params().as_ref().map(
+        |ModuleParams {
+             pattern,
+             before_arrow: _,
+             after_arrow: _,
+         }| {
+            let can_pattern = canonicalize_record_destructure(
+                &mut env,
+                var_store,
+                &mut scope,
+                &mut output,
+                PatternType::ModuleParams,
+                &pattern.value,
+                pattern.region,
+                PermitShadows(false),
+            );
+
+            let loc_pattern = Loc::at(pattern.region, can_pattern);
+
+            for (symbol, _) in BindingsFromPattern::new(&loc_pattern) {
+                env.top_level_symbols.insert(symbol);
+            }
+
+            (
+                var_store.fresh(),
+                AnnotatedMark::new(var_store),
+                loc_pattern,
+            )
+        },
+    );
+
     let (defs, output, symbols_introduced, imports_introduced) = canonicalize_defs(
         &mut env,
-        Output::default(),
+        output,
         var_store,
         &mut scope,
         loc_defs,
@@ -676,6 +722,7 @@ pub fn canonicalize_module_defs<'a>(
         scope,
         aliases,
         rigid_variables,
+        params_pattern,
         declarations,
         referenced_values,
         exposed_imports: can_exposed_imports,
@@ -969,6 +1016,7 @@ fn fix_values_captured_in_closure_expr(
         | SingleQuote(..)
         | IngestedFile(..)
         | Var(..)
+        | ParamsVar { .. }
         | AbilityMember(..)
         | EmptyRecord
         | TypedHole { .. }
@@ -1079,6 +1127,12 @@ fn fix_values_captured_in_closure_expr(
                 );
             }
         }
+
+        ImportParams(_, _, Some((_, expr))) => {
+            fix_values_captured_in_closure_expr(expr, no_capture_symbols, closure_captures);
+        }
+
+        ImportParams(_, _, None) => {}
 
         Tuple { elems, .. } => {
             for (_var, expr) in elems.iter_mut() {

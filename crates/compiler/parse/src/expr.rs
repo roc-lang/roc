@@ -3,7 +3,7 @@ use crate::ast::{
     Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
     ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
     ModuleImportParams, OldRecordBuilderField, Pattern, Spaceable, Spaced, Spaces, SpacesBefore,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -169,7 +169,12 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TaskAwaitBang),
+        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Task
+        )),
+        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
+            TryTarget::Result
+        )),
     ))
 }
 
@@ -892,10 +897,10 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
     then(
         and(
             backtrackable(space0_e(EImportParams::Indent)),
-            specialize_err(EImportParams::Record, record_help()),
+            specialize_err(EImportParams::Record, loc(record_help())),
         ),
-        |arena, state, _, (before, record): (_, RecordHelp<'a>)| {
-            if let Some(prefix) = record.prefix {
+        |arena, state, _, (before, loc_record): (_, Loc<RecordHelp<'a>>)| {
+            if let Some(prefix) = loc_record.value.prefix {
                 match prefix {
                     (update, RecordHelpPrefix::Update) => {
                         return Err((
@@ -912,21 +917,27 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
                 }
             }
 
-            let params = record.fields.map_items_result(arena, |loc_field| {
-                match loc_field.value.to_assigned_field(arena) {
-                    Ok(AssignedField::IgnoredValue(_, _, _)) => Err((
-                        MadeProgress,
-                        EImportParams::RecordIgnoredFieldFound(loc_field.region),
-                    )),
-                    Ok(field) => Ok(Loc::at(loc_field.region, field)),
-                    Err(FoundApplyValue) => Err((
-                        MadeProgress,
-                        EImportParams::RecordApplyFound(loc_field.region),
-                    )),
-                }
-            })?;
+            let params = loc_record
+                .value
+                .fields
+                .map_items_result(arena, |loc_field| {
+                    match loc_field.value.to_assigned_field(arena) {
+                        Ok(AssignedField::IgnoredValue(_, _, _)) => Err((
+                            MadeProgress,
+                            EImportParams::RecordIgnoredFieldFound(loc_field.region),
+                        )),
+                        Ok(field) => Ok(Loc::at(loc_field.region, field)),
+                        Err(FoundApplyValue) => Err((
+                            MadeProgress,
+                            EImportParams::RecordApplyFound(loc_field.region),
+                        )),
+                    }
+                })?;
 
-            let import_params = ModuleImportParams { before, params };
+            let import_params = ModuleImportParams {
+                before,
+                params: Loc::at(loc_record.region, params),
+            };
 
             Ok((MadeProgress, import_params, state))
         },
@@ -2170,8 +2181,9 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::SingleFieldRecordBuilder(_)
         | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
+        | Expr::RecordUpdater(_)
         | Expr::UnaryOp(_, _)
-        | Expr::TaskAwaitBang(..)
+        | Expr::TrySuffix { .. }
         | Expr::Crash
         | Expr::OldRecordBuilder(..)
         | Expr::RecordBuilder { .. } => return Err(()),
@@ -3240,7 +3252,7 @@ pub fn join_alias_to_body<'a>(
 /// 2. The beginning of a function call (e.g. `foo bar baz`)
 /// 3. The beginning of a definition (e.g. `foo =`)
 /// 4. The beginning of a type annotation (e.g. `foo :`)
-/// 5. A reserved keyword (e.g. `if ` or `case `), meaning we should do something else.
+/// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
 
 fn assign_or_destructure_identifier<'a>() -> impl Parser<'a, Ident<'a>, EExpr<'a>> {
     parse_ident
@@ -3302,6 +3314,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::RecordUpdaterFunction(string) => Expr::RecordUpdater(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
@@ -3743,7 +3756,10 @@ fn apply_expr_access_chain<'a>(
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
                 Expr::TupleAccess(arena.alloc(value), field)
             }
-            Suffix::TaskAwaitBang => Expr::TaskAwaitBang(arena.alloc(value)),
+            Suffix::TrySuffix(target) => Expr::TrySuffix {
+                target,
+                expr: arena.alloc(value),
+            },
         })
 }
 

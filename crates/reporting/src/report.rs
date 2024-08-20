@@ -509,6 +509,10 @@ impl<'a> RocDocAllocator<'a> {
         self.text(name).annotate(Annotation::Shorthand)
     }
 
+    pub fn backpassing_arrow(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("<-").annotate(Annotation::BinOp)
+    }
+
     pub fn binop(
         &'a self,
         content: roc_module::called_via::BinOp,
@@ -519,6 +523,13 @@ impl<'a> RocDocAllocator<'a> {
     pub fn unop(
         &'a self,
         content: roc_module::called_via::UnaryOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
+    }
+
+    pub fn suffix(
+        &'a self,
+        content: roc_module::called_via::Suffix,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::UnaryOp)
     }
@@ -886,6 +897,7 @@ pub enum Annotation {
     Ellipsis,
     Tag,
     RecordField,
+    RecordUpdater,
     TupleElem,
     TypeVariable,
     Alias,
@@ -1125,7 +1137,8 @@ where
             Warning => {
                 self.write_str(self.palette.warning)?;
             }
-            TypeBlock | InlineTypeBlock | Tag | RecordField | TupleElem => { /* nothing yet */ }
+            TypeBlock | InlineTypeBlock | Tag | RecordField | RecordUpdater | TupleElem => { /* nothing yet */
+            }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1144,8 +1157,8 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | TupleElem => { /* nothing yet */
-                }
+                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | RecordUpdater
+                | TupleElem => { /* nothing yet */ }
             },
         }
         Ok(())

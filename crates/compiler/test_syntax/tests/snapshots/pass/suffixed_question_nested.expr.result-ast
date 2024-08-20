@@ -1,19 +1,21 @@
 Apply(
-    @0-3 TaskAwaitBang(
-        Var {
+    @0-3 TrySuffix {
+        target: Result,
+        expr: Var {
             module_name: "",
             ident: "foo",
         },
-    ),
+    },
     [
         @9-17 ParensAround(
             Apply(
-                @9-12 TaskAwaitBang(
-                    Var {
+                @9-12 TrySuffix {
+                    target: Result,
+                    expr: Var {
                         module_name: "",
                         ident: "bar",
                     },
-                ),
+                },
                 [
                     @14-17 Var {
                         module_name: "",

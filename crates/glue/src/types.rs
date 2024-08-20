@@ -2243,21 +2243,24 @@ fn single_tag_payload_fields<'a, 'b>(
     types: &mut Types,
 ) -> (String, RocSingleTagPayload) {
     let layout = env.layout_cache.interner.get(in_layout);
-    // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
-    // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
-    // anyway just so we have some warning in case that relationship somehow didn't hold!
-    debug_assert_eq!(
-        env.glue_procs_by_layout.get(&layout).is_some(),
-        env.layout_cache
-            .interner
-            .has_varying_stack_size(in_layout, env.arena),
-        "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
-            &layout,
-            env.glue_procs_by_layout.get(&layout),
+
+    if std::env::var("SINGLE_TAG_GLUE_CHECK_OFF").as_deref() != Ok("1") {
+        // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
+        // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
+        // anyway just so we have some warning in case that relationship somehow didn't hold!
+        debug_assert_eq!(
+            env.glue_procs_by_layout.get(&layout).is_some(),
             env.layout_cache
                 .interner
-                .has_varying_stack_size(in_layout, env.arena)
-    );
+                .has_varying_stack_size(in_layout, env.arena),
+            "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
+                &layout,
+                env.glue_procs_by_layout.get(&layout),
+                env.layout_cache
+                    .interner
+                    .has_varying_stack_size(in_layout, env.arena)
+        );
+    }
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
 

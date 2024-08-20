@@ -16,11 +16,12 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
@@ -129,15 +130,13 @@ fn run_help(
         exposed_by_module,
         derived_module,
         function_kind,
+        params_pattern,
+        module_params_vars,
         ..
     } = config;
 
     let mut pools = Pools::default();
 
-    let state = State {
-        scope: Scope::default(),
-        mark: Mark::NONE.next(),
-    };
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
@@ -178,7 +177,6 @@ fn run_help(
     let state = solve(
         &mut env,
         types,
-        state,
         rank,
         problems,
         aliases,
@@ -186,6 +184,8 @@ fn run_help(
         abilities_store,
         &mut obligation_cache,
         &mut awaiting_specializations,
+        params_pattern,
+        module_params_vars,
     );
 
     RunSolveOutput {
@@ -236,7 +236,6 @@ enum Work<'a> {
 fn solve(
     env: &mut InferenceEnv,
     mut can_types: Types,
-    mut state: State,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     aliases: &mut Aliases,
@@ -244,14 +243,23 @@ fn solve(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
+    params_pattern: Option<roc_can::pattern::Pattern>,
+    module_params_vars: VecMap<ModuleId, Variable>,
 ) -> State {
+    let scope = Scope::new(params_pattern);
+
     let initial = Work::Constraint {
-        scope: &Scope::default(),
+        scope: &scope.clone(),
         rank,
         constraint,
     };
 
     let mut stack = vec![initial];
+
+    let mut state = State {
+        scope,
+        mark: Mark::NONE.next(),
+    };
 
     while let Some(work_item) = stack.pop() {
         let (scope, rank, constraint) = match work_item {
@@ -1390,6 +1398,86 @@ fn solve(
                             state
                         }
                     }
+                }
+            }
+            ImportParams(opt_provided, module_id, region) => {
+                match (module_params_vars.get(module_id), opt_provided) {
+                    (Some(expected), Some(provided)) => {
+                        let actual = either_type_index_to_var(
+                            env,
+                            rank,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            &mut can_types,
+                            aliases,
+                            *provided,
+                        );
+
+                        match unify(
+                            &mut env.uenv(),
+                            actual,
+                            *expected,
+                            UnificationMode::EQ,
+                            Polarity::OF_VALUE,
+                        ) {
+                            Success {
+                                vars,
+                                must_implement_ability,
+                                lambda_sets_to_specialize,
+                                extra_metadata: _,
+                            } => {
+                                env.introduce(rank, &vars);
+
+                                problems.extend(obligation_cache.check_obligations(
+                                    env.subs,
+                                    abilities_store,
+                                    must_implement_ability,
+                                    AbilityImplError::DoesNotImplement,
+                                ));
+                                compact_lambdas_and_check_obligations(
+                                    env,
+                                    problems,
+                                    abilities_store,
+                                    obligation_cache,
+                                    awaiting_specializations,
+                                    lambda_sets_to_specialize,
+                                );
+
+                                state
+                            }
+
+                            Failure(vars, actual_type, expected_type, _) => {
+                                env.introduce(rank, &vars);
+
+                                problems.push(TypeError::ModuleParamsMismatch(
+                                    *region,
+                                    *module_id,
+                                    actual_type,
+                                    expected_type,
+                                ));
+
+                                state
+                            }
+                        }
+                    }
+                    (Some(expected), None) => {
+                        let expected_type = env.uenv().var_to_error_type(*expected, Polarity::Neg);
+
+                        problems.push(TypeError::MissingModuleParams(
+                            *region,
+                            *module_id,
+                            expected_type,
+                        ));
+
+                        state
+                    }
+                    (None, Some(_)) => {
+                        problems.push(TypeError::UnexpectedModuleParams(*region, *module_id));
+
+                        state
+                    }
+                    (None, None) => state,
                 }
             }
         };

@@ -2230,33 +2230,65 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 ### [Record Builder](#record-builder) {#record-builder}
 
-The record builder syntax sugar is a useful feature which leverages the functional programming concept of [applicative functors](https://lucamug.medium.com/functors-applicatives-and-monads-in-pictures-784c2b5786f7), to provide a flexible method for constructing complex types.
+Record builders are a syntax sugar for sequencing actions and collecting the intermediate results as fields in a record. All you need to build a record is a `map2`-style function that takes two values of the same type and combines them using a provided combiner function. There are many convenient APIs we can build with this simple syntax.
 
-The record builder syntax sugar helps to build up a record by applying a series of functions to it.
-
-For example, let's say we write a record-builder as follows:
+For example, let's say we want a record builder to match URLs as follows:
 
 ```roc
-{ aliceID, bobID, trudyID } =
-    initIDCount {
-        aliceID: <- incID,
-        bobID: <- incID,
-        trudyID: <- incID,
-    } |> extractState
+combineMatchers : UrlMatcher a, UrlMatcher b, (a, b -> c) -> UrlMatcher c
+combineMatchers = \matcherA, matcherB, combiner -> ...
+
+userTabMatcher : UrlMatcher { users: {}, userId: U64, tab: Str }
+userTabMatcher =
+    { combineMatchers <-
+        users: exactSegment "users",
+        userId: u64Segment,
+        tab: anySegment,
+    }
+
+expect
+    userTabMatcher
+    |> matchOnUrl "/users/123/account"
+    == Ok { users: {}, userId: 123, tab: "account" }
 ```
 
-The above desguars to the following.
+The `userTabMatcher` record builder desugars to the following:
 
 ```roc
-{ aliceID, bobID, trudyID } =
-    initIDCount (\aID -> \bID -> \cID -> { aliceID: aID, bobID: bID, trudyID: cID })
-    |> incID
-    |> incID
-    |> incID
-    |> extractState
+userTabMatcher =
+    combineMatchers
+        (exactSegment "users")
+        (
+            combineMatchers
+                u64Segment
+                anySegment
+                \userId, tab -> (userId, tab)
+        )
+        \users, (userId, tab) -> { users, userId, tab }
 ```
 
-See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for an explanation of how to use this feature.
+You can see that the `combineMatchers` builder function is simply applied in sequence, pairing up all fields until a record is created.
+
+You'll notice that the `users` field above holds an empty record, and isn't a useful part of the result. If you want to ignore such a field in the record builder, prefix its name with an underscore as you would do to ignore a variable:
+
+```roc
+userTabMatcher : UrlMatcher { userId: U64 }
+userTabMatcher =
+    { combineMatchers <-
+        _: exactSegment "users",
+        userId: u64Segment,
+        _tab: anySegment,
+    }
+
+expect
+    userTabMatcher
+    |> matchOnUrl "/users/123/account"
+    == Ok { userId: 123 }
+```
+
+If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for a moderately-sized example or the [Arg.Builder](https://github.com/roc-lang/basic-cli/blob/main/platform/Arg/Builder.roc) module in our `basic-cli` platform for a complex example.
+
+_Note: This syntax replaces the old `field: <- value` record builder syntax using applicative functors because it is much simpler to understand and use. The old syntax will be removed soon._
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 

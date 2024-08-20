@@ -2396,6 +2396,13 @@ fn update<'a>(
                 .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
+            if let Some(params_pattern) = constrained_module.module.params_pattern.clone() {
+                state
+                    .module_cache
+                    .param_patterns
+                    .insert(module_id, params_pattern);
+            }
+
             state
                 .module_cache
                 .constrained
@@ -3551,6 +3558,7 @@ fn load_builtin_module_help<'a>(
                 header_type: HeaderType::Builtin {
                     name: header::ModuleName::new(name_stem),
                     exposes: unspace(arena, header.exposes.items),
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -3838,6 +3846,7 @@ fn parse_header<'a>(
                 header_type: HeaderType::Module {
                     name: roc_parse::header::ModuleName::new(module_name),
                     exposes: unspace(arena, header.exposes.items),
+                    opt_params: header.params,
                 },
                 module_comments: comments,
                 header_imports: header.interface_imports,
@@ -4379,7 +4388,7 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     imported_rigid_vars: &mut Vec<Variable>,
     imported_flex_vars: &mut Vec<Variable>,
-) -> (Vec<Variable>, AbilitiesStore) {
+) -> (Vec<Variable>, VecMap<ModuleId, Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -4486,7 +4495,31 @@ pub fn add_imports(
         },
     );
 
-    (import_variables, abilities_store)
+    let mut imported_param_vars = VecMap::default();
+
+    for (module_id, _) in exposed_for_module.exposed_by_module.iter_all() {
+        let ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            ..
+        } = exposed_for_module.exposed_by_module.get(module_id).unwrap();
+
+        if let Some(stored_aprams_var) = exposed_types.stored_params_var {
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, stored_aprams_var);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                &mut import_variables,
+                imported_rigid_vars,
+                imported_flex_vars,
+            );
+
+            imported_param_vars.insert(*module_id, copied_import_var);
+        }
+    }
+
+    (import_variables, imported_param_vars, abilities_store)
 }
 
 enum OnSymbolNotFound {
@@ -4608,6 +4641,7 @@ fn run_solve_solve(
         aliases,
         rigid_variables,
         abilities_store: pending_abilities,
+        params_pattern,
         ..
     } = module;
 
@@ -4617,7 +4651,7 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    let (import_variables, abilities_store) = add_imports(
+    let (import_variables, imported_param_vars, abilities_store) = add_imports(
         module.module_id,
         &mut constraints,
         &mut subs,
@@ -4655,6 +4689,8 @@ fn run_solve_solve(
             derived_module,
             #[cfg(debug_assertions)]
             checkmate,
+            params_pattern: params_pattern.map(|(_, _, pattern)| pattern.value),
+            module_params_vars: imported_param_vars,
         };
 
         let solve_output = roc_solve::module::run_solve(
@@ -4739,6 +4775,11 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
+    let opt_params_var = module
+        .params_pattern
+        .as_ref()
+        .map(|(params_var, _, _)| *params_var);
+
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
     let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
@@ -4810,6 +4851,7 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
+        opt_params_var,
         &solved_implementations,
         &abilities_store,
     );
@@ -5059,6 +5101,7 @@ fn canonicalize_and_constrain<'a>(
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
             &module_output.declarations,
+            &module_output.params_pattern,
             module_id,
         )
     };
@@ -5116,6 +5159,7 @@ fn canonicalize_and_constrain<'a>(
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
         loc_dbgs: module_output.loc_dbgs,
+        params_pattern: module_output.params_pattern,
     };
 
     let constrained_module = ConstrainedModule {
@@ -5459,6 +5503,7 @@ fn make_specializations<'a>(
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
+
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,

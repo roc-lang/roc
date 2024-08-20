@@ -17,10 +17,6 @@ if [ -n "$(ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$")" ]; then
   done
 fi
 
-if [[ "$(uname)" == "Darwin" ]]; then
-    brew install z3 # used by llvm
-fi
-
 # decompress the tar
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 

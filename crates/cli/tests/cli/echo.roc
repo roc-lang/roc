@@ -4,7 +4,7 @@ import pf.Stdin
 import pf.Stdout
 
 main =
-    _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
+    Stdout.line! "🗣  Shout into this cave and hear the echo! 👂👂👂"
 
     Task.loop {} tick
 

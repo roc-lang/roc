@@ -21,8 +21,7 @@ close = \@Handle handle -> PlatformTask.closeFile handle
 withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->
     handle = open! path
+    result = callback handle |> Task.result!
+    close! handle
 
-    callback handle
-    |> Task.attempt \result ->
-        close! handle
-        Task.fromResult result
+    Task.fromResult result
