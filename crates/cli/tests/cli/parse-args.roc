@@ -55,23 +55,23 @@ numParam = \{ name } ->
     { params: [param], parser }
 
 cliMap : ArgParser a, (a -> b) -> ArgParser b
-cliMap = \{ params, parser }, mapper -> {
-    params,
-    parser: \args ->
-        (data, afterData) <- parser args
-            |> Result.try
+cliMap = \{ params, parser }, mapper ->
+    mappedParser = \args ->
+        (data, afterData) = parser? args
 
-        Ok (mapper data, afterData),
-}
+        Ok (mapper data, afterData)
+
+    {
+        params,
+        parser: mappedParser,
+    }
 
 cliBuild : ArgParser a, ArgParser b, (a, b -> c) -> ArgParser c
 cliBuild = \firstWeaver, secondWeaver, combine ->
     allParams = List.concat firstWeaver.params secondWeaver.params
     combinedParser = \args ->
-        (firstValue, afterFirst) <- firstWeaver.parser args
-            |> Result.try
-        (secondValue, afterSecond) <- secondWeaver.parser afterFirst
-            |> Result.try
+        (firstValue, afterFirst) = firstWeaver.parser? args
+        (secondValue, afterSecond) = secondWeaver.parser? afterFirst
 
         Ok (combine firstValue secondValue, afterSecond)
 

@@ -1,4 +1,5 @@
 use roc_collections::all::MutSet;
+use roc_module::called_via::Suffix;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -246,6 +247,26 @@ pub fn can_problem<'b>(
             title = DUPLICATE_NAME.to_string();
         }
 
+        Problem::DeprecatedBackpassing(region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("Backpassing ("),
+                    alloc.backpassing_arrow(),
+                    alloc.reflow(") like this will soon be deprecated:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("You should use a "),
+                    alloc.suffix(Suffix::Bang),
+                    alloc.reflow(" for awaiting tasks or a "),
+                    alloc.suffix(Suffix::Question),
+                    alloc.reflow(" for trying results, and functions everywhere else."),
+                ]),
+            ]);
+
+            title = "BACKPASSING DEPRECATED".to_string();
+        }
+
         Problem::DefsOnlyUsedInRecursion(1, region) => {
             doc = alloc.stack([
                 alloc.reflow("This definition is only used in recursion with itself:"),
@@ -270,7 +291,7 @@ pub fn can_problem<'b>(
                 ),
             ]);
 
-            title = "DEFINITIONs ONLY USED IN RECURSION".to_string();
+            title = "DEFINITIONS ONLY USED IN RECURSION".to_string();
         }
         Problem::ExposedButNotDefined(symbol) => {
             doc = alloc.stack([
@@ -1423,6 +1444,22 @@ fn to_bad_ident_expr_report<'b>(
             ]),
         ]),
 
+        StrayAmpersand(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow(r"I am trying to parse a record updater function here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
+                    alloc.parser_suggestion("&name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("&height"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
         WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1608,6 +1645,22 @@ fn to_bad_ident_pattern_report<'b>(
                     alloc.reflow(" or "),
                     alloc.parser_suggestion(".height"),
                     alloc.reflow(" that accesses a value from a record."),
+                ]),
+            ])
+        }
+
+        StrayAmpersand(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow(r"I am trying to parse a record updater function here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("Something like "),
+                    alloc.parser_suggestion("&name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("&height"),
+                    alloc.reflow(" that updates a field in a record."),
                 ]),
             ])
         }

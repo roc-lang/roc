@@ -1265,7 +1265,7 @@ fn to_expr_report<'b>(
                                     alloc.concat([
                                         alloc.tip(),
                                         alloc.reflow("Remove "),
-                                        alloc.keyword("<-"),
+                                        alloc.backpassing_arrow(),
                                         alloc.reflow(" to assign the field directly.")
                                     ])
                                 }
@@ -1273,7 +1273,7 @@ fn to_expr_report<'b>(
                                     alloc.concat([
                                         alloc.note(""),
                                         alloc.reflow("Record builders need a mapper function before the "),
-                                        alloc.keyword("<-"),
+                                        alloc.backpassing_arrow(),
                                         alloc.reflow(" to combine fields together with.")
                                     ])
                                 }

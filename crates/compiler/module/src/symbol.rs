@@ -1,10 +1,9 @@
 use crate::ident::{Ident, Lowercase, ModuleName};
-use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
+use crate::module_err::{ModuleError, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
 use roc_error_macros::internal_error;
 use roc_ident::IdentStr;
 use roc_region::all::Region;
-use snafu::OptionExt;
 use std::num::NonZeroU32;
 use std::{fmt, u32};
 
@@ -324,7 +323,7 @@ pub fn get_module_ident_ids<'a>(
 ) -> ModuleResult<&'a IdentIds> {
     all_ident_ids
         .get(module_id)
-        .with_context(|| ModuleIdNotFoundSnafu {
+        .ok_or_else(|| ModuleError::ModuleIdNotFound {
             module_id: format!("{module_id:?}"),
             all_ident_ids: format!("{all_ident_ids:?}"),
         })
@@ -336,9 +335,10 @@ pub fn get_module_ident_ids_mut<'a>(
 ) -> ModuleResult<&'a mut IdentIds> {
     all_ident_ids
         .get_mut(module_id)
-        .with_context(|| ModuleIdNotFoundSnafu {
+        .ok_or_else(|| ModuleError::ModuleIdNotFound {
             module_id: format!("{module_id:?}"),
-            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
+            all_ident_ids: "I could not return all_ident_ids here because of borrowing issues."
+                .into(),
         })
 }
 
@@ -727,7 +727,7 @@ impl IdentIds {
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
         self.get_name(ident_id)
-            .with_context(|| IdentIdNotFoundSnafu {
+            .ok_or_else(|| ModuleError::IdentIdNotFound {
                 ident_id,
                 ident_ids_str: format!("{self:?}"),
             })

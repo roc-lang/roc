@@ -59,6 +59,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         expr_str,
         &mut None,
         arena.alloc("TestPath"),
+        &mut Default::default(),
     );
 
     let mut scope = Scope::new(

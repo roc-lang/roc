@@ -455,6 +455,8 @@ mod test_snapshots {
         pass/record_func_type_decl.expr,
         pass/record_type_with_function.expr,
         pass/record_update.expr,
+        pass/record_updater_literal_apply.expr,
+        pass/record_updater_var_apply.expr,
         pass/record_with_if.expr,
         pass/requires_type.header,
         pass/separate_defs.moduledefs,
