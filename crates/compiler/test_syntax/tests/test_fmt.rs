@@ -4806,6 +4806,21 @@ mod test_fmt {
             "
         ));
     }
+    #[test]
+    fn simple_closure_with_pipe_no_spaces() {
+        expr_formats_to(
+            indoc!(
+                r"
+                \x42->x42 |> Num.add 1
+            "
+            ),
+            indoc!(
+                r"
+                \x42 -> x42 |> Num.add 1
+            "
+            ),
+        );
+    }
 
     // #[test]
     fn _simple_closure_with_pipe_sugar() {

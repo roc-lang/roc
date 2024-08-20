@@ -1,6 +1,7 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::succeed;
+use crate::parser::ParseResult;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
@@ -312,6 +313,26 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
     simple_eat_until_control_character(&bytes[i..]) + i
 }
 
+pub fn parse_indent<'a, E>(
+    indent_problem: fn(Position) -> E,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a + SpaceProblem,
+{
+    let start = state.pos();
+    let mut newlines = Vec::new_in(arena);
+    let (progress, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
+    let spaces = newlines.into_bump_slice();
+    if spaces.is_empty() || state.column() >= min_indent {
+        Ok((progress, spaces, state))
+    } else {
+        Err((progress, indent_problem(start)))
+    }
+}
+
 pub fn space0_e<'a, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
@@ -319,15 +340,7 @@ where
     E: 'a + SpaceProblem,
 {
     move |arena, state: State<'a>, min_indent: u32| {
-        let start = state.pos();
-        let mut newlines = Vec::new_in(arena);
-        let (progress, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
-        let spaces = newlines.into_bump_slice();
-        if spaces.is_empty() || state.column() >= min_indent {
-            Ok((progress, spaces, state))
-        } else {
-            Err((progress, indent_problem(start)))
-        }
+        parse_indent(indent_problem, arena, state, min_indent)
     }
 }
 
@@ -338,7 +351,7 @@ where
 {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
         // TODO: we can do this more efficiently by stopping as soon as we see a '#' or a newline
-        let (_, spaces, _) = space0_e(newline_problem).parse(arena, state.clone(), min_indent)?;
+        let (_, spaces, _) = parse_indent(newline_problem, arena, state.clone(), min_indent)?;
 
         if !spaces.is_empty() || state.has_reached_end() {
             Ok((NoProgress, (), state))

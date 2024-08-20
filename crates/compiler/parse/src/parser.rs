@@ -1292,13 +1292,9 @@ pub fn loc<'a, Output, E: 'a>(
 ) -> impl Parser<'a, Loc<Output>, E> {
     move |arena, state: crate::state::State<'a>, min_indent: u32| {
         let start = state.pos();
-
         match parser.parse(arena, state, min_indent) {
             Ok((progress, value, state)) => {
-                let end = state.pos();
-                let region = Region::new(start, end);
-
-                Ok((progress, Loc { region, value }, state))
+                Ok((progress, Loc::pos(start, state.pos(), value), state))
             }
             Err(err) => Err(err),
         }
