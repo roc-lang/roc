@@ -732,10 +732,8 @@ impl<'a> Docify<'a> for Expr<'a> {
                     if multiline {
                         doc.literal("(");
                         indent!(doc, {
-                            doc.push(Node::OptionalNewline);
                             expr.value.docify(doc);
                         });
-                        doc.push(Node::OptionalNewline);
                         doc.literal(")");
                     } else {
                         expr.value.docify(doc);
@@ -823,10 +821,8 @@ impl<'a> Docify<'a> for Expr<'a> {
                 group!(doc, {
                     doc.literal("(");
                     indent!(doc, {
-                        // doc.push(Node::OptionalNewline);
                         expr.docify(doc);
                     });
-                    // doc.push(Node::OptionalNewline);
                     doc.literal(")");
                 });
             }
