@@ -10,9 +10,9 @@ mod test_fmt {
     use roc_fmt::Buf;
     use roc_parse::ast::{Defs, Header, SpacesBefore};
     use roc_parse::header::{self, parse_module_defs};
+    use roc_parse::normalize::Normalize;
     use roc_parse::parser::Parser;
     use roc_parse::parser::SyntaxError;
-    use roc_parse::remove_spaces::RemoveSpaces;
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
@@ -5883,8 +5883,8 @@ mod test_fmt {
                     panic!();
                 });
 
-                let ast_normalized = actual.remove_spaces(&arena);
-                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+                let ast_normalized = actual.normalize(&arena);
+                let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
 
                 if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
                     eprintln!(

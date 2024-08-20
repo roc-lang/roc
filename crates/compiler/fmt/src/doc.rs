@@ -776,10 +776,12 @@ impl<'a> Docify<'a> for Expr<'a> {
             Expr::When(cond, branches) => {
                 let begin = doc.begin();
                 doc.literal("when");
-                indent!(doc, {
-                    doc.push(Node::OptionalNewline);
-                    cond.value.docify(doc);
-                    doc.push(Node::OptionalNewline);
+                group!(doc, {
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        cond.value.docify(doc);
+                        doc.push(Node::OptionalNewline);
+                    });
                 });
                 doc.literal("is");
                 let begin_indent = doc.begin();
