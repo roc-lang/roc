@@ -253,6 +253,12 @@ impl<'a> Docify<'a> for Header<'a> {
             Header::Module(h) => {
                 doc.literal("module");
                 doc.space();
+                if let Some(params) = &h.params {
+                    docify_collection(&params.pattern.value, Braces::Curly, doc);
+                    doc.space();
+                    doc.literal("->");
+                    doc.space();
+                }
                 docify_collection(&h.exposes, Braces::Square, doc);
             }
             Header::App(h) => {
@@ -833,7 +839,27 @@ impl<'a> Docify<'a> for Expr<'a> {
             Expr::MultipleOldRecordBuilders(_) => todo!(),
             Expr::UnappliedOldRecordBuilder(_) => todo!(),
             Expr::OldRecordBuilder(_) => todo!(),
-            Expr::RecordBuilder { mapper, fields } => todo!(),
+            Expr::RecordBuilder { mapper, fields } => {
+                group!(doc, {
+                    doc.literal("{");
+                    indent!(doc, {
+                        doc.push(Node::OptionalNewline);
+                        mapper.value.docify(doc);
+                        doc.space();
+                        doc.literal("<-");
+                        doc.space();
+                        for (iter, field) in fields.iter().enumerate() {
+                            if iter > 0 {
+                                doc.literal(",");
+                                doc.push(Node::OptionalNewline);
+                            }
+                            field.value.docify(doc);
+                        }
+                    });
+                    doc.push(Node::OptionalNewline);
+                    doc.literal("}");
+                });
+            }
             Expr::EmptyRecordBuilder(_) => todo!(),
             Expr::SingleFieldRecordBuilder(_) => todo!(),
             Expr::OptionalFieldInRecordBuilder(_, _) => todo!(),
@@ -1507,7 +1533,14 @@ impl<'a, T: Docify<'a>> Docify<'a> for AssignedField<'a, T> {
                 doc.comments(comments);
             }
             AssignedField::Malformed(_) => todo!(),
-            AssignedField::IgnoredValue(_, _, _) => todo!(),
+            AssignedField::IgnoredValue(name, comments, value) => {
+                doc.literal("_");
+                doc.push(Node::Copy(name.value));
+                doc.literal(":");
+                doc.space();
+                doc.comments(comments);
+                value.value.docify(doc);
+            }
         }
     }
 }
@@ -1525,7 +1558,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
             Pattern::Tag(name) => doc.copy(name),
             Pattern::OpaqueRef(name) => doc.copy(name),
             Pattern::Apply(func, args) => {
-                let begin = doc.begin();
                 func.value.docify(doc);
                 for arg in *args {
                     doc.space();
@@ -1533,7 +1565,6 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 }
             }
             Pattern::RecordDestructure(items) => {
-                let begin = doc.begin();
                 doc.literal("{");
                 doc.space();
                 for (idx, item) in items.iter().enumerate() {
@@ -1547,14 +1578,12 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 doc.literal("}");
             }
             Pattern::RequiredField(name, pat) => {
-                let begin = doc.begin();
                 doc.copy(name);
                 doc.literal(":");
                 doc.space();
                 pat.value.docify(doc);
             }
             Pattern::OptionalField(name, pat) => {
-                let begin = doc.begin();
                 doc.copy(name);
                 doc.literal("?");
                 doc.space();
@@ -1636,8 +1665,12 @@ impl<'a> Docify<'a> for Pattern<'a> {
                 pat.docify(doc);
                 doc.comments(comments);
             }
-            Pattern::Malformed(_) => todo!(),
-            Pattern::MalformedIdent(_, _) => todo!(),
+            Pattern::Malformed(text) => {
+                doc.copy(text);
+            }
+            Pattern::MalformedIdent(text, _) => {
+                doc.copy(text);
+            }
         }
     }
 }
@@ -1737,6 +1770,11 @@ fn docify_str<'a>(lit: &'a StrLiteral, doc: &mut Doc<'a>) {
 fn docify_pattern_parens<'a>(value: &'a Pattern, doc: &mut Doc<'a>) {
     let needs_parens = match value.extract_spaces().item {
         Pattern::Apply(_, _) => true,
+        Pattern::StrLiteral(lit) => match lit {
+            StrLiteral::PlainLine(_) => false,
+            StrLiteral::Line(_) => false,
+            StrLiteral::Block(_) => true,
+        },
         _ => false,
     };
 
