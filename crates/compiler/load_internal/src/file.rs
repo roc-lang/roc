@@ -5093,6 +5093,7 @@ fn canonicalize_and_constrain<'a>(
         module_id,
         &module_output.module_params,
         &mut module_output.declarations,
+        &mut module_output.scope.locals.ident_ids,
         &mut var_store,
     );
 

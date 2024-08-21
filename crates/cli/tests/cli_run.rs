@@ -742,6 +742,9 @@ mod cli_run {
                 App1.getPost 1: https://api.example.com/one/posts/1
                 App2.getPost 2: http://api.example.com/two/posts/2
                 App3.getPost 3: https://api.example.com/three/posts/3
+                App1.getPosts [1, 2]: ["https://api.example.com/one/posts/1", "https://api.example.com/one/posts/2"]
+                App2.getPosts [3, 4]: ["http://api.example.com/two/posts/3", "http://api.example.com/two/posts/4"]
+                App2.getPosts [5, 6]: ["http://api.example.com/two/posts/5", "http://api.example.com/two/posts/6"]
                 App1.getPostComments 1: https://api.example.com/one/posts/1/comments
                 App2.getPostComments 2: http://api.example.com/two/posts/2/comments
                 App2.getPostComments 3: http://api.example.com/two/posts/3/comments

@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use roc_can::{
     expr::{
         AnnotatedMark, ClosureData,
@@ -10,7 +8,8 @@ use roc_can::{
     module::ModuleParams,
     pattern::Pattern,
 };
-use roc_module::symbol::{IdentId, ModuleId, Symbol};
+use roc_collections::VecMap;
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
@@ -18,42 +17,50 @@ use roc_types::types::Type;
 struct LowerParams<'a> {
     home_id: ModuleId,
     /// Top-level idents that we need to extend in a module with params. Empty if no params.
-    home_top_level_idents: Vec<IdentId>,
+    home_top_level_idents: VecMap<IdentId, usize>,
     home_params: &'a Option<ModuleParams>,
     var_store: &'a mut VarStore,
+    ident_ids: &'a mut IdentIds,
 }
 
 pub fn lower(
     home_id: ModuleId,
     home_params: &Option<ModuleParams>,
     decls: &mut Declarations,
+    ident_ids: &mut IdentIds,
     var_store: &mut VarStore,
 ) {
-    let home_top_level_idents = if home_params.is_some() {
-        decls
-            .symbols
-            .iter()
-            .map(|loc_sym| loc_sym.value.ident_id())
-            .collect()
-    } else {
-        vec![]
-    };
+    let mut home_top_level_idents = VecMap::new();
+
+    if home_params.is_some() {
+        for index in 0..decls.len() {
+            match decls.declarations[index] {
+                Function(_) | Recursive(_) | TailRecursive(_) => {
+                    let arity = decls.function_bodies[index].value.arguments.len();
+                    home_top_level_idents.insert(decls.symbols[index].value.ident_id(), arity);
+                }
+                Value => {
+                    home_top_level_idents.insert(decls.symbols[index].value.ident_id(), 0);
+                }
+                Destructure(_) | MutualRecursion { .. } | Expectation | ExpectationFx => {}
+            }
+        }
+    }
 
     let mut env = LowerParams {
         home_id,
         home_params,
         home_top_level_idents,
+        ident_ids,
         var_store,
     };
 
-    env.lower_decls(decls, 0..decls.len());
+    env.lower_decls(decls);
 }
 
 impl<'a> LowerParams<'a> {
-    fn lower_decls(&mut self, decls: &mut Declarations, range: Range<usize>) {
-        let mut index = range.start;
-
-        while index < range.end {
+    fn lower_decls(&mut self, decls: &mut Declarations) {
+        for index in 0..decls.len() {
             let tag = decls.declarations[index];
 
             match tag {
@@ -61,11 +68,15 @@ impl<'a> LowerParams<'a> {
                     self.lower_expr(&mut decls.expressions[index].value);
 
                     if let Some(new_arg) = self.home_params_argument() {
+                        // This module has params, and this is a top-level value,
+                        // so we need to convert it into a function that takes them.
                         decls.convert_value_to_function(index, vec![new_arg], self.var_store);
                     }
                 }
                 Function(fn_def_index) | Recursive(fn_def_index) | TailRecursive(fn_def_index) => {
                     if let Some((_, mark, pattern)) = self.home_params_argument() {
+                        // This module has params, and this is a top-level function,
+                        // so we need to extend its definition to take them.
                         let var = self.var_store.fresh();
 
                         decls.function_bodies[fn_def_index.index()]
@@ -83,22 +94,11 @@ impl<'a> LowerParams<'a> {
                     self.lower_expr(&mut decls.expressions[index].value)
                 }
 
-                MutualRecursion {
-                    length,
-                    cycle_mark: _,
-                } => {
-                    let length = length as usize;
-
-                    self.lower_decls(decls, index + 1..index + 1 + length);
-
-                    index += length;
-                }
                 Destructure(_) | Expectation | ExpectationFx => {
                     self.lower_expr(&mut decls.expressions[index].value)
                 }
+                MutualRecursion { .. } => {}
             }
-
-            index += 1;
         }
     }
 
@@ -114,14 +114,21 @@ impl<'a> LowerParams<'a> {
                     params_symbol,
                     params_var,
                 } => {
-                    // A referece to a top-level value def in an imported module with params
-                    *expr = self.call_params_var(*symbol, *var, *params_symbol, *params_var);
+                    *expr = self.lower_naked_params_var(
+                        // todo: get arity of imported symbol
+                        0,
+                        *symbol,
+                        *var,
+                        *params_symbol,
+                        *params_var,
+                    );
                 }
                 Var(symbol, var) => {
-                    if self.is_params_extended_home_symbol(symbol) {
-                        // A reference to a top-level value def in the home module with params
+                    if let Some(arity) = self.params_extended_home_symbol(symbol) {
                         let params = self.home_params.as_ref().unwrap();
-                        *expr = self.call_params_var(
+
+                        *expr = self.lower_naked_params_var(
+                            *arity,
                             *symbol,
                             *var,
                             params.whole_symbol,
@@ -133,19 +140,19 @@ impl<'a> LowerParams<'a> {
                     expr_stack.reserve(args.len() + 1);
 
                     match fun.1.value {
-                        // A call to a function in an imported module with params
                         ParamsVar {
                             symbol,
                             var,
                             params_var,
                             params_symbol,
                         } => {
+                            // Calling an imported function with params
                             args.push((params_var, Loc::at_zero(Var(params_symbol, params_var))));
                             fun.1.value = Var(symbol, var);
                         }
                         Var(symbol, _var) => {
-                            if self.is_params_extended_home_symbol(&symbol) {
-                                // A call to a top-level function in the home module with params
+                            if self.params_extended_home_symbol(&symbol).is_some() {
+                                // Calling a top-level function in the current module with params
                                 let params = self.home_params.as_ref().unwrap();
                                 args.push((
                                     params.whole_var,
@@ -160,6 +167,8 @@ impl<'a> LowerParams<'a> {
                         expr_stack.push(&mut arg.value);
                     }
                 }
+
+                // Nodes to walk
                 Closure(ClosureData {
                     loc_body,
                     captured_symbols: _,
@@ -173,7 +182,6 @@ impl<'a> LowerParams<'a> {
                     expr_stack.push(&mut loc_body.value);
                 }
 
-                // Nodes to walk
                 LetNonRec(def, cont) => {
                     expr_stack.reserve(2);
                     expr_stack.push(&mut def.loc_expr.value);
@@ -351,31 +359,92 @@ impl<'a> LowerParams<'a> {
         }
     }
 
-    fn is_params_extended_home_symbol(&self, symbol: &Symbol) -> bool {
-        symbol.module_id() == self.home_id
-            && self.home_top_level_idents.contains(&symbol.ident_id())
+    fn unique_symbol(&mut self) -> Symbol {
+        Symbol::new(self.home_id, self.ident_ids.gen_unique())
     }
 
-    fn call_params_var(
+    fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<&usize> {
+        if symbol.module_id() == self.home_id {
+            self.home_top_level_idents.get(&symbol.ident_id())
+        } else {
+            None
+        }
+    }
+
+    fn lower_naked_params_var(
         &mut self,
+        arity: usize,
         symbol: Symbol,
         var: Variable,
         params_symbol: Symbol,
         params_var: Variable,
     ) -> Expr {
         let params_arg = (params_var, Loc::at_zero(Var(params_symbol, params_var)));
+        let call_fn = Box::new((
+            self.var_store.fresh(),
+            Loc::at_zero(Var(symbol, var)),
+            self.var_store.fresh(),
+            self.var_store.fresh(),
+        ));
 
-        Call(
-            Box::new((
-                self.var_store.fresh(),
-                Loc::at_zero(Var(symbol, var)),
-                self.var_store.fresh(),
-                self.var_store.fresh(),
-            )),
-            vec![params_arg],
-            // todo: custom called via
-            roc_module::called_via::CalledVia::Space,
-        )
+        if arity == 0 {
+            // We are passing a top-level value that takes params, so we need to replace the Var
+            // with a call that passes the params to get the final result.
+            //
+            // value = \#params -> #params.x * 2
+            // record = \... #params -> { doubled: value }
+            //                                       ↓
+            //                                     value #params
+            Call(
+                call_fn,
+                vec![params_arg],
+                // todo: custom called via
+                roc_module::called_via::CalledVia::Space,
+            )
+        } else {
+            // We are passing a top-level function that takes params, so we need to replace
+            // the Var with a closure that captures the params and passes them to the function.
+            //
+            // fn1 = \arg #params -> #params.x * arg
+            // fn2 = \... #params -> List.map [1, 2] fn1
+            //                                        ↓
+            //                                       (\#1 -> fn1 #1 #params)
+            //
+            let mut arguments = Vec::with_capacity(arity);
+            let mut call_arguments = Vec::with_capacity(arity + 1);
+
+            for _ in 0..arity {
+                let sym = self.unique_symbol();
+                let var = self.var_store.fresh();
+
+                arguments.push((
+                    var,
+                    AnnotatedMark::new(self.var_store),
+                    Loc::at_zero(Pattern::Identifier(sym)),
+                ));
+                call_arguments.push((var, Loc::at_zero(Var(sym, var))));
+            }
+
+            call_arguments.push(params_arg);
+
+            let body = Call(
+                call_fn,
+                call_arguments,
+                // todo: custom called via
+                roc_module::called_via::CalledVia::Space,
+            );
+
+            Closure(ClosureData {
+                function_type: self.var_store.fresh(),
+                closure_type: self.var_store.fresh(),
+                return_type: self.var_store.fresh(),
+                name: self.unique_symbol(),
+                captured_symbols: vec![(params_symbol, params_var)],
+                recursive: roc_can::expr::Recursive::NotRecursive,
+                arguments,
+                loc_body: Box::new(Loc::at_zero(body)),
+            })
+        }
     }
     fn home_params_argument(&mut self) -> Option<(Variable, AnnotatedMark, Loc<Pattern>)> {
         match &self.home_params {
