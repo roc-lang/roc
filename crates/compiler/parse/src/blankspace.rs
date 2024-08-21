@@ -188,19 +188,6 @@ where
     )
 }
 
-pub fn check_indent<'a, E>(indent_problem: fn(Position) -> E) -> impl Parser<'a, (), E>
-where
-    E: 'a,
-{
-    move |_, state: State<'a>, min_indent: u32| {
-        if state.column() >= min_indent {
-            Ok((NoProgress, (), state))
-        } else {
-            Err((NoProgress, indent_problem(state.pos())))
-        }
-    }
-}
-
 pub fn simple_eat_whitespace(bytes: &[u8]) -> usize {
     let mut i = 0;
     while i < bytes.len() {
@@ -344,7 +331,6 @@ where
     }
 }
 
-// todo: @wip inline, just do it
 pub fn require_newline_or_eof<'a, E>(newline_problem: fn(Position) -> E) -> impl Parser<'a, (), E>
 where
     E: 'a + SpaceProblem,

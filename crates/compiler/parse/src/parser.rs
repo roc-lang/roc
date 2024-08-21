@@ -325,6 +325,7 @@ impl<'a> SyntaxError<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpr<'a> {
+    Ignored,
     TrailingOperator(Position),
 
     Start(Position),
@@ -335,8 +336,6 @@ pub enum EExpr<'a> {
 
     Dot(Position),
     Access(Position),
-    UnaryNot(Position),
-    UnaryNegate(Position),
     BadOperator(&'a str, Position),
 
     DefMissingFinalExpr(Position),
