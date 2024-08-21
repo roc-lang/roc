@@ -1079,8 +1079,6 @@ impl<'a> Normalize<'a> for EExpr<'a> {
             EExpr::Closure(inner_err, _pos) => {
                 EExpr::Closure(inner_err.normalize(arena), Position::zero())
             }
-            EExpr::Underscore(_pos) => EExpr::Underscore(Position::zero()),
-            EExpr::Crash(_pos) => EExpr::Crash(Position::zero()),
             EExpr::InParens(inner_err, _pos) => {
                 EExpr::InParens(inner_err.normalize(arena), Position::zero())
             }
