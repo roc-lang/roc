@@ -1,12 +1,10 @@
 a = "Hello,\n\nWorld!"
 b =
     """
-    Hello,\n\nWorld!
-    """
+    Hello,\n\nWorld!"""
 c =
     """
     Hello,
-
-    World!
-    """
+    
+    World!"""
 42

@@ -1,2 +1,5 @@
-when x is
-    Ok -> 3
+(when
+        x
+    is
+        Ok -> 3
+)

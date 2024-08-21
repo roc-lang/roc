@@ -1,5 +1,4 @@
-f :
-    # comment
-    {}
+f : # comment
+    { }
 
 42

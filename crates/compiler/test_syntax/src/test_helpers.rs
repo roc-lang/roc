@@ -1,5 +1,9 @@
 use bumpalo::Bump;
-use roc_fmt::{annotation::Formattable, header::fmt_header};
+use roc_fmt::{
+    annotation::Formattable,
+    doc::{doc_fmt_expr, doc_fmt_module},
+    header::fmt_header,
+};
 use roc_parse::{
     ast::{Defs, Expr, FullAst, Header, Malformed, SpacesBefore},
     header::parse_module_defs,
@@ -115,6 +119,19 @@ impl<'a> Output<'a> {
             Output::Full { .. } => format!("{self:#?}\n"),
         }
     }
+
+    pub fn format2(&self) -> InputOwned {
+        let arena = Bump::new();
+        let buf = Buf::new_in(&arena);
+        match self {
+            Output::Header(header) => InputOwned::Header(doc_fmt_module(Some(header), None)),
+            Output::ModuleDefs(defs) => InputOwned::ModuleDefs(doc_fmt_module(None, Some(defs))),
+            Output::Expr(expr) => InputOwned::Expr(doc_fmt_expr(expr)),
+            Output::Full(full) => {
+                InputOwned::Full(doc_fmt_module(Some(&full.header), Some(&full.defs)))
+            }
+        }
+    }
 }
 
 impl<'a> Malformed for Output<'a> {
@@ -203,7 +220,7 @@ impl<'a> Input<'a> {
             panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", self.as_str(), err);
         });
 
-        let output = actual.format();
+        let output = actual.format2();
 
         handle_formatted_output(output.as_ref());
 
@@ -245,7 +262,7 @@ impl<'a> Input<'a> {
 
         // Now verify that the resultant formatting is _idempotent_ - i.e. that it doesn't change again if re-formatted
         if check_idempotency {
-            let reformatted = reparsed_ast.format();
+            let reformatted = reparsed_ast.format2();
 
             if output != reformatted {
                 eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
@@ -257,6 +274,47 @@ impl<'a> Input<'a> {
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());
             }
+        }
+    }
+
+    pub fn check_invariants2(&self) {
+        let arena = Bump::new();
+
+        let actual = self.parse_in(&arena).unwrap_or_else(|err| {
+            panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", self.as_str(), err);
+        });
+
+        let output = actual.format2();
+
+        let reparsed_ast = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
+            panic!(
+                "After formatting, the source code no longer parsed!\n\n\
+                Parse error was: {:?}\n\n\
+                The original code was:\n\n{}\n\n\
+                The code that failed to parse:\n\n{}\n\n\
+                The original ast was:\n\n{:#?}\n\n",
+                err,
+                self.as_str(),
+                output.as_ref().as_str(),
+                actual
+            );
+        });
+
+        let ast_normalized = actual.normalize(&arena);
+        let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
+
+        if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
+            panic!(
+                "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                * * * Source code before formatting:\n{}\n\n\
+                * * * Source code after formatting:\n{}\n\n\
+                * * * AST before formatting:\n{:#?}\n\n\
+                * * * AST after formatting:\n{:#?}\n\n",
+                self.as_str(),
+                output.as_ref().as_str(),
+                actual,
+                reparsed_ast_normalized
+            );
         }
     }
 }

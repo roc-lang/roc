@@ -1,4 +1,3 @@
 # leading comment
-x <- \y -> y
-
+x <- (\y -> y)
 x

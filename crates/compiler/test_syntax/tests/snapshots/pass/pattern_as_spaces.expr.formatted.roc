@@ -1,4 +1,5 @@
-when 0 is
+when
+    0
+is
     0 # foobar
-        as # barfoo
-        n -> {}
+    as n -> { }

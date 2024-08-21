@@ -1,5 +1,1 @@
-module [
-    a,
-    b,
-    c,
-]
+module [a, b, c]

@@ -1,6 +1,6 @@
 platform "foo/barbaz"
-    requires { Model } { main : {} }
+    requires { Model } { main : { } }
     exposes []
-    packages { foo: "./foo" }
+    packages { foo : "./foo" }
     imports []
     provides [mainForHost]

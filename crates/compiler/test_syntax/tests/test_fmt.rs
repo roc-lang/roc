@@ -5,14 +5,19 @@ extern crate indoc;
 mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::def::fmt_defs;
+    use roc_fmt::doc::doc_fmt_module;
     use roc_fmt::header::fmt_header;
     use roc_fmt::Buf;
     use roc_parse::ast::{Defs, Header, SpacesBefore};
     use roc_parse::header::{self, parse_module_defs};
+    use roc_parse::normalize::Normalize;
+    use roc_parse::parser::Parser;
+    use roc_parse::parser::SyntaxError;
     use roc_parse::state::State;
     use roc_test_utils::assert_multiline_str_eq;
     use roc_test_utils_dir::workspace_root;
-    use test_syntax::test_helpers::Input;
+    use test_syntax::minimize::print_minimizations;
+    use test_syntax::test_helpers::{Input, InputKind};
 
     fn check_formatting(expected: &'_ str) -> impl Fn(Input) + '_ {
         let expected = expected.trim();
@@ -5849,6 +5854,53 @@ mod test_fmt {
                 let src = std::fs::read_to_string(path).unwrap();
                 println!("Now trying to format {}", path.display());
                 module_formats_same(&src);
+
+                println!("Now trying fmt v2 on {}", path.display());
+
+                let arena = Bump::new();
+
+                let actual = Input::Full(&src).parse_in(&arena).unwrap_or_else(|err| {
+                    eprintln!("Unexpected parse failure when parsing this for formatting\n\nParse error was:\n\n{:?}\n\n", err);
+                    print_minimizations(&src, InputKind::Full);
+                    panic!();
+                });
+
+                let output = actual.format2();
+
+                let reparsed_ast = output.as_ref().parse_in(&arena).unwrap_or_else(|err| {
+                    eprintln!(
+                        "After formatting, the source code no longer parsed!\n\n\
+                        Parse error was: {:?}\n\n\
+                        The original code was:\n\n{}\n\n\
+                        The code that failed to parse:\n\n{}\n\n\
+                        The original ast was:\n\n{:#?}\n\n",
+                        err,
+                        src,
+                        output.as_ref().as_str(),
+                        actual
+                    );
+                    print_minimizations(&src, InputKind::Full);
+                    panic!();
+                });
+
+                let ast_normalized = actual.normalize(&arena);
+                let reparsed_ast_normalized = reparsed_ast.normalize(&arena);
+
+                if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
+                    eprintln!(
+                        "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                        * * * Source code before formatting:\n{}\n\n\
+                        * * * Source code after formatting:\n{}\n\n\
+                        * * * AST before formatting:\n{:#?}\n\n\
+                        * * * AST after formatting:\n{:#?}\n\n",
+                        src,
+                        output.as_ref().as_str(),
+                        actual,
+                        reparsed_ast_normalized
+                    );
+                    print_minimizations(&src, InputKind::Full);
+                    panic!();
+                }
             }
         }
         assert!(

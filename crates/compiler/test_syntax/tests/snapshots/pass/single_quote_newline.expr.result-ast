@@ -1,0 +1,8 @@
+SpaceAfter(
+    SingleQuote(
+        "\n",
+    ),
+    [
+        Newline,
+    ],
+)

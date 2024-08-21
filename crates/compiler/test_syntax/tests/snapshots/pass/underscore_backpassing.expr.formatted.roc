@@ -1,4 +1,3 @@
 # leading comment
-_ <- \y -> y
-
+_ <- (\y -> y)
 4

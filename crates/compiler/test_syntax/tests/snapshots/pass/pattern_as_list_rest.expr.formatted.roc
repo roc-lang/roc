@@ -1,2 +1,4 @@
-when myList is
-    [first, .. as rest] -> 0
+when
+    myList
+is
+    [ first, .. as rest ] -> 0

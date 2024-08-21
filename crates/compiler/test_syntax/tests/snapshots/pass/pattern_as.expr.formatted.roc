@@ -1,2 +1,4 @@
-when 0 is
+when
+    0
+is
     _ as n -> n

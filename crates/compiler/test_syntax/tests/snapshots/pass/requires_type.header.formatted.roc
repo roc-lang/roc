@@ -1,6 +1,6 @@
 platform "test/types"
     requires { Flags, Model } { main : App Flags Model }
     exposes []
-    packages {}
+    packages { }
     imports []
     provides [mainForHost]

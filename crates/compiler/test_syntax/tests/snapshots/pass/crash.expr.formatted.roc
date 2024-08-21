@@ -5,5 +5,4 @@ _ = try foo (\_ -> crash "")
 _ =
     _ = crash ""
     crash
-
 { f: crash "" }

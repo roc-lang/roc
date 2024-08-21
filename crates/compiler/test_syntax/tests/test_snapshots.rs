@@ -264,6 +264,7 @@ mod test_snapshots {
         malformed/module_dot_tuple.expr,
         malformed/qualified_tag.expr,
         malformed/underscore_expr_in_def.expr,
+        pass/abcd.full,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
@@ -272,9 +273,11 @@ mod test_snapshots {
         pass/add_with_spaces.expr,
         pass/ann_closed_union.expr,
         pass/ann_open_union.expr,
+        pass/ann_parens_func.moduledefs,
         pass/annotated_record_destructure.expr,
         pass/annotated_tag_destructure.expr,
         pass/annotated_tuple_destructure.expr,
+        pass/annotation_tag_union_apply.full,
         pass/apply_parenthetical_tag_args.expr,
         pass/apply_tag.expr,
         pass/apply_three_args.expr,
@@ -459,8 +462,11 @@ mod test_snapshots {
         pass/record_updater_var_apply.expr,
         pass/record_with_if.expr,
         pass/requires_type.header,
+        pass/separate_annotation.full,
         pass/separate_defs.moduledefs,
+        pass/separate_ty_annotation.full,
         pass/single_arg_closure.expr,
+        pass/single_quote_newline.expr,
         pass/single_underscore_closure.expr,
         pass/space_before_colon.full,
         pass/space_only_after_minus.expr,
@@ -493,6 +499,7 @@ mod test_snapshots {
         pass/two_backpassing.expr,
         pass/two_branch_when.expr,
         pass/two_spaced_def.expr,
+        pass/type_apply_parens.moduledefs,
         pass/type_decl_with_underscore.expr,
         pass/type_signature_def.expr,
         pass/type_signature_function_def.expr,
@@ -633,6 +640,10 @@ mod test_snapshots {
 
         if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {
             input.check_invariants(check_saved_formatting(input.as_str(), formatted_path), true);
+        }
+
+        if expect == TestExpectation::Pass {
+            input.check_invariants2();
         }
     }
 
