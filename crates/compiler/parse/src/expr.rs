@@ -186,6 +186,10 @@ fn parse_underscore_or_term<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    if state.column() < min_indent {
+        return Err((NoProgress, EExpr::Ignored));
+    }
+
     let start = state.pos();
 
     match underscore_expression().parse(arena, state.clone(), min_indent) {
@@ -436,12 +440,7 @@ fn parse_expr_operator_chain<'a>(
     let call_min_indent = line_indent + 1;
 
     loop {
-        let term = if state.column() >= call_min_indent {
-            parse_underscore_or_term(options, arena, state.clone(), call_min_indent)
-        } else {
-            Err((NoProgress, EExpr::Ignored))
-        };
-        match term {
+        match parse_underscore_or_term(options, arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Err((NoProgress, _)) => {
                 let before_op = state.clone();
@@ -650,12 +649,7 @@ fn parse_stmt_operator_chain<'a>(
     let call_min_indent = line_indent + 1;
 
     loop {
-        let term = if state.column() >= call_min_indent {
-            parse_underscore_or_term(options, arena, state.clone(), call_min_indent)
-        } else {
-            Err((NoProgress, EExpr::Ignored))
-        };
-        match term {
+        match parse_underscore_or_term(options, arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Ok((
                 _,
@@ -1803,12 +1797,7 @@ fn parse_expr_end<'a>(
     mut expr_state: ExprState<'a>,
     initial_state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let term = if state.column() >= call_min_indent {
-        parse_underscore_or_term(options, arena, state.clone(), call_min_indent)
-    } else {
-        Err((NoProgress, EExpr::Ignored))
-    };
-    match term {
+    match parse_underscore_or_term(options, arena, state.clone(), call_min_indent) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((_, mut arg, state)) => {
             let mut expr_state = expr_state;
