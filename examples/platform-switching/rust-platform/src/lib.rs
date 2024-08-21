@@ -93,6 +93,11 @@ pub extern "C" fn rust_main() -> i32 {
         panic!("Writing to stdout failed! {:?}", e);
     }
 
+    // roc_str will not print without flushing if it does not contain a newline and you're using --linker=legacy
+    if let Err(e) = std::io::stdout().flush() {
+        panic!("Failed to flush stdout: {:?}", e);
+    }
+
     // Exit code
     0
 }
