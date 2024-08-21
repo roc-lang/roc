@@ -153,6 +153,27 @@ macro_rules! advance_state {
     };
 }
 
+/// This is a helper function for parsing function args.
+/// The rules for (-) are special-cased, and they come up in function args.
+///
+/// They work like this:
+///
+/// x - y  # "x minus y"
+/// x-y    # "x minus y"
+/// x- y   # "x minus y" (probably written in a rush)
+/// x -y   # "call x, passing (-y)"
+///
+/// Since operators have higher precedence than function application,
+/// any time we encounter a '-' it is unary iff it is both preceded by spaces
+/// and is *not* followed by a whitespace character.
+
+/// When we parse an ident like `foo ` it could be any of these:
+///
+/// 1. A standalone variable with trailing whitespace (e.g. because an operator is next)
+/// 2. The beginning of a function call (e.g. `foo bar baz`)
+/// 3. The beginning of a definition (e.g. `foo =`)
+/// 4. The beginning of a type annotation (e.g. `foo :`)
+/// 5. A reserved keyword (e.g. `if ` or `when `), meaning we should do something else.
 pub fn parse_ident<'a>(
     arena: &'a Bump,
     state: State<'a>,

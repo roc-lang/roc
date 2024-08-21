@@ -35,22 +35,25 @@ pub fn parse_closure_param<'a>(
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // An ident is the most common param, e.g. \foo -> ...
     match loc_ident_pattern_help(true).parse(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
         Ok(ok) => return Ok(ok),
         Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-        Err(_) => {}
     }
+
     // Underscore is also common, e.g. \_ -> ...
     match loc_underscore_pattern_help().parse(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
         Ok(ok) => return Ok(ok),
         Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-        Err(_) => {}
     }
+
     // You can destructure records in params, e.g. \{ x, y } -> ...
     match loc_record_pattern_help().parse(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
         Ok(ok) => return Ok(ok),
         Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-        Err(_) => {}
     }
+
     // If you wrap it in parens, you can match any arbitrary pattern at all.
     // e.g. \User.UserId userId -> ...
     loc_pattern_in_parens_help().parse(arena, state.clone(), min_indent)
@@ -342,13 +345,15 @@ fn loc_ident_pattern_help<'a>(
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let original_state = state.clone();
 
-        let (_, loc_ident, state) = specialize_err(|_, pos| EPattern::Start(pos), loc(parse_ident))
-            .parse(arena, state, min_indent)?;
+        let ident_start = state.pos();
+        let (_, ident, state) = parse_ident(arena, state, min_indent)
+            .map_err(|(p, _)| (p, EPattern::Start(ident_start)))?;
 
-        match loc_ident.value {
+        let ident_loc = Region::new(ident_start, state.pos());
+        match ident {
             Ident::Tag(tag) => {
                 let loc_tag = Loc {
-                    region: loc_ident.region,
+                    region: ident_loc,
                     value: Pattern::Tag(tag),
                 };
 
@@ -361,7 +366,7 @@ fn loc_ident_pattern_help<'a>(
                         Ok((MadeProgress, loc_tag, state))
                     } else {
                         let region = Region::across_all(
-                            std::iter::once(&loc_ident.region)
+                            std::iter::once(&ident_loc)
                                 .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
                         );
                         let value =
@@ -375,7 +380,7 @@ fn loc_ident_pattern_help<'a>(
             }
             Ident::OpaqueRef(name) => {
                 let loc_pat = Loc {
-                    region: loc_ident.region,
+                    region: ident_loc,
                     value: Pattern::OpaqueRef(name),
                 };
 
@@ -388,7 +393,7 @@ fn loc_ident_pattern_help<'a>(
                         Ok((MadeProgress, loc_pat, state))
                     } else {
                         let region = Region::across_all(
-                            std::iter::once(&loc_ident.region)
+                            std::iter::once(&ident_loc)
                                 .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
                         );
                         let value =
@@ -417,7 +422,7 @@ fn loc_ident_pattern_help<'a>(
                         return Ok((
                             MadeProgress,
                             Loc {
-                                region: loc_ident.region,
+                                region: ident_loc,
                                 value: Pattern::Identifier { ident: var },
                             },
                             state,
@@ -439,19 +444,18 @@ fn loc_ident_pattern_help<'a>(
                 Ok((
                     MadeProgress,
                     Loc {
-                        region: loc_ident.region,
+                        region: ident_loc,
                         value: Pattern::Malformed(malformed_str.into_bump_str()),
                     },
                     state,
                 ))
             }
-            Ident::AccessorFunction(_string) => Err((
-                MadeProgress,
-                EPattern::AccessorFunction(loc_ident.region.start()),
-            )),
+            Ident::AccessorFunction(_string) => {
+                Err((MadeProgress, EPattern::AccessorFunction(ident_loc.start())))
+            }
             Ident::RecordUpdaterFunction(_string) => Err((
                 MadeProgress,
-                EPattern::RecordUpdaterFunction(loc_ident.region.start()),
+                EPattern::RecordUpdaterFunction(ident_loc.start()),
             )),
             Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());
@@ -459,7 +463,7 @@ fn loc_ident_pattern_help<'a>(
                 Ok((
                     MadeProgress,
                     Loc {
-                        region: loc_ident.region,
+                        region: ident_loc,
                         value: Pattern::MalformedIdent(malformed, problem),
                     },
                     state,
