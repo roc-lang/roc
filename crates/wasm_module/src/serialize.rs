@@ -434,15 +434,69 @@ mod tests {
     #[test]
     fn test_encode_i32() {
         let a = &Bump::new();
+
+        // Edge cases
         assert_eq!(help_i32(a, 0), &[0]);
-        assert_eq!(help_i32(a, 1), &[1]);
-        assert_eq!(help_i32(a, -1), &[0x7f]);
-        assert_eq!(help_i32(a, 63), &[63]);
-        assert_eq!(help_i32(a, 64), &[0xc0, 0x0]);
-        assert_eq!(help_i32(a, -64), &[0x40]);
-        assert_eq!(help_i32(a, -65), &[0xbf, 0x7f]);
         assert_eq!(help_i32(a, i32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x07]);
         assert_eq!(help_i32(a, i32::MIN), &[0x80, 0x80, 0x80, 0x80, 0x78]);
+
+        // Single-byte positive values
+        assert_eq!(help_i32(a, 1), &[1]);
+        assert_eq!(help_i32(a, 63), &[63]);
+
+        // Single-byte negative values
+        assert_eq!(help_i32(a, -1), &[0x7f]);
+        assert_eq!(help_i32(a, -64), &[0x40]);
+
+        // Two-byte positive values
+        assert_eq!(help_i32(a, 64), &[0xc0, 0x00]);
+        assert_eq!(help_i32(a, 127), &[0xff, 0x00]);
+        assert_eq!(help_i32(a, 128), &[0x80, 0x01]);
+        assert_eq!(help_i32(a, 8191), &[0xff, 0x3f]);
+        assert_eq!(help_i32(a, 8192), &[0x80, 0xC0, 0x00]);
+
+        // Two-byte negative values
+        assert_eq!(help_i32(a, -65), &[0xbf, 0x7f]);
+        assert_eq!(help_i32(a, -128), &[0x80, 0x7f]);
+        assert_eq!(help_i32(a, -129), &[0xff, 0x7e]);
+        assert_eq!(help_i32(a, -8192), &[0x80, 0x40]);
+        assert_eq!(help_i32(a, -8193), &[0xff, 0xbf, 0x7f]);
+
+        // Three-byte positive values
+        assert_eq!(help_i32(a, 16384), &[0x80, 0x80, 0x01]);
+        assert_eq!(help_i32(a, 1048575), &[0xff, 0xff, 0x3f]);
+        assert_eq!(help_i32(a, 1048576), &[0x80, 0x80, 0xC0, 0x00]);
+
+        // Three-byte negative values
+        assert_eq!(help_i32(a, -16385), &[0xff, 0xff, 0x7e]);
+        assert_eq!(help_i32(a, -1048576), &[0x80, 0x80, 0x40]);
+        assert_eq!(help_i32(a, -1048577), &[0xff, 0xff, 0xbf, 0x7f]);
+
+        // Four-byte positive values
+        assert_eq!(help_i32(a, 2097152), &[0x80, 0x80, 0x80, 0x01]);
+        assert_eq!(help_i32(a, 134217727), &[0xff, 0xff, 0xff, 0x3f]);
+        assert_eq!(help_i32(a, 134217728), &[0x80, 0x80, 0x80, 0xC0, 0x00]);
+
+        // Four-byte negative values
+        assert_eq!(help_i32(a, -2097153), &[0xff, 0xff, 0xff, 0x7e]);
+        assert_eq!(help_i32(a, -134217728), &[0x80, 0x80, 0x80, 0x40]);
+        assert_eq!(help_i32(a, -134217729), &[0xff, 0xff, 0xff, 0xbf, 0x7f]);
+
+        // Five-byte values (only for very large positive or very small negative numbers)
+        assert_eq!(help_i32(a, 268435456), &[0x80, 0x80, 0x80, 0x80, 0x01]);
+        assert_eq!(help_i32(a, -268435457), &[0xff, 0xff, 0xff, 0xff, 0x7e]);
+
+        // Some arbitrary values
+        assert_eq!(help_i32(a, 123456), &[0xc0, 0xc4, 0x07]);
+        assert_eq!(help_i32(a, -123456), &[0xc0, 0xbb, 0x78]);
+        assert_eq!(help_i32(a, 9876543), &[0xbf, 0xe8, 0xda, 0x04]);
+        assert_eq!(help_i32(a, -9876543), &[0xC1, 0x97, 0xa5, 0x7b]);
+
+        // Values testing sign bit
+        assert_eq!(help_i32(a, 0x3fffffff), &[0xff, 0xff, 0xff, 0xff, 0x03]);
+        assert_eq!(help_i32(a, 0x40000000), &[0x80, 0x80, 0x80, 0x80, 0x04]);
+        assert_eq!(help_i32(a, -0x40000000), &[0x80, 0x80, 0x80, 0x80, 0x7c]);
+        assert_eq!(help_i32(a, -0x3fffffff), &[0x81, 0x80, 0x80, 0x80, 0x7c]);
     }
 
     fn help_i64(arena: &Bump, value: i64) -> Vec<'_, u8> {
