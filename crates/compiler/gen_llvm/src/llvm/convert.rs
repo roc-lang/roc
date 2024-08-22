@@ -263,7 +263,7 @@ fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
         2 => context.i16_type().into(),
         4 => context.i32_type().into(),
         8 => context.i64_type().into(),
-        16 => context.i128_type().into(),
+        16 => context.f128_type().into(),
         _ => unimplemented!("weird alignment: {alignment}"),
     }
 }
