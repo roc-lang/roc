@@ -304,15 +304,124 @@ mod tests {
     #[test]
     fn test_encode_u64() {
         let a = &Bump::new();
+
+        // Edge cases
         assert_eq!(help_u64(a, 0), &[0]);
-        assert_eq!(help_u64(a, 64), &[64]);
-        assert_eq!(help_u64(a, 0x7f), &[0x7f]);
-        assert_eq!(help_u64(a, 0x80), &[0x80, 0x01]);
-        assert_eq!(help_u64(a, 0x3fff), &[0xff, 0x7f]);
-        assert_eq!(help_u64(a, 0x4000), &[0x80, 0x80, 0x01]);
         assert_eq!(
             help_u64(a, u64::MAX),
             &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01],
+        );
+
+        // Single-byte values
+        assert_eq!(help_u64(a, 1), &[1]);
+        assert_eq!(help_u64(a, 64), &[64]);
+        assert_eq!(help_u64(a, 127), &[127]);
+
+        // Two-byte values
+        assert_eq!(help_u64(a, 128), &[0x80, 0x01]);
+        assert_eq!(help_u64(a, 255), &[0xff, 0x01]);
+        assert_eq!(help_u64(a, 256), &[0x80, 0x02]);
+        assert_eq!(help_u64(a, 16383), &[0xff, 0x7f]);
+        assert_eq!(help_u64(a, 16384), &[0x80, 0x80, 0x01]);
+
+        // Three-byte values
+        assert_eq!(help_u64(a, 16385), &[0x81, 0x80, 0x01]);
+        assert_eq!(help_u64(a, 2097151), &[0xff, 0xff, 0x7f]);
+        assert_eq!(help_u64(a, 2097152), &[0x80, 0x80, 0x80, 0x01]);
+
+        // Four-byte values
+        assert_eq!(help_u64(a, 2097153), &[0x81, 0x80, 0x80, 0x01]);
+        assert_eq!(help_u64(a, 268435455), &[0xff, 0xff, 0xff, 0x7f]);
+        assert_eq!(help_u64(a, 268435456), &[0x80, 0x80, 0x80, 0x80, 0x01]);
+
+        // Five-byte values
+        assert_eq!(help_u64(a, 268435457), &[0x81, 0x80, 0x80, 0x80, 0x01]);
+        assert_eq!(help_u64(a, 34359738367), &[0xff, 0xff, 0xff, 0xff, 0x7f]);
+        assert_eq!(
+            help_u64(a, 34359738368),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+
+        // Six-byte values
+        assert_eq!(
+            help_u64(a, 34359738369),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+        assert_eq!(
+            help_u64(a, 4398046511103),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+        );
+        assert_eq!(
+            help_u64(a, 4398046511104),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+
+        // Seven-byte values
+        assert_eq!(
+            help_u64(a, 4398046511105),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+        assert_eq!(
+            help_u64(a, 562949953421311),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+        );
+        assert_eq!(
+            help_u64(a, 562949953421312),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+
+        // Eight-byte values
+        assert_eq!(
+            help_u64(a, 562949953421313),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+        assert_eq!(
+            help_u64(a, 72057594037927935),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+        );
+        assert_eq!(
+            help_u64(a, 72057594037927936),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+
+        // Nine-byte values
+        assert_eq!(
+            help_u64(a, 72057594037927937),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+        assert_eq!(
+            help_u64(a, 9223372036854775807),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+        );
+        assert_eq!(
+            help_u64(a, 9223372036854775808),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+
+        // Ten-byte values (only for very large numbers)
+        assert_eq!(
+            help_u64(a, 9223372036854775809),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+
+        // Some arbitrary values
+        assert_eq!(
+            help_u64(a, 12345678901234),
+            &[0xf2, 0xdf, 0xb8, 0x9e, 0xa7, 0xe7, 0x02]
+        );
+        assert_eq!(
+            help_u64(a, 98765432109876543),
+            &[0xbf, 0x8a, 0xfd, 0x87, 0xb2, 0xd4, 0xb8, 0xaf, 0x01]
+        );
+
+        // Values testing higher bits
+        assert_eq!(
+            help_u64(a, 1 << 63),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
+        );
+        assert_eq!(
+            help_u64(a, (1 << 63) + 1),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]
         );
     }
 
