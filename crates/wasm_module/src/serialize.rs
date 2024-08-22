@@ -508,13 +508,9 @@ mod tests {
     #[test]
     fn test_encode_i64() {
         let a = &Bump::new();
+
+        // Edge cases
         assert_eq!(help_i64(a, 0), &[0]);
-        assert_eq!(help_i64(a, 1), &[1]);
-        assert_eq!(help_i64(a, -1), &[0x7f]);
-        assert_eq!(help_i64(a, 63), &[63]);
-        assert_eq!(help_i64(a, 64), &[0xc0, 0x0]);
-        assert_eq!(help_i64(a, -64), &[0x40]);
-        assert_eq!(help_i64(a, -65), &[0xbf, 0x7f]);
         assert_eq!(
             help_i64(a, i64::MAX),
             &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00],
@@ -522,6 +518,152 @@ mod tests {
         assert_eq!(
             help_i64(a, i64::MIN),
             &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
+        );
+
+        // Single-byte positive values
+        assert_eq!(help_i64(a, 1), &[1]);
+        assert_eq!(help_i64(a, 63), &[63]);
+
+        // Single-byte negative values
+        assert_eq!(help_i64(a, -1), &[0x7f]);
+        assert_eq!(help_i64(a, -64), &[0x40]);
+
+        // Two-byte positive values
+        assert_eq!(help_i64(a, 64), &[0xc0, 0x00]);
+        assert_eq!(help_i64(a, 127), &[0xff, 0x00]);
+        assert_eq!(help_i64(a, 128), &[0x80, 0x01]);
+        assert_eq!(help_i64(a, 8191), &[0xff, 0x3f]);
+        assert_eq!(help_i64(a, 8192), &[0x80, 0xC0, 0x00]);
+
+        // Two-byte negative values
+        assert_eq!(help_i64(a, -65), &[0xbf, 0x7f]);
+        assert_eq!(help_i64(a, -128), &[0x80, 0x7f]);
+        assert_eq!(help_i64(a, -129), &[0xff, 0x7e]);
+        assert_eq!(help_i64(a, -8192), &[0x80, 0x40]);
+        assert_eq!(help_i64(a, -8193), &[0xff, 0xbf, 0x7f]);
+
+        // Three-byte values
+        assert_eq!(help_i64(a, 16384), &[0x80, 0x80, 0x01]);
+        assert_eq!(help_i64(a, -16385), &[0xff, 0xff, 0x7e]);
+        assert_eq!(help_i64(a, 1048575), &[0xff, 0xff, 0x3f]);
+        assert_eq!(help_i64(a, -1048576), &[0x80, 0x80, 0x40]);
+
+        // Four-byte values
+        assert_eq!(help_i64(a, 1048576), &[0x80, 0x80, 0xC0, 0x00]);
+        assert_eq!(help_i64(a, -1048577), &[0xff, 0xff, 0xbf, 0x7f]);
+        assert_eq!(help_i64(a, 134217727), &[0xff, 0xff, 0xff, 0x3f]);
+        assert_eq!(help_i64(a, -134217728), &[0x80, 0x80, 0x80, 0x40]);
+
+        // Five-byte values
+        assert_eq!(help_i64(a, 134217728), &[0x80, 0x80, 0x80, 0xC0, 0x00]);
+        assert_eq!(help_i64(a, -134217729), &[0xff, 0xff, 0xff, 0xbf, 0x7f]);
+        assert_eq!(help_i64(a, 17179869183), &[0xff, 0xff, 0xff, 0xff, 0x3f]);
+        assert_eq!(help_i64(a, -17179869184), &[0x80, 0x80, 0x80, 0x80, 0x40]);
+
+        // Six-byte values
+        assert_eq!(
+            help_i64(a, 17179869184),
+            &[0x80, 0x80, 0x80, 0x80, 0xc0, 0x00]
+        );
+        assert_eq!(
+            help_i64(a, -17179869185),
+            &[0xff, 0xff, 0xff, 0xff, 0xbf, 0x7f]
+        );
+        assert_eq!(
+            help_i64(a, 2199023255551),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]
+        );
+        assert_eq!(
+            help_i64(a, -2199023255552),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x40]
+        );
+
+        // Seven-byte values
+        assert_eq!(
+            help_i64(a, 2199023255552),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0xc0, 0x00]
+        );
+        assert_eq!(
+            help_i64(a, -2199023255553),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xbf, 0x7f]
+        );
+        assert_eq!(
+            help_i64(a, 281474976710655),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]
+        );
+        assert_eq!(
+            help_i64(a, -281474976710656),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]
+        );
+
+        // Eight-byte values
+        assert_eq!(
+            help_i64(a, 281474976710656),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xc0, 0x00]
+        );
+        assert_eq!(
+            help_i64(a, -281474976710657),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbf, 0x7f]
+        );
+        assert_eq!(
+            help_i64(a, 36028797018963967),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]
+        );
+        assert_eq!(
+            help_i64(a, -36028797018963968),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]
+        );
+
+        // Nine-byte values
+        assert_eq!(
+            help_i64(a, 36028797018963968),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xc0, 0x00]
+        );
+        assert_eq!(
+            help_i64(a, -36028797018963969),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbf, 0x7f]
+        );
+        assert_eq!(
+            help_i64(a, 4611686018427387903),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]
+        );
+        assert_eq!(
+            help_i64(a, -4611686018427387904),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]
+        );
+
+        // Ten-byte values (only for very large positive or very small negative numbers)
+        assert_eq!(
+            help_i64(a, 4611686018427387904),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xc0, 0x00]
+        );
+        assert_eq!(
+            help_i64(a, -4611686018427387905),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbf, 0x7f]
+        );
+
+        // Some arbitrary values
+        assert_eq!(help_i64(a, 123456789), &[0x95, 0x9a, 0xef, 0x3a]);
+        assert_eq!(help_i64(a, -123456789), &[0xeb, 0xe5, 0x90, 0x45]);
+        assert_eq!(help_i64(a, 9876543210), &[0xea, 0xad, 0xc0, 0xe5, 0x24]);
+        assert_eq!(help_i64(a, -9876543210), &[0x96, 0xd2, 0xbf, 0x9a, 0x5b]);
+
+        // Values testing sign bit and higher bits
+        assert_eq!(
+            help_i64(a, 0x3fffffffffffffff),
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]
+        );
+        assert_eq!(
+            help_i64(a, 0x4000000000000000),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xc0, 0x00]
+        );
+        assert_eq!(
+            help_i64(a, -0x4000000000000000),
+            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]
+        );
+        assert_eq!(
+            help_i64(a, -0x3fffffffffffffff),
+            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]
         );
     }
 
