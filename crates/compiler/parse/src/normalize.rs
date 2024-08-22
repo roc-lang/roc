@@ -1024,7 +1024,6 @@ impl<'a> Normalize<'a> for PatternAs<'a> {
 impl<'a> Normalize<'a> for EExpr<'a> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match self {
-            EExpr::Ignored => EExpr::Ignored,
             EExpr::TrailingOperator(_pos) => EExpr::TrailingOperator(Position::zero()),
             EExpr::Start(_pos) => EExpr::Start(Position::zero()),
             EExpr::End(_pos) => EExpr::End(Position::zero()),
