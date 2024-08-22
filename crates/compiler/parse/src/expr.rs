@@ -205,6 +205,12 @@ fn parse_term<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
+    match closure_help(options).parse(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Closure(fail, start))),
+    }
+
     match loc_expr_in_parens_etc_help().parse(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
         res => return res,
@@ -220,12 +226,6 @@ fn parse_term<'a>(
         Err((NoProgress, _)) => {}
         Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Number(fail, start))),
-    }
-
-    match closure_help(options).parse(arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Closure(fail, start))),
     }
 
     match record_literal_help().parse(arena, state.clone(), min_indent) {
@@ -406,12 +406,9 @@ fn parse_expr_start<'a>(
     // Parse a chain of expressions separated by operators. Also handles function application.
     let start = state.pos();
     match parse_expr_operator_chain(options, arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
+        Err(fail) => Err(fail),
     }
-
-    Err((NoProgress, EExpr::Start(start)))
 }
 
 fn parse_expr_operator_chain<'a>(
@@ -420,7 +417,7 @@ fn parse_expr_operator_chain<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let line_indent = state.line_indent();
+    let call_min_indent = state.line_indent() + 1;
 
     let (_, term, state) = parse_negative_or_term(options, arena, state, min_indent)?;
 
@@ -428,7 +425,7 @@ fn parse_expr_operator_chain<'a>(
 
     let (spaces_before_op, state) =
         match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
-            Err((_, _)) => return Ok((MadeProgress, term.value, state)),
+            Err(_) => return Ok((MadeProgress, term.value, state)),
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
 
@@ -441,8 +438,6 @@ fn parse_expr_operator_chain<'a>(
     };
 
     let mut state = state;
-    let call_min_indent = line_indent + 1;
-
     loop {
         match parse_underscore_or_term(options, arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
@@ -452,19 +447,19 @@ fn parse_expr_operator_chain<'a>(
                 // We're part way thru parsing an expression, e.g. `bar foo `.
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
-                return match parse_bin_op(true, state.clone()) {
+                let op_res = match parse_bin_op(true, state.clone()) {
                     Err((MadeProgress, f)) => Err((MadeProgress, f)),
                     Err((NoProgress, _)) => {
-                        let out = parse_expr_final(expr_state, arena);
                         // roll back space parsing
-                        Ok((MadeProgress, out, initial_state))
+                        let expr = parse_expr_final(expr_state, arena);
+                        Ok((MadeProgress, expr, initial_state))
                     }
                     Ok((_, op, state)) => {
                         let op_start = before_op.pos();
                         let op_end = state.pos();
 
                         expr_state.consume_spaces(arena);
-                        let (_, spaces_after_operator, state) =
+                        let (_, spaces_after_op, state) =
                             parse_indent(EExpr::IndentEnd, arena, state, min_indent)?;
 
                         // a `-` is unary if it is preceded by a space and not followed by a space
@@ -490,13 +485,14 @@ fn parse_expr_operator_chain<'a>(
                                 call_min_indent,
                                 options,
                                 true,
-                                spaces_after_operator,
+                                spaces_after_op,
                                 expr_state,
                                 loc_op,
                             ),
                         }
                     }
                 };
+                return op_res;
             }
             Ok((_, arg, new_state)) => {
                 state = new_state;
@@ -841,7 +837,6 @@ impl<'a> ExprState<'a> {
 #[allow(clippy::unnecessary_wraps)]
 fn parse_expr_final<'a>(expr_state: ExprState<'a>, arena: &'a Bump) -> Expr<'a> {
     let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
-
     if expr_state.operators.is_empty() {
         right_arg.value
     } else {
