@@ -258,13 +258,41 @@ mod tests {
     #[test]
     fn test_encode_u32() {
         let a = &Bump::new();
+
+        // Edge cases
         assert_eq!(help_u32(a, 0), &[0]);
-        assert_eq!(help_u32(a, 64), &[64]);
-        assert_eq!(help_u32(a, 0x7f), &[0x7f]);
-        assert_eq!(help_u32(a, 0x80), &[0x80, 0x01]);
-        assert_eq!(help_u32(a, 0x3fff), &[0xff, 0x7f]);
-        assert_eq!(help_u32(a, 0x4000), &[0x80, 0x80, 0x01]);
         assert_eq!(help_u32(a, u32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x0f]);
+
+        // Single-byte values
+        assert_eq!(help_u32(a, 1), &[1]);
+        assert_eq!(help_u32(a, 64), &[64]);
+        assert_eq!(help_u32(a, 127), &[127]);
+
+        // Two-byte values
+        assert_eq!(help_u32(a, 128), &[0x80, 0x01]);
+        assert_eq!(help_u32(a, 255), &[0xff, 0x01]);
+        assert_eq!(help_u32(a, 256), &[0x80, 0x02]);
+        assert_eq!(help_u32(a, 16383), &[0xff, 0x7f]);
+        assert_eq!(help_u32(a, 16384), &[0x80, 0x80, 0x01]);
+
+        // Three-byte values
+        assert_eq!(help_u32(a, 16385), &[0x81, 0x80, 0x01]);
+        assert_eq!(help_u32(a, 2097151), &[0xff, 0xff, 0x7f]);
+        assert_eq!(help_u32(a, 2097152), &[0x80, 0x80, 0x80, 0x01]);
+
+        // Four-byte values
+        assert_eq!(help_u32(a, 2097153), &[0x81, 0x80, 0x80, 0x01]);
+        assert_eq!(help_u32(a, 268435455), &[0xff, 0xff, 0xff, 0x7f]);
+        assert_eq!(help_u32(a, 268435456), &[0x80, 0x80, 0x80, 0x80, 0x01]);
+
+        // Five-byte values (only for very large numbers)
+        assert_eq!(help_u32(a, 268435457), &[0x81, 0x80, 0x80, 0x80, 0x01]);
+        assert_eq!(help_u32(a, 1073741823), &[0xff, 0xff, 0xff, 0xff, 0x03]);
+        assert_eq!(help_u32(a, 1073741824), &[0x80, 0x80, 0x80, 0x80, 0x04]);
+
+        // Some arbitrary values
+        assert_eq!(help_u32(a, 1234567), &[0x87, 0xad, 0x4b]);
+        assert_eq!(help_u32(a, 98765432), &[0xF8, 0x94, 0x8C, 0x2F]);
     }
 
     fn help_u64(arena: &Bump, value: u64) -> Vec<'_, u8> {
