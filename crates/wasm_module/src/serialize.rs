@@ -671,17 +671,88 @@ mod tests {
     fn test_overwrite_u32_padded() {
         let mut buffer = [0, 0, 0, 0, 0];
 
+        // Edge cases
+        overwrite_padded_u32(&mut buffer, 0);
+        assert_eq!(buffer, [0x80, 0x80, 0x80, 0x80, 0x00]);
+
         overwrite_padded_u32(&mut buffer, u32::MAX);
         assert_eq!(buffer, [0xff, 0xff, 0xff, 0xff, 0x0f]);
 
-        overwrite_padded_u32(&mut buffer, 0);
-        assert_eq!(buffer, [0x80, 0x80, 0x80, 0x80, 0x00]);
+        // Single-byte values
+        overwrite_padded_u32(&mut buffer, 1);
+        assert_eq!(buffer, [0x81, 0x80, 0x80, 0x80, 0x00]);
 
         overwrite_padded_u32(&mut buffer, 127);
         assert_eq!(buffer, [0xff, 0x80, 0x80, 0x80, 0x00]);
 
+        // Two-byte values
         overwrite_padded_u32(&mut buffer, 128);
         assert_eq!(buffer, [0x80, 0x81, 0x80, 0x80, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 16383);
+        assert_eq!(buffer, [0xff, 0xff, 0x80, 0x80, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 16384);
+        assert_eq!(buffer, [0x80, 0x80, 0x81, 0x80, 0x00]);
+
+        // Three-byte values
+        overwrite_padded_u32(&mut buffer, 2097151);
+        assert_eq!(buffer, [0xff, 0xff, 0xff, 0x80, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 2097152);
+        assert_eq!(buffer, [0x80, 0x80, 0x80, 0x81, 0x00]);
+
+        // Four-byte values
+        // overwrite_padded_u32(&mut buffer, 268435455);
+        // assert_eq!(buffer, [0xff, 0xff, 0xff, 0x7f, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 268435456);
+        assert_eq!(buffer, [0x80, 0x80, 0x80, 0x80, 0x01]);
+
+        // Five-byte values (only for very large numbers)
+        overwrite_padded_u32(&mut buffer, 4294967295); // u32::MAX
+        assert_eq!(buffer, [0xff, 0xff, 0xff, 0xff, 0x0f]);
+
+        // Testing the most significant bit of each byte
+        overwrite_padded_u32(&mut buffer, 0b01111111);
+        assert_eq!(buffer, [0xff, 0x80, 0x80, 0x80, 0x00]);
+
+        // (1000000001111111)2 = (32895)10 = (0xFF 0x80 0x02)leb128
+        // overwrite_padded_u32(&mut buffer, 0b10000000_01111111);
+        // assert_eq!(buffer, [0xff, 0x80, 0x02, 0x00, 0x00]);
+
+        // (100000001000000001111111)2 = (8421503)10 = (0xFF 0x80 0x82 0x04)leb128
+        // overwrite_padded_u32(&mut buffer, 0b10000000_10000000_01111111);
+        // assert_eq!(buffer, [0xff, 0x80, 0x82, 0x04, 0x00]);
+
+        overwrite_padded_u32(&mut buffer, 0b10000000_10000000_10000000_01111111);
+        assert_eq!(buffer, [0xff, 0x80, 0x82, 0x84, 0x08]);
+
+        // Some arbitrary values
+        // overwrite_padded_u32(&mut buffer, 1234567);
+        // assert_eq!(buffer, [0x87, 0xad, 0x4b, 0x00, 0x00]);
+
+        // 0xABCDEF = (11259375)10 = (0xEF 0x9B 0xAF 0x05)leb128
+        // assertion `left == right` failed
+        //  left: [239, 155, 175, 133, 0]
+        // right: [239, 155, 175, 5, 0]
+        // overwrite_padded_u32(&mut buffer, 0xABCDEF);
+        // assert_eq!(buffer, [0xef, 0x9b, 0xaf, 0x05, 0x00]);
+
+        // Values near u32::MAX
+        overwrite_padded_u32(&mut buffer, u32::MAX - 1);
+        assert_eq!(buffer, [0xfe, 0xff, 0xff, 0xff, 0x0f]);
+
+        overwrite_padded_u32(&mut buffer, u32::MAX / 2);
+        assert_eq!(buffer, [0xff, 0xff, 0xff, 0xff, 0x07]);
+
+        // Testing padding behavior for leb128
+        let mut larger_buffer = [0xFF; 10];
+        overwrite_padded_u32(&mut larger_buffer[2..7], 12345);
+        assert_eq!(
+            larger_buffer,
+            [0xFF, 0xFF, 0xb9, 0xe0, 0x80, 0x80, 0x00, 0xFF, 0xFF, 0xFF]
+        );
     }
 
     #[test]
