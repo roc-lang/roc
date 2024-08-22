@@ -398,9 +398,9 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
             res => return res,
         }
 
-        // Parse a chain of expressions separated by operators. Also handles function application.
         let start = state.pos();
 
+        // Parse a chain of expressions separated by operators. Also handles function application.
         match parse_expr_operator_chain(options, arena, state.clone(), min_indent) {
             Err((NoProgress, _)) => {}
             Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
@@ -617,7 +617,7 @@ fn parse_stmt_operator_chain<'a>(
 
     let (spaces_before_op, state) =
         match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
-            Err((_, _)) => return Ok((MadeProgress, Stmt::Expr(expr.value), state)),
+            Err(_) => return Ok((MadeProgress, Stmt::Expr(expr.value), state)),
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
 
@@ -629,10 +629,8 @@ fn parse_stmt_operator_chain<'a>(
         end,
     };
 
-    let mut state = state;
-
     let call_min_indent = line_indent + 1;
-
+    let mut state = state;
     loop {
         match parse_underscore_or_term(options, arena, state.clone(), call_min_indent) {
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
@@ -689,9 +687,8 @@ fn parse_stmt_operator_chain<'a>(
                         } else if options.check_for_arrow && state.bytes().starts_with(b"->") {
                             Err((MadeProgress, EExpr::BadOperator("->", state.pos())))
                         } else {
-                            let expr = parse_expr_final(expr_state, arena);
-
                             // roll back space parsing
+                            let expr = parse_expr_final(expr_state, arena);
                             Ok((MadeProgress, Stmt::Expr(expr), initial_state))
                         }
                     }
@@ -700,7 +697,6 @@ fn parse_stmt_operator_chain<'a>(
             Ok((_, arg, new_state)) => {
                 state = new_state;
                 initial_state = state.clone();
-
                 if parse_after_expr_arg_and_check_final(
                     arena,
                     &mut state,
@@ -1711,12 +1707,18 @@ fn parse_stmt_multi_backpassing<'a>(
     match two_bytes(b'<', b'-', EExpr::BackpassArrow).parse(arena, state.clone(), min_indent) {
         Err((_, fail)) => Err((MadeProgress, fail)),
         Ok((_, _, state)) => {
-            let parse_body = space0_before_e(expr_start(options), EExpr::IndentEnd);
+            let min_indent = line_indent + 1;
+            let (ps, spaces_before, state) =
+                parse_indent(EExpr::IndentEnd, arena, state, min_indent)?;
 
-            let (_, loc_body, state) = parse_body.parse(arena, state, line_indent + 1)?;
+            let (loc_body, state) = match expr_start(options).parse(arena, state, min_indent) {
+                Ok((_, loc_body, state)) => (loc_body, state),
+                Err((pe, fail)) => return Err((ps.or(pe), fail)),
+            };
+
+            let loc_body = with_spaces_before(loc_body, spaces_before, arena);
 
             let ret = Stmt::Backpassing(patterns.into_bump_slice(), arena.alloc(loc_body));
-
             Ok((MadeProgress, ret, state))
         }
     }
@@ -1944,13 +1946,21 @@ pub fn loc_expr_block<'a>(
 }
 
 pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    space0_before_e(
-        expr_start(ExprParseOptions {
+    move |arena, state: State<'a>, min_indent| {
+        let options = ExprParseOptions {
             accept_multi_backpassing,
             check_for_arrow: true,
-        }),
-        EExpr::IndentEnd,
-    )
+        };
+
+        let (ps, spaces_before, state) = parse_indent(EExpr::IndentEnd, arena, state, min_indent)?;
+        match expr_start(options).parse(arena, state, min_indent) {
+            Ok((_, expr, state)) => {
+                let expr = with_spaces_before(expr, spaces_before, arena);
+                Ok((MadeProgress, expr, state))
+            }
+            Err((pe, fail)) => Err((ps.or(pe), fail)),
+        }
+    }
 }
 
 pub fn merge_spaces<'a>(
@@ -2331,7 +2341,7 @@ mod when {
     use super::*;
     use crate::{
         ast::WhenBranch,
-        blankspace::{spaces_around_help, with_spaces, with_spaces_before},
+        blankspace::{with_spaces, with_spaces_before},
     };
 
     /// Parser for when expressions.
@@ -2341,101 +2351,100 @@ mod when {
         arena: &'a Bump,
         mut state: State<'a>,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        if !state.bytes().starts_with(keyword::WHEN.as_bytes()) {
-            return Err((NoProgress, EWhen::When(state.pos())));
-        }
-
         // the next character should not be an identifier character
         // to prevent treating `whence` as a keyword
         let when_width = keyword::WHEN.len();
         match state.bytes().get(when_width) {
-            None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
+            None | Some(b' ' | b'#' | b'\n' | b'\r')
+                if state.bytes().starts_with(keyword::WHEN.as_bytes()) => {}
             _ => return Err((NoProgress, EWhen::When(state.pos()))),
         };
 
         let cond_indent = state.line_indent() + 1;
         state.advance_mut(when_width);
 
-        // todo: @wip inline similar single_branch_alternative
-        let cond_parser = specialize_err_ref(EWhen::Condition, expr_start(options));
-        let cond_parser = and(space0_e(EWhen::IndentCondition), and(cond_parser, spaces()));
+        let (_, spaces_before, state) =
+            parse_indent(EWhen::IndentCondition, arena, state, cond_indent)
+                .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-        match cond_parser.parse(arena, state, cond_indent) {
-            Ok((_, cond, mut state)) => {
-                if !state.bytes().starts_with(keyword::IS.as_bytes()) {
-                    return Err((MadeProgress, EWhen::Is(state.pos())));
-                }
+        let at_cond = state.pos();
+        let (_, cond, state) = expr_start(options)
+            .parse(arena, state, cond_indent)
+            .map_err(|(_, fail)| (MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))?;
 
-                let is_width = keyword::IS.len();
-                match state.bytes().get(is_width) {
-                    None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
-                    _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
-                };
+        let (_, spaces_after, state) = spaces()
+            .parse(arena, state, cond_indent)
+            .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-                // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
-                // ambiguity. The formatter will fix it up.
-                // We require that branches are indented relative to the line containing the `is`.
-                let branch_indent = state.line_indent() + 1;
-                state.advance_mut(is_width);
+        let mut state = state;
+        let is_width = keyword::IS.len();
+        match state.bytes().get(is_width) {
+            None | Some(b' ' | b'#' | b'\n' | b'\r')
+                if state.bytes().starts_with(keyword::IS.as_bytes()) => {}
+            _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
+        };
 
-                // 1. Parse the first branch and get its indentation level (it must be >= branch_indent).
-                // 2. Parse the other branches. Their indentation levels must be == the first branch's.
-                let (_, ((pattern_indent, first_patterns), guard), state) =
-                    parse_branch_alternatives(options, None, arena, state, branch_indent)
-                        .map_err(|(_, fail)| (MadeProgress, fail))?;
+        // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
+        // ambiguity. The formatter will fix it up.
+        // We require that branches are indented relative to the line containing the `is`.
+        let branch_indent = state.line_indent() + 1;
+        state.advance_mut(is_width);
 
-                // Parse the first "->" and the expression after it.
-                let (_, value, mut state) = parse_branch_result(pattern_indent + 1, arena, state)?;
+        // 1. Parse the first branch and get its indentation level (it must be >= branch_indent).
+        // 2. Parse the other branches. Their indentation levels must be == the first branch's.
+        let (_, ((pattern_indent, first_patterns), guard), state) =
+            parse_branch_alternatives(options, None, arena, state, branch_indent)
+                .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-                // Record this as the first branch, then optionally parse additional branches.
-                let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
-                branches.push(arena.alloc(WhenBranch {
-                    patterns: first_patterns.into_bump_slice(),
-                    value,
-                    guard,
-                }));
+        // Parse the first "->" and the expression after it.
+        let (_, value, mut state) = parse_branch_result(pattern_indent + 1, arena, state)?;
 
-                while !state.bytes().is_empty() {
-                    match parse_branch_alternatives(
-                        options,
-                        Some(pattern_indent),
-                        arena,
-                        state.clone(),
-                        branch_indent,
-                    ) {
-                        Ok((_, ((indent_column, patterns), guard), m_state)) => {
-                            if pattern_indent == indent_column {
-                                let (_, value, next_state) =
-                                    parse_branch_result(pattern_indent + 1, arena, m_state)?;
+        // Record this as the first branch, then optionally parse additional branches.
+        let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
+        branches.push(arena.alloc(WhenBranch {
+            patterns: first_patterns.into_bump_slice(),
+            value,
+            guard,
+        }));
 
-                                let branch = WhenBranch {
-                                    patterns: patterns.into_bump_slice(),
-                                    value,
-                                    guard,
-                                };
-                                branches.push(arena.alloc(branch));
-                                state = next_state;
-                            } else {
-                                let indent = pattern_indent - indent_column;
-                                let fail = EWhen::PatternAlignment(indent, m_state.pos());
-                                return Err((MadeProgress, fail));
-                            }
-                        }
-                        Err((NoProgress, _)) => {
-                            break;
-                        }
-                        Err(fail) => {
-                            return Err(fail);
-                        }
+        while !state.bytes().is_empty() {
+            match parse_branch_alternatives(
+                options,
+                Some(pattern_indent),
+                arena,
+                state.clone(),
+                branch_indent,
+            ) {
+                Ok((_, ((indent_column, patterns), guard), m_state)) => {
+                    if pattern_indent == indent_column {
+                        let (_, value, next_state) =
+                            parse_branch_result(pattern_indent + 1, arena, m_state)?;
+
+                        let branch = WhenBranch {
+                            patterns: patterns.into_bump_slice(),
+                            value,
+                            guard,
+                        };
+                        branches.push(arena.alloc(branch));
+                        state = next_state;
+                    } else {
+                        let indent = pattern_indent - indent_column;
+                        let fail = EWhen::PatternAlignment(indent, m_state.pos());
+                        return Err((MadeProgress, fail));
                     }
                 }
-
-                let cond = spaces_around_help(arena, cond);
-                let out = Expr::When(arena.alloc(cond), branches.into_bump_slice());
-                Ok((MadeProgress, out, state))
+                Err((NoProgress, _)) => {
+                    break;
+                }
+                Err(fail) => {
+                    return Err(fail);
+                }
             }
-            Err((_, fail)) => Err((MadeProgress, fail)),
         }
+
+        let cond = with_spaces(arena, spaces_before, cond, spaces_after);
+        let when = Expr::When(arena.alloc(cond), branches.into_bump_slice());
+        Ok((MadeProgress, when, state))
     }
 
     /// Parsing alternative patterns in `when` branches.
@@ -2527,13 +2536,10 @@ mod when {
         let column_patterns = (pattern_column, patterns);
         let original_state = state.clone();
 
-        if !state.bytes().starts_with(keyword::IF.as_bytes()) {
-            return Ok((MadeProgress, (column_patterns, None), original_state));
-        }
-
         let if_width = keyword::IF.len();
         match state.bytes().get(if_width) {
-            None | Some(b' ' | b'#' | b'\n' | b'\r') => {}
+            None | Some(b' ' | b'#' | b'\n' | b'\r')
+                if state.bytes().starts_with(keyword::IF.as_bytes()) => {}
             _ => return Ok((MadeProgress, (column_patterns, None), original_state)),
         }
 
