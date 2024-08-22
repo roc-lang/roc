@@ -688,12 +688,85 @@ mod tests {
     fn test_write_unencoded_u32() {
         let mut buffer = std::vec::Vec::with_capacity(4);
 
+        // Edge cases
         buffer.write_unencoded_u32(0);
         assert_eq!(buffer, &[0, 0, 0, 0]);
-
         buffer.clear();
+
         buffer.write_unencoded_u32(u32::MAX);
         assert_eq!(buffer, &[0xff, 0xff, 0xff, 0xff]);
+        buffer.clear();
+
+        // Testing each byte individually
+        buffer.write_unencoded_u32(0x000000FF);
+        assert_eq!(buffer, &[0xff, 0, 0, 0]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0x0000FF00);
+        assert_eq!(buffer, &[0, 0xff, 0, 0]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0x00FF0000);
+        assert_eq!(buffer, &[0, 0, 0xff, 0]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0xFF000000);
+        assert_eq!(buffer, &[0, 0, 0, 0xff]);
+        buffer.clear();
+
+        // Testing combinations of bytes
+        buffer.write_unencoded_u32(0x0000FFFF);
+        assert_eq!(buffer, &[0xff, 0xff, 0, 0]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0xFFFF0000);
+        assert_eq!(buffer, &[0, 0, 0xff, 0xff]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0xFF00FF00);
+        assert_eq!(buffer, &[0, 0xff, 0, 0xff]);
+        buffer.clear();
+
+        // Some arbitrary values
+        buffer.write_unencoded_u32(0x12345678);
+        assert_eq!(buffer, &[0x78, 0x56, 0x34, 0x12]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0xABCDEF01);
+        assert_eq!(buffer, &[0x01, 0xef, 0xcd, 0xab]);
+        buffer.clear();
+
+        // Testing endianness
+        buffer.write_unencoded_u32(0x01020304);
+        assert_eq!(buffer, &[0x04, 0x03, 0x02, 0x01]);
+        buffer.clear();
+
+        // Additional edge cases
+        buffer.write_unencoded_u32(1);
+        assert_eq!(buffer, &[1, 0, 0, 0]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(u32::MAX - 1);
+        assert_eq!(buffer, &[0xfe, 0xff, 0xff, 0xff]);
+        buffer.clear();
+
+        // Powers of two
+        buffer.write_unencoded_u32(0x00000001);
+        assert_eq!(buffer, &[0x01, 0x00, 0x00, 0x00]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0x00010000);
+        assert_eq!(buffer, &[0x00, 0x00, 0x01, 0x00]);
+        buffer.clear();
+
+        // Large values
+        buffer.write_unencoded_u32(0x7FFFFFFF); // Largest positive signed 32-bit integer
+        assert_eq!(buffer, &[0xff, 0xff, 0xff, 0x7f]);
+        buffer.clear();
+
+        buffer.write_unencoded_u32(0x80000000); // Smallest negative signed 32-bit integer when interpreted as signed
+        assert_eq!(buffer, &[0x00, 0x00, 0x00, 0x80]);
+        buffer.clear();
     }
 
     #[test]
