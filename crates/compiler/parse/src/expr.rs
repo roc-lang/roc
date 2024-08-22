@@ -282,6 +282,7 @@ fn parse_underscore_expression<'a>(
     Ok((MadeProgress, Loc::pos(start, state.pos(), expr), state))
 }
 
+#[inline(always)]
 fn parse_negative_or_term_or_if_when_closure<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
@@ -391,25 +392,26 @@ fn parse_negative_or_term<'a>(
 
 /// Entry point for parsing an expression.
 /// If Ok it always returns MadeProgress
-fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    (move |arena, state: State<'a>, min_indent| {
-        match parse_if_when_closure(options, arena, state.clone(), min_indent) {
-            Err((NoProgress, _)) => {}
-            res => return res,
-        }
+fn parse_expr_start<'a>(
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    match parse_if_when_closure(options, arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
 
-        let start = state.pos();
+    // Parse a chain of expressions separated by operators. Also handles function application.
+    let start = state.pos();
+    match parse_expr_operator_chain(options, arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+    }
 
-        // Parse a chain of expressions separated by operators. Also handles function application.
-        match parse_expr_operator_chain(options, arena, state.clone(), min_indent) {
-            Err((NoProgress, _)) => {}
-            Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-            Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
-        }
-
-        Err((NoProgress, EExpr::Start(start)))
-    })
-    .trace("expr_start")
+    Err((NoProgress, EExpr::Start(start)))
 }
 
 fn parse_expr_operator_chain<'a>(
@@ -1561,7 +1563,7 @@ fn parse_stmt_operator<'a>(
                 match expr_to_pattern_help(arena, &call.value) {
                     Ok(good) => {
                         let (_, mut ann_type, state) =
-                            expr_start(options).parse(arena, state, call_min_indent)?;
+                            parse_expr_start(options, arena, state, call_min_indent)?;
 
                         // put the spaces from after the operator in front of the call
                         ann_type = with_spaces_before(ann_type, spaces_after_op.value, &arena);
@@ -1711,7 +1713,7 @@ fn parse_stmt_multi_backpassing<'a>(
             let (ps, spaces_before, state) =
                 parse_indent(EExpr::IndentEnd, arena, state, min_indent)?;
 
-            let (loc_body, state) = match expr_start(options).parse(arena, state, min_indent) {
+            let (loc_body, state) = match parse_expr_start(options, arena, state, min_indent) {
                 Ok((_, loc_body, state)) => (loc_body, state),
                 Err((pe, fail)) => return Err((ps.or(pe), fail)),
             };
@@ -1953,7 +1955,7 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
         };
 
         let (ps, spaces_before, state) = parse_indent(EExpr::IndentEnd, arena, state, min_indent)?;
-        match expr_start(options).parse(arena, state, min_indent) {
+        match parse_expr_start(options, arena, state, min_indent) {
             Ok((_, expr, state)) => {
                 let expr = with_spaces_before(expr, spaces_before, arena);
                 Ok((MadeProgress, expr, state))
@@ -2368,8 +2370,7 @@ mod when {
                 .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         let at_cond = state.pos();
-        let (_, cond, state) = expr_start(options)
-            .parse(arena, state, cond_indent)
+        let (_, cond, state) = parse_expr_start(options, arena, state, cond_indent)
             .map_err(|(_, fail)| (MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))?;
 
         let (_, spaces_after, state) = spaces()
@@ -2551,8 +2552,7 @@ mod when {
             .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         let guard_pos = state.pos();
-        let (_, guard, state) = expr_start(options)
-            .parse(arena, state, min_indent + 1)
+        let (_, guard, state) = parse_expr_start(options, arena, state, min_indent + 1)
             .map_err(|(_, fail)| (MadeProgress, EWhen::IfGuard(arena.alloc(fail), guard_pos)))?;
 
         let (_, spaces_after, state) = space0_e(EWhen::IndentArrow)
@@ -2842,8 +2842,7 @@ where
         Ok((MadeProgress, loc_expr, state))
     } else {
         let last_pos = state.pos();
-        let (_, loc_expr, state) = expr_start(options)
-            .parse(arena, state, min_indent)
+        let (_, loc_expr, state) = parse_expr_start(options, arena, state, min_indent)
             .map_err(|(p, e)| (p, wrap_error(arena.alloc(e), last_pos)))?;
 
         let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
