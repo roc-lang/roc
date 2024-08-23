@@ -63,8 +63,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
                 Err((NoProgress, ()))
             } else {
-                let width = ident.len();
-                Ok((MadeProgress, ident, state.advance(width)))
+                Ok((MadeProgress, ident, state.advance(ident.len())))
             }
         }
     }

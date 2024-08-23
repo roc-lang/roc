@@ -1062,10 +1062,10 @@ where
     E: 'a,
 {
     move |_, state: State<'a>, _| {
-        let start = state.pos();
-        match parse_keyword(keyword_str, state) {
-            Some(state) => Ok((MadeProgress, (), state)),
-            None => Err((NoProgress, if_error(start))),
+        if has_keyword(keyword_str, &state) {
+            Ok((MadeProgress, (), state.advance(keyword_str.len())))
+        } else {
+            Err((NoProgress, if_error(state.pos())))
         }
     }
 }
@@ -1073,14 +1073,10 @@ where
 /// Start the check from the next character after keyword,
 /// that should not be an identifier character
 /// to prevent treating `whence` or `iffy` as keywords
-pub fn parse_keyword<'a>(kw: &'static str, state: State<'a>) -> Option<State<'a>> {
-    let kw_len = kw.len();
-    match state.bytes().get(kw_len) {
-        None | Some(b' ' | b'#' | b'\n' | b'\r') if state.bytes().starts_with(kw.as_bytes()) => {
-            Some(state.advance(kw_len))
-        }
-        _ => None,
-    }
+pub fn has_keyword<'a>(kw: &'static str, state: &State<'a>) -> bool {
+    let bs = state.bytes();
+    matches!(bs.get(kw.len()),
+        None | Some(b' ' | b'#' | b'\n' | b'\r') if bs.starts_with(kw.as_bytes()))
 }
 
 /// Parse zero or more values separated by a delimiter (e.g. a comma) whose

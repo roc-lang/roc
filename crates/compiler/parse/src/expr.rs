@@ -16,7 +16,7 @@ use crate::ident::{
 };
 use crate::parser::{
     self, and, backtrackable, between, byte, collection_inner, collection_trailing_sep_e, either,
-    increment_min_indent, loc, map, map_with_arena, optional, parse_keyword, reset_min_indent,
+    has_keyword, increment_min_indent, loc, map, map_with_arena, optional, reset_min_indent,
     set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref, then, two_bytes,
     zero_or_more, EClosure, EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber,
     EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
@@ -371,8 +371,10 @@ fn parse_negative_or_term<'a>(
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Number(fail, start))),
     }
 
-    if let Some(next) = parse_keyword(crate::keyword::CRASH, state.clone()) {
-        return Ok((MadeProgress, Loc::pos(start, next.pos(), Expr::Crash), next));
+    if has_keyword(crate::keyword::CRASH, &state) {
+        let state = state.advance(crate::keyword::CRASH.len());
+        let expr = Loc::pos(start, state.pos(), Expr::Crash);
+        return Ok((MadeProgress, expr, state));
     }
 
     match record_literal_help().parse(arena, state.clone(), min_indent) {
@@ -1601,40 +1603,27 @@ fn parse_after_binop<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     match parse_negative_or_term_or_if_when_closure(options, arena, state.clone(), call_min_indent)
     {
-        Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Err((NoProgress, _)) => Err((MadeProgress, EExpr::TrailingOperator(state.pos()))),
-        Ok((_, mut new_expr, state)) => {
-            let new_end = state.pos();
+        Err(fail) => Err(fail),
+        Ok((_, new_expr, state)) => {
+            // put the spaces from after the operator in front of the new_expr
+            let new_expr = with_spaces_before(new_expr, spaces_after_operator, arena);
+
+            let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
+            let call = to_call(arena, args, expr_state.expr);
+            expr_state.operators.push((call, loc_op));
+            expr_state.expr = new_expr;
+            expr_state.end = state.pos();
 
             let initial_state = state.clone();
-
-            // put the spaces from after the operator in front of the new_expr
-            new_expr = with_spaces_before(new_expr, spaces_after_operator, arena);
-
-            match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => {
-                    let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
-
-                    let call = to_call(arena, args, expr_state.expr);
-
-                    expr_state.operators.push((call, loc_op));
-                    expr_state.expr = new_expr;
-                    expr_state.end = new_end;
+            match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
+                Err(_) => {
                     expr_state.spaces_after = &[];
-
                     let expr = parse_expr_final(expr_state, arena);
                     Ok((MadeProgress, expr, state))
                 }
-                Ok((_, spaces, state)) => {
-                    let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
-
-                    let call = to_call(arena, args, expr_state.expr);
-
-                    expr_state.operators.push((call, loc_op));
-                    expr_state.expr = new_expr;
-                    expr_state.end = new_end;
-                    expr_state.spaces_after = spaces;
-
+                Ok((_, spaces_after, state)) => {
+                    expr_state.spaces_after = spaces_after;
                     parse_expr_end(
                         arena,
                         state,
@@ -2346,19 +2335,14 @@ mod when {
     pub fn parse_when_expr<'a>(
         options: ExprParseOptions,
         arena: &'a Bump,
-        mut state: State<'a>,
+        state: State<'a>,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        // the next character should not be an identifier character
-        // to prevent treating `whence` as a keyword
-        let when_width = keyword::WHEN.len();
-        match state.bytes().get(when_width) {
-            None | Some(b' ' | b'#' | b'\n' | b'\r')
-                if state.bytes().starts_with(keyword::WHEN.as_bytes()) => {}
-            _ => return Err((NoProgress, EWhen::When(state.pos()))),
-        };
+        if !has_keyword(keyword::WHEN, &state) {
+            return Err((NoProgress, EWhen::When(state.pos())));
+        }
 
         let cond_indent = state.line_indent() + 1;
-        state.advance_mut(when_width);
+        let state = state.advance(keyword::WHEN.len());
 
         let (_, spaces_before, state) =
             parse_indent(EWhen::IndentCondition, arena, state, cond_indent)
@@ -2372,19 +2356,15 @@ mod when {
             .parse(arena, state, cond_indent)
             .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-        let mut state = state;
-        let is_width = keyword::IS.len();
-        match state.bytes().get(is_width) {
-            None | Some(b' ' | b'#' | b'\n' | b'\r')
-                if state.bytes().starts_with(keyword::IS.as_bytes()) => {}
-            _ => return Err((MadeProgress, EWhen::Is(state.pos()))),
-        };
+        if !has_keyword(keyword::IS, &state) {
+            return Err((MadeProgress, EWhen::Is(state.pos())));
+        }
 
         // Note that we allow the `is` to be at any indent level, since this doesn't introduce any
         // ambiguity. The formatter will fix it up.
         // We require that branches are indented relative to the line containing the `is`.
         let branch_indent = state.line_indent() + 1;
-        state.advance_mut(is_width);
+        let state = state.advance(keyword::IS.len());
 
         // 1. Parse the first branch and get its indentation level (it must be >= branch_indent).
         // 2. Parse the other branches. Their indentation levels must be == the first branch's.
@@ -2532,14 +2512,10 @@ mod when {
         let column_patterns = (pattern_column, patterns);
         let original_state = state.clone();
 
-        let if_width = keyword::IF.len();
-        match state.bytes().get(if_width) {
-            None | Some(b' ' | b'#' | b'\n' | b'\r')
-                if state.bytes().starts_with(keyword::IF.as_bytes()) => {}
-            _ => return Ok((MadeProgress, (column_patterns, None), original_state)),
+        if !has_keyword(keyword::IF, &state) {
+            return Ok((MadeProgress, (column_patterns, None), original_state));
         }
-
-        state.advance_mut(if_width);
+        state.advance_mut(keyword::IF.len());
 
         // TODO we should require space before the expression but not after
         let (_, spaces_before, state) = space0_e(EWhen::IndentIfGuard)
@@ -2656,8 +2632,10 @@ fn parse_dbg<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Stmt<'a>, EExpect<'a>> {
-    let start = state.pos();
-    let state = parse_keyword(keyword::DBG, state).ok_or((NoProgress, EExpect::Dbg(start)))?;
+    if !has_keyword(keyword::DBG, &state) {
+        return Err((NoProgress, EExpect::Dbg(state.pos())));
+    }
+    let state = state.advance(keyword::DBG.len());
 
     let (_, condition, state) = parse_block(
         options,
@@ -2694,8 +2672,11 @@ fn parse_if_expr<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Expr<'a>, EIf<'a>> {
-    let start = state.pos();
-    let state = parse_keyword(keyword::IF, state).ok_or((NoProgress, EIf::If(start)))?;
+    if !has_keyword(keyword::IF, &state) {
+        return Err((NoProgress, EIf::If(state.pos())));
+    }
+
+    let state = state.advance(keyword::IF.len());
 
     let mut branches = Vec::with_capacity_in(1, arena);
 
