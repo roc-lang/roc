@@ -206,7 +206,7 @@ fn parse_term<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
-    match closure_help(options).parse(arena, state.clone(), min_indent) {
+    match parse_closure(options, arena, state.clone()) {
         Err((NoProgress, _)) => {}
         Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Closure(fail, start))),
@@ -317,7 +317,7 @@ fn parse_if_when_closure<'a>(
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::When(fail, start))),
     }
 
-    match closure_help(options).parse(arena, state.clone(), min_indent) {
+    match parse_closure(options, arena, state.clone()) {
         Err((NoProgress, _)) => {}
         Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Closure(fail, start))),
@@ -406,15 +406,6 @@ fn parse_expr_start<'a>(
     }
 
     // Parse a chain of expressions separated by operators. Also handles function application.
-    parse_expr_operator_chain(options, arena, state.clone(), min_indent)
-}
-
-fn parse_expr_operator_chain<'a>(
-    options: ExprParseOptions,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
     let call_min_indent = state.line_indent() + 1;
 
@@ -444,7 +435,6 @@ fn parse_expr_operator_chain<'a>(
             Err((MadeProgress, f)) => return Err((MadeProgress, f)),
             Err((NoProgress, _)) => {
                 let before_op = state.clone();
-                let mut expr_state = expr_state;
                 // We're part way thru parsing an expression, e.g. `bar foo `.
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
@@ -500,6 +490,7 @@ fn parse_expr_operator_chain<'a>(
                 state = new_state;
                 prev_state = state.clone();
 
+                // todo: @wip abstract 6 lines below to fn
                 if !expr_state.spaces_after.is_empty() {
                     arg = with_spaces_before(arg, expr_state.spaces_after, arena);
                     expr_state.spaces_after = &[];
@@ -2156,144 +2147,143 @@ const CLOSURE_PIPE_OPERATOR: &[u8] = b"\\>";
 const CLOSURE_PIPE_PARAM: &str = "x44";
 
 /// If Ok it always returns MadeProgress
-fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
-    move |arena, state: State<'a>, _min_indent| {
-        // After the first token, all other tokens must be indented past the start of the line
-        let slash_indent = state.line_indent();
-        if slash_indent > state.column() {
-            return Err((NoProgress, EClosure::Start(state.pos())));
-        }
+fn parse_closure<'a>(
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EClosure<'a>> {
+    // After the first token, all other tokens must be indented past the start of the line
+    let slash_indent = state.line_indent();
+    if slash_indent > state.column() {
+        return Err((NoProgress, EClosure::Start(state.pos())));
+    }
 
-        if state.bytes().starts_with(CLOSURE_PIPE_OPERATOR) {
-            // parsing
-            // `\> ...`
-            // to
-            // `\x44->x44|> ...`
-            //
-            let mut state = state.advance(CLOSURE_PIPE_OPERATOR.len());
-            let param_pos = state.pos();
-            state.advance_mut(CLOSURE_PIPE_PARAM.len());
-
-            let param = Pattern::Identifier {
-                ident: &CLOSURE_PIPE_PARAM,
-            };
-            let loc_param = Loc::pos(param_pos, state.pos(), param);
-            let mut params = Vec::with_capacity_in(1, arena);
-            params.push(loc_param);
-            dbg!("closure pipe param: ", loc_param);
-
-            // let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(loc_expr));
-            // return Ok((MadeProgress, closure, state));
-            todo!("@wip")
-        }
-
-        // All closures start with a '\' - e.g. (\x -> x + 1)
-        if state.bytes().first() != Some(&b'\\') {
-            return Err((NoProgress, EClosure::Start(state.pos())));
-        }
-
-        let state = state.advance(1);
-
-        // Once we see the '\', we're committed to parsing this as a closure.
-        // It may turn out to be malformed, but it is definitely a closure.
-        let min_indent: u32 = slash_indent + 1;
-
-        // Parse the params, params are comma-separated
+    if state.bytes().starts_with(CLOSURE_PIPE_OPERATOR) {
+        // parsing
+        // `\> ...`
+        // to
+        // `\x44->x44|> ...`
+        //
+        let mut state = state.advance(CLOSURE_PIPE_OPERATOR.len());
         let param_pos = state.pos();
-        let (_, spaces_before, state) = parse_indent(EClosure::IndentArg, arena, state, min_indent)
-            .map_err(|(p, fail)| match p {
-                NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                _ => (MadeProgress, fail),
-            })?;
+        state.advance_mut(CLOSURE_PIPE_PARAM.len());
 
-        let param_ident_pos = state.pos();
-        let (_, param, state) =
-            parse_closure_param(arena, state, min_indent).map_err(|(p, fail)| match p {
-                NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                _ => (MadeProgress, EClosure::Pattern(fail, param_ident_pos)),
-            })?;
-
-        let (_, spaces_after, state) =
-            parse_indent(EClosure::IndentArrow, arena, state, min_indent).map_err(
-                |(p, fail)| match p {
-                    NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                    _ => (MadeProgress, fail),
-                },
-            )?;
-
-        let first_param = with_spaces(arena, spaces_before, param, spaces_after);
+        let param = Pattern::Identifier {
+            ident: &CLOSURE_PIPE_PARAM,
+        };
+        let loc_param = Loc::pos(param_pos, state.pos(), param);
         let mut params = Vec::with_capacity_in(1, arena);
-        params.push(first_param);
+        params.push(loc_param);
+        dbg!("closure pipe param: ", loc_param);
 
-        let mut state = state;
-        loop {
-            let prev_state = state.clone();
-            if state.bytes().first() == Some(&b',') {
-                state.advance_mut(1);
+        // let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(loc_expr));
+        // return Ok((MadeProgress, closure, state));
+        todo!("@wip")
+    }
 
-                // After delimiter found, parse the parameter
-                let param_pos = state.pos();
-                let (_, spaces_before, next_state) =
-                    parse_indent(EClosure::IndentArg, arena, state, min_indent).map_err(
-                        |(p, fail)| match p {
-                            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                            _ => (MadeProgress, fail),
-                        },
-                    )?;
+    // All closures start with a '\' - e.g. (\x -> x + 1)
+    if state.bytes().first() != Some(&b'\\') {
+        return Err((NoProgress, EClosure::Start(state.pos())));
+    }
 
-                let param_ident_pos = next_state.pos();
-                let (_, param, next_state) = parse_closure_param(arena, next_state, min_indent)
-                    .map_err(|(p, fail)| match p {
+    let state = state.advance(1);
+
+    // Once we see the '\', we're committed to parsing this as a closure.
+    // It may turn out to be malformed, but it is definitely a closure.
+    let min_indent: u32 = slash_indent + 1;
+
+    // Parse the params, params are comma-separated
+    let param_pos = state.pos();
+    let (_, spaces_before, state) = parse_indent(EClosure::IndentArg, arena, state, min_indent)
+        .map_err(|(p, fail)| match p {
+            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
+            _ => (MadeProgress, fail),
+        })?;
+
+    let param_ident_pos = state.pos();
+    let (_, param, state) =
+        parse_closure_param(arena, state, min_indent).map_err(|(p, fail)| match p {
+            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
+            _ => (MadeProgress, EClosure::Pattern(fail, param_ident_pos)),
+        })?;
+
+    let (_, spaces_after, state) = parse_indent(EClosure::IndentArrow, arena, state, min_indent)
+        .map_err(|(p, fail)| match p {
+            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
+            _ => (MadeProgress, fail),
+        })?;
+
+    let first_param = with_spaces(arena, spaces_before, param, spaces_after);
+    let mut params = Vec::with_capacity_in(1, arena);
+    params.push(first_param);
+
+    let mut state = state;
+    loop {
+        let prev_state = state.clone();
+        if state.bytes().first() == Some(&b',') {
+            state.advance_mut(1);
+
+            // After delimiter found, parse the parameter
+            let param_pos = state.pos();
+            let (_, spaces_before, next_state) =
+                parse_indent(EClosure::IndentArg, arena, state, min_indent).map_err(
+                    |(p, fail)| match p {
                         NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                        _ => (MadeProgress, EClosure::Pattern(fail, param_ident_pos)),
-                    })?;
+                        _ => (MadeProgress, fail),
+                    },
+                )?;
 
-                let (_, spaces_after, next_state) =
-                    parse_indent(EClosure::IndentArrow, arena, next_state, min_indent).map_err(
-                        |(p, fail)| match p {
-                            NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
-                            _ => (MadeProgress, fail),
-                        },
-                    )?;
+            let param_ident_pos = next_state.pos();
+            let (_, param, next_state) = parse_closure_param(arena, next_state, min_indent)
+                .map_err(|(p, fail)| match p {
+                    NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
+                    _ => (MadeProgress, EClosure::Pattern(fail, param_ident_pos)),
+                })?;
 
-                let next_param = with_spaces(arena, spaces_before, param, spaces_after);
-                params.push(next_param);
-                state = next_state;
-            } else {
-                // Successfully completed the loop if no more delimiters found, restoring the previous state
-                state = prev_state;
-                break;
-            }
+            let (_, spaces_after, next_state) =
+                parse_indent(EClosure::IndentArrow, arena, next_state, min_indent).map_err(
+                    |(p, fail)| match p {
+                        NoProgress => (MadeProgress, EClosure::Arg(param_pos)),
+                        _ => (MadeProgress, fail),
+                    },
+                )?;
+
+            let next_param = with_spaces(arena, spaces_before, param, spaces_after);
+            params.push(next_param);
+            state = next_state;
+        } else {
+            // Successfully completed the loop if no more delimiters found, restoring the previous state
+            state = prev_state;
+            break;
         }
+    }
 
-        // Parse the arrow which separates params from body, only then parse the body
-        if !state.bytes().starts_with(b"->") {
-            return Err((MadeProgress, EClosure::Arrow(state.pos())));
-        }
+    // Parse the arrow which separates params from body, only then parse the body
+    if !state.bytes().starts_with(b"->") {
+        return Err((MadeProgress, EClosure::Arrow(state.pos())));
+    }
+    state.advance_mut(2);
 
-        state.advance_mut(2);
-
-        let min_indent = state.line_indent() + 1;
-        let (_, first_space, state) = loc_space0_e(EClosure::IndentBody)
-            .parse(arena, state, min_indent)
-            .map_err(|(_, fail)| (MadeProgress, fail))?;
-
-        let allow_defs = !first_space.value.is_empty();
-        let (_, body_block, state) = parse_block_inner(
-            options,
-            arena,
-            state,
-            min_indent,
-            EClosure::IndentBody,
-            EClosure::Body,
-            first_space,
-            allow_defs,
-        )
+    let body_indent = state.line_indent() + 1;
+    let (_, first_space, state) = loc_space0_e(EClosure::IndentBody)
+        .parse(arena, state, body_indent)
         .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body_block));
-        Ok((MadeProgress, closure, state))
-    }
+    let allow_defs = !first_space.value.is_empty();
+    let (_, body_block, state) = parse_block_inner(
+        options,
+        arena,
+        state,
+        body_indent,
+        EClosure::IndentBody,
+        EClosure::Body,
+        first_space,
+        allow_defs,
+    )
+    .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body_block));
+    Ok((MadeProgress, closure, state))
 }
 
 mod when {
