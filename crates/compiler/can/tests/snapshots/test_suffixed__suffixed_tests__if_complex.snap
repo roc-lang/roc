@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -112,7 +114,9 @@ Defs {
                                     ),
                                 ],
                             ),
-                            comment: None,
+                            lines_between: [
+                                Newline,
+                            ],
                             body_pattern: @95-98 Identifier {
                                 ident: "msg",
                             },
@@ -190,7 +194,7 @@ Defs {
                                                                                     @140-152 Inferred,
                                                                                 ],
                                                                             ),
-                                                                            comment: None,
+                                                                            lines_between: [],
                                                                             body_pattern: @140-152 Identifier {
                                                                                 ident: "#!0_stmt",
                                                                             },
@@ -312,7 +316,7 @@ Defs {
                                                                                                     @227-239 Inferred,
                                                                                                 ],
                                                                                             ),
-                                                                                            comment: None,
+                                                                                            lines_between: [],
                                                                                             body_pattern: @227-239 Identifier {
                                                                                                 ident: "#!2_stmt",
                                                                                             },

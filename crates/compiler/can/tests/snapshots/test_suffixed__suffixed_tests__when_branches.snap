@@ -13,9 +13,11 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
@@ -88,7 +90,7 @@ Defs {
                                                                     @54-65 Inferred,
                                                                 ],
                                                             ),
-                                                            comment: None,
+                                                            lines_between: [],
                                                             body_pattern: @54-65 Identifier {
                                                                 ident: "#!1_stmt",
                                                             },

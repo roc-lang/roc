@@ -330,6 +330,7 @@ pub enum EExpr<'a> {
     Start(Position),
     End(Position),
     BadExprEnd(Position),
+    StmtAfterExpr(Position),
     Space(BadInputError, Position),
 
     Dot(Position),
@@ -355,6 +356,8 @@ pub enum EExpr<'a> {
     QualifiedTag(Position),
     BackpassComma(Position),
     BackpassArrow(Position),
+    BackpassContinue(Position),
+    DbgContinue(Position),
 
     When(EWhen<'a>, Position),
     If(EIf<'a>, Position),
@@ -369,9 +372,11 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    OptionalValueInRecordBuilder(Region),
-    RecordUpdateAccumulator(Region),
-    RecordBuilderAccumulator(Region),
+    OptionalValueInOldRecordBuilder(Region),
+    IgnoredValueInOldRecordBuilder(Region),
+    RecordUpdateOldBuilderField(Region),
+    RecordUpdateIgnoredField(Region),
+    RecordBuilderOldBuilderField(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -383,6 +388,7 @@ pub enum EExpr<'a> {
     IndentEnd(Position),
 
     UnexpectedComma(Position),
+    UnexpectedTopLevelExpr(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,6 +430,7 @@ pub enum ERecord<'a> {
 
     Prefix(Position),
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
     Arrow(Position),
@@ -573,6 +580,7 @@ pub enum EImportParams<'a> {
     RecordUpdateFound(Region),
     RecordBuilderFound(Region),
     RecordApplyFound(Region),
+    RecordIgnoredFieldFound(Region),
     Space(BadInputError, Position),
 }
 
@@ -597,6 +605,7 @@ pub enum EPattern<'a> {
     AsIndentStart(Position),
 
     AccessorFunction(Position),
+    RecordUpdaterFunction(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +740,7 @@ pub enum ETypeAbilityImpl<'a> {
     Open(Position),
 
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     Arrow(Position),
     Optional(Position),
@@ -752,6 +762,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::End(p) => ETypeAbilityImpl::End(p),
             ERecord::Open(p) => ETypeAbilityImpl::Open(p),
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
+            ERecord::UnderscoreField(p) => ETypeAbilityImpl::UnderscoreField(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
@@ -851,8 +862,9 @@ where
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "{:<5?}: {}{:<50}",
+            "{:<5?}:{:<2} {}{:<50}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -868,8 +880,9 @@ where
         };
 
         println!(
-            "{:<5?}: {}{:<50} {:<15} {:?}",
+            "{:<5?}:{:<2} {}{:<50} {:<15} {:?}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),

@@ -150,7 +150,10 @@
           full = rocBuild.roc-full;
           # only the CLI crate = executable provided in nightly releases
           cli = rocBuild.roc-cli;
+          cli-debug = rocBuild.roc-cli-debug;
+
           lang-server = rocBuild.roc-lang-server;
+          lang-server-debug = rocBuild.roc-lang-server-debug;
         };
 
         apps = {

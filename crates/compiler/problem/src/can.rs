@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
-use roc_module::symbol::{ModuleId, ScopeModuleSource, Symbol};
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
@@ -54,6 +54,7 @@ pub enum Problem {
         new_symbol: Symbol,
         existing_symbol_region: Region,
     },
+    DeprecatedBackpassing(Region),
     /// First symbol is the name of the closure with that argument
     /// Bool is whether the closure is anonymous
     /// Second symbol is the name of the argument that is unused
@@ -238,6 +239,13 @@ pub enum Problem {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeModuleSource {
+    Builtin,
+    Current,
+    Import(Region),
+}
+
 impl Problem {
     pub fn severity(&self) -> Severity {
         use Severity::{Fatal, RuntimeError, Warning};
@@ -250,6 +258,7 @@ impl Problem {
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
             Problem::ImportShadowsSymbol { .. } => RuntimeError,
+            Problem::DeprecatedBackpassing(_) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
             Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
@@ -333,6 +342,7 @@ impl Problem {
             | Problem::ExplicitBuiltinImport(_, region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
+            | Problem::DeprecatedBackpassing(region)
             | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)

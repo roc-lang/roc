@@ -4443,6 +4443,15 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
+        ParamsVar { .. } => {
+            unimplemented!("module params code generation")
+        }
+        ImportParams(_, _, Some((_, value))) => {
+            with_hole(env, *value, variable, procs, layout_cache, assigned, hole)
+        }
+        ImportParams(_, _, None) => {
+            internal_error!("Missing module params should've been dropped by now");
+        }
         AbilityMember(member, specialization_id, specialization_var) => {
             let specialization_symbol = late_resolve_ability_specialization(
                 env,
@@ -6140,7 +6149,7 @@ fn late_resolve_ability_specialization(
             member,
             specialization_var,
         )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        .expect("Ability specialization is unknown. Tip: check out <https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/Non-Functions.20in.20Abilities/near/456068617>");
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,

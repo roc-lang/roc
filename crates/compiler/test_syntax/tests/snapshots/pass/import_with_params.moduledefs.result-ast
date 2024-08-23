@@ -13,17 +13,18 @@ Defs {
     ],
     space_before: [
         Slice(start = 0, length = 0),
-        Slice(start = 1, length = 0),
-        Slice(start = 2, length = 0),
-        Slice(start = 3, length = 0),
-    ],
-    space_after: [
         Slice(start = 0, length = 1),
         Slice(start = 1, length = 1),
         Slice(start = 2, length = 1),
-        Slice(start = 3, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
+        Slice(start = 2, length = 0),
+        Slice(start = 3, length = 1),
     ],
     spaces: [
+        Newline,
         Newline,
         Newline,
         Newline,
@@ -44,7 +45,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @15-29 [
                             @17-21 LabelOnly(
                                 @17-21 "echo",
                             ),
@@ -70,7 +71,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @42-60 [
                             @44-48 LabelOnly(
                                 @44-48 "echo",
                             ),
@@ -101,7 +102,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @73-91 [
                             @75-79 LabelOnly(
                                 @75-79 "echo",
                             ),
@@ -143,7 +144,7 @@ Defs {
                 params: Some(
                     ModuleImportParams {
                         before: [],
-                        params: [
+                        params: @109-123 [
                             @111-115 LabelOnly(
                                 @111-115 "echo",
                             ),

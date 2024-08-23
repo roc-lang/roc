@@ -10,7 +10,7 @@ use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
     is_expr_suffixed, AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces,
-    OldRecordBuilderField, Pattern, WhenBranch,
+    OldRecordBuilderField, Pattern, TryTarget, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -39,6 +39,7 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | AccessorFunction(_)
+            | RecordUpdater(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -47,7 +48,7 @@ impl<'a> Formattable for Expr<'a> {
             | OpaqueRef(_)
             | Crash => false,
 
-            RecordAccess(inner, _) | TupleAccess(inner, _) | TaskAwaitBang(inner) => {
+            RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
             }
 
@@ -510,6 +511,11 @@ impl<'a> Formattable for Expr<'a> {
                     Accessor::TupleIndex(key) => buf.push_str(key),
                 }
             }
+            RecordUpdater(key) => {
+                buf.indent(indent);
+                buf.push('&');
+                buf.push_str(key);
+            }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
@@ -520,9 +526,12 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            TaskAwaitBang(expr) => {
+            TrySuffix { expr, target } => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('!');
+                match target {
+                    TryTarget::Task => buf.push('!'),
+                    TryTarget::Result => buf.push('?'),
+                }
             }
             MalformedIdent(str, _) => {
                 buf.indent(indent);
@@ -543,7 +552,7 @@ impl<'a> Formattable for Expr<'a> {
     }
 }
 
-fn is_str_multiline(literal: &StrLiteral) -> bool {
+pub fn is_str_multiline(literal: &StrLiteral) -> bool {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -615,6 +624,22 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
+fn fmt_str_body(body: &str, buf: &mut Buf) {
+    for c in body.chars() {
+        match c {
+            // Format blank characters as unicode escapes
+            '\u{200a}' => buf.push_str("\\u(200a)"),
+            '\u{200b}' => buf.push_str("\\u(200b)"),
+            '\u{200c}' => buf.push_str("\\u(200c)"),
+            '\u{feff}' => buf.push_str("\\u(feff)"),
+            // Don't change anything else in the string
+            ' ' => buf.push_str_allow_spaces(" "),
+            '\n' => buf.push_str_allow_spaces("\n"),
+            _ => buf.push(c),
+        }
+    }
+}
+
 fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
     use StrSegment::*;
 
@@ -624,10 +649,10 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
             // a line break in the input string
             match string.strip_suffix('\n') {
                 Some(string_without_newline) => {
-                    buf.push_str_allow_spaces(string_without_newline);
+                    fmt_str_body(string_without_newline, buf);
                     buf.newline();
                 }
-                None => buf.push_str_allow_spaces(string),
+                None => fmt_str_body(string, buf),
             }
         }
         Unicode(loc_str) => {
@@ -671,10 +696,6 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::And => buf.push_str("&&"),
         called_via::BinOp::Or => buf.push_str("||"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
-        called_via::BinOp::Assignment => unreachable!(),
-        called_via::BinOp::IsAliasType => unreachable!(),
-        called_via::BinOp::IsOpaqueType => unreachable!(),
-        called_via::BinOp::Backpassing => unreachable!(),
     }
 }
 
@@ -691,7 +712,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
                 buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
-                    buf.push_str_allow_spaces(line);
+                    fmt_str_body(line, buf);
                     buf.push_newline_literal();
                 }
                 buf.indent(indent);
@@ -699,7 +720,7 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
             } else {
                 buf.indent(indent);
                 buf.push('"');
-                buf.push_str_allow_spaces(string);
+                fmt_str_body(string, buf);
                 buf.push('"');
             };
         }
@@ -1533,6 +1554,23 @@ fn format_assigned_field_multiline<T>(
             ann.value.format(buf, indent);
             buf.push(',');
         }
+        IgnoredValue(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push('_');
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
         LabelOnly(name) => {
             buf.newline();
             buf.indent(indent);
@@ -1708,10 +1746,6 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::And
                     | BinOp::Or
                     | BinOp::Pizza => true,
-                    BinOp::Assignment
-                    | BinOp::IsAliasType
-                    | BinOp::IsOpaqueType
-                    | BinOp::Backpassing => false,
                 })
         }
         Expr::If(_, _) => true,

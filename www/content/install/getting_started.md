@@ -11,7 +11,7 @@ If you have a specific question, the [FAQ](/faq) might have an answer, although 
 ## [Installation](#installation){#installation}
 
 - [🐧 Linux x86_64](/install/linux_x86_64)
-- [❄️ Nix Linux/MacOS](/install/nix)
+- [❄️ Nix](/install/nix)
 - [🍏 MacOS Apple Silicon](/install/macos_apple_silicon)
 - [🍏 MacOS x86_64](/install/macos_x86_64)
 - [🟦 Windows](/install/windows)

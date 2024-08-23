@@ -23,6 +23,7 @@ mod cli_run {
     use serial_test::serial;
     use std::iter;
     use std::path::Path;
+    use std::process::ExitStatus;
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
@@ -104,6 +105,11 @@ mod cli_run {
         let err = err.replace('\r', "");
 
         assert_multiline_str_eq!(err.as_str(), expected);
+    }
+
+    fn assert_valid_roc_check_status(status: ExitStatus) {
+        // 0 means no errors or warnings, 2 means just warnings
+        assert!(status.code().is_some_and(|code| code == 0 || code == 2))
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
@@ -713,6 +719,17 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn platform_requires_pkg() {
+        test_roc_app_slim(
+            "crates/cli/tests/platform_requires_pkg",
+            "app.roc",
+            "from app from package",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",
@@ -792,7 +809,7 @@ mod cli_run {
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     // TODO: write a new test once mono bugs are resolved in investigation
@@ -801,7 +818,7 @@ mod cli_run {
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -810,7 +827,7 @@ mod cli_run {
     fn cli_countdown_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "countdown.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -819,7 +836,7 @@ mod cli_run {
     fn cli_echo_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "echo.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -828,7 +845,7 @@ mod cli_run {
     fn cli_file_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "fileBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -837,7 +854,8 @@ mod cli_run {
     fn cli_form_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "form.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        dbg!(out.stdout, out.stderr);
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -846,7 +864,7 @@ mod cli_run {
     fn cli_http_get_check() {
         let path = file_path_from_root("crates/cli/tests/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
+        assert_valid_roc_check_status(out.status);
     }
 
     #[test]
@@ -881,7 +899,7 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
+    #[cfg_attr(target_os = "windows", ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -947,7 +965,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "For multiple tasks: {a: 123, b: \"abc\", c: [123], d: [\"abc\"], e: {\"a\": \"b\"}}\n",
+            "For multiple tasks: {a: 123, b: \"abc\", c: [123]}\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -1471,9 +1489,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                6│  main : Str -> Task {} []
-                7│  main = /_ ->
-                8│      "this is a string, not a Task {} [] function like the platform expects."
+                5│  main : Str -> Task {} []
+                6│  main = /_ ->
+                7│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:
@@ -1484,10 +1502,8 @@ mod cli_run {
 
                     Effect.Effect (Result {} [])
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
+                Tip: Add type annotations to functions or values to help you figure
+                this out.
 
                 ────────────────────────────────────────────────────────────────────────────────
 

@@ -13,17 +13,19 @@ Defs {
         Slice(start = 0, length = 0),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
             @0-4 Identifier {
                 ident: "main",
             },
-            @11-24 Apply(
-                @11-24 Var {
+            @11-17 Apply(
+                @11-17 Var {
                     module_name: "Task",
                     ident: "await",
                 },
@@ -32,13 +34,13 @@ Defs {
                         module_name: "",
                         ident: "a",
                     },
-                    @11-24 Closure(
+                    @11-17 Closure(
                         [
                             @15-17 Identifier {
                                 ident: "#!0_arg",
                             },
                         ],
-                        @11-24 LowLevelDbg(
+                        @11-17 LowLevelDbg(
                             (
                                 "test.roc:2",
                                 "in",
