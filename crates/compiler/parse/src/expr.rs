@@ -450,12 +450,12 @@ fn parse_expr_operator_chain<'a>(
                 // We just tried parsing an argument and determined we couldn't -
                 // so we're going to try parsing an operator.
                 let op_res = match parse_bin_op(true, state.clone()) {
-                    Err((MadeProgress, f)) => Err((MadeProgress, f)),
                     Err((NoProgress, _)) => {
                         // roll back space parsing
                         let expr = parse_expr_final(expr_state, arena);
                         Ok((MadeProgress, expr, initial_state))
                     }
+                    Err(fail) => Err(fail),
                     Ok((_, op, state)) => {
                         let op_start = before_op.pos();
                         let op_end = state.pos();
@@ -658,7 +658,6 @@ fn parse_stmt_operator_chain<'a>(
                 // This is very similar to the logic in `expr_operator_chain`, except
                 // we handle the additional case of backpassing, which is valid
                 // at the statement level but not at the expression level.
-                let mut expr_state = expr_state;
                 let before_op = state.clone();
                 return match loc(operator()).parse(arena, state.clone(), min_indent) {
                     Err((MadeProgress, f)) => Err((MadeProgress, f)),
@@ -1774,30 +1773,24 @@ fn parse_expr_end<'a>(
     match parse_underscore_or_term(options, arena, state.clone(), call_min_indent) {
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((_, mut arg, state)) => {
-            let mut expr_state = expr_state;
-            let new_end = state.pos();
-
             // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
             if !expr_state.spaces_after.is_empty() {
                 arg = with_spaces_before(arg, expr_state.spaces_after, arena);
                 expr_state.spaces_after = &[];
             }
+
+            expr_state.arguments.push(arena.alloc(arg));
+            expr_state.end = state.pos();
+
             let initial_state = state.clone();
-
-            match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-                Err((_, _)) => {
-                    expr_state.arguments.push(arena.alloc(arg));
-                    expr_state.end = new_end;
+            match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
+                Err(_) => {
                     expr_state.spaces_after = &[];
-
                     let expr = parse_expr_final(expr_state, arena);
                     Ok((MadeProgress, expr, state))
                 }
-                Ok((_, new_spaces, state)) => {
-                    expr_state.arguments.push(arena.alloc(arg));
-                    expr_state.end = new_end;
-                    expr_state.spaces_after = new_spaces;
-
+                Ok((_, spaces_after, state)) => {
+                    expr_state.spaces_after = spaces_after;
                     parse_expr_end(
                         arena,
                         state,
@@ -1854,8 +1847,8 @@ fn parse_expr_end<'a>(
                     }
                 }
                 Err((NoProgress, _)) => {
-                    let expr = parse_expr_final(expr_state, arena);
                     // roll back space parsing
+                    let expr = parse_expr_final(expr_state, arena);
                     Ok((MadeProgress, expr, initial_state))
                 }
             }
