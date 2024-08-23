@@ -1062,7 +1062,7 @@ where
     E: 'a,
 {
     move |_, state: State<'a>, _| {
-        if has_keyword(keyword_str, &state) {
+        if at_keyword(keyword_str, &state) {
             Ok((MadeProgress, (), state.advance(keyword_str.len())))
         } else {
             Err((NoProgress, if_error(state.pos())))
@@ -1073,7 +1073,7 @@ where
 /// Start the check from the next character after keyword,
 /// that should not be an identifier character
 /// to prevent treating `whence` or `iffy` as keywords
-pub fn has_keyword<'a>(kw: &'static str, state: &State<'a>) -> bool {
+pub fn at_keyword(kw: &'static str, state: &State<'_>) -> bool {
     let bs = state.bytes();
     matches!(bs.get(kw.len()),
         None | Some(b' ' | b'#' | b'\n' | b'\r') if bs.starts_with(kw.as_bytes()))
