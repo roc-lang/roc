@@ -406,11 +406,7 @@ fn parse_expr_start<'a>(
     }
 
     // Parse a chain of expressions separated by operators. Also handles function application.
-    let start = state.pos();
-    match parse_expr_operator_chain(options, arena, state.clone(), min_indent) {
-        Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err(fail) => Err(fail),
-    }
+    parse_expr_operator_chain(options, arena, state.clone(), min_indent)
 }
 
 fn parse_expr_operator_chain<'a>(
@@ -418,7 +414,8 @@ fn parse_expr_operator_chain<'a>(
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let start = state.pos();
     let call_min_indent = state.line_indent() + 1;
 
     let (_, term, state) = parse_negative_or_term(options, arena, state, min_indent)?;
@@ -426,7 +423,10 @@ fn parse_expr_operator_chain<'a>(
     let mut prev_state = state.clone();
     let (spaces_before_op, state) =
         match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
-            Err(_) => return Ok((MadeProgress, term.value, state)),
+            Err(_) => {
+                let loc_term = Loc::pos(start, state.pos(), term.value);
+                return Ok((MadeProgress, loc_term, state));
+            }
             Ok((_, spaces_before_op, state)) => (spaces_before_op, state),
         };
 
@@ -492,20 +492,34 @@ fn parse_expr_operator_chain<'a>(
                         }
                     }
                 };
-                return op_res;
+                return op_res.map(|(_, expr, state)| {
+                    (MadeProgress, Loc::pos(start, state.pos(), expr), state)
+                });
             }
-            Ok((_, arg, new_state)) => {
+            Ok((_, mut arg, new_state)) => {
                 state = new_state;
                 prev_state = state.clone();
-                if parse_after_expr_arg_and_check_final(
-                    arena,
-                    &mut state,
-                    min_indent,
-                    &mut expr_state,
-                    arg,
-                ) {
-                    let expr = parse_expr_final(expr_state, arena);
-                    return Ok((MadeProgress, expr, state));
+
+                if !expr_state.spaces_after.is_empty() {
+                    arg = with_spaces_before(arg, expr_state.spaces_after, arena);
+                    expr_state.spaces_after = &[];
+                }
+                expr_state.arguments.push(arena.alloc(arg));
+                expr_state.end = state.pos();
+
+                match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
+                    Err(_) => {
+                        expr_state.spaces_after = &[];
+
+                        let expr = parse_expr_final(expr_state, arena);
+                        let expr = Loc::pos(start, state.pos(), expr);
+                        return Ok((MadeProgress, expr, state));
+                    }
+                    Ok((_, new_spaces, new_state)) => {
+                        expr_state.spaces_after = new_spaces;
+
+                        state = new_state;
+                    }
                 }
 
                 continue;
@@ -607,7 +621,7 @@ fn parse_stmt_operator_chain<'a>(
 
     let (_, expr, state) = parse_negative_or_term(options, arena, state, min_indent)?;
 
-    let mut initial_state = state.clone();
+    let mut prev_state = state.clone();
     let end = state.pos();
 
     let (spaces_before_op, state) =
@@ -682,66 +696,41 @@ fn parse_stmt_operator_chain<'a>(
                         } else {
                             // roll back space parsing
                             let expr = parse_expr_final(expr_state, arena);
-                            Ok((MadeProgress, Stmt::Expr(expr), initial_state))
+                            Ok((MadeProgress, Stmt::Expr(expr), prev_state))
                         }
                     }
                 };
                 return op_res;
             }
-            Ok((_, arg, new_state)) => {
+            Ok((_, mut arg, new_state)) => {
                 state = new_state;
-                initial_state = state.clone();
-                if parse_after_expr_arg_and_check_final(
-                    arena,
-                    &mut state,
-                    min_indent,
-                    &mut expr_state,
-                    arg,
-                ) {
-                    let expr = parse_expr_final(expr_state, arena);
-                    return Ok((MadeProgress, Stmt::Expr(expr), state));
+                prev_state = state.clone();
+
+                if !expr_state.spaces_after.is_empty() {
+                    arg = with_spaces_before(arg, expr_state.spaces_after, arena);
+                    expr_state.spaces_after = &[];
+                }
+                expr_state.arguments.push(arena.alloc(arg));
+                expr_state.end = state.pos();
+
+                match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
+                    Err(_) => {
+                        expr_state.spaces_after = &[];
+
+                        let expr = parse_expr_final(expr_state, arena);
+                        return Ok((MadeProgress, Stmt::Expr(expr), state));
+                    }
+                    Ok((_, new_spaces, new_state)) => {
+                        expr_state.spaces_after = new_spaces;
+
+                        state = new_state;
+                    }
                 }
 
                 continue;
             }
         }
     }
-}
-
-fn parse_after_expr_arg_and_check_final<'a>(
-    arena: &'a Bump,
-    state: &mut State<'a>,
-    min_indent: u32,
-    expr_state: &mut ExprState<'a>,
-    mut arg: Loc<Expr<'a>>,
-) -> bool {
-    let new_end = state.pos();
-
-    if !expr_state.spaces_after.is_empty() {
-        arg = arena
-            .alloc(arg.value)
-            .with_spaces_before(expr_state.spaces_after, arg.region);
-
-        expr_state.spaces_after = &[];
-    }
-    let new_spaces = match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), min_indent) {
-        Err((_, _)) => {
-            expr_state.arguments.push(arena.alloc(arg));
-            expr_state.end = new_end;
-            expr_state.spaces_after = &[];
-
-            return true;
-        }
-        Ok((_, new_spaces, new_state)) => {
-            *state = new_state;
-            new_spaces
-        }
-    };
-    expr_state.arguments.push(arena.alloc(arg));
-    expr_state.end = new_end;
-    expr_state.spaces_after = new_spaces;
-
-    false
 }
 
 #[derive(Debug)]
@@ -1769,7 +1758,6 @@ fn parse_expr_end<'a>(
                 arg = with_spaces_before(arg, expr_state.spaces_after, arena);
                 expr_state.spaces_after = &[];
             }
-
             expr_state.arguments.push(arena.alloc(arg));
             expr_state.end = state.pos();
 
