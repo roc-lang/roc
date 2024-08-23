@@ -74,10 +74,9 @@ impl<'a> LowerParams<'a> {
                     }
                 }
                 Function(fn_def_index) | Recursive(fn_def_index) | TailRecursive(fn_def_index) => {
-                    if let Some((_, mark, pattern)) = self.home_params_argument() {
+                    if let Some((var, mark, pattern)) = self.home_params_argument() {
                         // This module has params, and this is a top-level function,
                         // so we need to extend its definition to take them.
-                        let var = self.var_store.fresh();
 
                         decls.function_bodies[fn_def_index.index()]
                             .value
