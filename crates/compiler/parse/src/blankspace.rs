@@ -390,7 +390,6 @@ where
 {
     move |arena, state: State<'a>, _min_indent: u32| {
         let mut newlines = Vec::new_in(arena);
-
         match consume_spaces(state, |_, space, _| newlines.push(space)) {
             Ok((progress, state)) => Ok((progress, newlines.into_bump_slice(), state)),
             Err((progress, err)) => Err((progress, err)),

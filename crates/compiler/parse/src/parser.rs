@@ -1092,7 +1092,6 @@ where
 {
     move |arena, state: State<'a>, min_indent: u32| {
         let original_state = state.clone();
-
         let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state, min_indent) {
@@ -1140,63 +1139,6 @@ where
                 MadeProgress => Err((MadeProgress, fail)),
                 NoProgress => Ok((NoProgress, Vec::new_in(arena), original_state)),
             },
-        }
-    }
-}
-
-/// Parse zero or more values separated by a delimiter (e.g. a comma)
-/// with an optional trailing delimiter whose values are discarded
-pub fn trailing_sep_by0<'a, P, D, Val, Error>(
-    delimiter: D,
-    parser: P,
-) -> impl Parser<'a, Vec<'a, Val>, Error>
-where
-    D: Parser<'a, (), Error>,
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    move |arena, state: State<'a>, min_indent: u32| {
-        let original_state = state.clone();
-        let start_bytes_len = state.bytes().len();
-
-        match parser.parse(arena, state, min_indent) {
-            Ok((progress, first_output, next_state)) => {
-                // in practice, we want elements to make progress
-                debug_assert_eq!(progress, MadeProgress);
-                let mut state = next_state;
-                let mut buf = Vec::with_capacity_in(1, arena);
-
-                buf.push(first_output);
-
-                loop {
-                    match delimiter.parse(arena, state.clone(), min_indent) {
-                        Ok((_, (), next_state)) => {
-                            // If the delimiter passed, check the element parser.
-                            match parser.parse(arena, next_state.clone(), min_indent) {
-                                Ok((element_progress, next_output, next_state)) => {
-                                    // in practice, we want elements to make progress
-                                    debug_assert_eq!(element_progress, MadeProgress);
-                                    state = next_state;
-                                    buf.push(next_output);
-                                }
-                                Err(_) => {
-                                    // If the delimiter parsed, but the following
-                                    // element did not, that means we saw a trailing comma
-                                    let progress = Progress::from_lengths(
-                                        start_bytes_len,
-                                        next_state.bytes().len(),
-                                    );
-                                    return Ok((progress, buf, next_state));
-                                }
-                            }
-                        }
-                        Err((NoProgress, _)) => return Ok((NoProgress, buf, state)),
-                        Err(fail) => return Err(fail),
-                    }
-                }
-            }
-            Err((NoProgress, _)) => Ok((NoProgress, Vec::new_in(arena), original_state)),
-            Err(fail) => Err(fail),
         }
     }
 }
@@ -1378,27 +1320,60 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     delimiter: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
-    let parser = and(
-        and(
-            crate::blankspace::spaces(),
-            trailing_sep_by0(
-                delimiter,
-                crate::blankspace::spaces_before_optional_after(elem),
-            ),
-        ),
-        crate::blankspace::spaces(),
-    );
+    let elem_parser = crate::blankspace::spaces_before_optional_after(elem);
 
     move |arena, state, min_indent| {
-        let (_, ((spaces, mut elems), mut final_comments), state) =
-            parser.parse(arena, state, min_indent)?;
+        let (_, spaces_before, state) =
+            crate::blankspace::spaces().parse(arena, state, min_indent)?;
 
-        if !spaces.is_empty() {
+        // Parse zero or more values separated by a delimiter (e.g. a comma)
+        // with an optional trailing delimiter whose values are discarded
+        let before_elems_state = state.clone();
+
+        let (mut elems, state) = match elem_parser.parse(arena, state, min_indent) {
+            Ok((first_elem_p, first_elem, first_elem_state)) => {
+                // in practice, we want elements to make progress
+                debug_assert_eq!(first_elem_p, MadeProgress);
+
+                let mut elems = Vec::with_capacity_in(1, arena);
+                elems.push(first_elem);
+
+                let mut state = first_elem_state;
+                loop {
+                    match delimiter.parse(arena, state.clone(), min_indent) {
+                        Ok((_, (), delim_state)) => {
+                            match elem_parser.parse(arena, delim_state.clone(), min_indent) {
+                                Ok((elem_p, next_output, elem_state)) => {
+                                    debug_assert_eq!(elem_p, MadeProgress);
+                                    state = elem_state;
+                                    elems.push(next_output);
+                                }
+                                Err(_) => {
+                                    state = delim_state;
+                                    break;
+                                }
+                            }
+                        }
+                        Err((NoProgress, _)) => break,
+                        Err((_, fail)) => return Err((MadeProgress, fail)),
+                    }
+                }
+                (elems, state)
+            }
+            Err((NoProgress, _)) => (Vec::new_in(arena), before_elems_state),
+            Err((_, fail)) => return Err((MadeProgress, fail)),
+        };
+
+        let (_, mut final_comments, state) = crate::blankspace::spaces()
+            .parse(arena, state, min_indent)
+            .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+        if !spaces_before.is_empty() {
             if let Some(first) = elems.first_mut() {
-                first.value = space_before(arena.alloc(first.value.clone()), spaces);
+                first.value = space_before(arena.alloc(first.value.clone()), spaces_before);
             } else {
                 debug_assert!(final_comments.is_empty());
-                final_comments = spaces;
+                final_comments = spaces_before;
             }
         }
 
@@ -1407,6 +1382,7 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
             elems.into_bump_slice(),
             final_comments,
         );
+
         Ok((MadeProgress, elems, state))
     }
 }

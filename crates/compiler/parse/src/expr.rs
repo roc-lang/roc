@@ -102,17 +102,17 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
             byte(b')', EInParens::End),
             Expr::SpaceBefore,
         )),
-        move |arena, state, _, loc_elements| {
-            let elements = loc_elements.value;
-            let region = loc_elements.region;
+        move |arena, state, _, loc_elems| {
+            let elems = loc_elems.value;
+            let region = loc_elems.region;
 
-            if elements.len() > 1 {
+            if elems.len() > 1 {
                 Ok((
                     MadeProgress,
-                    Loc::at(region, Expr::Tuple(elements.ptrify_items(arena))),
+                    Loc::at(region, Expr::Tuple(elems.ptrify_items(arena))),
                     state,
                 ))
-            } else if elements.is_empty() {
+            } else if elems.is_empty() {
                 Err((NoProgress, EInParens::Empty(state.pos())))
             } else {
                 // TODO: don't discard comments before/after
@@ -120,8 +120,8 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
                 Ok((
                     MadeProgress,
                     Loc::at(
-                        elements.items[0].region,
-                        Expr::ParensAround(&elements.items[0].value),
+                        elems.items[0].region,
+                        Expr::ParensAround(&elems.items[0].value),
                     ),
                     state,
                 ))
