@@ -1703,8 +1703,8 @@ macro_rules! one_of {
 
             match $p1.parse(arena, state, min_indent) {
                 valid @ Ok(_) => valid,
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
                 Err((NoProgress, _)) => $p2.parse(arena, original_state, min_indent),
+                Err(fail) => Err(fail),
             }
         }
     };

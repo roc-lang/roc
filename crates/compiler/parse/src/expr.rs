@@ -7,8 +7,8 @@ use crate::ast::{
 };
 use crate::blankspace::{
     loc_space0_e, parse_indent, require_newline_or_eof, space0_after_e, space0_around_ee,
-    space0_before_e, space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
-    with_spaces, with_spaces_before,
+    space0_before_e, space0_e, spaces, spaces_around, spaces_before, with_spaces,
+    with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -51,13 +51,25 @@ pub fn test_parse_expr<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
 ) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
-    let parser = skip_second(
-        space0_before_optional_after(loc_expr_block(true), EExpr::IndentStart, EExpr::IndentEnd),
-        expr_end(),
-    );
+    match parse_indent(EExpr::IndentStart, arena, state, min_indent) {
+        Ok((_, spaces_before, state)) => {
+            let block_res = loc_expr_block(true);
 
-    match parser.parse(arena, state, min_indent) {
-        Ok((_, expression, _)) => Ok(expression),
+            match block_res.parse(arena, state, min_indent) {
+                Ok((_, expr, state)) => {
+                    let (spaces_after, state) =
+                        match parse_indent(EExpr::IndentEnd, arena, state.clone(), min_indent) {
+                            Ok((_, spaces_after, state)) => (spaces_after, state),
+                            Err(_) => (&[] as &[_], state),
+                        };
+                    match expr_end().parse(arena, state, min_indent) {
+                        Ok(_) => Ok(with_spaces(arena, spaces_before, expr, spaces_after)),
+                        Err((_, fail)) => Err(fail),
+                    }
+                }
+                Err((_, fail)) => Err(fail),
+            }
+        }
         Err((_, fail)) => Err(fail),
     }
 }
@@ -89,11 +101,7 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
     then(
         loc(collection_trailing_sep_e(
             byte(b'(', EInParens::Open),
-            specialize_err_ref(
-                EInParens::Expr,
-                // space0_before_e(
-                loc_expr_block(false),
-            ),
+            specialize_err_ref(EInParens::Expr, loc_expr_block(false)),
             byte(b',', EInParens::End),
             byte(b')', EInParens::End),
             Expr::SpaceBefore,
@@ -1876,19 +1884,30 @@ pub fn loc_expr_block<'a>(
                 check_for_arrow: true,
             };
 
-            let (_, loc_first_space, state) =
+            let (_, first_space, state) =
                 loc_space0_e(EExpr::IndentStart).parse(arena, state, min_indent)?;
 
-            parse_block_inner(
-                options,
+            let (_, stmts, state) = parse_stmt_seq(
                 arena,
                 state,
+                |fail, _| fail.clone(),
+                options,
                 min_indent,
+                Loc::at(first_space.region, &[]),
                 EExpr::IndentStart,
-                |a, _| a.clone(),
-                loc_first_space,
-                true,
-            )
+            )?;
+
+            let last_pos = state.pos();
+            if stmts.is_empty() {
+                let fail = arena.alloc(EExpr::Start(last_pos)).clone();
+                return Err((NoProgress, fail));
+            }
+
+            let loc_expr =
+                stmts_to_expr(&stmts, arena).map_err(|e| (MadeProgress, arena.alloc(e).clone()))?;
+
+            let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
+            Ok((MadeProgress, loc_expr, state))
         },
         EExpr::IndentEnd,
     )
@@ -2176,9 +2195,9 @@ fn parse_closure<'a>(
         params.push(loc_param);
         dbg!("closure pipe param: ", loc_param);
 
-        // let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(loc_expr));
+        // let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
         // return Ok((MadeProgress, closure, state));
-        todo!("@wip")
+        todo!("@wip I need the body")
     }
 
     // All closures start with a '\' - e.g. (\x -> x + 1)
@@ -2269,20 +2288,35 @@ fn parse_closure<'a>(
         .parse(arena, state, body_indent)
         .map_err(|(_, fail)| (MadeProgress, fail))?;
 
-    let allow_defs = !first_space.value.is_empty();
-    let (_, body_block, state) = parse_block_inner(
-        options,
-        arena,
-        state,
-        body_indent,
-        EClosure::IndentBody,
-        EClosure::Body,
-        first_space,
-        allow_defs,
-    )
-    .map_err(|(_, fail)| (MadeProgress, fail))?;
+    let (body, state) = if first_space.value.is_empty() {
+        let err_pos = state.pos();
+        let (_, body, state) = parse_expr_start(options, arena, state, min_indent)
+            .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), err_pos)))?;
+        (body, state)
+    } else {
+        let (_, stmts, state) = parse_stmt_seq(
+            arena,
+            state,
+            EClosure::Body,
+            options,
+            min_indent,
+            Loc::at(first_space.region, &[]),
+            EClosure::IndentBody,
+        )?;
 
-    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body_block));
+        let err_pos = state.pos();
+        if stmts.is_empty() {
+            let fail = EClosure::Body(arena.alloc(EExpr::Start(err_pos)), err_pos);
+            return Err((MadeProgress, fail));
+        }
+
+        let body = stmts_to_expr(&stmts, arena)
+            .map_err(|e| (MadeProgress, EClosure::Body(arena.alloc(e), err_pos)))?;
+        let body = with_spaces_before(body, first_space.value, arena);
+        (body, state)
+    };
+
+    let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
     Ok((MadeProgress, closure, state))
 }
 
