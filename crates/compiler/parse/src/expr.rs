@@ -94,41 +94,41 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 }
 
 fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
-    then(
-        loc(collection_trailing_sep_e(
-            byte(b'(', EInParens::Open),
-            specialize_err_ref(EInParens::Expr, loc_expr_block(false)),
-            byte(b',', EInParens::End),
-            byte(b')', EInParens::End),
-            Expr::SpaceBefore,
-        )),
-        move |arena, state, _, loc_elems| {
-            let elems = loc_elems.value;
-            let region = loc_elems.region;
-
-            if elems.len() > 1 {
-                Ok((
-                    MadeProgress,
-                    Loc::at(region, Expr::Tuple(elems.ptrify_items(arena))),
-                    state,
-                ))
-            } else if elems.is_empty() {
-                Err((NoProgress, EInParens::Empty(state.pos())))
-            } else {
-                // TODO: don't discard comments before/after
-                // (stored in the Collection)
-                Ok((
-                    MadeProgress,
-                    Loc::at(
-                        elems.items[0].region,
-                        Expr::ParensAround(&elems.items[0].value),
-                    ),
-                    state,
-                ))
+    let parser = collection_trailing_sep_e(
+        byte(b'(', EInParens::Open),
+        specialize_err_ref(EInParens::Expr, loc_expr_block(false)),
+        byte(b',', EInParens::End),
+        byte(b')', EInParens::End),
+        Expr::SpaceBefore,
+    );
+    move |arena, state: State<'a>, min_indent| {
+        let start = state.pos();
+        match parser.parse(arena, state.clone(), min_indent) {
+            Ok((_, elems, state)) => {
+                if elems.len() > 1 {
+                    Ok((
+                        MadeProgress,
+                        Loc::pos(start, state.pos(), Expr::Tuple(elems.ptrify_items(arena))),
+                        state,
+                    ))
+                } else if elems.is_empty() {
+                    Err((NoProgress, EInParens::Empty(state.pos())))
+                } else {
+                    // TODO: don't discard comments before/after
+                    // (stored in the Collection)
+                    Ok((
+                        MadeProgress,
+                        Loc::at(
+                            elems.items[0].region,
+                            Expr::ParensAround(&elems.items[0].value),
+                        ),
+                        state,
+                    ))
+                }
             }
-        },
-    )
-    .trace("in_parens")
+            Err(fail) => Err(fail),
+        }
+    }
 }
 
 fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {

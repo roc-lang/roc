@@ -36,22 +36,19 @@ pub fn parse_closure_param<'a>(
     // An ident is the most common param, e.g. \foo -> ...
     match loc_ident_pattern_help(true).parse(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
-        Ok(ok) => return Ok(ok),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        res => return res,
     }
 
     // Underscore is also common, e.g. \_ -> ...
     match loc_underscore_pattern_help().parse(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
-        Ok(ok) => return Ok(ok),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        res => return res,
     }
 
     // You can destructure records in params, e.g. \{ x, y } -> ...
     match loc_record_pattern_help().parse(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
-        Ok(ok) => return Ok(ok),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, fail)),
+        res => return res,
     }
 
     // If you wrap it in parens, you can match any arbitrary pattern at all.
