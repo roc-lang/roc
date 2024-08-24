@@ -1176,11 +1176,10 @@ where
                                 Ok((element_progress, next_output, next_state)) => {
                                     // in practice, we want elements to make progress
                                     debug_assert_eq!(element_progress, MadeProgress);
-
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((_, _fail)) => {
+                                Err(_) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that means we saw a trailing comma
                                     let progress = Progress::from_lengths(
@@ -1191,17 +1190,13 @@ where
                                 }
                             }
                         }
-                        Err((delim_progress, fail)) => match delim_progress {
-                            MadeProgress => return Err((MadeProgress, fail)),
-                            NoProgress => return Ok((NoProgress, buf, state)),
-                        },
+                        Err((NoProgress, _)) => return Ok((NoProgress, buf, state)),
+                        Err(fail) => return Err(fail),
                     }
                 }
             }
-            Err((element_progress, fail)) => match element_progress {
-                MadeProgress => Err((MadeProgress, fail)),
-                NoProgress => Ok((NoProgress, Vec::new_in(arena), original_state)),
-            },
+            Err((NoProgress, _)) => Ok((NoProgress, Vec::new_in(arena), original_state)),
+            Err(fail) => Err(fail),
         }
     }
 }
@@ -1383,44 +1378,37 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     delimiter: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
-    map_with_arena(
+    let parser = and(
         and(
-            and(
-                crate::blankspace::spaces(),
-                trailing_sep_by0(
-                    delimiter,
-                    crate::blankspace::spaces_before_optional_after(elem),
-                ),
-            ),
             crate::blankspace::spaces(),
-        ),
-        #[allow(clippy::type_complexity)]
-        move |arena: &'a bumpalo::Bump,
-              out: (
-            (
-                &'a [crate::ast::CommentOrNewline<'a>],
-                bumpalo::collections::Vec<'a, Loc<Elem>>,
+            trailing_sep_by0(
+                delimiter,
+                crate::blankspace::spaces_before_optional_after(elem),
             ),
-            &'a [crate::ast::CommentOrNewline<'a>],
-        )| {
-            let ((spaces, mut parsed_elems), mut final_comments) = out;
+        ),
+        crate::blankspace::spaces(),
+    );
 
-            if !spaces.is_empty() {
-                if let Some(first) = parsed_elems.first_mut() {
-                    first.value = space_before(arena.alloc(first.value.clone()), spaces);
-                } else {
-                    debug_assert!(final_comments.is_empty());
-                    final_comments = spaces;
-                }
+    move |arena, state, min_indent| {
+        let (_, ((spaces, mut elems), mut final_comments), state) =
+            parser.parse(arena, state, min_indent)?;
+
+        if !spaces.is_empty() {
+            if let Some(first) = elems.first_mut() {
+                first.value = space_before(arena.alloc(first.value.clone()), spaces);
+            } else {
+                debug_assert!(final_comments.is_empty());
+                final_comments = spaces;
             }
+        }
 
-            crate::ast::Collection::with_items_and_comments(
-                arena,
-                parsed_elems.into_bump_slice(),
-                final_comments,
-            )
-        },
-    )
+        let elems = crate::ast::Collection::with_items_and_comments(
+            arena,
+            elems.into_bump_slice(),
+            final_comments,
+        );
+        Ok((MadeProgress, elems, state))
+    }
 }
 
 pub fn collection_trailing_sep_e<

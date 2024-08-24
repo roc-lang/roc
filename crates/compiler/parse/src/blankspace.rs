@@ -300,7 +300,7 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
     simple_eat_until_control_character(&bytes[i..]) + i
 }
 
-pub fn parse_indent<'a, E>(
+pub fn parse_space<'a, E>(
     indent_problem: fn(Position) -> E,
     arena: &'a Bump,
     state: State<'a>,
@@ -327,7 +327,7 @@ where
     E: 'a + SpaceProblem,
 {
     move |arena, state: State<'a>, min_indent: u32| {
-        parse_indent(indent_problem, arena, state, min_indent)
+        parse_space(indent_problem, arena, state, min_indent)
     }
 }
 
@@ -337,7 +337,7 @@ where
 {
     move |arena: &'a Bump, state: State<'a>, min_indent| {
         // TODO: we can do this more efficiently by stopping as soon as we see a '#' or a newline
-        let (_, spaces, _) = parse_indent(newline_problem, arena, state.clone(), min_indent)?;
+        let (_, spaces, _) = parse_space(newline_problem, arena, state.clone(), min_indent)?;
 
         if !spaces.is_empty() || state.has_reached_end() {
             Ok((NoProgress, (), state))
