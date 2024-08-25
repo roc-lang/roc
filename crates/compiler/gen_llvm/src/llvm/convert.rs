@@ -404,7 +404,8 @@ impl<'ctx> RocUnion<'ctx> {
         let mut width = self.data_width;
 
         // add padding between data and the tag id
-        width = round_up_to_alignment(width, tag_id_width);
+        let tag_id_alignment = tag_id_width.max(1);
+        width = round_up_to_alignment(width, tag_id_alignment);
 
         // add tag id
         width += tag_id_width;
