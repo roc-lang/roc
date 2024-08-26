@@ -1,6 +1,6 @@
 SpaceBefore(
     SpaceAfter(
-        Dbg(
+        DbgStmt(
             @5-11 BinOps(
                 [
                     (

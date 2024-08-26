@@ -65,7 +65,8 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
-            Dbg(condition, _) => condition.is_multiline(),
+            Dbg(expr) => expr.is_multiline(),
+            DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
@@ -453,8 +454,11 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
-            Dbg(condition, continuation) => {
-                fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
+            Dbg(expr) => {
+                fmt_dbg_expr(buf, expr, self.is_multiline(), indent);
+            }
+            DbgStmt(condition, continuation) => {
+                fmt_dbg_stmt(buf, condition, continuation, self.is_multiline(), indent);
             }
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
@@ -1018,7 +1022,16 @@ fn fmt_when<'a>(
     }
 }
 
-fn fmt_dbg<'a>(
+fn fmt_dbg_expr<'a>(buf: &mut Buf, expr: &'a Loc<Expr<'a>>, _: bool, indent: u16) {
+    buf.indent(indent);
+    buf.push_str("dbg");
+
+    buf.spaces(1);
+
+    expr.format(buf, indent);
+}
+
+fn fmt_dbg_stmt<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,

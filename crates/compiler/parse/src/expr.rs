@@ -2170,7 +2170,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::Expect(_, _)
-        | Expr::Dbg(_, _)
+        | Expr::Dbg(_)
+        | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
         | Expr::MalformedSuffixed(..)
@@ -3151,7 +3152,7 @@ fn stmts_to_defs<'a>(
 
                         let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
 
-                        let e = Expr::Dbg(arena.alloc(condition), arena.alloc(rest));
+                        let e = Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest));
 
                         let e = if sp_stmt.before.is_empty() {
                             e

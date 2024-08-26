@@ -1359,7 +1359,10 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        Dbg(condition, continuation) => {
+        Dbg(_expr) => {
+            todo!();
+        }
+        DbgStmt(condition, continuation) => {
             // Desugars a `dbg x` statement into essentially
             // Inspect.toStr x |> LowLevelDbg
             let desugared_continuation = &*arena.alloc(desugar_expr(

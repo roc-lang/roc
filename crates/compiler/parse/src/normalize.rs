@@ -784,7 +784,8 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
-            Expr::Dbg(a, b) => Expr::Dbg(
+            Expr::Dbg(a) => Expr::Dbg(arena.alloc(a.normalize(arena))),
+            Expr::DbgStmt(a, b) => Expr::DbgStmt(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
             ),
