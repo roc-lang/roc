@@ -5,7 +5,9 @@ import pf.PlatformTasks
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 main : Task {} []
 main =
-    { value, isError } = PlatformTasks.getInt!
+    { value, isError } =
+        PlatformTasks.getInt
+            |> Task.mapErr! \_ -> crash "unreachable"
     inputResult =
         if isError then
             Err GetIntError
@@ -19,13 +21,15 @@ main =
             optimized = eval (constFolding (reassoc e))
 
             unoptimized
-            |> Num.toStr
-            |> Str.concat " & "
-            |> Str.concat (Num.toStr optimized)
-            |> PlatformTasks.putLine
+                |> Num.toStr
+                |> Str.concat " & "
+                |> Str.concat (Num.toStr optimized)
+                |> PlatformTasks.putLine
+                |> Task.mapErr! \_ -> crash "unreachable"
 
         Err GetIntError ->
             PlatformTasks.putLine "Error: Failed to get Integer from stdin."
+                |> Task.mapErr! \_ -> crash "unreachable"
 
 Expr : [
     Add Expr Expr,

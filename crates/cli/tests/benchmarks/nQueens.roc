@@ -4,7 +4,9 @@ import pf.PlatformTasks
 
 main : Task {} []
 main =
-    { value, isError } = PlatformTasks.getInt!
+    { value, isError } =
+        PlatformTasks.getInt
+            |> Task.mapErr! \_ -> crash "unreachable"
     inputResult =
         if isError then
             Err GetIntError
@@ -14,11 +16,13 @@ main =
     when inputResult is
         Ok n ->
             queens n # original koka 13
-            |> Num.toStr
-            |> PlatformTasks.putLine
+                |> Num.toStr
+                |> PlatformTasks.putLine
+                |> Task.mapErr! \_ -> crash "unreachable"
 
         Err GetIntError ->
             PlatformTasks.putLine "Error: Failed to get Integer from stdin."
+                |> Task.mapErr! \_ -> crash "unreachable"
 
 ConsList a : [Nil, Cons a (ConsList a)]
 

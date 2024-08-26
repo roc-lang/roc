@@ -7,7 +7,9 @@ IO a : Task a []
 
 main : Task {} []
 main =
-    { value, isError } = PlatformTasks.getInt!
+    { value, isError } =
+        PlatformTasks.getInt
+            |> Task.mapErr! \_ -> crash "unreachable"
     inputResult =
         if isError then
             Err GetIntError
@@ -27,6 +29,7 @@ main =
 
         Err GetIntError ->
             PlatformTasks.putLine "Error: Failed to get Integer from stdin."
+                |> Task.mapErr! \_ -> crash "unreachable"
 
 nestHelp : I64, (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nestHelp = \s, f, m, x ->
@@ -167,5 +170,7 @@ deriv = \i, f ->
         Num.toStr (i + 1)
         |> Str.concat " count: "
         |> Str.concat (Num.toStr (count fprime))
-    PlatformTasks.putLine! line
+    PlatformTasks.putLine line
+        |> Task.mapErr! \_ -> crash "unreachable"
+
     Task.ok fprime

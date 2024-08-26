@@ -2,6 +2,6 @@ hosted PlatformTasks
     exposes [putLine, getLine]
     imports []
 
-putLine : Str -> Task {} *
+putLine : Str -> Task {} {}
 
-getLine : Task Str *
+getLine : Task Str {}
