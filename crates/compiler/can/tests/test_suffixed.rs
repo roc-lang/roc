@@ -445,6 +445,16 @@ mod suffixed_tests {
     }
 
     #[test]
+    fn dbg_expr() {
+        run_test!(
+            r#"
+            main =
+                dbg (dbg 1 + 1)
+            "#
+        );
+    }
+
+    #[test]
     fn apply_argument_single() {
         run_test!(
             r#"
