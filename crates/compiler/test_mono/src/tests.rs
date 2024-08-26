@@ -3262,6 +3262,15 @@ fn dbg_nested_expr() {
 }
 
 #[mono_test]
+fn dbg_inside_string() {
+    indoc!(
+        r#"
+        "Hello $(dbg "world")!"
+        "#
+    )
+}
+
+#[mono_test]
 fn linked_list_reverse() {
     indoc!(
         r#"

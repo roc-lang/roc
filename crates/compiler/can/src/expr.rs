@@ -2478,13 +2478,19 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::DbgStmt(_, _)
         | ast::Expr::LowLevelDbg(_, _, _)
-        | ast::Expr::Defs(_, _)
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)
         | ast::Expr::Backpassing(_, _, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
+        // Desugared dbg expression
+        ast::Expr::Defs(_, loc_ret) => match loc_ret.value {
+            ast::Expr::LowLevelDbg(_, _, continuation) => {
+                is_valid_interpolation(&continuation.value)
+            }
+            _ => false,
+        },
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Dbg(expr) => is_valid_interpolation(&expr.value),
         ast::Expr::Str(StrLiteral::Line(segments)) => {
