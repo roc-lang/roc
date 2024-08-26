@@ -9,8 +9,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, ModuleImportParams, OldRecordBuilderField, Pattern, StrLiteral,
-    StrSegment, TypeAnnotation, ValueDef, WhenBranch,
+    AssignedField, Collection, Defs, ModuleImportParams, OldRecordBuilderField, Pattern,
+    StrLiteral, StrSegment, TypeAnnotation, ValueDef, WhenBranch,
 };
 use roc_problem::can::Problem;
 use roc_region::all::{LineInfo, Loc, Region};
@@ -1359,8 +1359,95 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        Dbg(_expr) => {
-            todo!();
+        Dbg(expr) => {
+            // Desugars a `dbg expr` expression into a statement block that prints and returns the
+            // value produced by `expr`. Essentially:
+            // (
+            //     tmpVar = expr
+            //     LowLevelDbg (Inspect.toStr tmpVar)
+            //     tmpVar
+            // )
+            let desugared_expr = &*arena.alloc(desugar_expr(
+                arena,
+                var_store,
+                expr,
+                src,
+                line_info,
+                module_path,
+                problems,
+            ));
+
+            let region = expr.region;
+
+            // tmpVar = expr
+            let ident = &*arena.alloc_str(&format!("{:?}", var_store.fresh()));
+
+            let value_def = ValueDef::Body(
+                arena.alloc(Loc {
+                    value: Pattern::Identifier { ident },
+                    region,
+                }),
+                desugared_expr,
+            );
+
+            let defs = arena.alloc(Defs::default());
+            defs.push_value_def(value_def, region, &[], &[]);
+
+            // tmpVar
+            let tmp_var = arena.alloc(Loc {
+                value: Var {
+                    module_name: "",
+                    ident,
+                },
+                region,
+            });
+
+            // Inspect.toStr tmpVar
+            let inspect_fn = Var {
+                module_name: ModuleName::INSPECT,
+                ident: "toStr",
+            };
+            let loc_inspect_fn_var = arena.alloc(Loc {
+                value: inspect_fn,
+                region,
+            });
+            let inspect_args = &*arena.alloc([&*tmp_var]);
+
+            let dbg_str = arena.alloc(Loc {
+                value: Apply(loc_inspect_fn_var, inspect_args, CalledVia::Space),
+                region,
+            });
+
+            // line_info is an option so that we can lazily calculate it.
+            // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
+            if line_info.is_none() {
+                *line_info = Some(LineInfo::new(src));
+            }
+            let line_col = line_info.as_ref().unwrap().convert_pos(region.start());
+
+            let dbg_src = src
+                .split_at(region.start().offset as usize)
+                .1
+                .split_at((region.end().offset - region.start().offset) as usize)
+                .0;
+
+            // |> LowLevelDbg
+            let dbg_stmt = arena.alloc(Loc {
+                value: LowLevelDbg(
+                    arena.alloc((
+                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line + 1)),
+                        &*arena.alloc_str(dbg_src),
+                    )),
+                    dbg_str,
+                    tmp_var,
+                ),
+                region: loc_expr.region,
+            });
+
+            arena.alloc(Loc {
+                value: Defs(defs, dbg_stmt),
+                region: loc_expr.region,
+            })
         }
         DbgStmt(condition, continuation) => {
             // Desugars a `dbg x` statement into essentially

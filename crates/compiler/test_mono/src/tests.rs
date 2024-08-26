@@ -3244,6 +3244,24 @@ fn dbg_str_followed_by_number() {
 }
 
 #[mono_test]
+fn dbg_expr() {
+    indoc!(
+        r#"
+        1 + (dbg 2)
+        "#
+    )
+}
+
+#[mono_test]
+fn dbg_nested_expr() {
+    indoc!(
+        r#"
+        dbg (dbg (dbg 1))
+        "#
+    )
+}
+
+#[mono_test]
 fn linked_list_reverse() {
     indoc!(
         r#"
