@@ -1,5 +1,5 @@
-use roc_types::subs::{Rank, Variable};
 use roc_error_macros::internal_error;
+use roc_types::subs::{Rank, Variable};
 
 const DEFAULT_POOLS: usize = 8;
 
