@@ -183,6 +183,7 @@ pub fn parse_ident<'a>(
     match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
         Ok((width, ident)) => {
             let state = advance_state!(state, width as usize)?;
+
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
                     if let Some(first) = parts.first() {
@@ -193,8 +194,6 @@ pub fn parse_ident<'a>(
                         }
                     }
                 }
-
-                return Ok((MadeProgress, Ident::Access { module_name, parts }, state));
             }
 
             Ok((MadeProgress, ident, state))

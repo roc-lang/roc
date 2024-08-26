@@ -8,7 +8,7 @@ use crate::ast::{
 use crate::blankspace::{
     loc_space0_e, parse_space, require_newline_or_eof, space0_after_e, space0_around_ee,
     space0_before_e, space0_e, spaces, spaces_around, spaces_before, with_spaces,
-    with_spaces_after, with_spaces_before,
+    with_spaces_before,
 };
 use crate::header::module_name_help;
 use crate::ident::{
@@ -537,7 +537,7 @@ pub fn parse_repl_defs_and_optional_expr<'a>(
         EExpr::IndentEnd,
     )?;
 
-    let state = match space0_e(EExpr::IndentEnd).parse(arena, state.clone(), 0) {
+    let state = match parse_space(EExpr::IndentEnd, arena, state.clone(), 0) {
         Err((NoProgress, _)) => state,
         Err((MadeProgress, e)) => return Err((MadeProgress, e)),
         Ok((_, _, state)) => state,
@@ -1882,21 +1882,19 @@ pub fn loc_expr_block<'a>(
             EExpr::IndentStart,
         )?;
 
-        let last_pos = state.pos();
+        let err_pos = state.pos();
         if stmts.is_empty() {
-            let fail = arena.alloc(EExpr::Start(last_pos)).clone();
+            let fail = arena.alloc(EExpr::Start(err_pos)).clone();
             return Err((NoProgress, fail));
         }
 
-        let loc_expr =
+        let expr =
             stmts_to_expr(&stmts, arena).map_err(|e| (MadeProgress, arena.alloc(e).clone()))?;
-
-        let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
 
         match parse_space(EExpr::IndentEnd, arena, state, min_indent) {
             Ok((_, spaces_after, state)) => {
-                let loc_expr = with_spaces_after(loc_expr, spaces_after, arena);
-                Ok((MadeProgress, loc_expr, state))
+                let expr = with_spaces(arena, first_space.value, expr, spaces_after);
+                Ok((MadeProgress, expr, state))
             }
             Err((_, fail)) => Err((MadeProgress, fail)),
         }
@@ -2127,7 +2125,7 @@ pub fn parse_top_level_defs<'a>(
         EExpr::IndentEnd,
     )?;
 
-    let (_, last_space, state) = space0_e(EExpr::IndentStart).parse(arena, state, 0)?;
+    let (_, last_space, state) = parse_space(EExpr::IndentStart, arena, state, 0)?;
 
     let existing_len = output.tags.len();
 
@@ -2791,14 +2789,14 @@ where
             indent_problem,
         )?;
 
-        let last_pos = state.pos();
+        let err_pos = state.pos();
         if stmts.is_empty() {
-            let fail = wrap_error(arena.alloc(EExpr::Start(last_pos)), last_pos);
+            let fail = wrap_error(arena.alloc(EExpr::Start(err_pos)), err_pos);
             return Err((NoProgress, fail));
         }
 
         let loc_expr = stmts_to_expr(&stmts, arena)
-            .map_err(|e| (MadeProgress, wrap_error(arena.alloc(e), last_pos)))?;
+            .map_err(|e| (MadeProgress, wrap_error(arena.alloc(e), err_pos)))?;
 
         let loc_expr = with_spaces_before(loc_expr, first_space.value, arena);
         Ok((MadeProgress, loc_expr, state))

@@ -1,11 +1,11 @@
 use crate::ast::{Collection, Implements, Pattern, PatternAs};
-use crate::blankspace::{space0_e, spaces, spaces_before, with_spaces_after};
+use crate::blankspace::{parse_space, space0_e, spaces, spaces_before, with_spaces_after};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, byte, collection_inner, collection_trailing_sep_e, fail_when, loc, map,
-    map_with_arena, optional, specialize_err, specialize_err_ref, then, three_bytes, two_bytes,
-    zero_or_more, EPattern, PInParens, PList, PRecord, ParseResult, Parser,
+    self, byte, collection_inner, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
+    optional, specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more,
+    EPattern, PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::parser::{either, Progress::*};
 use crate::state::State;
@@ -34,32 +34,32 @@ pub fn parse_closure_param<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // An ident is the most common param, e.g. \foo -> ...
-    match loc_ident_pattern_help(true).parse(arena, state.clone(), min_indent) {
+    match parse_ident_pattern(true, arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
 
     // Underscore is also common, e.g. \_ -> ...
-    match loc_underscore_pattern_help().parse(arena, state.clone(), min_indent) {
+    match parse_underscore_pattern(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
 
     // You can destructure records in params, e.g. \{ x, y } -> ...
-    match loc_record_pattern_help().parse(arena, state.clone(), min_indent) {
+    match parse_record_pattern(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
 
     // If you wrap it in parens, you can match any arbitrary pattern at all.
     // e.g. \User.UserId userId -> ...
-    loc_pattern_in_parens_help().parse(arena, state.clone(), min_indent)
+    parse_pattern_in_parens(arena, state.clone())
 }
 
 /// If Ok it always returns MadeProgress
 pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     move |arena, state: State<'a>, min_indent| {
-        let (_, pattern, state) = loc_pattern_help_help(true).parse(arena, state, min_indent)?;
+        let (_, pattern, state) = parse_loc_pattern_etc(true, arena, state, min_indent)?;
 
         let pattern_state = state.clone();
 
@@ -86,18 +86,49 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
     }
 }
 
-fn loc_pattern_help_help<'a>(
+fn parse_loc_pattern_etc<'a>(
     can_have_arguments: bool,
-) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    one_of!(
-        loc_pattern_in_parens_help(),
-        loc_underscore_pattern_help(),
-        loc_ident_pattern_help(can_have_arguments),
-        loc_record_pattern_help(),
-        loc(specialize_err(EPattern::List, list_pattern_help())),
-        loc(number_pattern_help()),
-        loc(string_like_pattern_help()),
-    )
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    match parse_pattern_in_parens(arena, state.clone()) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
+
+    match parse_underscore_pattern(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
+
+    match parse_ident_pattern(can_have_arguments, arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
+
+    match parse_record_pattern(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
+
+    let start = state.pos();
+    match list_pattern_help().parse(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
+        Err((MadeProgress, fail)) => return Err((MadeProgress, EPattern::List(fail, start))),
+    }
+
+    match number_pattern_help().parse(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
+        Err(fail) => return Err(fail),
+    }
+
+    match string_like_pattern_help().parse(arena, state.clone(), min_indent) {
+        Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
+        Err(fail) => Err(fail),
+    }
 }
 
 fn pattern_as<'a>() -> impl Parser<'a, PatternAs<'a>, EPattern<'a>> {
@@ -139,15 +170,14 @@ fn loc_tag_pattern_arg<'a>(
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // Don't parse operators, because they have a higher precedence than function application.
     // If we encounter one, we're done parsing function args!
-    move |arena, original_state: State<'a>, min_indent| {
-        let (_, spaces, state) = backtrackable(space0_e(EPattern::IndentStart)).parse(
-            arena,
-            original_state.clone(),
-            min_indent,
-        )?;
+    move |arena, state: State<'a>, min_indent| {
+        let start = state.pos();
+        let (_, spaces, state) =
+            parse_space(EPattern::IndentStart, arena, state.clone(), min_indent)
+                .map_err(|(_, fail)| (NoProgress, fail))?;
 
         // Cannot have arguments here, pass `false` to make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-        let (_, loc_pat, state) = loc_pattern_help_help(false).parse(arena, state, min_indent)?;
+        let (_, loc_pat, state) = parse_loc_pattern_etc(false, arena, state, min_indent)?;
 
         let Loc { region, value } = loc_pat;
 
@@ -160,7 +190,7 @@ fn loc_tag_pattern_arg<'a>(
                 }
             )
         {
-            Err((NoProgress, EPattern::End(original_state.pos())))
+            Err((NoProgress, EPattern::End(start)))
         } else {
             Ok((
                 MadeProgress,
@@ -198,47 +228,47 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
     )
 }
 
-fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    (move |arena, state: State<'a>, _min_indent| {
-        let start = state.pos();
-        if state.bytes().first() != Some(&b'(') {
-            let fail = PInParens::Open(state.pos());
-            return Err((NoProgress, EPattern::PInParens(fail, start)));
-        }
-        let state = state.advance(1);
+fn parse_pattern_in_parens<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    let start = state.pos();
+    if state.bytes().first() != Some(&b'(') {
+        let fail = PInParens::Open(state.pos());
+        return Err((NoProgress, EPattern::PInParens(fail, start)));
+    }
+    let state = state.advance(1);
 
-        let elem_parser = specialize_err_ref(PInParens::Pattern, loc_pattern_help());
-        let parser = collection_inner(
-            elem_parser,
-            byte(b',', PInParens::End),
-            Pattern::SpaceBefore,
-        );
-        let (_, pats, state) = parser
-            .parse(arena, state, 0)
-            .map_err(|(_, fail)| (MadeProgress, EPattern::PInParens(fail, start)))?;
+    let elem_parser = specialize_err_ref(PInParens::Pattern, loc_pattern_help());
+    let parser = collection_inner(
+        elem_parser,
+        byte(b',', PInParens::End),
+        Pattern::SpaceBefore,
+    );
+    let (_, pats, state) = parser
+        .parse(arena, state, 0)
+        .map_err(|(_, fail)| (MadeProgress, EPattern::PInParens(fail, start)))?;
 
-        if state.bytes().first() != Some(&b')') {
-            let fail = PInParens::End(state.pos());
-            return Err((MadeProgress, EPattern::PInParens(fail, start)));
-        }
-        let state = state.advance(1);
+    if state.bytes().first() != Some(&b')') {
+        let fail = PInParens::End(state.pos());
+        return Err((MadeProgress, EPattern::PInParens(fail, start)));
+    }
+    let state = state.advance(1);
 
-        if pats.is_empty() {
-            let fail = PInParens::Empty(state.pos());
-            return Err((NoProgress, EPattern::PInParens(fail, start)));
-        }
+    if pats.is_empty() {
+        let fail = PInParens::Empty(state.pos());
+        return Err((NoProgress, EPattern::PInParens(fail, start)));
+    }
 
-        let pats = if pats.len() > 1 {
-            Loc::pos(start, state.pos(), Pattern::Tuple(pats))
-        } else {
-            // TODO: don't discard comments before/after
-            // (stored in the Collection)
-            // TODO: add Pattern::ParensAround to faithfully represent the input, see the `parse_expr_in_parens_etc`
-            pats.items[0]
-        };
-        Ok((MadeProgress, pats, state))
-    })
-    .trace("pat_in_parens")
+    let pats = if pats.len() > 1 {
+        Loc::pos(start, state.pos(), Pattern::Tuple(pats))
+    } else {
+        // TODO: don't discard comments before/after
+        // (stored in the Collection)
+        // TODO: add Pattern::ParensAround to faithfully represent the input, see the `parse_expr_in_parens_etc`
+        pats.items[0]
+    };
+    Ok((MadeProgress, pats, state))
 }
 
 fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
@@ -337,173 +367,176 @@ fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     }
 }
 
-fn loc_ident_pattern_help<'a>(
+fn parse_ident_pattern<'a>(
     can_have_arguments: bool,
-) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let original_state = state.clone();
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    let original_state = state.clone();
 
-        let ident_start = state.pos();
-        let (_, ident, state) = parse_ident(arena, state, min_indent)
-            .map_err(|(p, _)| (p, EPattern::Start(ident_start)))?;
+    let ident_start = state.pos();
+    let (_, ident, state) = parse_ident(arena, state, min_indent)
+        .map_err(|(p, _)| (p, EPattern::Start(ident_start)))?;
 
-        let ident_loc = Region::new(ident_start, state.pos());
-        match ident {
-            Ident::Tag(tag) => {
-                let loc_tag = Loc {
-                    region: ident_loc,
-                    value: Pattern::Tag(tag),
-                };
+    let ident_loc = Region::new(ident_start, state.pos());
+    match ident {
+        Ident::Tag(tag) => {
+            let loc_tag = Loc {
+                region: ident_loc,
+                value: Pattern::Tag(tag),
+            };
 
-                // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-                if can_have_arguments {
-                    let (_, loc_args, state) =
-                        loc_type_def_tag_pattern_args_help().parse(arena, state, min_indent)?;
+            // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
+            if can_have_arguments {
+                let (_, loc_args, state) =
+                    loc_type_def_tag_pattern_args_help().parse(arena, state, min_indent)?;
 
-                    if loc_args.is_empty() {
-                        Ok((MadeProgress, loc_tag, state))
-                    } else {
-                        let region = Region::across_all(
-                            std::iter::once(&ident_loc)
-                                .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                        );
-                        let value =
-                            Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
-
-                        Ok((MadeProgress, Loc { region, value }, state))
-                    }
-                } else {
+                if loc_args.is_empty() {
                     Ok((MadeProgress, loc_tag, state))
-                }
-            }
-            Ident::OpaqueRef(name) => {
-                let loc_pat = Loc {
-                    region: ident_loc,
-                    value: Pattern::OpaqueRef(name),
-                };
-
-                // Make sure `@Foo Bar 1` is parsed as `@Foo (Bar) 1`, and not `@Foo (Bar 1)`
-                if can_have_arguments {
-                    let (_, loc_args, state) =
-                        loc_tag_pattern_args_help().parse(arena, state, min_indent)?;
-
-                    if loc_args.is_empty() {
-                        Ok((MadeProgress, loc_pat, state))
-                    } else {
-                        let region = Region::across_all(
-                            std::iter::once(&ident_loc)
-                                .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
-                        );
-                        let value =
-                            Pattern::Apply(&*arena.alloc(loc_pat), loc_args.into_bump_slice());
-
-                        Ok((MadeProgress, Loc { region, value }, state))
-                    }
                 } else {
+                    let region = Region::across_all(
+                        std::iter::once(&ident_loc)
+                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                    );
+                    let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                    Ok((MadeProgress, Loc { region, value }, state))
+                }
+            } else {
+                Ok((MadeProgress, loc_tag, state))
+            }
+        }
+        Ident::OpaqueRef(name) => {
+            let loc_pat = Loc {
+                region: ident_loc,
+                value: Pattern::OpaqueRef(name),
+            };
+
+            // Make sure `@Foo Bar 1` is parsed as `@Foo (Bar) 1`, and not `@Foo (Bar 1)`
+            if can_have_arguments {
+                let (_, loc_args, state) =
+                    loc_tag_pattern_args_help().parse(arena, state, min_indent)?;
+
+                if loc_args.is_empty() {
                     Ok((MadeProgress, loc_pat, state))
+                } else {
+                    let region = Region::across_all(
+                        std::iter::once(&ident_loc)
+                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                    );
+                    let value = Pattern::Apply(&*arena.alloc(loc_pat), loc_args.into_bump_slice());
+
+                    Ok((MadeProgress, Loc { region, value }, state))
+                }
+            } else {
+                Ok((MadeProgress, loc_pat, state))
+            }
+        }
+        Ident::Access {
+            module_name, parts, ..
+        } => {
+            // Plain identifiers (e.g. `foo`) are allowed in patterns, but
+            // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
+
+            for keyword in crate::keyword::KEYWORDS.iter() {
+                if parts[0] == Accessor::RecordField(keyword) {
+                    return Err((NoProgress, EPattern::End(original_state.pos())));
                 }
             }
-            Ident::Access {
-                module_name, parts, ..
-            } => {
-                // Plain identifiers (e.g. `foo`) are allowed in patterns, but
-                // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
 
-                for keyword in crate::keyword::KEYWORDS.iter() {
-                    if parts[0] == Accessor::RecordField(keyword) {
-                        return Err((NoProgress, EPattern::End(original_state.pos())));
-                    }
+            if module_name.is_empty() && parts.len() == 1 {
+                if let Accessor::RecordField(var) = &parts[0] {
+                    return Ok((
+                        MadeProgress,
+                        Loc {
+                            region: ident_loc,
+                            value: Pattern::Identifier { ident: var },
+                        },
+                        state,
+                    ));
                 }
-
-                if module_name.is_empty() && parts.len() == 1 {
-                    if let Accessor::RecordField(var) = &parts[0] {
-                        return Ok((
-                            MadeProgress,
-                            Loc {
-                                region: ident_loc,
-                                value: Pattern::Identifier { ident: var },
-                            },
-                            state,
-                        ));
-                    }
-                }
-                let mut malformed_str = String::new_in(arena);
-
-                if !module_name.is_empty() {
-                    malformed_str.push_str(module_name);
-                };
-                for part in parts {
-                    if !malformed_str.is_empty() {
-                        malformed_str.push('.');
-                    }
-                    malformed_str.push_str(part.as_inner());
-                }
-
-                Ok((
-                    MadeProgress,
-                    Loc {
-                        region: ident_loc,
-                        value: Pattern::Malformed(malformed_str.into_bump_str()),
-                    },
-                    state,
-                ))
             }
-            Ident::AccessorFunction(_string) => {
-                Err((MadeProgress, EPattern::AccessorFunction(ident_loc.start())))
+            let mut malformed_str = String::new_in(arena);
+
+            if !module_name.is_empty() {
+                malformed_str.push_str(module_name);
+            };
+            for part in parts {
+                if !malformed_str.is_empty() {
+                    malformed_str.push('.');
+                }
+                malformed_str.push_str(part.as_inner());
             }
-            Ident::RecordUpdaterFunction(_string) => Err((
+
+            Ok((
                 MadeProgress,
-                EPattern::RecordUpdaterFunction(ident_loc.start()),
-            )),
-            Ident::Malformed(malformed, problem) => {
-                debug_assert!(!malformed.is_empty());
+                Loc {
+                    region: ident_loc,
+                    value: Pattern::Malformed(malformed_str.into_bump_str()),
+                },
+                state,
+            ))
+        }
+        Ident::AccessorFunction(_string) => {
+            Err((MadeProgress, EPattern::AccessorFunction(ident_loc.start())))
+        }
+        Ident::RecordUpdaterFunction(_string) => Err((
+            MadeProgress,
+            EPattern::RecordUpdaterFunction(ident_loc.start()),
+        )),
+        Ident::Malformed(malformed, problem) => {
+            debug_assert!(!malformed.is_empty());
 
-                Ok((
-                    MadeProgress,
-                    Loc {
-                        region: ident_loc,
-                        value: Pattern::MalformedIdent(malformed, problem),
-                    },
-                    state,
-                ))
-            }
+            Ok((
+                MadeProgress,
+                Loc {
+                    region: ident_loc,
+                    value: Pattern::MalformedIdent(malformed, problem),
+                },
+                state,
+            ))
         }
     }
 }
 
-fn loc_underscore_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    move |arena, state: State<'a>, min_indent| {
-        let start = state.pos();
-        if state.bytes().first() == Some(&b'_') {
-            let state = state.advance(1);
-            let before_ident = state.clone();
-            match lowercase_ident().parse(arena, state, min_indent) {
-                Ok((_, name, state)) => {
-                    let ident = Loc::pos(start, state.pos(), Pattern::Underscore(name));
-                    Ok((MadeProgress, ident, state))
-                }
-                Err((NoProgress, _)) => {
-                    let ident = Loc::pos(start, before_ident.pos(), Pattern::Underscore(""));
-                    Ok((MadeProgress, ident, before_ident))
-                }
-                Err(_) => Err((MadeProgress, EPattern::End(before_ident.pos()))),
+fn parse_underscore_pattern<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    let start = state.pos();
+    if state.bytes().first() == Some(&b'_') {
+        let state = state.advance(1);
+        let before_ident = state.clone();
+        match lowercase_ident().parse(arena, state, min_indent) {
+            Ok((_, name, state)) => {
+                let ident = Loc::pos(start, state.pos(), Pattern::Underscore(name));
+                Ok((MadeProgress, ident, state))
             }
-        } else {
-            Err((NoProgress, EPattern::Underscore(state.pos())))
+            Err((NoProgress, _)) => {
+                let ident = Loc::pos(start, before_ident.pos(), Pattern::Underscore(""));
+                Ok((MadeProgress, ident, before_ident))
+            }
+            Err(_) => Err((MadeProgress, EPattern::End(before_ident.pos()))),
         }
+    } else {
+        Err((NoProgress, EPattern::Underscore(state.pos())))
     }
 }
 
-fn loc_record_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    move |arena, state: State<'a>, min_indent| {
-        let start = state.pos();
-        match record_pattern_fields().parse(arena, state, min_indent) {
-            Ok((p, pats, state)) => {
-                let pat = Loc::pos(start, state.pos(), Pattern::RecordDestructure(pats));
-                Ok((p, pat, state))
-            }
-            Err((p, fail)) => Err((p, EPattern::Record(fail, start))),
+fn parse_record_pattern<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    let start = state.pos();
+    match record_pattern_fields().parse(arena, state, min_indent) {
+        Ok((p, pats, state)) => {
+            let pat = Loc::pos(start, state.pos(), Pattern::RecordDestructure(pats));
+            Ok((p, pat, state))
         }
+        Err((p, fail)) => Err((p, EPattern::Record(fail, start))),
     }
 }
 
