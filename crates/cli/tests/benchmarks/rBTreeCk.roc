@@ -1,6 +1,6 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 Color : [Red, Black]
 
@@ -39,7 +39,7 @@ fold = \f, tree, b ->
 
 main : Task {} []
 main =
-    { value, isError } = PlatformTask.getInt!
+    { value, isError } = PlatformTasks.getInt!
     inputResult =
         if isError then
             Err GetIntError
@@ -58,13 +58,13 @@ main =
 
                     val
                     |> Num.toStr
-                    |> PlatformTask.putLine
+                    |> PlatformTasks.putLine
 
                 Nil ->
-                    PlatformTask.putLine "fail"
+                    PlatformTasks.putLine "fail"
 
         Err GetIntError ->
-            PlatformTask.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 insert : Tree (Num k) v, Num k, v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v

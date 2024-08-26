@@ -1,6 +1,6 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 main : Task {} []
 main =
@@ -9,7 +9,7 @@ main =
 
     tree
     |> show
-    |> PlatformTask.putLine
+    |> PlatformTasks.putLine
 
 show : RedBlackTree I64 {} -> Str
 show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")

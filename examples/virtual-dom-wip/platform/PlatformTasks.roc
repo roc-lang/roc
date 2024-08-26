@@ -1,4 +1,4 @@
-hosted PlatformTask
+hosted PlatformTasks
     exposes [
         NodeId,
         HandlerId,

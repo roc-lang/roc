@@ -1,11 +1,11 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTask
+import pf.PlatformTasks
 import AStar
 
 main : Task {} []
 main =
-    PlatformTask.putLine! (showBool test1)
+    PlatformTasks.putLine! (showBool test1)
 
 showBool : Bool -> Str
 showBool = \b ->

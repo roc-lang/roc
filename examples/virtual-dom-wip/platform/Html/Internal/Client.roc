@@ -4,7 +4,7 @@ module [
     dispatchEvent,
 ]
 
-import PlatformTask exposing [
+import PlatformTasks exposing [
     NodeId,
     HandlerId,
     TagName,
@@ -164,19 +164,19 @@ indexNodes = \{ nodes, siblingIds }, unrendered ->
 applyPatch : Patch -> Task {} *
 applyPatch = \patch ->
     when patch is
-        CreateElement nodeId tagName -> PlatformTask.createElement nodeId tagName
-        CreateTextNode nodeId content -> PlatformTask.createTextNode nodeId content
-        UpdateTextNode nodeId content -> PlatformTask.updateTextNode nodeId content
-        AppendChild parentId childId -> PlatformTask.appendChild parentId childId
-        RemoveNode id -> PlatformTask.removeNode id
-        ReplaceNode oldId newId -> PlatformTask.replaceNode oldId newId
-        SetAttribute nodeId attrName value -> PlatformTask.setAttribute nodeId attrName value
-        RemoveAttribute nodeId attrName -> PlatformTask.removeAttribute nodeId attrName
-        SetProperty nodeId propName json -> PlatformTask.setProperty nodeId propName json
-        RemoveProperty nodeId propName -> PlatformTask.removeProperty nodeId propName
-        SetStyle nodeId key value -> PlatformTask.setStyle nodeId key value
-        SetListener nodeId eventType accessorsJson handlerId -> PlatformTask.setListener nodeId eventType accessorsJson handlerId
-        RemoveListener nodeId handlerId -> PlatformTask.removeListener nodeId handlerId
+        CreateElement nodeId tagName -> PlatformTasks.createElement nodeId tagName
+        CreateTextNode nodeId content -> PlatformTasks.createTextNode nodeId content
+        UpdateTextNode nodeId content -> PlatformTasks.updateTextNode nodeId content
+        AppendChild parentId childId -> PlatformTasks.appendChild parentId childId
+        RemoveNode id -> PlatformTasks.removeNode id
+        ReplaceNode oldId newId -> PlatformTasks.replaceNode oldId newId
+        SetAttribute nodeId attrName value -> PlatformTasks.setAttribute nodeId attrName value
+        RemoveAttribute nodeId attrName -> PlatformTasks.removeAttribute nodeId attrName
+        SetProperty nodeId propName json -> PlatformTasks.setProperty nodeId propName json
+        RemoveProperty nodeId propName -> PlatformTasks.removeProperty nodeId propName
+        SetStyle nodeId key value -> PlatformTasks.setStyle nodeId key value
+        SetListener nodeId eventType accessorsJson handlerId -> PlatformTasks.setListener nodeId eventType accessorsJson handlerId
+        RemoveListener nodeId handlerId -> PlatformTasks.removeListener nodeId handlerId
 
 applyPatches : List Patch -> Task {} *
 applyPatches = \patches ->

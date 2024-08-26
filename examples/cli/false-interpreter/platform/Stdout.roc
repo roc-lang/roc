@@ -1,9 +1,9 @@
 module [line, raw]
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 line : Str -> Task {} *
-line = PlatformTask.putLine
+line = PlatformTasks.putLine
 
 raw : Str -> Task {} *
-raw = PlatformTask.putRaw
+raw = PlatformTasks.putRaw

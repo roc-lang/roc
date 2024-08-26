@@ -1,7 +1,7 @@
 app [main] { pf: platform "platform/main.roc" }
 
 import Issue2279Help
-import pf.PlatformTask
+import pf.PlatformTasks
 
 main =
     text =
@@ -10,4 +10,4 @@ main =
         else
             Issue2279Help.asText 42
 
-    PlatformTask.putLine text
+    PlatformTasks.putLine text

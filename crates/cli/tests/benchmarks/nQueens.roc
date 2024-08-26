@@ -1,10 +1,10 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 main : Task {} []
 main =
-    { value, isError } = PlatformTask.getInt!
+    { value, isError } = PlatformTasks.getInt!
     inputResult =
         if isError then
             Err GetIntError
@@ -15,10 +15,10 @@ main =
         Ok n ->
             queens n # original koka 13
             |> Num.toStr
-            |> PlatformTask.putLine
+            |> PlatformTasks.putLine
 
         Err GetIntError ->
-            PlatformTask.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 ConsList a : [Nil, Cons a (ConsList a)]
 

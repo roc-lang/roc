@@ -3,10 +3,10 @@ module [
     char,
 ]
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 line : Task Str *
-line = PlatformTask.getLine
+line = PlatformTasks.getLine
 
 char : Task U8 *
-char = PlatformTask.getChar
+char = PlatformTasks.getChar

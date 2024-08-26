@@ -1,13 +1,13 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
 IO a : Task a []
 
 main : Task {} []
 main =
-    { value, isError } = PlatformTask.getInt!
+    { value, isError } = PlatformTasks.getInt!
     inputResult =
         if isError then
             Err GetIntError
@@ -26,7 +26,7 @@ main =
             |> Task.map \_ -> {}
 
         Err GetIntError ->
-            PlatformTask.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 nestHelp : I64, (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nestHelp = \s, f, m, x ->
@@ -167,5 +167,5 @@ deriv = \i, f ->
         Num.toStr (i + 1)
         |> Str.concat " count: "
         |> Str.concat (Num.toStr (count fprime))
-    PlatformTask.putLine! line
+    PlatformTasks.putLine! line
     Task.ok fprime

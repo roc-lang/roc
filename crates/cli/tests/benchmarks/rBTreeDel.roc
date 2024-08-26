@@ -1,6 +1,6 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.PlatformTask
+import pf.PlatformTasks
 
 Color : [Red, Black]
 
@@ -12,7 +12,7 @@ ConsList a : [Nil, Cons a (ConsList a)]
 
 main : Task {} []
 main =
-    { value, isError } = PlatformTask.getInt!
+    { value, isError } = PlatformTasks.getInt!
     inputResult =
         if isError then
             Err GetIntError
@@ -26,10 +26,10 @@ main =
 
             val
             |> Num.toStr
-            |> PlatformTask.putLine
+            |> PlatformTasks.putLine
 
         Err GetIntError ->
-            PlatformTask.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 boom : Str -> a
 boom = \_ -> boom ""

@@ -1,4 +1,4 @@
-hosted PlatformTask
+hosted PlatformTasks
     exposes [openFile, closeFile, withFileOpen, getFileLine, getFileBytes, putLine, putRaw, getLine, getChar]
     imports []
 
