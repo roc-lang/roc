@@ -2149,8 +2149,7 @@ pub fn parse_top_level_defs<'a>(
     Ok((MadeProgress, output, state))
 }
 
-const CLOSURE_PIPE_OPERATOR: &[u8] = b"\\>";
-const CLOSURE_PIPE_PARAM: &str = "x44";
+const CLOSURE_PIPE_PARAM: &str = "x321";
 
 /// If Ok it always returns MadeProgress
 fn parse_closure<'a>(
@@ -2164,35 +2163,61 @@ fn parse_closure<'a>(
         return Err((NoProgress, EClosure::Start(state.pos())));
     }
 
-    if state.bytes().starts_with(CLOSURE_PIPE_OPERATOR) {
-        // parsing
-        // `\> ...`
-        // to
-        // `\x44->x44|> ...`
-        //
-        let mut state = state.advance(CLOSURE_PIPE_OPERATOR.len());
-        let param_pos = state.pos();
-        state.advance_mut(CLOSURE_PIPE_PARAM.len());
-
-        let param = Pattern::Identifier {
-            ident: &CLOSURE_PIPE_PARAM,
-        };
-        let loc_param = Loc::pos(param_pos, state.pos(), param);
-        let mut params = Vec::with_capacity_in(1, arena);
-        params.push(loc_param);
-        dbg!("closure pipe param: ", loc_param);
-
-        // let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(body));
-        // return Ok((MadeProgress, closure, state));
-        todo!("@wip I need the body")
-    }
-
     // All closures start with a '\' - e.g. (\x -> x + 1)
     if state.bytes().first() != Some(&b'\\') {
         return Err((NoProgress, EClosure::Start(state.pos())));
     }
-
     let state = state.advance(1);
+
+    // Funny feature that turns `\> expr` into the `\x321->x321|> expr`
+    if state.bytes().first() == Some(&b'>') {
+        let after_slash = state.pos();
+        let state = state.advance(1);
+        let after_greater = state.pos();
+
+        let param = Pattern::Identifier {
+            ident: &CLOSURE_PIPE_PARAM,
+        };
+        let loc_param = Loc::pos(after_slash, after_greater, param);
+        let mut params = Vec::with_capacity_in(1, arena);
+        params.push(loc_param);
+
+        // usage of param before `|>`
+        let term = Expr::Var {
+            module_name: "",
+            ident: CLOSURE_PIPE_PARAM,
+        };
+        let loc_term = Loc::pos(after_slash, after_greater, term);
+
+        let expr_state = ExprState {
+            operators: Vec::new_in(arena),
+            arguments: Vec::new_in(arena),
+            expr: loc_term,
+            spaces_after: &[],
+            end: after_slash,
+        };
+
+        let op = BinOp::Pizza;
+        let loc_op = Loc::pos(after_slash, after_greater, op);
+
+        let (_, body, state) = parse_after_binop(
+            arena,
+            state,
+            slash_indent + 1,
+            slash_indent + 1,
+            options,
+            true,
+            &[],
+            expr_state,
+            loc_op,
+        )
+        .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_greater)))?;
+
+        let loc_body = Loc::pos(after_greater, state.pos(), body);
+
+        let closure = Expr::Closure(params.into_bump_slice(), arena.alloc(loc_body));
+        return Ok((MadeProgress, closure, state));
+    }
 
     // Once we see the '\', we're committed to parsing this as a closure.
     // It may turn out to be malformed, but it is definitely a closure.

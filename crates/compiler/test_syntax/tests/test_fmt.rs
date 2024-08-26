@@ -4832,7 +4832,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                \x42 -> x42 |> Num.add 1
+                \x321 -> x321 |> Num.add 1
             "
             ),
         );
