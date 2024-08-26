@@ -5761,28 +5761,6 @@ mod test_reporting {
     );
 
     test_report!(
-        dbg_without_final_expression,
-        indoc!(
-            r"
-            dbg 42
-            "
-        ),
-        @r#"
-    ── INDENT ENDS AFTER EXPRESSION in tmp/dbg_without_final_expression/Test.roc ───
-
-    I am partway through parsing a dbg statement, but I got stuck here:
-
-    4│      dbg 42
-                  ^
-
-    I was expecting a final expression, like so
-
-        dbg 42
-        "done"
-    "#
-    );
-
-    test_report!(
         expect_without_final_expression,
         indoc!(
             r"

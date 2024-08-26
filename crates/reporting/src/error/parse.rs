@@ -601,19 +601,6 @@ fn to_expr_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity);
 
             let doc = match context {
-                Context::InNode(Node::Dbg, _) => alloc.stack([
-                    alloc.reflow(
-                        r"I am partway through parsing a dbg statement, but I got stuck here:",
-                    ),
-                    snippet,
-                    alloc.stack([
-                        alloc.reflow(r"I was expecting a final expression, like so"),
-                        alloc.vcat([
-                            alloc.parser_suggestion("dbg 42").indent(4),
-                            alloc.parser_suggestion("\"done\"").indent(4),
-                        ]),
-                    ]),
-                ]),
                 Context::InNode(Node::Expect, _) => alloc.stack([
                     alloc.reflow(
                         r"I am partway through parsing an expect statement, but I got stuck here:",
