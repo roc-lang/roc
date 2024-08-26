@@ -94,39 +94,41 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 }
 
 fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
-    let parser = collection_trailing_sep_e(
-        byte(b'(', EInParens::Open),
-        specialize_err_ref(EInParens::Expr, loc_expr_block(false)),
-        byte(b',', EInParens::End),
-        byte(b')', EInParens::End),
-        Expr::SpaceBefore,
-    );
-    move |arena, state: State<'a>, min_indent| {
+    let elem_parser = specialize_err_ref(EInParens::Expr, loc_expr_block(false));
+
+    let parser = collection_inner(elem_parser, byte(b',', EInParens::End), Expr::SpaceBefore);
+
+    move |arena, state: State<'a>, _| {
         let start = state.pos();
-        match parser.parse(arena, state.clone(), min_indent) {
-            Ok((_, elems, state)) => {
-                if elems.len() > 1 {
-                    Ok((
-                        MadeProgress,
-                        Loc::pos(start, state.pos(), Expr::Tuple(elems.ptrify_items(arena))),
-                        state,
-                    ))
-                } else if elems.is_empty() {
-                    Err((NoProgress, EInParens::Empty(state.pos())))
-                } else {
-                    // TODO: don't discard comments before/after
-                    // (stored in the Collection)
-                    Ok((
-                        MadeProgress,
-                        Loc::at(
-                            elems.items[0].region,
-                            Expr::ParensAround(&elems.items[0].value),
-                        ),
-                        state,
-                    ))
-                }
-            }
-            Err(fail) => Err(fail),
+
+        if state.bytes().first() != Some(&b'(') {
+            return Err((NoProgress, EInParens::Open(start)));
+        }
+        let state = state.advance(1);
+
+        let (_, elems, state) = parser.parse(arena, state.clone(), 0)?;
+
+        if state.bytes().first() != Some(&b')') {
+            return Err((MadeProgress, EInParens::End(state.pos())));
+        }
+        let state = state.advance(1);
+
+        if elems.len() > 1 {
+            let elems = Loc::pos(start, state.pos(), Expr::Tuple(elems.ptrify_items(arena)));
+            Ok((MadeProgress, elems, state))
+        } else if elems.is_empty() {
+            Err((NoProgress, EInParens::Empty(state.pos())))
+        } else {
+            // TODO: don't discard comments before/after
+            // (stored in the Collection)
+            Ok((
+                MadeProgress,
+                Loc::at(
+                    elems.items[0].region,
+                    Expr::ParensAround(&elems.items[0].value),
+                ),
+                state,
+            ))
         }
     }
 }
@@ -1713,8 +1715,8 @@ fn parse_negated_term<'a>(
 
     let initial_state = state.clone();
     let (spaces, state) = match parse_space(EExpr::IndentEnd, arena, state.clone(), min_indent) {
-        Err(_) => (&[] as &[_], state),
         Ok((_, spaces, state)) => (spaces, state),
+        Err(_) => (&[] as &[_], state),
     };
     expr_state.spaces_after = spaces;
 

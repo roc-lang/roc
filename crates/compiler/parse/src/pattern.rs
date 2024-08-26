@@ -209,32 +209,32 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPatter
         let start = state.pos();
         if state.bytes().first() != Some(&b'(') {
             let fail = PInParens::Open(state.pos());
-            Err((NoProgress, EPattern::PInParens(fail, start)))
-        } else {
-            let state = state.advance(1);
-            match patterns_parser.parse(arena, state, 0) {
-                Ok((_, pats, state)) => {
-                    if state.bytes().first() != Some(&b')') {
-                        let fail = PInParens::End(state.pos());
-                        Err((MadeProgress, EPattern::PInParens(fail, start)))
-                    } else {
-                        let state = state.advance(1);
-                        if pats.len() > 1 {
-                            let pats = Loc::pos(start, state.pos(), Pattern::Tuple(pats));
-                            Ok((MadeProgress, pats, state))
-                        } else if pats.is_empty() {
-                            let fail = PInParens::Empty(state.pos());
-                            Err((NoProgress, EPattern::PInParens(fail, start)))
-                        } else {
-                            // TODO: don't discard comments before/after
-                            // (stored in the Collection)
-                            // TODO: add Pattern::ParensAround to faithfully represent the input
-                            Ok((MadeProgress, pats.items[0], state))
-                        }
-                    }
+            return Err((NoProgress, EPattern::PInParens(fail, start)));
+        }
+        let state = state.advance(1);
+
+        match patterns_parser.parse(arena, state, 0) {
+            Ok((_, pats, state)) => {
+                if state.bytes().first() != Some(&b')') {
+                    let fail = PInParens::End(state.pos());
+                    return Err((MadeProgress, EPattern::PInParens(fail, start)));
                 }
-                Err((_, fail)) => Err((MadeProgress, EPattern::PInParens(fail, start))),
+                let state = state.advance(1);
+
+                if pats.len() > 1 {
+                    let pats = Loc::pos(start, state.pos(), Pattern::Tuple(pats));
+                    Ok((MadeProgress, pats, state))
+                } else if pats.is_empty() {
+                    let fail = PInParens::Empty(state.pos());
+                    Err((NoProgress, EPattern::PInParens(fail, start)))
+                } else {
+                    // TODO: don't discard comments before/after
+                    // (stored in the Collection)
+                    // TODO: add Pattern::ParensAround to faithfully represent the input
+                    Ok((MadeProgress, pats.items[0], state))
+                }
             }
+            Err((_, fail)) => Err((MadeProgress, EPattern::PInParens(fail, start))),
         }
     })
     .trace("pat_in_parens")

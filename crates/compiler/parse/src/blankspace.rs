@@ -65,24 +65,6 @@ where
     )
 }
 
-pub fn spaces_before_optional_after<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
-where
-    S: 'a + Spaceable<'a>,
-    P: 'a + Parser<'a, Loc<S>, E>,
-    E: 'a + SpaceProblem,
-{
-    parser::map_with_arena(
-        and(
-            spaces(),
-            and(
-                parser,
-                one_of![backtrackable(spaces()), succeed(&[] as &[_]),],
-            ),
-        ),
-        spaces_around_help,
-    )
-}
-
 pub fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (

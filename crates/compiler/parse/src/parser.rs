@@ -1,4 +1,7 @@
-use crate::state::State;
+use crate::{
+    blankspace::{consume_spaces, with_spaces},
+    state::State,
+};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
@@ -1320,11 +1323,33 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
     delimiter: impl Parser<'a, (), E>,
     space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
 ) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
-    let elem_parser = crate::blankspace::spaces_before_optional_after(elem);
+    let elem_parser = move |arena, state: State<'a>, min_indent| {
+        let mut newlines = Vec::new_in(arena);
+        let (p0, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
+        let spaces_before = newlines.into_bump_slice();
+
+        match elem.parse(arena, state, min_indent) {
+            Ok((_, expr, state)) => {
+                let mut newlines = Vec::new_in(arena);
+                let (spaces_after, state) =
+                    match consume_spaces::<'a, E, _>(state.clone(), |_, space, _| {
+                        newlines.push(space)
+                    }) {
+                        Ok((_, state)) => (newlines.into_bump_slice(), state),
+                        Err(_) => (&[] as &[_], state),
+                    };
+
+                let expr = with_spaces(arena, spaces_before, expr, spaces_after);
+                Ok((MadeProgress, expr, state))
+            }
+            Err((p1, fail)) => Err((p0.or(p1), fail)),
+        }
+    };
 
     move |arena, state, min_indent| {
-        let (_, spaces_before, state) =
-            crate::blankspace::spaces().parse(arena, state, min_indent)?;
+        let mut newlines = Vec::new_in(arena);
+        let (_, state) = consume_spaces(state, |_, space, _| newlines.push(space))?;
+        let spaces_before = newlines.into_bump_slice();
 
         // Parse zero or more values separated by a delimiter (e.g. a comma)
         // with an optional trailing delimiter whose values are discarded
@@ -1355,13 +1380,13 @@ pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a 
                             }
                         }
                         Err((NoProgress, _)) => break,
-                        Err((_, fail)) => return Err((MadeProgress, fail)),
+                        Err(fail) => return Err(fail),
                     }
                 }
                 (elems, state)
             }
             Err((NoProgress, _)) => (Vec::new_in(arena), before_elems_state),
-            Err((_, fail)) => return Err((MadeProgress, fail)),
+            Err(fail) => return Err(fail),
         };
 
         let (_, mut final_comments, state) = crate::blankspace::spaces()
