@@ -93,71 +93,59 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     }
 }
 
-fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
-    let elem_parser = specialize_err_ref(EInParens::Expr, loc_expr_block(false));
+fn parse_expr_in_parens_etc<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let start = state.pos();
 
-    let parser = collection_inner(elem_parser, byte(b',', EInParens::End), Expr::SpaceBefore);
-
-    move |arena, state: State<'a>, _| {
-        let start = state.pos();
-
-        if state.bytes().first() != Some(&b'(') {
-            return Err((NoProgress, EInParens::Open(start)));
-        }
-        let state = state.advance(1);
-
-        let (_, elems, state) = parser.parse(arena, state.clone(), 0)?;
-
-        if state.bytes().first() != Some(&b')') {
-            return Err((MadeProgress, EInParens::End(state.pos())));
-        }
-        let state = state.advance(1);
-
-        if elems.len() > 1 {
-            let elems = Loc::pos(start, state.pos(), Expr::Tuple(elems.ptrify_items(arena)));
-            Ok((MadeProgress, elems, state))
-        } else if elems.is_empty() {
-            Err((NoProgress, EInParens::Empty(state.pos())))
-        } else {
-            // TODO: don't discard comments before/after
-            // (stored in the Collection)
-            Ok((
-                MadeProgress,
-                Loc::at(
-                    elems.items[0].region,
-                    Expr::ParensAround(&elems.items[0].value),
-                ),
-                state,
-            ))
-        }
+    if state.bytes().first() != Some(&b'(') {
+        let fail = EInParens::Open(start);
+        return Err((NoProgress, EExpr::InParens(fail, start)));
     }
-}
+    let state = state.advance(1);
 
-fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    map_with_arena(
-        loc(and(
-            specialize_err(EExpr::InParens, loc_expr_in_parens_help()),
-            record_field_access_chain(),
-        )),
-        move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, Suffix<'a>>)>| {
-            let Loc {
-                mut region,
-                value: (loc_expr, field_accesses),
-            } = value;
+    let elem_parser = specialize_err_ref(EInParens::Expr, loc_expr_block(false));
+    let parser = collection_inner(elem_parser, byte(b',', EInParens::End), Expr::SpaceBefore);
+    let (_, elems, state) = parser
+        .parse(arena, state.clone(), 0)
+        .map_err(|(p, fail)| (p, EExpr::InParens(fail, start)))?;
 
-            let mut value = loc_expr.value;
+    if state.bytes().first() != Some(&b')') {
+        let fail = EInParens::End(state.pos());
+        return Err((MadeProgress, EExpr::InParens(fail, start)));
+    }
+    let state = state.advance(1);
 
-            // if there are field accesses, include the parentheses in the region
-            // otherwise, don't include the parentheses
-            if field_accesses.is_empty() {
-                region = loc_expr.region;
-            } else {
-                value = apply_expr_access_chain(arena, value, field_accesses);
-            }
+    if elems.is_empty() {
+        let fail = EInParens::Empty(state.pos());
+        return Err((NoProgress, EExpr::InParens(fail, start)));
+    }
 
-            Loc::at(region, value)
-        },
-    )
+    let mut loc_elems = if elems.len() > 1 {
+        Loc::pos(start, state.pos(), Expr::Tuple(elems.ptrify_items(arena)))
+    } else {
+        // TODO: don't discard comments before/after
+        // (stored in the Collection)
+        Loc::at(
+            elems.items[0].region,
+            Expr::ParensAround(&elems.items[0].value),
+        )
+    };
+
+    let (_, field_accesses, state) = record_field_access_chain()
+        .parse(arena, state, min_indent)
+        .map_err(|(_, fail)| (MadeProgress, fail))?;
+
+    // if there are field accesses, include the parentheses in the region
+    // otherwise, don't include the parentheses
+    if !field_accesses.is_empty() {
+        let elems = apply_expr_access_chain(arena, loc_elems.value, field_accesses);
+        loc_elems = Loc::pos(start, state.pos(), elems)
+    };
+
+    Ok((MadeProgress, loc_elems, state))
 }
 
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr<'a>> {
@@ -218,7 +206,7 @@ fn parse_term<'a>(
         Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Closure(fail, start))),
     }
 
-    match loc_expr_in_parens_etc_help().parse(arena, state.clone(), min_indent) {
+    match parse_expr_in_parens_etc(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
@@ -359,7 +347,7 @@ fn parse_negative_or_term<'a>(
         res => return res,
     }
 
-    match loc_expr_in_parens_etc_help().parse(arena, state.clone(), min_indent) {
+    match parse_expr_in_parens_etc(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
         res => return res,
     }

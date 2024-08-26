@@ -3,9 +3,9 @@ use crate::blankspace::{space0_e, spaces, spaces_before, with_spaces_after};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, backtrackable, byte, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
-    optional, specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more,
-    EPattern, PInParens, PList, PRecord, ParseResult, Parser,
+    self, backtrackable, byte, collection_inner, collection_trailing_sep_e, fail_when, loc, map,
+    map_with_arena, optional, specialize_err, specialize_err_ref, then, three_bytes, two_bytes,
+    zero_or_more, EPattern, PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::parser::{either, Progress::*};
 use crate::state::State;
@@ -200,12 +200,6 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
 
 fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     (move |arena, state: State<'a>, _min_indent| {
-        let patterns_parser = parser::collection_inner(
-            specialize_err_ref(PInParens::Pattern, loc_pattern_help()),
-            byte(b',', PInParens::End),
-            Pattern::SpaceBefore,
-        );
-
         let start = state.pos();
         if state.bytes().first() != Some(&b'(') {
             let fail = PInParens::Open(state.pos());
@@ -213,29 +207,36 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPatter
         }
         let state = state.advance(1);
 
-        match patterns_parser.parse(arena, state, 0) {
-            Ok((_, pats, state)) => {
-                if state.bytes().first() != Some(&b')') {
-                    let fail = PInParens::End(state.pos());
-                    return Err((MadeProgress, EPattern::PInParens(fail, start)));
-                }
-                let state = state.advance(1);
+        let elem_parser = specialize_err_ref(PInParens::Pattern, loc_pattern_help());
+        let parser = collection_inner(
+            elem_parser,
+            byte(b',', PInParens::End),
+            Pattern::SpaceBefore,
+        );
+        let (_, pats, state) = parser
+            .parse(arena, state, 0)
+            .map_err(|(_, fail)| (MadeProgress, EPattern::PInParens(fail, start)))?;
 
-                if pats.len() > 1 {
-                    let pats = Loc::pos(start, state.pos(), Pattern::Tuple(pats));
-                    Ok((MadeProgress, pats, state))
-                } else if pats.is_empty() {
-                    let fail = PInParens::Empty(state.pos());
-                    Err((NoProgress, EPattern::PInParens(fail, start)))
-                } else {
-                    // TODO: don't discard comments before/after
-                    // (stored in the Collection)
-                    // TODO: add Pattern::ParensAround to faithfully represent the input
-                    Ok((MadeProgress, pats.items[0], state))
-                }
-            }
-            Err((_, fail)) => Err((MadeProgress, EPattern::PInParens(fail, start))),
+        if state.bytes().first() != Some(&b')') {
+            let fail = PInParens::End(state.pos());
+            return Err((MadeProgress, EPattern::PInParens(fail, start)));
         }
+        let state = state.advance(1);
+
+        if pats.is_empty() {
+            let fail = PInParens::Empty(state.pos());
+            return Err((NoProgress, EPattern::PInParens(fail, start)));
+        }
+
+        let pats = if pats.len() > 1 {
+            Loc::pos(start, state.pos(), Pattern::Tuple(pats))
+        } else {
+            // TODO: don't discard comments before/after
+            // (stored in the Collection)
+            // TODO: add Pattern::ParensAround to faithfully represent the input, see the `parse_expr_in_parens_etc`
+            pats.items[0]
+        };
+        Ok((MadeProgress, pats, state))
     })
     .trace("pat_in_parens")
 }
