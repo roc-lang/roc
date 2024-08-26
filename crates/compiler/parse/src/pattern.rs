@@ -373,8 +373,6 @@ fn parse_ident_pattern<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let original_state = state.clone();
-
     let ident_start = state.pos();
     let (_, ident, state) = parse_ident(arena, state, min_indent)
         .map_err(|(p, _)| (p, EPattern::Start(ident_start)))?;
@@ -382,10 +380,7 @@ fn parse_ident_pattern<'a>(
     let ident_loc = Region::new(ident_start, state.pos());
     match ident {
         Ident::Tag(tag) => {
-            let loc_tag = Loc {
-                region: ident_loc,
-                value: Pattern::Tag(tag),
-            };
+            let loc_tag = Loc::at(ident_loc, Pattern::Tag(tag));
 
             // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
             if can_have_arguments {
@@ -400,7 +395,6 @@ fn parse_ident_pattern<'a>(
                             .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
                     );
                     let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
-
                     Ok((MadeProgress, Loc { region, value }, state))
                 }
             } else {
@@ -408,10 +402,7 @@ fn parse_ident_pattern<'a>(
             }
         }
         Ident::OpaqueRef(name) => {
-            let loc_pat = Loc {
-                region: ident_loc,
-                value: Pattern::OpaqueRef(name),
-            };
+            let loc_pat = Loc::at(ident_loc, Pattern::OpaqueRef(name));
 
             // Make sure `@Foo Bar 1` is parsed as `@Foo (Bar) 1`, and not `@Foo (Bar 1)`
             if can_have_arguments {
@@ -426,7 +417,6 @@ fn parse_ident_pattern<'a>(
                             .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
                     );
                     let value = Pattern::Apply(&*arena.alloc(loc_pat), loc_args.into_bump_slice());
-
                     Ok((MadeProgress, Loc { region, value }, state))
                 }
             } else {
@@ -438,27 +428,14 @@ fn parse_ident_pattern<'a>(
         } => {
             // Plain identifiers (e.g. `foo`) are allowed in patterns, but
             // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-
-            for keyword in crate::keyword::KEYWORDS.iter() {
-                if parts[0] == Accessor::RecordField(keyword) {
-                    return Err((NoProgress, EPattern::End(original_state.pos())));
-                }
-            }
-
             if module_name.is_empty() && parts.len() == 1 {
                 if let Accessor::RecordField(var) = &parts[0] {
-                    return Ok((
-                        MadeProgress,
-                        Loc {
-                            region: ident_loc,
-                            value: Pattern::Identifier { ident: var },
-                        },
-                        state,
-                    ));
+                    let ident = Loc::at(ident_loc, Pattern::Identifier { ident: var });
+                    return Ok((MadeProgress, ident, state));
                 }
             }
-            let mut malformed_str = String::new_in(arena);
 
+            let mut malformed_str = String::new_in(arena);
             if !module_name.is_empty() {
                 malformed_str.push_str(module_name);
             };
@@ -469,14 +446,8 @@ fn parse_ident_pattern<'a>(
                 malformed_str.push_str(part.as_inner());
             }
 
-            Ok((
-                MadeProgress,
-                Loc {
-                    region: ident_loc,
-                    value: Pattern::Malformed(malformed_str.into_bump_str()),
-                },
-                state,
-            ))
+            let bad_ident = Loc::at(ident_loc, Pattern::Malformed(malformed_str.into_bump_str()));
+            Ok((MadeProgress, bad_ident, state))
         }
         Ident::AccessorFunction(_string) => {
             Err((MadeProgress, EPattern::AccessorFunction(ident_loc.start())))
