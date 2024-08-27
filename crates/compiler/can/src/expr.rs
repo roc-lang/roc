@@ -3135,11 +3135,11 @@ impl Declarations {
                     Index::push_new(&mut self.function_bodies, loc_function_def);
 
                 if let Some(annotation) = &mut self.annotations[index] {
-                    annotation.add_arguments(new_args_len, var_store);
+                    annotation.convert_to_fn(new_args_len, var_store);
                 }
 
                 if let Some((_var, annotation)) = self.host_exposed_annotations.get_mut(&index) {
-                    annotation.add_arguments(new_args_len, var_store);
+                    annotation.convert_to_fn(new_args_len, var_store);
                 }
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
