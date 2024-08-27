@@ -9,10 +9,13 @@ use roc_repl_eval::gen::Problems;
 use roc_repl_ui::colors::{CYAN, END_COL};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
-use roc_reporting::report::{to_file_problem_report_string, ANSI_STYLE_CODES, DEFAULT_PALETTE};
+use roc_reporting::report::{
+    strip_colors, to_file_problem_report_string, ANSI_STYLE_CODES, DEFAULT_PALETTE,
+};
 use roc_target::Target;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
+use rustyline::Config;
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
 use target_lexicon::Triple;
@@ -34,23 +37,43 @@ pub struct ReplHelper {
     state: ReplState,
 }
 
-pub fn main() -> i32 {
+pub fn main(has_color: bool, has_header: bool) -> i32 {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
+
+    let strip_colors_if_necessary = |s: &str| {
+        if has_color {
+            s.to_string()
+        } else {
+            strip_colors(s)
+        }
+    };
 
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
-    print!("{WELCOME_MESSAGE}{SHORT_INSTRUCTIONS}");
+    if has_header {
+        print!(
+            "{}{}",
+            strip_colors_if_necessary(WELCOME_MESSAGE),
+            strip_colors_if_necessary(SHORT_INSTRUCTIONS),
+        );
+    }
 
-    let mut editor = Editor::<ReplHelper>::new();
+    let editor_color_mode = if has_color {
+        rustyline::ColorMode::Enabled
+    } else {
+        rustyline::ColorMode::Disabled
+    };
+    let mut editor =
+        Editor::<ReplHelper>::with_config(Config::builder().color_mode(editor_color_mode).build());
     let repl_helper = ReplHelper::default();
     editor.set_helper(Some(repl_helper));
     let target = Triple::host().into();
     let mut arena = Bump::new();
 
     loop {
-        match editor.readline(PROMPT) {
+        match editor.readline(&strip_colors_if_necessary(PROMPT)) {
             Ok(line) => {
                 let line = line.trim();
 
@@ -68,14 +91,17 @@ pub fn main() -> i32 {
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
                         if !output.is_empty() {
-                            println!("{output}");
+                            println!("{}", strip_colors_if_necessary(&output));
                         }
                     }
                     ReplAction::Exit => {
                         return 0;
                     }
                     ReplAction::FileProblem { filename, error } => {
-                        println!("{}", to_file_problem_report_string(filename, error));
+                        println!(
+                            "{}",
+                            to_file_problem_report_string(filename, error, has_color)
+                        );
                     }
                     ReplAction::Help => {
                         println!("{TIPS}");
