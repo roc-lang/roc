@@ -8,6 +8,7 @@ module { appId, protocol } -> [
     baseUrlAliased,
     getPostAliased,
     getUserSafe,
+    getPostComment,
 ]
 
 ## value def referencing params
@@ -61,3 +62,8 @@ getUserSafe =
         \id -> "$(getUser id)?safe=true"
     else
         getUser
+
+## two-argument function
+getPostComment : U32, U32 -> Str
+getPostComment = \postId, commentId ->
+    "$(getPost postId)/comments/$(Num.toStr commentId)"

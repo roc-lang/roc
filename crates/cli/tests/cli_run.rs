@@ -797,9 +797,20 @@ mod cli_run {
 
                 Are there any missing commas? Or missing parentheses?
 
+
+                ── TOO FEW ARGS in tests/module_params/bad_types.roc ───────────────────────────
+
+                The getPostComment function expects 2 arguments, but it got only 1:
+
+                16│      $(Api.getPostComment 1)
+                           ^^^^^^^^^^^^^^^^^^
+
+                Roc does not allow functions to be partially applied. Use a closure to
+                make partial application explicit.
+
                 ────────────────────────────────────────────────────────────────────────────────
 
-                2 errors and 0 warnings found in <ignored for test> ms."#
+                3 errors and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
