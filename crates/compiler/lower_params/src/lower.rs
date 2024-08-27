@@ -119,9 +119,7 @@ impl<'a> LowerParams<'a> {
                     }
                 }
                 Var(symbol, var) => {
-                    if let Some(arity) = self.params_extended_home_symbol(symbol) {
-                        let params = self.home_params.as_ref().unwrap();
-
+                    if let Some((params, arity)) = self.params_extended_home_symbol(symbol) {
                         *expr = self.lower_naked_params_var(
                             *arity,
                             *symbol,
@@ -154,9 +152,8 @@ impl<'a> LowerParams<'a> {
                             fun.1.value = Var(symbol, var);
                         }
                         Var(symbol, _var) => {
-                            if self.params_extended_home_symbol(&symbol).is_some() {
+                            if let Some((params, _)) = self.params_extended_home_symbol(&symbol) {
                                 // Calling a top-level function in the current module with params
-                                let params = self.home_params.as_ref().unwrap();
                                 args.push((
                                     params.whole_var,
                                     Loc::at_zero(Var(params.whole_symbol, params.whole_var)),
@@ -366,10 +363,13 @@ impl<'a> LowerParams<'a> {
         Symbol::new(self.home_id, self.ident_ids.gen_unique())
     }
 
-    fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<&usize> {
+    fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<(&ModuleParams, &usize)> {
         if symbol.module_id() == self.home_id {
             match self.home_params {
-                Some(params) => params.arity_by_name.get(&symbol.ident_id()),
+                Some(params) => match params.arity_by_name.get(&symbol.ident_id()) {
+                    Some(arity) => Some((params, arity)),
+                    None => None,
+                },
                 None => None,
             }
         } else {
