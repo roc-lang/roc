@@ -495,8 +495,7 @@ impl<'a> LowerParams<'a> {
             let body = Call(
                 call_fn,
                 call_arguments,
-                // todo: custom called via
-                roc_module::called_via::CalledVia::Space,
+                roc_module::called_via::CalledVia::NakedParamsVar,
             );
 
             let captured_symbols = if symbol.module_id() == self.home_id
@@ -539,8 +538,7 @@ impl<'a> LowerParams<'a> {
         Call(
             call_fn,
             vec![params_arg],
-            // todo: custom called via
-            roc_module::called_via::CalledVia::Space,
+            roc_module::called_via::CalledVia::NakedParamsVar,
         )
     }
 }

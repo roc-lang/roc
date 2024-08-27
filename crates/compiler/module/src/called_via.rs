@@ -99,6 +99,9 @@ pub enum CalledVia {
     /// This call is the result of desugaring a Result.try from `?` syntax
     /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...
     QuestionSuffix,
+
+    /// This call is a result of lowering a reference to a module-params-extended def
+    NakedParamsVar,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
