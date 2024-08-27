@@ -8,16 +8,13 @@ use roc_can::{
     module::ModuleParams,
     pattern::Pattern,
 };
-use roc_collections::VecMap;
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
 
 struct LowerParams<'a> {
     home_id: ModuleId,
-    /// Top-level idents that we need to extend in a module with params. Empty if no params.
-    home_top_level_idents: VecMap<IdentId, usize>,
     home_params: &'a Option<ModuleParams>,
     var_store: &'a mut VarStore,
     ident_ids: &'a mut IdentIds,
@@ -30,30 +27,9 @@ pub fn lower(
     ident_ids: &mut IdentIds,
     var_store: &mut VarStore,
 ) {
-    let mut home_top_level_idents = VecMap::new();
-
-    if home_params.is_some() {
-        for index in 0..decls.len() {
-            match decls.declarations[index] {
-                Function(fn_index) | Recursive(fn_index) | TailRecursive(fn_index) => {
-                    let arity = decls.function_bodies[fn_index.index()]
-                        .value
-                        .arguments
-                        .len();
-                    home_top_level_idents.insert(decls.symbols[index].value.ident_id(), arity);
-                }
-                Value => {
-                    home_top_level_idents.insert(decls.symbols[index].value.ident_id(), 0);
-                }
-                Destructure(_) | MutualRecursion { .. } | Expectation | ExpectationFx => {}
-            }
-        }
-    }
-
     let mut env = LowerParams {
         home_id,
         home_params,
-        home_top_level_idents,
         ident_ids,
         var_store,
     };
@@ -367,7 +343,10 @@ impl<'a> LowerParams<'a> {
 
     fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<&usize> {
         if symbol.module_id() == self.home_id {
-            self.home_top_level_idents.get(&symbol.ident_id())
+            match self.home_params {
+                Some(params) => params.arity_by_name.get(&symbol.ident_id()),
+                None => None,
+            }
         } else {
             None
         }

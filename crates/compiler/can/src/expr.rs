@@ -18,7 +18,7 @@ use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::{IdentId, ModuleId, Symbol};
 use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
@@ -2776,6 +2776,9 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    // used while lowering params.
+    arity_by_name: VecMap<IdentId, usize>,
+
     pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
 
     pub function_bodies: Vec<Loc<FunctionDef>>,
@@ -2804,6 +2807,7 @@ impl Declarations {
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
             destructs: Vec::new(),          // number of destructs is probably low
+            arity_by_name: VecMap::with_capacity(capacity),
         }
     }
 
@@ -2841,6 +2845,9 @@ impl Declarations {
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
+
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
@@ -2889,6 +2896,9 @@ impl Declarations {
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
+
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
 
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
@@ -2965,6 +2975,8 @@ impl Declarations {
             self.host_exposed_annotations
                 .insert(self.declarations.len(), annotation);
         }
+
+        self.arity_by_name.insert(symbol.value.ident_id(), 0);
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -3204,6 +3216,11 @@ impl Declarations {
         }
 
         collector
+    }
+
+    pub(crate) fn take_arity_by_name(&mut self) -> VecMap<IdentId, usize> {
+        // `arity_by_name` is only needed for lowering module params
+        std::mem::take(&mut self.arity_by_name)
     }
 }
 

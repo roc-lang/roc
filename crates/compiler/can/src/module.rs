@@ -18,7 +18,7 @@ use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
@@ -149,6 +149,8 @@ pub struct ModuleParams {
     pub record_var: Variable,
     pub record_ext_var: Variable,
     pub destructs: Vec<Loc<RecordDestruct>>,
+    // used while lowering passed functions
+    pub arity_by_name: VecMap<IdentId, usize>,
 }
 
 impl ModuleParams {
@@ -447,6 +449,7 @@ pub fn canonicalize_module_defs<'a>(
                 record_var: var_store.fresh(),
                 record_ext_var: var_store.fresh(),
                 destructs,
+                arity_by_name: Default::default(),
             }
         },
     );
@@ -524,6 +527,11 @@ pub fn canonicalize_module_defs<'a>(
         new_output,
         &exposed_symbols,
     );
+
+    let module_params = module_params.map(|params| ModuleParams {
+        arity_by_name: declarations.take_arity_by_name(),
+        ..params
+    });
 
     debug_assert!(
         output.pending_derives.is_empty(),
