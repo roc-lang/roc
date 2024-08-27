@@ -8,6 +8,7 @@ use roc_can::{
     module::ModuleParams,
     pattern::Pattern,
 };
+use roc_collections::VecMap;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{VarStore, Variable};
@@ -16,6 +17,7 @@ use roc_types::types::Type;
 struct LowerParams<'a> {
     home_id: ModuleId,
     home_params: &'a Option<ModuleParams>,
+    imported_params: VecMap<ModuleId, ModuleParams>,
     var_store: &'a mut VarStore,
     ident_ids: &'a mut IdentIds,
 }
@@ -23,6 +25,7 @@ struct LowerParams<'a> {
 pub fn lower(
     home_id: ModuleId,
     home_params: &Option<ModuleParams>,
+    imported_params: VecMap<ModuleId, ModuleParams>,
     decls: &mut Declarations,
     ident_ids: &mut IdentIds,
     var_store: &mut VarStore,
@@ -30,6 +33,7 @@ pub fn lower(
     let mut env = LowerParams {
         home_id,
         home_params,
+        imported_params,
         ident_ids,
         var_store,
     };
@@ -92,14 +96,19 @@ impl<'a> LowerParams<'a> {
                     params_symbol,
                     params_var,
                 } => {
-                    *expr = self.lower_naked_params_var(
-                        // todo: get arity of imported symbol
-                        0,
-                        *symbol,
-                        *var,
-                        *params_symbol,
-                        *params_var,
-                    );
+                    // The module was imported with params, but it might not actually expect them.
+                    // We should only lower if it does to prevent confusing type errors.
+                    if let Some(params) = self.imported_params.get(&symbol.module_id()) {
+                        let arity = params.arity_by_name.get(&symbol.ident_id()).unwrap();
+
+                        *expr = self.lower_naked_params_var(
+                            *arity,
+                            *symbol,
+                            *var,
+                            *params_symbol,
+                            *params_var,
+                        );
+                    }
                 }
                 Var(symbol, var) => {
                     if let Some(arity) = self.params_extended_home_symbol(symbol) {
@@ -125,7 +134,15 @@ impl<'a> LowerParams<'a> {
                             params_symbol,
                         } => {
                             // Calling an imported function with params
-                            args.push((params_var, Loc::at_zero(Var(params_symbol, params_var))));
+
+                            // Extend arguments only if the imported module actually expects params
+                            if self.imported_params.contains_key(&symbol.module_id()) {
+                                args.push((
+                                    params_var,
+                                    Loc::at_zero(Var(params_symbol, params_var)),
+                                ));
+                            }
+
                             fun.1.value = Var(symbol, var);
                         }
                         Var(symbol, _var) => {
@@ -415,12 +432,19 @@ impl<'a> LowerParams<'a> {
                 roc_module::called_via::CalledVia::Space,
             );
 
+            let captured_symbols = if symbol.module_id() == self.home_id {
+                vec![(params_symbol, params_var)]
+            } else {
+                // todo: capture if import is not top-level
+                vec![]
+            };
+
             Closure(ClosureData {
                 function_type: self.var_store.fresh(),
                 closure_type: self.var_store.fresh(),
                 return_type: self.var_store.fresh(),
                 name: self.unique_symbol(),
-                captured_symbols: vec![(params_symbol, params_var)],
+                captured_symbols,
                 recursive: roc_can::expr::Recursive::NotRecursive,
                 arguments,
                 loc_body: Box::new(Loc::at_zero(body)),

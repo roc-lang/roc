@@ -18,7 +18,7 @@ use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
 use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations, TypeState,
+    ModuleParams, ResolvedImplementations, TypeState,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -251,6 +251,7 @@ fn start_phase<'a>(
 
                 let mut aliases = MutMap::default();
                 let mut abilities_store = PendingAbilitiesStore::default();
+                let mut imported_module_params = VecMap::default();
 
                 for imported in parsed.available_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
@@ -293,6 +294,10 @@ fn start_phase<'a>(
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
                     }
+
+                    if let Some(params) = state.module_cache.module_params.get(imported) {
+                        imported_module_params.insert(*imported, params.clone());
+                    }
                 }
 
                 let skip_constraint_gen = {
@@ -311,6 +316,7 @@ fn start_phase<'a>(
                     skip_constraint_gen,
                     exposed_module_ids: state.exposed_modules,
                     exec_mode: state.exec_mode,
+                    imported_module_params,
                 }
             }
 
@@ -891,6 +897,7 @@ enum BuildTask<'a> {
         exposed_module_ids: &'a [ModuleId],
         skip_constraint_gen: bool,
         exec_mode: ExecutionMode,
+        imported_module_params: VecMap<ModuleId, ModuleParams>,
     },
     Solve {
         module: Module,
@@ -5006,6 +5013,7 @@ fn canonicalize_and_constrain<'a>(
     skip_constraint_gen: bool,
     exposed_module_ids: &[ModuleId],
     exec_mode: ExecutionMode,
+    imported_module_params: VecMap<ModuleId, ModuleParams>,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5097,14 +5105,17 @@ fn canonicalize_and_constrain<'a>(
             // If we did, we'd have to update the language server to exclude the extra arguments
         }
         ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
-            // lower module params
-            roc_lower_params::lower::lower(
-                module_id,
-                &module_output.module_params,
-                &mut module_output.declarations,
-                &mut module_output.scope.locals.ident_ids,
-                &mut var_store,
-            );
+            // We need to lower params only if the current module has any or imports at least one with params
+            if module_output.module_params.is_some() || !imported_module_params.is_empty() {
+                roc_lower_params::lower::lower(
+                    module_id,
+                    &module_output.module_params,
+                    imported_module_params,
+                    &mut module_output.declarations,
+                    &mut module_output.scope.locals.ident_ids,
+                    &mut var_store,
+                );
+            }
         }
     }
 
@@ -6227,6 +6238,7 @@ fn run_task<'a>(
             skip_constraint_gen,
             exposed_module_ids,
             exec_mode,
+            imported_module_params,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6239,6 +6251,7 @@ fn run_task<'a>(
                 skip_constraint_gen,
                 exposed_module_ids,
                 exec_mode,
+                imported_module_params,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
