@@ -139,22 +139,13 @@ fn remove_for_reason(
 
         Reason::FnCall { .. } => {}
 
-        Reason::FnArg {
-            name: Some(name),
-            arg_index: _,
-            called_via: _,
-        } if env.is_extended(name) => {
-            todo!()
+        Reason::FnArg { .. } | Reason::TypedArg { .. } => {
+            // I believe these don't need to be touched because reporting only
+            // shows the type of the arguments, not the whole function.
         }
-
-        Reason::FnArg { .. } => {}
 
         // Irrelevant
-        Reason::TypedArg {
-            name: _,
-            arg_index: _,
-        }
-        | Reason::LowLevelOpArg {
+        Reason::LowLevelOpArg {
             op: _,
             arg_index: _,
         }
