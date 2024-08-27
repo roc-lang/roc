@@ -363,6 +363,7 @@ fn start_phase<'a>(
                     declarations,
                     state.cached_types.clone(),
                     derived_module,
+                    state.exec_mode,
                     //
                     #[cfg(debug_assertions)]
                     checkmate,
@@ -914,6 +915,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
 
         #[cfg(debug_assertions)]
         checkmate: Option<roc_checkmate::Collector>,
@@ -4320,6 +4322,7 @@ impl<'a> BuildTask<'a> {
         declarations: Declarations,
         cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
+        exec_mode: ExecutionMode,
 
         #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
     ) -> Self {
@@ -4343,6 +4346,7 @@ impl<'a> BuildTask<'a> {
             module_timing,
             cached_subs,
             derived_module,
+            exec_mode,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -4782,6 +4786,7 @@ fn run_solve<'a>(
     dep_idents: IdentIdsByModule,
     cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
+    exec_mode: ExecutionMode,
 
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
 ) -> Msg<'a> {
@@ -4828,7 +4833,6 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     problems: vec![],
                     abilities_store: abilities,
-                    // todo: agus
                     imported_modules_with_params: vec![],
 
                     #[cfg(debug_assertions)]
@@ -4874,13 +4878,19 @@ fn run_solve<'a>(
         &abilities_store,
     );
 
-    // todo: check exec mode
-    roc_lower_params::type_error::remove_module_param_arguments(
-        &mut problems,
-        home_has_params,
-        &decls.symbols,
-        imported_modules_with_params,
-    );
+    match exec_mode {
+        ExecutionMode::Check => {
+            // Params are not lowered in check mode
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            roc_lower_params::type_error::remove_module_param_arguments(
+                &mut problems,
+                home_has_params,
+                &decls.symbols,
+                imported_modules_with_params,
+            );
+        }
+    }
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
@@ -6290,6 +6300,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
 
             #[cfg(debug_assertions)]
             checkmate,
@@ -6308,6 +6319,7 @@ fn run_task<'a>(
             dep_idents,
             cached_subs,
             derived_module,
+            exec_mode,
             //
             #[cfg(debug_assertions)]
             checkmate,
