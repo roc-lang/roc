@@ -310,6 +310,7 @@ fn start_phase<'a>(
                     abilities_store,
                     skip_constraint_gen,
                     exposed_module_ids: state.exposed_modules,
+                    exec_mode: state.exec_mode,
                 }
             }
 
@@ -889,6 +890,7 @@ enum BuildTask<'a> {
         abilities_store: PendingAbilitiesStore,
         exposed_module_ids: &'a [ModuleId],
         skip_constraint_gen: bool,
+        exec_mode: ExecutionMode,
     },
     Solve {
         module: Module,
@@ -5003,6 +5005,7 @@ fn canonicalize_and_constrain<'a>(
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
     exposed_module_ids: &[ModuleId],
+    exec_mode: ExecutionMode,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5088,14 +5091,22 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
-    // lower module params
-    roc_lower_params::lower::lower(
-        module_id,
-        &module_output.module_params,
-        &mut module_output.declarations,
-        &mut module_output.scope.locals.ident_ids,
-        &mut var_store,
-    );
+    match exec_mode {
+        ExecutionMode::Check => {
+            // No need to lower params for `roc check` and lang server
+            // If we did, we'd have to update the language server to exclude the extra arguments
+        }
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+            // lower module params
+            roc_lower_params::lower::lower(
+                module_id,
+                &module_output.module_params,
+                &mut module_output.declarations,
+                &mut module_output.scope.locals.ident_ids,
+                &mut var_store,
+            );
+        }
+    }
 
     let mut constraints = Constraints::new();
 
@@ -6215,6 +6226,7 @@ fn run_task<'a>(
             abilities_store,
             skip_constraint_gen,
             exposed_module_ids,
+            exec_mode,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6226,6 +6238,7 @@ fn run_task<'a>(
                 parsed,
                 skip_constraint_gen,
                 exposed_module_ids,
+                exec_mode,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))
