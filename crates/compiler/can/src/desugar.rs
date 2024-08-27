@@ -1377,81 +1377,30 @@ pub fn desugar_expr<'a>(
                 problems,
             ));
 
-            let region = expr.region;
-
-            // tmpVar = expr
-            let ident = &*arena.alloc_str(&format!("{:?}", var_store.fresh()));
-
-            let value_def = ValueDef::Body(
-                arena.alloc(Loc {
-                    value: Pattern::Identifier { ident },
-                    region,
-                }),
-                desugared_expr,
-            );
-
-            let defs = arena.alloc(Defs::default());
-            defs.push_value_def(value_def, region, &[], &[]);
-
-            // tmpVar
-            let tmp_var = arena.alloc(Loc {
-                value: Var {
-                    module_name: "",
-                    ident,
-                },
-                region,
-            });
-
-            // Inspect.toStr tmpVar
-            let inspect_fn = Var {
-                module_name: ModuleName::INSPECT,
-                ident: "toStr",
-            };
-            let loc_inspect_fn_var = arena.alloc(Loc {
-                value: inspect_fn,
-                region,
-            });
-            let inspect_args = &*arena.alloc([&*tmp_var]);
-
-            let dbg_str = arena.alloc(Loc {
-                value: Apply(loc_inspect_fn_var, inspect_args, CalledVia::Space),
-                region,
-            });
-
-            // line_info is an option so that we can lazily calculate it.
-            // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
-            if line_info.is_none() {
-                *line_info = Some(LineInfo::new(src));
-            }
-            let line_col = line_info.as_ref().unwrap().convert_pos(region.start());
-
-            let dbg_src = src
-                .split_at(region.start().offset as usize)
-                .1
-                .split_at((region.end().offset - region.start().offset) as usize)
-                .0;
-
-            // |> LowLevelDbg
-            let dbg_stmt = arena.alloc(Loc {
-                value: LowLevelDbg(
-                    arena.alloc((
-                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line + 1)),
-                        &*arena.alloc_str(dbg_src),
-                    )),
-                    dbg_str,
-                    tmp_var,
-                ),
-                region: loc_expr.region,
-            });
-
             arena.alloc(Loc {
-                value: Defs(defs, dbg_stmt),
+                value: *desugar_dbg_expr(
+                    arena,
+                    var_store,
+                    desugared_expr,
+                    loc_expr.region,
+                    src,
+                    line_info,
+                    module_path,
+                ),
                 region: loc_expr.region,
             })
         }
         DbgStmt(condition, continuation) => {
-            // Desugars a `dbg x` statement into essentially
-            // Inspect.toStr x |> LowLevelDbg
+            let desugared_condition = &*arena.alloc(desugar_expr(
+                arena,
+                var_store,
+                condition,
+                src,
+                line_info,
+                module_path,
+                problems,
+            ));
+
             let desugared_continuation = &*arena.alloc(desugar_expr(
                 arena,
                 var_store,
@@ -1462,53 +1411,14 @@ pub fn desugar_expr<'a>(
                 problems,
             ));
 
-            let region = condition.region;
-            // Inspect.toStr x
-            let inspect_fn = Var {
-                module_name: ModuleName::INSPECT,
-                ident: "toStr",
-            };
-            let loc_inspect_fn_var = arena.alloc(Loc {
-                value: inspect_fn,
-                region,
-            });
-            let desugared_inspect_args = arena.alloc([desugar_expr(
-                arena,
-                var_store,
-                condition,
-                src,
-                line_info,
-                module_path,
-                problems,
-            )]);
-
-            let dbg_str = arena.alloc(Loc {
-                value: Apply(loc_inspect_fn_var, desugared_inspect_args, CalledVia::Space),
-                region,
-            });
-
-            // line_info is an option so that we can lazily calculate it.
-            // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
-            if line_info.is_none() {
-                *line_info = Some(LineInfo::new(src));
-            }
-            let line_col = line_info.as_ref().unwrap().convert_pos(region.start());
-
-            let dbg_src = src
-                .split_at(region.start().offset as usize)
-                .1
-                .split_at((region.end().offset - region.start().offset) as usize)
-                .0;
-
-            // |> LowLevelDbg
             arena.alloc(Loc {
-                value: LowLevelDbg(
-                    arena.alloc((
-                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line + 1)),
-                        &*arena.alloc_str(dbg_src),
-                    )),
-                    dbg_str,
+                value: *desugar_dbg_stmt(
+                    arena,
+                    desugared_condition,
                     desugared_continuation,
+                    src,
+                    line_info,
+                    module_path,
                 ),
                 region: loc_expr.region,
             })
@@ -1928,6 +1838,100 @@ fn desugar_pattern<'a>(
             problems,
         ),
     }
+}
+
+fn desugar_dbg_expr<'a>(
+    arena: &'a Bump,
+    var_store: &mut VarStore,
+    expr: &'a Loc<Expr<'a>>,
+    outer_region: Region,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> &'a Expr<'a> {
+    let region = expr.region;
+
+    // tmpVar = expr
+    let ident = &*arena.alloc_str(&format!("{:?}", var_store.fresh()));
+
+    let value_def = ValueDef::Body(
+        arena.alloc(Loc {
+            value: Pattern::Identifier { ident },
+            region,
+        }),
+        expr,
+    );
+
+    let defs = arena.alloc(Defs::default());
+    defs.push_value_def(value_def, region, &[], &[]);
+
+    // tmpVar
+    let tmp_var = arena.alloc(Loc {
+        value: Var {
+            module_name: "",
+            ident,
+        },
+        region,
+    });
+
+    // LowLevelDbg
+    let dbg_stmt = arena.alloc(Loc {
+        value: *desugar_dbg_stmt(arena, tmp_var, tmp_var, src, line_info, module_path),
+        region: outer_region,
+    });
+
+    arena.alloc(Defs(defs, dbg_stmt))
+}
+
+fn desugar_dbg_stmt<'a>(
+    arena: &'a Bump,
+    condition: &'a Loc<Expr<'a>>,
+    continuation: &'a Loc<Expr<'a>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> &'a Expr<'a> {
+    let region = condition.region;
+
+    // Desugars a `dbg x` statement into essentially
+    // Inspect.toStr x |> LowLevelDbg
+    let inspect_fn = Var {
+        module_name: ModuleName::INSPECT,
+        ident: "toStr",
+    };
+    let loc_inspect_fn_var = arena.alloc(Loc {
+        value: inspect_fn,
+        region,
+    });
+    let inspect_args = &*arena.alloc([condition]);
+
+    let dbg_str = arena.alloc(Loc {
+        value: Apply(loc_inspect_fn_var, inspect_args, CalledVia::Space),
+        region,
+    });
+
+    // line_info is an option so that we can lazily calculate it.
+    // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
+    if line_info.is_none() {
+        *line_info = Some(LineInfo::new(src));
+    }
+    let line_col = line_info.as_ref().unwrap().convert_pos(region.start());
+
+    let dbg_src = src
+        .split_at(region.start().offset as usize)
+        .1
+        .split_at((region.end().offset - region.start().offset) as usize)
+        .0;
+
+    // |> LowLevelDbg
+    arena.alloc(LowLevelDbg(
+        arena.alloc((
+            &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line + 1)),
+            &*arena.alloc_str(dbg_src),
+        )),
+        dbg_str,
+        continuation,
+    ))
 }
 
 struct OldRecordBuilderArg<'a> {
