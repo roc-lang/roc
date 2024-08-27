@@ -36,16 +36,6 @@ use roc_region::all::{Loc, Position, Region};
 
 use crate::parser::Progress::{self, *};
 
-fn expr_end<'a>() -> impl Parser<'a, (), EExpr<'a>> {
-    |_arena, state: State<'a>, _min_indent: u32| {
-        if state.has_reached_end() {
-            Ok((NoProgress, (), state))
-        } else {
-            Err((NoProgress, EExpr::BadExprEnd(state.pos())))
-        }
-    }
-}
-
 pub fn test_parse_expr<'a>(
     min_indent: u32,
     arena: &'a bumpalo::Bump,
@@ -64,9 +54,10 @@ pub fn test_parse_expr<'a>(
             Err(_) => (&[] as &[_], state),
         };
 
-    match expr_end().parse(arena, state, min_indent) {
-        Ok(_) => Ok(with_spaces(arena, spaces_before, expr, spaces_after)),
-        Err((_, fail)) => Err(fail),
+    if state.has_reached_end() {
+        Ok(with_spaces(arena, spaces_before, expr, spaces_after))
+    } else {
+        Err(EExpr::BadExprEnd(state.pos()))
     }
 }
 
