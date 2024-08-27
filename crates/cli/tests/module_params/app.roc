@@ -21,6 +21,10 @@ main =
         # use captured params def
         App3.getUser userId
 
+    usersApp3Passed =
+        # pass top-level fn in a nested def
+        List.map [1, 2, 3] App3.getUser
+
     """
     App1.baseUrl: $(App1.baseUrl)
     App2.baseUrl: $(App2.baseUrl)
@@ -42,4 +46,5 @@ main =
     App2.getCompanies [5, 6]: $(Inspect.toStr (App2.getCompanies [5, 6]))
     usersApp1: $(Inspect.toStr usersApp1)
     getUserApp3Nested 3: $(getUserApp3Nested 3)
+    usersApp3Passed: $(Inspect.toStr usersApp3Passed)
     """

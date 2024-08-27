@@ -9,7 +9,7 @@ use roc_can::{
     pattern::Pattern,
 };
 use roc_collections::VecMap;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Type;
@@ -20,6 +20,7 @@ struct LowerParams<'a> {
     imported_params: VecMap<ModuleId, ModuleParams>,
     var_store: &'a mut VarStore,
     ident_ids: &'a mut IdentIds,
+    top_level_idents: Vec<IdentId>,
 }
 
 pub fn lower(
@@ -30,12 +31,19 @@ pub fn lower(
     ident_ids: &mut IdentIds,
     var_store: &mut VarStore,
 ) {
+    let top_level_idents = decls
+        .symbols
+        .iter()
+        .map(|symbol| symbol.value.ident_id())
+        .collect();
+
     let mut env = LowerParams {
         home_id,
         home_params,
         imported_params,
         ident_ids,
         var_store,
+        top_level_idents,
     };
 
     env.lower_decls(decls);
@@ -432,10 +440,11 @@ impl<'a> LowerParams<'a> {
                 roc_module::called_via::CalledVia::Space,
             );
 
-            let captured_symbols = if symbol.module_id() == self.home_id {
+            let captured_symbols = if symbol.module_id() == self.home_id
+                || !self.top_level_idents.contains(&params_symbol.ident_id())
+            {
                 vec![(params_symbol, params_var)]
             } else {
-                // todo: capture if import is not top-level
                 vec![]
             };
 
