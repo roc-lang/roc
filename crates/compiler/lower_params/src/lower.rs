@@ -12,7 +12,6 @@ use roc_collections::VecMap;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Type;
 
 struct LowerParams<'a> {
     home_id: ModuleId,
@@ -56,12 +55,21 @@ impl<'a> LowerParams<'a> {
 
             match tag {
                 Value => {
-                    self.lower_expr(&mut decls.expressions[index].value);
+                    let aliasing_fn = self.lower_expr(true, &mut decls.expressions[index].value);
 
                     if let Some(new_arg) = self.home_params_argument() {
-                        // This module has params, and this is a top-level value,
-                        // so we need to convert it into a function that takes them.
-                        decls.convert_value_to_function(index, vec![new_arg], self.var_store);
+                        if !aliasing_fn {
+                            // This module has params, and this is a top-level value,
+                            // so we need to convert it into a function that takes them.
+
+                            decls.convert_value_to_function(index, vec![new_arg], self.var_store);
+                        } else {
+                            // This value def is just aliasing another function,
+                            // we only need to fix the annotation
+                            if let Some(ann) = &mut decls.annotations[index] {
+                                ann.add_arguments(1, self.var_store);
+                            }
+                        }
                     }
                 }
                 Function(fn_def_index) | Recursive(fn_def_index) | TailRecursive(fn_def_index) => {
@@ -75,25 +83,24 @@ impl<'a> LowerParams<'a> {
                             .push((var, mark, pattern));
 
                         if let Some(ann) = &mut decls.annotations[index] {
-                            if let Type::Function(args, _, _) = &mut ann.signature {
-                                args.push(Type::Variable(var))
-                            }
+                            ann.add_arguments(1, self.var_store);
                         }
                     }
 
-                    self.lower_expr(&mut decls.expressions[index].value)
+                    self.lower_expr(false, &mut decls.expressions[index].value);
                 }
 
                 Destructure(_) | Expectation | ExpectationFx => {
-                    self.lower_expr(&mut decls.expressions[index].value)
+                    self.lower_expr(false, &mut decls.expressions[index].value);
                 }
                 MutualRecursion { .. } => {}
             }
         }
     }
 
-    fn lower_expr(&mut self, expr: &mut Expr) {
+    fn lower_expr(&mut self, is_value_def: bool, expr: &mut Expr) -> bool {
         let mut expr_stack = vec![expr];
+        let mut aliasing_fn = false;
 
         while let Some(expr) = expr_stack.pop() {
             match expr {
@@ -120,8 +127,14 @@ impl<'a> LowerParams<'a> {
                 }
                 Var(symbol, var) => {
                     if let Some((params, arity)) = self.params_extended_home_symbol(symbol) {
+                        if is_value_def && arity > 0 {
+                            // Aliased top-level function, no need to lower
+                            aliasing_fn = true;
+                            continue;
+                        }
+
                         *expr = self.lower_naked_params_var(
-                            *arity,
+                            arity,
                             *symbol,
                             *var,
                             params.whole_symbol,
@@ -357,17 +370,19 @@ impl<'a> LowerParams<'a> {
                 | AbilityMember(_, _, _) => { /* terminal */ }
             }
         }
+
+        aliasing_fn
     }
 
     fn unique_symbol(&mut self) -> Symbol {
         Symbol::new(self.home_id, self.ident_ids.gen_unique())
     }
 
-    fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<(&ModuleParams, &usize)> {
+    fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<(&ModuleParams, usize)> {
         if symbol.module_id() == self.home_id {
             match self.home_params {
                 Some(params) => match params.arity_by_name.get(&symbol.ident_id()) {
-                    Some(arity) => Some((params, arity)),
+                    Some(arity) => Some((params, *arity)),
                     None => None,
                 },
                 None => None,

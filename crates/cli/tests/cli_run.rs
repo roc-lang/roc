@@ -751,6 +751,9 @@ mod cli_run {
                 App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
                 App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
                 App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
+                App1.getPostAliased 1: https://api.example.com/one/posts/1
+                App2.getPostAliased 2: http://api.example.com/two/posts/2
+                App3.getPostAliased 3: https://api.example.com/three/posts/3
                 usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
                 getUserApp3Nested 3: https://api.example.com/three/users/3
                 usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]

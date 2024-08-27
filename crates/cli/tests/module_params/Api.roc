@@ -1,4 +1,12 @@
-module { appId, protocol } -> [baseUrl, getUser, getPost, getPosts, getPostComments, getCompanies]
+module { appId, protocol } -> [
+    baseUrl,
+    getUser,
+    getPost,
+    getPosts,
+    getPostComments,
+    getCompanies,
+    getPostAliased,
+]
 
 ## value def referencing params
 baseUrl : Str
@@ -33,3 +41,8 @@ getCompanies = \ids ->
         protocol "api.example.com/$(appId)/companies/$(Num.toStr id)"
 
     List.map ids getCompany
+
+## aliasing top-level fn
+getPostAliased : U32 -> Str
+getPostAliased =
+    getPost
