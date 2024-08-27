@@ -5,6 +5,7 @@ module { appId, protocol } -> [
     getPosts,
     getPostComments,
     getCompanies,
+    baseUrlAliased,
     getPostAliased,
 ]
 
@@ -41,6 +42,11 @@ getCompanies = \ids ->
         protocol "api.example.com/$(appId)/companies/$(Num.toStr id)"
 
     List.map ids getCompany
+
+## aliasing top-level value
+baseUrlAliased : Str
+baseUrlAliased =
+    baseUrl
 
 ## aliasing top-level fn
 getPostAliased : U32 -> Str

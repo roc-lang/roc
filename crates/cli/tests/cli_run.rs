@@ -754,6 +754,9 @@ mod cli_run {
                 App1.getPostAliased 1: https://api.example.com/one/posts/1
                 App2.getPostAliased 2: http://api.example.com/two/posts/2
                 App3.getPostAliased 3: https://api.example.com/three/posts/3
+                App1.baseUrlAliased: https://api.example.com/one
+                App2.baseUrlAliased: http://api.example.com/two
+                App3.baseUrlAliased: https://api.example.com/three
                 usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
                 getUserApp3Nested 3: https://api.example.com/three/users/3
                 usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]

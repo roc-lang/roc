@@ -55,16 +55,16 @@ impl<'a> LowerParams<'a> {
 
             match tag {
                 Value => {
-                    let aliasing_fn = self.lower_expr(true, &mut decls.expressions[index].value);
+                    let aliased = self.lower_expr(true, &mut decls.expressions[index].value);
 
                     if let Some(new_arg) = self.home_params_argument() {
-                        if !aliasing_fn {
+                        if !aliased {
                             // This module has params, and this is a top-level value,
                             // so we need to convert it into a function that takes them.
 
                             decls.convert_value_to_function(index, vec![new_arg], self.var_store);
                         } else {
-                            // This value def is just aliasing another function,
+                            // This value def is just aliasing another params extended def,
                             // we only need to fix the annotation
                             if let Some(ann) = &mut decls.annotations[index] {
                                 ann.add_arguments(1, self.var_store);
@@ -100,7 +100,7 @@ impl<'a> LowerParams<'a> {
 
     fn lower_expr(&mut self, is_value_def: bool, expr: &mut Expr) -> bool {
         let mut expr_stack = vec![expr];
-        let mut aliasing_fn = false;
+        let mut aliased = false;
 
         while let Some(expr) = expr_stack.pop() {
             match expr {
@@ -127,9 +127,9 @@ impl<'a> LowerParams<'a> {
                 }
                 Var(symbol, var) => {
                     if let Some((params, arity)) = self.params_extended_home_symbol(symbol) {
-                        if is_value_def && arity > 0 {
-                            // Aliased top-level function, no need to lower
-                            aliasing_fn = true;
+                        if is_value_def {
+                            // Aliased top-level def, no need to lower
+                            aliased = true;
                             continue;
                         }
 
@@ -371,7 +371,7 @@ impl<'a> LowerParams<'a> {
             }
         }
 
-        aliasing_fn
+        aliased
     }
 
     fn unique_symbol(&mut self) -> Symbol {
