@@ -848,6 +848,57 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn module_params_bad_ann() {
+        check_compile_error_with(
+            CMD_DEV,
+            &cli_testing_dir("/module_params/bad_ann.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── TYPE MISMATCH in tests/module_params/BadAnn.roc ─────────────────────────────
+
+                Something is off with the body of the fnAnnotatedAsValue definition:
+
+                3│   fnAnnotatedAsValue : Str
+                4│>  fnAnnotatedAsValue = /postId, commentId ->
+                5│>      "/posts/$(postId)/comments/$(Num.toStr commentId)"
+
+                The body is an anonymous function of type:
+
+                    Str, Num * -> Str
+
+                But the type annotation on fnAnnotatedAsValue says it should be:
+
+                    Str
+
+
+                ── TYPE MISMATCH in tests/module_params/BadAnn.roc ─────────────────────────────
+
+                Something is off with the body of the missingArg definition:
+
+                7│   missingArg : Str -> Str
+                8│>  missingArg = /postId, _ ->
+                9│>      "/posts/$(postId)/comments"
+
+                The body is an anonymous function of type:
+
+                    (Str, ? -> Str)
+
+                But the type annotation on missingArg says it should be:
+
+                    (Str -> Str)
+
+                Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                2 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn transitive_expects() {
         test_roc_expect(
             "crates/cli/tests/expects_transitive",

@@ -1,4 +1,4 @@
-use roc_can::expected::Expected;
+use roc_can::{expected::Expected, pattern::Pattern};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
@@ -32,9 +32,47 @@ pub fn remove_module_param_arguments(
     for error in errors {
         match error {
             TypeError::BadExpr(_, _, found, Expected::ForReason(reason, expected, _)) => {
-                remove_with_bad_expr_reason(&env, found, reason, expected);
+                remove_for_reason(&env, found, reason, expected);
             }
-            TypeError::BadExpr(_, _, _, _) => todo!("{:?}", error),
+
+            TypeError::BadExpr(
+                _,
+                _,
+                found,
+                Expected::FromAnnotation(
+                    Loc {
+                        value: Pattern::Identifier(name),
+                        region: _,
+                    },
+                    arity,
+                    _,
+                    expected,
+                ),
+            ) if env.is_extended(name) => {
+                if *arity > 1 {
+                    *arity -= 1;
+                }
+
+                drop_last_argument(found);
+                drop_last_argument(expected);
+
+                if let (
+                    ErrorType::Function(found_args, _, _),
+                    ErrorType::Function(expected_args, _, _),
+                ) = (found, expected)
+                {
+                    if found_args.len() > expected_args.len() {
+                        // If the found arity doesn't match  the annotation's, the params
+                        // record would appear in the error, so we replace it with `?`.
+                        if let Some(last) = found_args.last_mut() {
+                            *last = ErrorType::Error;
+                        }
+                    }
+                }
+            }
+
+            TypeError::BadExpr(_, _, _, Expected::FromAnnotation(_, _, _, _))
+            | TypeError::BadExpr(_, _, _, Expected::NoExpectation(_)) => {}
 
             // Irrelevant
             TypeError::BadPattern(_, _, _, _)
@@ -80,7 +118,7 @@ impl Env {
     }
 }
 
-fn remove_with_bad_expr_reason(
+fn remove_for_reason(
     env: &Env,
     found_type: &mut ErrorType,
     reason: &mut Reason,
