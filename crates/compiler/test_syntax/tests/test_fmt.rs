@@ -4799,6 +4799,24 @@ mod test_fmt {
     }
 
     #[test]
+    fn func_call_trailing_lambda_with_pipe_sugar() {
+        expr_formats_to(
+            indoc!(
+                r"
+                list = List.map [1, 2, 3] \> Num.add 1
+                list
+            "
+            ),
+            indoc!(
+                r"
+                list = List.map [1, 2, 3] \x321 -> x321 |> Num.add 1
+                list
+            "
+            ),
+        );
+    }
+
+    #[test]
     fn simple_closure_with_pipe() {
         expr_formats_same(indoc!(
             r"
@@ -4822,8 +4840,8 @@ mod test_fmt {
         );
     }
 
-    // #[test]
-    fn _simple_closure_with_pipe_sugar() {
+    #[test]
+    fn simple_closure_with_pipe_sugar() {
         expr_formats_to(
             indoc!(
                 r"

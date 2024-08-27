@@ -285,10 +285,9 @@ fn parse_negative_or_term_or_if_when_closure<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     match parse_if_when_closure(options, arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        res => return res,
+        Err((NoProgress, _)) => parse_negative_or_term(options, arena, state, min_indent),
+        res => res,
     }
-    parse_negative_or_term(options, arena, state, min_indent)
 }
 
 fn parse_if_when_closure<'a>(
@@ -1568,41 +1567,41 @@ fn parse_after_binop<'a>(
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    match parse_negative_or_term_or_if_when_closure(options, arena, state.clone(), call_min_indent)
-    {
-        Err((NoProgress, _)) => Err((MadeProgress, EExpr::TrailingOperator(state.pos()))),
-        Err(fail) => Err(fail),
-        Ok((_, new_expr, state)) => {
-            // put the spaces from after the operator in front of the new_expr
-            let new_expr = with_spaces_before(new_expr, spaces_after_operator, arena);
+    let (_, new_expr, state) =
+        parse_negative_or_term_or_if_when_closure(options, arena, state.clone(), call_min_indent)
+            .map_err(|(p, fail)| match p {
+            NoProgress => (MadeProgress, EExpr::TrailingOperator(state.pos())),
+            _ => (MadeProgress, fail),
+        })?;
 
-            let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
-            let call = to_call(arena, args, expr_state.expr);
-            expr_state.operators.push((call, loc_op));
-            expr_state.expr = new_expr;
-            expr_state.end = state.pos();
+    // put the spaces from after the operator in front of the new_expr
+    let new_expr = with_spaces_before(new_expr, spaces_after_operator, arena);
 
-            let initial_state = state.clone();
-            match parse_space(EExpr::IndentEnd, arena, state.clone(), min_indent) {
-                Err(_) => {
-                    expr_state.spaces_after = &[];
-                    let expr = parse_expr_final(expr_state, arena);
-                    Ok((MadeProgress, expr, state))
-                }
-                Ok((_, spaces_after, state)) => {
-                    expr_state.spaces_after = spaces_after;
-                    parse_expr_end(
-                        arena,
-                        state,
-                        min_indent,
-                        call_min_indent,
-                        options,
-                        check_for_defs,
-                        expr_state,
-                        initial_state,
-                    )
-                }
-            }
+    let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
+    let call = to_call(arena, args, expr_state.expr);
+    expr_state.operators.push((call, loc_op));
+    expr_state.expr = new_expr;
+    expr_state.end = state.pos();
+
+    let initial_state = state.clone();
+    match parse_space(EExpr::IndentEnd, arena, state.clone(), min_indent) {
+        Err(_) => {
+            expr_state.spaces_after = &[];
+            let expr = parse_expr_final(expr_state, arena);
+            Ok((MadeProgress, expr, state))
+        }
+        Ok((_, spaces_after, state)) => {
+            expr_state.spaces_after = spaces_after;
+            parse_expr_end(
+                arena,
+                state,
+                min_indent,
+                call_min_indent,
+                options,
+                check_for_defs,
+                expr_state,
+                initial_state,
+            )
         }
     }
 }
@@ -2200,14 +2199,19 @@ fn parse_closure<'a>(
         let op = BinOp::Pizza;
         let loc_op = Loc::pos(after_slash, after_greater, op);
 
+        let min_indent = slash_indent + 1;
+        let (_, spaces_after_op, state) =
+            parse_space(EExpr::IndentEnd, arena, state, min_indent)
+                .map_err(|(_, e)| (MadeProgress, EClosure::Body(arena.alloc(e), after_greater)))?;
+
         let (_, body, state) = parse_after_binop(
             arena,
             state,
-            slash_indent + 1,
-            slash_indent + 1,
+            min_indent,
+            min_indent,
             options,
             true,
-            &[],
+            spaces_after_op,
             expr_state,
             loc_op,
         )
