@@ -13,5 +13,6 @@ roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_types = { path = "../types" }
 roc_collections = { path = "../collections" }
+roc_solve_problem = { path = "../solve_problem" }
 
 bumpalo.workspace = true

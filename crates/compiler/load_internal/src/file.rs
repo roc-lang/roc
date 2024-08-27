@@ -4627,6 +4627,7 @@ struct SolveResult {
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     problems: Vec<TypeError>,
     abilities_store: AbilitiesStore,
+    imported_modules_with_params: Vec<ModuleId>,
 
     #[cfg(debug_assertions)]
     checkmate: Option<roc_checkmate::Collector>,
@@ -4671,6 +4672,11 @@ fn run_solve_solve(
         &mut imported_rigid_vars,
         &mut imported_flex_vars,
     );
+
+    let imported_modules_with_params = imported_param_vars
+        .keys()
+        .copied()
+        .collect::<Vec<ModuleId>>();
 
     let actual_constraint = constraints.let_import_constraint(
         imported_rigid_vars,
@@ -4754,6 +4760,7 @@ fn run_solve_solve(
         exposed_vars_by_symbol,
         problems: errors,
         abilities_store: resolved_abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4786,6 +4793,7 @@ fn run_solve<'a>(
     let aliases = module.aliases.clone();
 
     let opt_params_var = module.module_params.as_ref().map(|params| params.whole_var);
+    let home_has_params = opt_params_var.is_some();
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
@@ -4820,6 +4828,8 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     problems: vec![],
                     abilities_store: abilities,
+                    // todo: agus
+                    imported_modules_with_params: vec![],
 
                     #[cfg(debug_assertions)]
                     checkmate: None,
@@ -4847,8 +4857,9 @@ fn run_solve<'a>(
         solved: mut solved_subs,
         solved_implementations,
         exposed_vars_by_symbol,
-        problems,
+        mut problems,
         abilities_store,
+        imported_modules_with_params,
 
         #[cfg(debug_assertions)]
         checkmate,
@@ -4861,6 +4872,14 @@ fn run_solve<'a>(
         opt_params_var,
         &solved_implementations,
         &abilities_store,
+    );
+
+    // todo: check exec mode
+    roc_lower_params::type_error::remove_module_param_arguments(
+        &mut problems,
+        home_has_params,
+        &decls.symbols,
+        imported_modules_with_params,
     );
 
     let solved_module = SolvedModule {

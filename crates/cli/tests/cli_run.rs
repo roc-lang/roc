@@ -10,8 +10,8 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        cli_testing_dir, extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir,
+        has_error, known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
@@ -85,11 +85,11 @@ mod cli_run {
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(
-            [CMD_CHECK, file.to_str().unwrap()].iter().chain(flags),
-            &[],
-            &[],
-        );
+        check_compile_error_with(CMD_CHECK, file, flags, expected);
+    }
+
+    fn check_compile_error_with(cmd: &str, file: &Path, flags: &[&str], expected: &str) {
+        let compile_out = run_roc([cmd, file.to_str().unwrap()].iter().chain(flags), &[], &[]);
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
 
@@ -766,6 +766,31 @@ mod cli_run {
             ),
             UseValgrind::No,
             TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params_remove_from_errors() {
+        check_compile_error_with(
+            CMD_BUILD,
+            &cli_testing_dir("/module_params/bad_types.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── TOO MANY ARGS in tests/module_params/bad_types.roc ──────────────────────────
+
+                The getUser function expects 1 argument, but it got 2 instead:
+
+                12│      Api.getUser: $(Api.getUser 1 2)
+                                        ^^^^^^^^^^^
+
+                Are there any missing commas? Or missing parentheses?
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
+            ),
         );
     }
 
