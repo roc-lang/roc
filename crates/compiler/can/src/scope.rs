@@ -774,7 +774,7 @@ impl ScopeModules {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SymbolLookup {
     pub symbol: Symbol,
     pub module_params: Option<(Variable, Symbol)>,

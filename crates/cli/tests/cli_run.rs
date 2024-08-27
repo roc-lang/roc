@@ -752,6 +752,7 @@ mod cli_run {
                 App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
                 App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
                 usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
+                getUserApp3Nested 3: https://api.example.com/three/users/3
                 "#
             ),
             UseValgrind::No,

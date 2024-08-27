@@ -22,6 +22,7 @@ use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Patte
 use crate::procedure::QualifiedReference;
 use crate::procedure::References;
 use crate::scope::create_alias;
+use crate::scope::SymbolLookup;
 use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
@@ -2427,9 +2428,10 @@ fn canonicalize_pending_value_def<'a>(
         } => {
             // Insert a reference to the record so that we don't report it as unused
             // If the whole module is unused, we'll report that separately
-            output
-                .references
-                .insert_value_lookup(symbol, QualifiedReference::Unqualified);
+            output.references.insert_value_lookup(
+                SymbolLookup::no_params(symbol),
+                QualifiedReference::Unqualified,
+            );
 
             let (opt_var_record, references) = match opt_provided {
                 Some(params) => {

@@ -1920,7 +1920,7 @@ fn canonicalize_var_lookup(
             Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(lookup.symbol, QualifiedReference::Unqualified);
+                    .insert_value_lookup(lookup, QualifiedReference::Unqualified);
 
                 if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
@@ -1945,7 +1945,7 @@ fn canonicalize_var_lookup(
             Ok(lookup) => {
                 output
                     .references
-                    .insert_value_lookup(lookup.symbol, QualifiedReference::Qualified);
+                    .insert_value_lookup(lookup, QualifiedReference::Qualified);
 
                 if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(

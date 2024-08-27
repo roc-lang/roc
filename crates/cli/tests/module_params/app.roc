@@ -17,6 +17,10 @@ main =
 
     import Api { appId: app3Id, protocol: https } as App3
 
+    getUserApp3Nested = \userId ->
+        # use captured params def
+        App3.getUser userId
+
     """
     App1.baseUrl: $(App1.baseUrl)
     App2.baseUrl: $(App2.baseUrl)
@@ -37,4 +41,5 @@ main =
     App2.getCompanies [3, 4]: $(Inspect.toStr (App2.getCompanies [3, 4]))
     App2.getCompanies [5, 6]: $(Inspect.toStr (App2.getCompanies [5, 6]))
     usersApp1: $(Inspect.toStr usersApp1)
+    getUserApp3Nested 3: $(getUserApp3Nested 3)
     """
