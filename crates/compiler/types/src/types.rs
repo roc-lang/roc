@@ -3594,7 +3594,7 @@ pub enum Mismatch {
 
 pub type DoesNotImplementAbility = Vec<(ErrorType, Symbol)>;
 
-#[derive(PartialEq, Eq, Clone, Hash, Debug)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum ErrorType {
     Infinite,
     Type(Symbol, Vec<ErrorType>),
@@ -3619,12 +3619,12 @@ pub enum ErrorType {
     Error,
 }
 
-// impl std::fmt::Debug for ErrorType {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         // TODO remove clone
-//         write!(f, "{:?}", write_debug_error_type(self.clone()))
-//     }
-// }
+impl std::fmt::Debug for ErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO remove clone
+        write!(f, "{:?}", write_debug_error_type(self.clone()))
+    }
+}
 
 impl ErrorType {
     pub fn unwrap_structural_alias(self) -> ErrorType {
