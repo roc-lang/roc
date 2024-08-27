@@ -35,8 +35,11 @@ pub fn lower(
     if home_params.is_some() {
         for index in 0..decls.len() {
             match decls.declarations[index] {
-                Function(_) | Recursive(_) | TailRecursive(_) => {
-                    let arity = decls.function_bodies[index].value.arguments.len();
+                Function(fn_index) | Recursive(fn_index) | TailRecursive(fn_index) => {
+                    let arity = decls.function_bodies[fn_index.index()]
+                        .value
+                        .arguments
+                        .len();
                     home_top_level_idents.insert(decls.symbols[index].value.ident_id(), arity);
                 }
                 Value => {
