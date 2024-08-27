@@ -91,25 +91,25 @@ fn remove_with_bad_expr_reason(
             name: Some(name),
             arity,
             called_via: _,
-        } => {
-            if env.is_extended(name) {
-                debug_assert_ne!(0, *arity);
+        } if env.is_extended(name) => {
+            *arity -= 1;
+            debug_assert_ne!(0, *arity);
 
-                *arity -= 1;
-                drop_last_argument(found_type);
-                drop_last_argument(expected_type);
-            }
+            drop_last_argument(found_type);
+            drop_last_argument(expected_type);
         }
 
         Reason::FnCall { .. } => {}
 
         Reason::FnArg {
-            name: _,
+            name: Some(name),
             arg_index: _,
             called_via: _,
-        } => {
-            todo!();
+        } if env.is_extended(name) => {
+            todo!()
         }
+
+        Reason::FnArg { .. } => {}
 
         // Irrelevant
         Reason::TypedArg {

@@ -771,14 +771,14 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn module_params_remove_from_errors() {
+    fn module_params_arity_mismatch() {
         check_compile_error_with(
             CMD_DEV,
-            &cli_testing_dir("/module_params/bad_types.roc"),
+            &cli_testing_dir("/module_params/arity_mismatch.roc"),
             &[],
             indoc!(
                 r#"
-                ── TOO MANY ARGS in tests/module_params/bad_types.roc ──────────────────────────
+                ── TOO MANY ARGS in tests/module_params/arity_mismatch.roc ─────────────────────
 
                 The getUser function expects 1 argument, but it got 2 instead:
 
@@ -788,7 +788,7 @@ mod cli_run {
                 Are there any missing commas? Or missing parentheses?
 
 
-                ── TOO MANY ARGS in tests/module_params/bad_types.roc ──────────────────────────
+                ── TOO MANY ARGS in tests/module_params/arity_mismatch.roc ─────────────────────
 
                 This value is not a function, but it was given 1 argument:
 
@@ -798,7 +798,7 @@ mod cli_run {
                 Are there any missing commas? Or missing parentheses?
 
 
-                ── TOO FEW ARGS in tests/module_params/bad_types.roc ───────────────────────────
+                ── TOO FEW ARGS in tests/module_params/arity_mismatch.roc ──────────────────────
 
                 The getPostComment function expects 2 arguments, but it got only 1:
 
@@ -813,6 +813,37 @@ mod cli_run {
                 3 errors and 0 warnings found in <ignored for test> ms."#
             ),
         );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn module_params_unexpected_fn() {
+        check_compile_error_with(
+            CMD_DEV,
+            &cli_testing_dir("/module_params/unexpected_fn.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── TYPE MISMATCH in tests/module_params/unexpected_fn.roc ──────────────────────
+
+                This argument to this string interpolation has an unexpected type:
+
+                11│      $(Api.getPost)
+                           ^^^^^^^^^^^
+
+                The argument is an anonymous function of type:
+
+                    U32 -> Str
+
+                But this string interpolation needs its argument to be:
+
+                    Str
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
+            ),
+        )
     }
 
     #[test]
