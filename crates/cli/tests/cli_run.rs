@@ -773,7 +773,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn module_params_remove_from_errors() {
         check_compile_error_with(
-            CMD_BUILD,
+            CMD_DEV,
             &cli_testing_dir("/module_params/bad_types.roc"),
             &[],
             indoc!(
@@ -782,14 +782,24 @@ mod cli_run {
 
                 The getUser function expects 1 argument, but it got 2 instead:
 
-                12│      Api.getUser: $(Api.getUser 1 2)
-                                        ^^^^^^^^^^^
+                12│      $(Api.getUser 1 2)
+                           ^^^^^^^^^^^
+
+                Are there any missing commas? Or missing parentheses?
+
+
+                ── TOO MANY ARGS in tests/module_params/bad_types.roc ──────────────────────────
+
+                This value is not a function, but it was given 1 argument:
+
+                13│      $(Api.baseUrl 1)
+                           ^^^^^^^^^^^
 
                 Are there any missing commas? Or missing parentheses?
 
                 ────────────────────────────────────────────────────────────────────────────────
 
-                1 error and 0 warnings found in <ignored for test> ms."#
+                2 errors and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

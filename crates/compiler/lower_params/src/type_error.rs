@@ -24,33 +24,17 @@ pub fn remove_module_param_arguments(
         vec![]
     };
 
-    let is_extended = |symbol: &Symbol| {
-        imported_modules_with_params.contains(&symbol.module_id())
-            || home_top_level_symbols.contains(symbol)
+    let env = Env {
+        home_top_level_symbols,
+        imported_modules_with_params,
     };
 
     for error in errors {
         match error {
-            TypeError::BadExpr(
-                _,
-                _,
-                found,
-                Expected::ForReason(
-                    Reason::FnCall {
-                        name: Some(name),
-                        arity,
-                        called_via: _,
-                    },
-                    err_type,
-                    _,
-                ),
-            ) if is_extended(name) => {
-                *arity -= 1;
-                drop_last_argument(found);
-                drop_last_argument(err_type);
+            TypeError::BadExpr(_, _, found, Expected::ForReason(reason, expected, _)) => {
+                remove_with_bad_expr_reason(&env, found, reason, expected);
             }
-
-            TypeError::BadExpr(_, _, _, _) => todo!(),
+            TypeError::BadExpr(_, _, _, _) => todo!("{:?}", error),
 
             // Irrelevant
             TypeError::BadPattern(_, _, _, _)
@@ -79,6 +63,96 @@ pub fn remove_module_param_arguments(
             | TypeError::MissingModuleParams(_, _, _)
             | TypeError::ModuleParamsMismatch(_, _, _, _) => {}
         }
+    }
+}
+
+struct Env {
+    home_top_level_symbols: Vec<Symbol>,
+    imported_modules_with_params: Vec<ModuleId>,
+}
+
+impl Env {
+    fn is_extended(&self, symbol: &Symbol) -> bool {
+        self.home_top_level_symbols.contains(symbol)
+            || self
+                .imported_modules_with_params
+                .contains(&symbol.module_id())
+    }
+}
+
+fn remove_with_bad_expr_reason(
+    env: &Env,
+    found_type: &mut ErrorType,
+    reason: &mut Reason,
+    expected_type: &mut ErrorType,
+) {
+    match reason {
+        Reason::FnCall {
+            name: Some(name),
+            arity,
+            called_via: _,
+        } => {
+            if env.is_extended(name) {
+                debug_assert_ne!(0, *arity);
+
+                *arity -= 1;
+                drop_last_argument(found_type);
+                drop_last_argument(expected_type);
+            }
+        }
+
+        Reason::FnCall { .. } => {}
+
+        Reason::FnArg {
+            name: _,
+            arg_index: _,
+            called_via: _,
+        } => {
+            todo!();
+        }
+
+        // Irrelevant
+        Reason::TypedArg {
+            name: _,
+            arg_index: _,
+        }
+        | Reason::LowLevelOpArg {
+            op: _,
+            arg_index: _,
+        }
+        | Reason::ForeignCallArg {
+            foreign_symbol: _,
+            arg_index: _,
+        }
+        | Reason::FloatLiteral
+        | Reason::IntLiteral
+        | Reason::NumLiteral
+        | Reason::StrInterpolation
+        | Reason::WhenBranches
+        | Reason::WhenBranch { index: _ }
+        | Reason::WhenGuard
+        | Reason::ExpectCondition
+        | Reason::IfCondition
+        | Reason::IfBranch {
+            index: _,
+            total_branches: _,
+        }
+        | Reason::ElemInList { index: _ }
+        | Reason::RecordUpdateValue(_)
+        | Reason::RecordUpdateKeys(_, _)
+        | Reason::RecordDefaultField(_)
+        | Reason::NumericLiteralSuffix
+        | Reason::InvalidAbilityMemberSpecialization {
+            member_name: _,
+            def_region: _,
+            unimplemented_abilities: _,
+        }
+        | Reason::GeneralizedAbilityMemberSpecialization {
+            member_name: _,
+            def_region: _,
+        }
+        | Reason::CrashArg
+        | Reason::ImportParams(_) => {}
     }
 }
 
