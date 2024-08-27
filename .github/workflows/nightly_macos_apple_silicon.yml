@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
@@ -19,6 +19,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: smores56/roc
+          ref: d3732b444014d05f17953d814c5ac19b4f683127
 
       - name: Update PATH to use zig 11
         run: |
