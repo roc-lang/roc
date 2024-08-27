@@ -7,6 +7,7 @@ module { appId, protocol } -> [
     getCompanies,
     baseUrlAliased,
     getPostAliased,
+    getUserSafe,
 ]
 
 ## value def referencing params
@@ -52,3 +53,11 @@ baseUrlAliased =
 getPostAliased : U32 -> Str
 getPostAliased =
     getPost
+
+## top-level value returning functions
+getUserSafe : U32 -> Str
+getUserSafe =
+    if Str.startsWith appId "prod_" then
+        \id -> "$(getUser id)?safe=true"
+    else
+        getUser

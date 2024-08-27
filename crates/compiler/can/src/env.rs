@@ -8,6 +8,7 @@ use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIdsByModule, ModuleId, PQModuleName, PackageModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
+use roc_types::subs::Variable;
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
@@ -38,7 +39,7 @@ pub struct Env<'a> {
 
     pub top_level_symbols: VecSet<Symbol>,
 
-    pub home_param_symbols: VecSet<Symbol>,
+    pub home_params_record: Option<(Symbol, Variable)>,
 
     pub arena: &'a Bump,
 
@@ -66,7 +67,7 @@ impl<'a> Env<'a> {
             qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
             top_level_symbols: VecSet::default(),
-            home_param_symbols: VecSet::default(),
+            home_params_record: None,
             opt_shorthand,
         }
     }

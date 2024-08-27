@@ -1553,6 +1553,8 @@ fn canonicalize_closure_body<'a>(
         &loc_body_expr.value,
     );
 
+    let mut references_top_level = false;
+
     let mut captured_symbols: Vec<_> = new_output
         .references
         .value_lookups()
@@ -1563,17 +1565,27 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !new_output.references.bound_symbols().any(|x| x == s))
         .filter(|s| bound_by_argument_patterns.iter().all(|(k, _)| s != k))
         // filter out top-level symbols those will be globally available, and don't need to be captured
-        .filter(|s| !env.top_level_symbols.contains(s))
+        .filter(|s| {
+            let is_top_level = env.top_level_symbols.contains(s);
+            references_top_level = references_top_level || is_top_level;
+            !is_top_level
+        })
         // filter out imported symbols those will be globally available, and don't need to be captured
         .filter(|s| s.module_id() == env.home)
         // filter out functions that don't close over anything
         .filter(|s| !new_output.non_closures.contains(s))
         .filter(|s| !output.non_closures.contains(s))
-        // module params are not captured by top-level defs, because they are passed in as arguments
-        // nested defs, however, do capture them
-        .filter(|s| scope.depth > 1 || !env.home_param_symbols.contains(s))
         .map(|s| (s, var_store.fresh()))
         .collect();
+
+    if references_top_level {
+        if let Some(params_record) = env.home_params_record {
+            // If this module has params and the closure references top-level symbols,
+            // we need to capture the whole record so we can pass it.
+            // The lower_params pass will take care of removing the captures for top-level fns.
+            captured_symbols.push(params_record);
+        }
+    }
 
     output.union(new_output);
 

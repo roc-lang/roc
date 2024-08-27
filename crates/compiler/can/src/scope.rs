@@ -48,9 +48,6 @@ pub struct Scope {
     /// Ignored variables (variables that start with an underscore).
     /// We won't intern them because they're only used during canonicalization for error reporting.
     ignored_locals: VecMap<String, Region>,
-
-    /// How many nested scopes deep we are.
-    pub depth: usize,
 }
 
 impl Scope {
@@ -76,7 +73,6 @@ impl Scope {
             modules: ScopeModules::new(home, module_name),
             imported_symbols: default_imports,
             ignored_locals: VecMap::default(),
-            depth: 0,
         }
     }
 
@@ -450,11 +446,9 @@ impl Scope {
         let locals_snapshot = self.locals.in_scope.len();
         let imported_symbols_snapshot = self.imported_symbols.len();
         let imported_modules_snapshot = self.modules.len();
-        self.depth += 1;
 
         let result = f(self);
 
-        self.depth -= 1;
         self.aliases.truncate(aliases_count);
         self.ignored_locals.truncate(ignored_locals_count);
         self.imported_symbols.truncate(imported_symbols_snapshot);

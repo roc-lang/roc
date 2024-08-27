@@ -433,18 +433,16 @@ pub fn canonicalize_module_defs<'a>(
                 PermitShadows(false),
             );
 
-            env.home_param_symbols.reserve(destructs.len());
-
-            for destruct in destructs.iter() {
-                env.home_param_symbols.insert(destruct.value.symbol);
-            }
-
             let whole_symbol = scope.gen_unique_symbol();
             env.top_level_symbols.insert(whole_symbol);
 
+            let whole_var = var_store.fresh();
+
+            env.home_params_record = Some((whole_symbol, whole_var));
+
             ModuleParams {
                 region: pattern.region,
-                whole_var: var_store.fresh(),
+                whole_var,
                 whole_symbol,
                 record_var: var_store.fresh(),
                 record_ext_var: var_store.fresh(),

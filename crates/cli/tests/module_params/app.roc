@@ -4,6 +4,7 @@ app [main] {
 
 import Api { appId: "one", protocol: https } as App1
 import Api { appId: "two", protocol: http } as App2
+import Api { appId: "prod_1", protocol: http } as Prod
 
 https = \url -> "https://$(url)"
 http = \url -> "http://$(url)"
@@ -50,6 +51,8 @@ main =
     App1.baseUrlAliased: $(App1.baseUrlAliased)
     App2.baseUrlAliased: $(App2.baseUrlAliased)
     App3.baseUrlAliased: $(App3.baseUrlAliased)
+    App1.getUserSafe 1: $(App1.getUserSafe 1)
+    Prod.getUserSafe 2: $(Prod.getUserSafe 2)
     usersApp1: $(Inspect.toStr usersApp1)
     getUserApp3Nested 3: $(getUserApp3Nested 3)
     usersApp3Passed: $(Inspect.toStr usersApp3Passed)

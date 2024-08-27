@@ -757,6 +757,8 @@ mod cli_run {
                 App1.baseUrlAliased: https://api.example.com/one
                 App2.baseUrlAliased: http://api.example.com/two
                 App3.baseUrlAliased: https://api.example.com/three
+                App1.getUserSafe 1: https://api.example.com/one/users/1
+                Prod.getUserSafe 2: http://api.example.com/prod_1/users/2?safe=true
                 usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
                 getUserApp3Nested 3: https://api.example.com/three/users/3
                 usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]

@@ -15,6 +15,7 @@ use roc_types::{
     subs::{VarStore, Variable},
     types::Type,
 };
+use std::iter::once;
 
 struct LowerParams<'a> {
     home_id: ModuleId,
@@ -53,6 +54,16 @@ pub fn lower(
 
 impl<'a> LowerParams<'a> {
     fn lower_decls(&mut self, decls: &mut Declarations) {
+        let home_param_symbols = match self.home_params {
+            Some(params) => params
+                .destructs
+                .iter()
+                .map(|destruct| destruct.value.symbol)
+                .chain(once(params.whole_symbol))
+                .collect::<Vec<Symbol>>(),
+            None => vec![],
+        };
+
         for index in 0..decls.len() {
             let tag = decls.declarations[index];
 
@@ -72,10 +83,13 @@ impl<'a> LowerParams<'a> {
                         // This module has params, and this is a top-level function,
                         // so we need to extend its definition to take them.
 
-                        decls.function_bodies[fn_def_index.index()]
-                            .value
-                            .arguments
-                            .push((var, mark, pattern));
+                        let function_body = &mut decls.function_bodies[fn_def_index.index()].value;
+                        function_body.arguments.push((var, mark, pattern));
+
+                        // Remove home params from the captured symbols, only nested lambdas need them.
+                        function_body
+                            .captured_symbols
+                            .retain(|(sym, _)| !home_param_symbols.contains(sym));
 
                         if let Some(ann) = &mut decls.annotations[index] {
                             if let Type::Function(args, _, _) = &mut ann.signature {
@@ -409,13 +423,12 @@ impl<'a> LowerParams<'a> {
 
     fn params_extended_home_symbol(&self, symbol: &Symbol) -> Option<(&ModuleParams, usize)> {
         if symbol.module_id() == self.home_id {
-            match self.home_params {
-                Some(params) => match params.arity_by_name.get(&symbol.ident_id()) {
-                    Some(arity) => Some((params, *arity)),
-                    None => None,
-                },
-                None => None,
-            }
+            self.home_params.as_ref().and_then(|params| {
+                params
+                    .arity_by_name
+                    .get(&symbol.ident_id())
+                    .map(|arity| (params, *arity))
+            })
         } else {
             None
         }
