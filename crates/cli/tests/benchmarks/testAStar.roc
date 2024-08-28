@@ -5,8 +5,7 @@ import AStar
 
 main : Task {} []
 main =
-    PlatformTasks.putLine (showBool test1)
-        |> Task.mapErr! \_ -> crash "unreachable"
+    PlatformTasks.putLine! (showBool test1)
 
 showBool : Bool -> Str
 showBool = \b ->

@@ -4,12 +4,8 @@ import pf.PlatformTasks
 
 main : Task {} []
 main =
-    line =
-        PlatformTasks.getLine
-            |> Task.mapErr! \_ -> crash "unreachable"
-    PlatformTasks.putLine "You entered: $(line)"
-        |> Task.mapErr! \_ -> crash "unreachable"
-    PlatformTasks.putLine "It is known"
-        |> Task.mapErr! \_ -> crash "unreachable"
+    line = PlatformTasks.getLine!
+    PlatformTasks.putLine! "You entered: $(line)"
+    PlatformTasks.putLine! "It is known"
 
     Task.ok {}

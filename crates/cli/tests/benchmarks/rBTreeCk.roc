@@ -39,9 +39,7 @@ fold = \f, tree, b ->
 
 main : Task {} []
 main =
-    { value, isError } =
-        PlatformTasks.getInt
-            |> Task.mapErr! \_ -> crash "unreachable"
+    { value, isError } = PlatformTasks.getInt!
     inputResult =
         if isError then
             Err GetIntError
@@ -59,17 +57,14 @@ main =
                     val = fold (\_, v, r -> if v then r + 1 else r) head 0
 
                     val
-                        |> Num.toStr
-                        |> PlatformTasks.putLine
-                        |> Task.mapErr! \_ -> crash "unreachable"
+                    |> Num.toStr
+                    |> PlatformTasks.putLine
 
                 Nil ->
                     PlatformTasks.putLine "fail"
-                        |> Task.mapErr! \_ -> crash "unreachable"
 
         Err GetIntError ->
             PlatformTasks.putLine "Error: Failed to get Integer from stdin."
-                |> Task.mapErr! \_ -> crash "unreachable"
 
 insert : Tree (Num k) v, Num k, v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v

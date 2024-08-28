@@ -8,9 +8,8 @@ main =
     tree = insert 0 {} Empty
 
     tree
-        |> show
-        |> PlatformTasks.putLine
-        |> Task.mapErr! \_ -> crash "unreachable"
+    |> show
+    |> PlatformTasks.putLine
 
 show : RedBlackTree I64 {} -> Str
 show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")

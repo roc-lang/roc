@@ -12,9 +12,7 @@ ConsList a : [Nil, Cons a (ConsList a)]
 
 main : Task {} []
 main =
-    { value, isError } =
-        PlatformTasks.getInt
-            |> Task.mapErr! \_ -> crash "unreachable"
+    { value, isError } = PlatformTasks.getInt!
     inputResult =
         if isError then
             Err GetIntError
@@ -27,13 +25,11 @@ main =
             val = fold (\_, v, r -> if v then r + 1 else r) m 0
 
             val
-                |> Num.toStr
-                |> PlatformTasks.putLine
-                |> Task.mapErr! \_ -> crash "unreachable"
+            |> Num.toStr
+            |> PlatformTasks.putLine
 
         Err GetIntError ->
             PlatformTasks.putLine "Error: Failed to get Integer from stdin."
-                |> Task.mapErr! \_ -> crash "unreachable"
 
 boom : Str -> a
 boom = \_ -> boom ""

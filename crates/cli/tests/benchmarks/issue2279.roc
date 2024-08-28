@@ -11,4 +11,3 @@ main =
             Issue2279Help.asText 42
 
     PlatformTasks.putLine text
-        |> Task.mapErr! \_ -> crash "unreachable"
