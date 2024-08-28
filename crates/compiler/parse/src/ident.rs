@@ -57,7 +57,12 @@ pub enum Ident<'a> {
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| parse_lowercase_ident(state)
+}
+
+#[inline(always)]
+pub fn parse_lowercase_ident<'a>(state: State<'a>) -> ParseResult<'a, &'a str, ()> {
+    match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {

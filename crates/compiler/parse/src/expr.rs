@@ -12,7 +12,8 @@ use crate::blankspace::{
 };
 use crate::header::module_name_help;
 use crate::ident::{
-    integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident, Suffix,
+    integer_ident, lowercase_ident, parse_ident, parse_lowercase_ident, unqualified_ident,
+    Accessor, Ident, Suffix,
 };
 use crate::parser::{
     self, and, at_keyword, backtrackable, between, byte, collection_inner,
@@ -176,7 +177,7 @@ fn parse_underscore_or_term<'a>(
         return Err((NoProgress, EExpr::Start(state.pos())));
     }
 
-    match parse_underscore_expression(arena, state.clone(), min_indent) {
+    match parse_underscore_expression(state.clone()) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
@@ -249,36 +250,21 @@ fn parse_ident_seq<'a>(
     Ok((MadeProgress, Loc::pos(ident_start, ident_end, expr), state))
 }
 
-fn parse_underscore_expression<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+fn parse_underscore_expression<'a>(state: State<'a>) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
     if state.bytes().first() != Some(&b'_') {
         return Err((NoProgress, EExpr::Start(start)));
     }
-
     let state = state.advance(1);
 
-    let lowercase_ident_expr = specialize_err(move |_, _| EExpr::End(start), lowercase_ident());
-    let (_, name, state) = optional(lowercase_ident_expr).parse(arena, state, min_indent)?;
+    let (name, state) = match parse_lowercase_ident(state.clone()) {
+        Ok((_, name, state)) => (name, state),
+        Err((NoProgress, _)) => ("", state),
+        Err(_) => return Err((MadeProgress, EExpr::End(start))),
+    };
 
-    let expr = Expr::Underscore(name.unwrap_or(""));
+    let expr = Expr::Underscore(name);
     Ok((MadeProgress, Loc::pos(start, state.pos(), expr), state))
-}
-
-#[inline(always)]
-fn parse_negative_or_term_or_if_when_closure<'a>(
-    options: ExprParseOptions,
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    match parse_if_when_closure(options, arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => parse_negative_or_term(options, arena, state, min_indent),
-        res => res,
-    }
 }
 
 fn parse_if_when_closure<'a>(
@@ -316,7 +302,7 @@ fn parse_negative_or_term<'a>(
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    match parse_underscore_expression(arena, state.clone(), min_indent) {
+    match parse_underscore_expression(state.clone()) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
@@ -1558,20 +1544,24 @@ fn parse_after_binop<'a>(
     mut expr_state: ExprState<'a>,
     loc_op: Loc<BinOp>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (_, new_expr, state) =
-        parse_negative_or_term_or_if_when_closure(options, arena, state.clone(), call_min_indent)
-            .map_err(|(p, fail)| match p {
-            NoProgress => (MadeProgress, EExpr::TrailingOperator(state.pos())),
-            _ => (MadeProgress, fail),
-        })?;
+    let res = match parse_if_when_closure(options, arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => parse_negative_or_term(options, arena, state.clone(), min_indent),
+        res => res,
+    };
+
+    let (right_expr, state) = match res {
+        Ok((_, expr, state)) => (expr, state),
+        Err((NoProgress, _)) => return Err((MadeProgress, EExpr::TrailingOperator(state.pos()))),
+        Err(fail) => return Err(fail),
+    };
 
     // put the spaces from after the operator in front of the new_expr
-    let new_expr = with_spaces_before(new_expr, spaces_after_operator, arena);
+    let right_expr = with_spaces_before(right_expr, spaces_after_operator, arena);
 
     let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
     let call = to_call(arena, args, expr_state.expr);
     expr_state.operators.push((call, loc_op));
-    expr_state.expr = new_expr;
+    expr_state.expr = right_expr;
     expr_state.end = state.pos();
 
     let initial_state = state.clone();
@@ -2159,7 +2149,7 @@ fn parse_closure<'a>(
     }
     let state = state.advance(1);
 
-    // Funny feature that turns `\> expr` into the `\x321->x321|> expr`
+    // Fun feature that turns `\> expr` into the `\x321->x321|> expr`
     if state.bytes().first() == Some(&b'>') {
         let after_slash = state.pos();
         let state = state.advance(1);
@@ -2334,7 +2324,6 @@ mod when {
         blankspace::{with_spaces, with_spaces_before},
     };
 
-    /// Parser for when expressions.
     /// If Ok it always returns MadeProgress
     pub fn parse_when_expr<'a>(
         options: ExprParseOptions,

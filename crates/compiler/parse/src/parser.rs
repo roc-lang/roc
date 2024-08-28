@@ -610,8 +610,6 @@ pub enum PRecord<'a> {
     Open(Position),
 
     Field(Position),
-    Colon(Position),
-    Optional(Position),
 
     Pattern(&'a EPattern<'a>, Position),
     Expr(&'a EExpr<'a>, Position),
