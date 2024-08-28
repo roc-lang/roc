@@ -11,16 +11,16 @@ Full(
                         ),
                     ],
                     before_packages: [],
-                    packages: @11-134 [
-                        @13-132 SpaceAfter(
+                    packages: @11-142 [
+                        @13-140 SpaceAfter(
                             PackageEntry {
                                 shorthand: "pf",
                                 spaces_after_shorthand: [
                                     Newline,
                                 ],
                                 platform_marker: None,
-                                package_name: @17-132 PackageName(
-                                    "https://github.com/roc-lang/basic-cli/releases/download/0.14.0/dC5ceT962N_4jmoyoffVdphJ_4GlW3YMhAPyGPr-nU0.tar.br",
+                                package_name: @17-140 PackageName(
+                                    "https://github.com/roc-lang/basic-cli/releases/download/0.15.0-testing/libzR-AkVEn_dTBg2bKuXqMNZ9rYEfz3HSEQU8inoGk.tar.br",
                                 ),
                             },
                             [
@@ -38,7 +38,7 @@ Full(
                 Index(2147483648),
             ],
             regions: [
-                @136-183,
+                @144-191,
             ],
             space_before: [
                 Slice(start = 0, length = 2),
@@ -54,17 +54,17 @@ Full(
             type_defs: [],
             value_defs: [
                 Body(
-                    @136-140 Identifier {
+                    @144-148 Identifier {
                         ident: "main",
                     },
-                    @147-183 SpaceBefore(
+                    @155-191 SpaceBefore(
                         Apply(
-                            @147-158 Var {
+                            @155-166 Var {
                                 module_name: "Stdout",
                                 ident: "line",
                             },
                             [
-                                @159-183 Str(
+                                @167-191 Str(
                                     PlainLine(
                                         "I'm a Roc application!",
                                     ),

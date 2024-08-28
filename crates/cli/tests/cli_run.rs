@@ -754,11 +754,11 @@ mod cli_run {
                 r#"
                 Compiled in <ignored for test> ms.
 
-                Transitive.roc:
-                    0 failed and 1 passed in <ignored for test> ms.
-
                 Direct.roc:
                     0 failed and 2 passed in <ignored for test> ms.
+
+                Transitive.roc:
+                    0 failed and 1 passed in <ignored for test> ms.
                 "#
             ),
         );
@@ -1489,9 +1489,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                5│  main : Str -> Task {} []
-                6│  main = /_ ->
-                7│      "this is a string, not a Task {} [] function like the platform expects."
+                3│  main : Str -> Task {} []
+                4│  main = /_ ->
+                5│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:

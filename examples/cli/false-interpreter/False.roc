@@ -31,7 +31,7 @@ interpretFile = \filename ->
         result = interpretCtx ctx |> Task.result!
         when result is
             Ok _ ->
-                Task.succeed {}
+                Task.ok {}
 
             Err BadUtf8 ->
                 Task.err (StringErr "Failed to convert string from Utf8 bytes")

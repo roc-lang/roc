@@ -1,7 +1,11 @@
 app "test" provides [tforever] to "./platform"
 
-Task ok err := {} -> ok err
+Effect a := {} -> a
 
-tforever : Task val * -> Task * *
-tforever = \task -> Task.forever task
-#^^^^^^^^{-1} Task val err -[[tforever(0)]]-> Task * *
+eforever : Effect a -> Effect b
+
+OtherTask a err : Effect (Result a err)
+
+tforever : OtherTask val err -> OtherTask * *
+tforever = \task -> eforever task
+#^^^^^^^^{-1} OtherTask val err -[[tforever(0)]]-> OtherTask * *
