@@ -174,6 +174,7 @@ pub fn can_expr_with<'a>(
         expr_str,
         &mut None,
         arena.alloc("TestPath"),
+        &mut Default::default(),
     );
 
     let mut scope = Scope::new(

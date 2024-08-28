@@ -122,6 +122,23 @@ impl std::fmt::Display for UnaryOp {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Suffix {
+    /// (!), e.g. (Stdin.line!)
+    Bang,
+    /// (?), e.g. (parseData? data)
+    Question,
+}
+
+impl std::fmt::Display for Suffix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Suffix::Bang => write!(f, "!"),
+            Suffix::Question => write!(f, "?"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
     // highest precedence
     Caret,

@@ -1022,6 +1022,9 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Backpassing(_, _, _) => {
             internal_error!("Backpassing should have been desugared by now")
         }
+        ast::Expr::RecordUpdater(_) => {
+            internal_error!("Record updater should have been desugared by now")
+        }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
                 canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr, None);
@@ -2483,6 +2486,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Num(_)
         | ast::Expr::NonBase10Int { .. }
         | ast::Expr::AccessorFunction(_)
+        | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)

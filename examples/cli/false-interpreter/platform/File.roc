@@ -22,7 +22,8 @@ close = \@Handle handle -> Effect.after (Effect.closeFile handle) Task.succeed
 
 withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->
-    handle <- Task.await (open path)
-    result <- Task.attempt (callback handle)
-    {} <- Task.await (close handle)
+    handle = open! path
+    result = callback handle |> Task.result!
+    close! handle
+
     Task.fromResult result

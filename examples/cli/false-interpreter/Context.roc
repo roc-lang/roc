@@ -61,18 +61,18 @@ toStr = \{ scopes, stack, state, vars } ->
 
 with : Str, (Context -> Task {} a) -> Task {} a
 with = \path, callback ->
-    handle <- File.withOpen path
-    # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
-    # Instead I have to inline this.
-    # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
-    callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
+    File.withOpen path \handle ->
+        # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
+        # Instead I have to inline this.
+        # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
+        callback { scopes: [{ data: Some handle, index: 0, buf: [], whileInfo: None }], state: Executing, stack: [], vars: List.repeat (Number 0) Variable.totalCount }
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.
 getChar : Context -> Task [T U8 Context] [EndOfData, NoScope]
 getChar = \ctx ->
     when List.last ctx.scopes is
         Ok scope ->
-            (T val newScope) <- Task.await (getCharScope scope)
+            (T val newScope) = getCharScope! scope
             Task.succeed (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
 
         Err ListWasEmpty ->
@@ -87,7 +87,7 @@ getCharScope = \scope ->
         Err OutOfBounds ->
             when scope.data is
                 Some h ->
-                    bytes <- Task.await (File.chunk h)
+                    bytes = File.chunk! h
                     when List.first bytes is
                         Ok val ->
                             # This starts at 1 because the first character is already being returned.
