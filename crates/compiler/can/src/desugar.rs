@@ -1852,7 +1852,7 @@ fn desugar_dbg_expr<'a>(
     let region = expr.region;
 
     // tmpVar = expr
-    let ident = &*arena.alloc_str(&format!("{:?}", var_store.fresh()));
+    let ident = &*arena.alloc(var_store.fresh().index().to_string());
 
     let value_def = ValueDef::Body(
         arena.alloc(Loc {
