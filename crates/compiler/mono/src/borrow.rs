@@ -395,8 +395,10 @@ impl<'state, 'a> State<'state, 'a> {
                         Some(s) => s,
                         None =>  unreachable!(
                             "\n\tNo borrow signature for {name:?} layout.\n\n\t\
-                            Tip: This can happen when you call a function with less arguments than it expects.\n\t\
-                            Like `Arg.list!` instead of `Arg.list! {{}}`"
+                            Tip 1: This can happen when you call a function with less arguments than it expects.\n\t\
+                            Like `Arg.list!` instead of `Arg.list! {{}}`.\n\t
+                            Tip 2: `roc check yourfile.roc` can sometimes give you a helpful error. 
+                            "
                         )
                     };
 
