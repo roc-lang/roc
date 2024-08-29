@@ -20,8 +20,7 @@ use crate::parser::{
     collection_trailing_sep_e, either, increment_min_indent, loc, map, map_with_arena, optional,
     reset_min_indent, set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref,
     then, two_bytes, zero_or_more, EClosure, EExpect, EExpr, EIf, EImport, EImportParams,
-    EInParens, EList, ENumber, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult,
-    Parser, SpaceProblem,
+    EInParens, EList, EPattern, ERecord, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
@@ -203,16 +202,14 @@ fn parse_term<'a>(
         res => return res,
     }
 
-    match string_like_literal_help().parse(arena, state.clone(), min_indent) {
+    match string_like_literal_help(arena, state.clone(), min_indent) {
         Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Str(fail, start))),
+        res => return res,
     }
 
-    match positive_number_literal_help().parse(arena, state.clone(), min_indent) {
+    match parse_positive_number_literal_expr(state.clone()) {
         Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Number(fail, start))),
+        res => return res,
     }
 
     match record_literal_help().parse(arena, state.clone(), min_indent) {
@@ -313,7 +310,7 @@ fn parse_negative_or_term<'a>(
     }
 
     // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
-    match parse_number_literal(arena, state.clone(), min_indent) {
+    match parse_number_literal_expr(state.clone()) {
         Err((NoProgress, _)) => {}
         res => return res,
     }
@@ -328,19 +325,17 @@ fn parse_negative_or_term<'a>(
         res => return res,
     }
 
+    match string_like_literal_help(arena, state.clone(), min_indent) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
+
+    match parse_positive_number_literal_expr(state.clone()) {
+        Err((NoProgress, _)) => {}
+        res => return res,
+    }
+
     let start = state.pos();
-    match string_like_literal_help().parse(arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Str(fail, start))),
-    }
-
-    match positive_number_literal_help().parse(arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Number(fail, start))),
-    }
-
     if at_keyword(crate::keyword::CRASH, &state) {
         let state = state.advance(crate::keyword::CRASH.len());
         let expr = Loc::pos(start, state.pos(), Expr::Crash);
@@ -3687,26 +3682,37 @@ fn apply_expr_access_chain<'a>(
         })
 }
 
-fn string_like_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
-    map_with_arena(
-        crate::string_literal::parse_str_like_literal(),
-        |arena, lit| match lit {
-            StrLikeLiteral::Str(s) => Expr::Str(s),
-            StrLikeLiteral::SingleQuote(s) => {
-                // TODO: preserve the original escaping
-                Expr::SingleQuote(s.to_str_in(arena))
-            }
-        },
-    )
+/// todo: @duplicate almost a dup with the `parse_string_like_pattern` in pattern.rs
+fn string_like_literal_help<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let start = state.pos();
+    match crate::string_literal::parse_str_like_literal().parse(arena, state, min_indent) {
+        Ok((p, literal, state)) => {
+            let literal_expr = match literal {
+                StrLikeLiteral::Str(s) => Expr::Str(s),
+                StrLikeLiteral::SingleQuote(s) => {
+                    // TODO: preserve the original escaping
+                    Expr::SingleQuote(s.to_str_in(arena))
+                }
+            };
+            Ok((p, Loc::pos(start, state.pos(), literal_expr), state))
+        }
+        Err((p, fail)) => Err((p, EExpr::Str(fail, start))),
+    }
 }
 
-fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
-    map(
-        crate::number_literal::positive_number_literal(),
-        |literal| {
+fn parse_positive_number_literal_expr<'a>(
+    state: State<'a>,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    let start = state.pos();
+    match crate::number_literal::parse_positive_number_literal(state) {
+        Ok((p, literal, state)) => {
             use crate::number_literal::NumLiteral::*;
 
-            match literal {
+            let literal = match literal {
                 Num(s) => Expr::Num(s),
                 Float(s) => Expr::Float(s),
                 NonBase10Int {
@@ -3718,9 +3724,11 @@ fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
                     base,
                     is_negative,
                 },
-            }
-        },
-    )
+            };
+            Ok((p, Loc::pos(start, state.pos(), literal), state))
+        }
+        Err((p, fail)) => Err((p, EExpr::Number(fail, start))),
+    }
 }
 
 /// A minus is unary if:
@@ -3753,14 +3761,10 @@ fn parse_unary_minus<'a>(
     Err((NoProgress, EExpr::Start(start)))
 }
 
-fn parse_number_literal<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+fn parse_number_literal_expr<'a>(state: State<'a>) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     use crate::number_literal::NumLiteral::*;
     let start = state.pos();
-    match crate::number_literal::number_literal().parse(arena, state, min_indent) {
+    match crate::number_literal::parse_number_literal(state) {
         Ok((p, literal, state)) => {
             let expr = match literal {
                 Num(s) => Expr::Num(s),

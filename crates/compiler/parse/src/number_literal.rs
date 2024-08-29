@@ -1,5 +1,5 @@
 use crate::ast::Base;
-use crate::parser::{ENumber, ParseResult, Parser, Progress};
+use crate::parser::{ENumber, ParseResult, Progress};
 use crate::state::State;
 
 pub enum NumLiteral<'a> {
@@ -12,35 +12,23 @@ pub enum NumLiteral<'a> {
     },
 }
 
-pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
-    move |_arena, state: State<'a>, _min_indent: u32| {
-        match state.bytes().first() {
-            Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, state.bytes(), state)
-            }
-            _ => {
-                // this is not a number at all
-                Err((Progress::NoProgress, ENumber::End))
-            }
-        }
+pub fn parse_positive_number_literal<'a>(
+    state: State<'a>,
+) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
+    match state.bytes().first() {
+        Some(b) if (*b as char).is_ascii_digit() => parse_number_base(false, state.bytes(), state),
+        _ => Err((Progress::NoProgress, ENumber::End)),
     }
 }
 
-pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
-    move |_arena, state: State<'a>, _min_indent: u32| {
-        match state.bytes().first() {
-            Some(first_byte) if *first_byte == b'-' => {
-                // drop the minus
-                parse_number_base(true, &state.bytes()[1..], state)
-            }
-            Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, state.bytes(), state)
-            }
-            _ => {
-                // this is not a number at all
-                Err((Progress::NoProgress, ENumber::End))
-            }
+pub fn parse_number_literal<'a>(state: State<'a>) -> ParseResult<'a, NumLiteral<'a>, ENumber> {
+    match state.bytes().first() {
+        Some(b) if *b == b'-' => {
+            // drop the minus
+            parse_number_base(true, &state.bytes()[1..], state)
         }
+        Some(b) if (*b as char).is_ascii_digit() => parse_number_base(false, state.bytes(), state),
+        _ => Err((Progress::NoProgress, ENumber::End)),
     }
 }
 

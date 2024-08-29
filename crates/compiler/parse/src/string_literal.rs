@@ -2,7 +2,7 @@ use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, between, byte, loc, reset_min_indent, skip_second, specialize_err_ref, then,
+    allocated, between, byte, loc, reset_min_indent, skip_second, specialize_err_ref,
     BadInputError, ESingleQuote, EString, Parser,
 };
 use crate::state::State;
@@ -72,16 +72,18 @@ pub enum StrLikeLiteral<'a> {
 }
 
 pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
-    then(
-        loc(parse_str_like_literal()),
-        |_arena, state, progress, str_like| match str_like.value {
-            StrLikeLiteral::SingleQuote(_) => Err((
-                progress,
-                EString::ExpectedDoubleQuoteGotSingleQuote(str_like.region.start()),
-            )),
-            StrLikeLiteral::Str(str_literal) => Ok((progress, str_literal, state)),
-        },
-    )
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
+        match parse_str_like_literal().parse(arena, state, min_indent) {
+            Ok((p, str_like, state)) => match str_like {
+                StrLikeLiteral::SingleQuote(_) => {
+                    Err((p, EString::ExpectedDoubleQuoteGotSingleQuote(start)))
+                }
+                StrLikeLiteral::Str(str_literal) => Ok((p, str_literal, state)),
+            },
+            Err(fail) => Err(fail),
+        }
+    }
 }
 
 pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EString<'a>> {

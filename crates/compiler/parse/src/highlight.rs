@@ -8,7 +8,7 @@ use crate::{
     ast::CommentOrNewline,
     blankspace::loc_spaces,
     keyword::KEYWORDS,
-    number_literal::positive_number_literal,
+    number_literal::parse_positive_number_literal,
     parser::{EExpr, ParseResult, Parser},
     state::State,
     string_literal::{parse_str_like_literal, StrLikeLiteral},
@@ -174,8 +174,7 @@ fn highlight_inner<'a>(
                     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Decimal));
                 }
                 '0'..='9' => {
-                    if let Ok((_, _item, new_state)) =
-                        positive_number_literal().parse(arena, state.clone(), 0)
+                    if let Ok((_, _item, new_state)) = parse_positive_number_literal(state.clone())
                     {
                         state = new_state;
                         tokens.push(Loc::at(Region::between(start, state.pos()), Token::Number));

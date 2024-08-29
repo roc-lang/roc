@@ -4,9 +4,8 @@ use crate::ident::{lowercase_ident, parse_ident, parse_lowercase_ident, Accessor
 use crate::keyword;
 use crate::parser::{at_keyword, Progress::*};
 use crate::parser::{
-    byte, collection_inner, collection_trailing_sep_e, fail_when, loc, map, map_with_arena,
-    specialize_err, specialize_err_ref, then, three_bytes, two_bytes, zero_or_more, EPattern,
-    PInParens, PList, PRecord, ParseResult, Parser,
+    byte, collection_inner, fail_when, loc, specialize_err_ref, then, three_bytes, two_bytes,
+    zero_or_more, EPattern, PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
@@ -92,19 +91,14 @@ fn parse_loc_pattern_etc<'a>(
         Some(&b'_') => parse_underscore_pattern(arena, state.clone(), min_indent),
         Some(&b'{') => parse_record_pattern(arena, state.clone(), min_indent),
         Some(&b'(') => parse_pattern_in_parens(arena, state.clone()),
-        Some(&b'[') => match list_pattern_help().parse(arena, state.clone(), min_indent) {
-            Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
-            Err((MadeProgress, fail)) => Err((MadeProgress, EPattern::List(fail, start))),
-            Err(_) => Err((NoProgress, EPattern::Start(state.pos()))),
-        },
+        Some(&b'[') => parse_list_pattern(arena, state.clone()),
         Some(_) => {
-            match number_pattern_help().parse(arena, state.clone(), min_indent) {
+            match parse_number_pattern(state.clone()) {
                 Err((NoProgress, _)) => {}
-                Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-                Err(fail) => return Err(fail),
+                res => return res,
             }
 
-            match string_like_pattern_help().parse(arena, state.clone(), min_indent) {
+            match parse_string_like_pattern(arena, state.clone(), min_indent) {
                 Err((NoProgress, _)) => {}
                 Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
                 Err(fail) => return Err(fail),
@@ -256,13 +250,12 @@ fn parse_pattern_in_parens<'a>(
     Ok((MadeProgress, pats, state))
 }
 
-fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    specialize_err(
-        EPattern::NumLiteral,
-        map(crate::number_literal::number_literal(), |literal| {
+fn parse_number_pattern<'a>(state: State<'a>) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    let start = state.pos();
+    match crate::number_literal::parse_number_literal(state) {
+        Ok((p, literal, state)) => {
             use crate::number_literal::NumLiteral::*;
-
-            match literal {
+            let literal = match literal {
                 Num(s) => Pattern::NumLiteral(s),
                 Float(s) => Pattern::FloatLiteral(s),
                 NonBase10Int {
@@ -274,38 +267,64 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
                     base,
                     is_negative,
                 },
-            }
-        }),
-    )
+            };
+            Ok((p, Loc::pos(start, state.pos(), literal), state))
+        }
+        Err((p, fail)) => Err((p, EPattern::NumLiteral(fail, start))),
+    }
 }
 
-fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    specialize_err(
-        |_, pos| EPattern::Start(pos),
-        map_with_arena(
-            crate::string_literal::parse_str_like_literal(),
-            |arena, lit| match lit {
+fn parse_string_like_pattern<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+) -> ParseResult<'a, Pattern<'a>, EPattern<'a>> {
+    let start = state.pos();
+    match crate::string_literal::parse_str_like_literal().parse(arena, state, min_indent) {
+        Ok((p, literal, state)) => {
+            let literal = match literal {
                 StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
                 StrLikeLiteral::SingleQuote(s) => {
                     // TODO: preserve the original escaping
                     Pattern::SingleQuote(s.to_str_in(arena))
                 }
-            },
-        ),
-    )
+            };
+            Ok((p, literal, state))
+        }
+        Err((p, _)) => Err((p, EPattern::Start(start))),
+    }
 }
 
-fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
-    map(
-        collection_trailing_sep_e(
-            byte(b'[', PList::Open),
-            list_element_pattern(),
-            byte(b',', PList::End),
-            byte(b']', PList::End),
-            Pattern::SpaceBefore,
-        ),
-        Pattern::List,
-    )
+fn parse_list_pattern<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    let start = state.pos();
+    if state.bytes().first() != Some(&b'[') {
+        let fail = PList::Open(state.pos());
+        return Err((NoProgress, EPattern::List(fail, start)));
+    }
+    let state = state.advance(1);
+
+    let inner = collection_inner(
+        list_element_pattern(),
+        byte(b',', PList::End),
+        Pattern::SpaceBefore,
+    );
+
+    let (elems, state) = match inner.parse(arena, state, 0) {
+        Ok((_, out, state)) => (out, state),
+        Err((_, fail)) => return Err((MadeProgress, EPattern::List(fail, start))),
+    };
+
+    if state.bytes().first() != Some(&b']') {
+        let fail = PList::End(state.pos());
+        return Err((MadeProgress, EPattern::List(fail, start)));
+    }
+    let state = state.advance(1);
+
+    let pattern = Loc::pos(start, state.pos(), Pattern::List(elems));
+    return Ok((MadeProgress, pattern, state));
 }
 
 fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
