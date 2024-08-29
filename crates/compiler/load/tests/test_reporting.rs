@@ -14494,6 +14494,76 @@ All branches in an `if` must have the same type!
     "
     );
 
+    test_report!(
+        dbg_unapplied,
+        indoc!(
+            r"
+            1 + dbg + 2
+            "
+        ),
+    @r"
+    ── UNAPPLIED DBG in /code/proj/Main.roc ────────────────────────────────────────
+
+    This `dbg` doesn't have a value given to it:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    `dbg` must be passed a value to print at the exact place it's used. `dbg`
+    can't be used as a value that's passed around, like functions can be -
+    it must be applied immediately!
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg + 2
+                ^^^
+
+    This `63` value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "
+    );
+
+    test_report!(
+        dbg_overapplied,
+        indoc!(
+            r#"
+            1 + dbg "" "" + 2
+            "#
+        ),
+    @r#"
+    ── OVERAPPLIED DBG in /code/proj/Main.roc ──────────────────────────────────────
+
+    This `dbg` has too many values given to it:
+
+    4│      1 + dbg "" "" + 2
+                    ^^^^^
+
+    `dbg` must be given exactly one value to print.
+
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    This 2nd argument to + has an unexpected type:
+
+    4│      1 + dbg "" "" + 2
+                ^^^^^^^^^
+
+    This `63` value is a:
+
+        {}
+
+    But + needs its 2nd argument to be:
+
+        Num *
+    "#
+    );
+
     // TODO: add the following tests after built-in Tasks are added
     // https://github.com/roc-lang/roc/pull/6836
 

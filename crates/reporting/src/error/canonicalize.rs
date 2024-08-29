@@ -1328,6 +1328,34 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERAPPLIED CRASH".to_string();
         }
+        Problem::UnappliedDbg { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "), alloc.keyword("dbg"), alloc.reflow(" doesn't have a value given to it:")
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("dbg"), alloc.reflow(" must be passed a value to print at the exact place it's used. "),
+                    alloc.keyword("dbg"), alloc.reflow(" can't be used as a value that's passed around, like functions can be - it must be applied immediately!"),
+                ])
+            ]);
+            title = "UNAPPLIED DBG".to_string();
+        }
+        Problem::OverAppliedDbg { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("dbg"),
+                    alloc.reflow(" has too many values given to it:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("dbg"),
+                    alloc.reflow(" must be given exactly one value to print."),
+                ]),
+            ]);
+            title = "OVERAPPLIED DBG".to_string();
+        }
         Problem::FileProblem { filename, error } => {
             let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;

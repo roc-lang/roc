@@ -1,8 +1,12 @@
 SpaceAfter(
-    Dbg(
-        @4-5 Num(
-            "1",
-        ),
+    Apply(
+        @0-5 Dbg,
+        [
+            @4-5 Num(
+                "1",
+            ),
+        ],
+        Space,
     ),
     [
         Newline,

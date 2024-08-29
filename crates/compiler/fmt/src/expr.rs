@@ -46,7 +46,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
-            | Crash => false,
+            | Crash
+            | Dbg => false,
 
             RecordAccess(inner, _) | TupleAccess(inner, _) | TrySuffix { expr: inner, .. } => {
                 inner.is_multiline()
@@ -65,7 +66,6 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
-            Dbg(expr) => expr.is_multiline(),
             DbgStmt(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
@@ -454,8 +454,9 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
-            Dbg(expr) => {
-                fmt_dbg_expr(buf, expr, self.is_multiline(), indent);
+            Dbg => {
+                buf.indent(indent);
+                buf.push_str("dbg");
             }
             DbgStmt(condition, continuation) => {
                 fmt_dbg_stmt(buf, condition, continuation, self.is_multiline(), indent);
@@ -1020,15 +1021,6 @@ fn fmt_when<'a>(
 
         prev_branch_was_multiline = is_multiline_expr || is_multiline_patterns;
     }
-}
-
-fn fmt_dbg_expr<'a>(buf: &mut Buf, expr: &'a Loc<Expr<'a>>, _: bool, indent: u16) {
-    buf.indent(indent);
-    buf.push_str("dbg");
-
-    buf.spaces(1);
-
-    expr.format(buf, indent);
 }
 
 fn fmt_dbg_stmt<'a>(

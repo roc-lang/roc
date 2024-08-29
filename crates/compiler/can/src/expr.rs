@@ -1207,7 +1207,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::Dbg(_) | ast::Expr::DbgStmt(_, _) => {
+        ast::Expr::Dbg | ast::Expr::DbgStmt(_, _) => {
             internal_error!("Dbg should have been desugared by now")
         }
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
@@ -2470,6 +2470,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::AccessorFunction(_)
         | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
+        | ast::Expr::Dbg
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
@@ -2492,7 +2493,6 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             _ => false,
         },
         // These can contain subexpressions, so we need to recursively check those
-        ast::Expr::Dbg(expr) => is_valid_interpolation(&expr.value),
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
                 ast::StrSegment::EscapedChar(_)

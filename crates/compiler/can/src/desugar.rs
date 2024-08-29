@@ -1079,6 +1079,54 @@ pub fn desugar_expr<'a>(
 
             arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))
         }
+        Apply(Loc { value: Dbg, .. }, loc_args, _called_via) => {
+            debug_assert!(!loc_args.is_empty());
+
+            if loc_args.len() > 1 {
+                let args_region = Region::span_across(
+                    &loc_args.first().unwrap().region,
+                    &loc_args.last().unwrap().region,
+                );
+                problems.push(Problem::OverAppliedDbg {
+                    region: args_region,
+                });
+
+                arena.alloc(Loc {
+                    value: *desugar_invalid_dbg_expr(
+                        arena,
+                        var_store,
+                        loc_expr.region,
+                        src,
+                        line_info,
+                        module_path,
+                    ),
+                    region: loc_expr.region,
+                })
+            } else {
+                let desugared_arg = desugar_expr(
+                    arena,
+                    var_store,
+                    loc_args.first().unwrap(),
+                    src,
+                    line_info,
+                    module_path,
+                    problems,
+                );
+
+                arena.alloc(Loc {
+                    value: *desugar_dbg_expr(
+                        arena,
+                        var_store,
+                        desugared_arg,
+                        loc_expr.region,
+                        src,
+                        line_info,
+                        module_path,
+                    ),
+                    region: loc_expr.region,
+                })
+            }
+        }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
             let mut builder_apply_exprs = None;
@@ -1359,29 +1407,15 @@ pub fn desugar_expr<'a>(
                 region: loc_expr.region,
             })
         }
-        Dbg(expr) => {
-            // Desugars a `dbg expr` expression into a statement block that prints and returns the
-            // value produced by `expr`. Essentially:
-            // (
-            //     tmpVar = expr
-            //     LowLevelDbg (Inspect.toStr tmpVar)
-            //     tmpVar
-            // )
-            let desugared_expr = &*arena.alloc(desugar_expr(
-                arena,
-                var_store,
-                expr,
-                src,
-                line_info,
-                module_path,
-                problems,
-            ));
+        Dbg => {
+            problems.push(Problem::UnappliedDbg {
+                region: loc_expr.region,
+            });
 
             arena.alloc(Loc {
-                value: *desugar_dbg_expr(
+                value: *desugar_invalid_dbg_expr(
                     arena,
                     var_store,
-                    desugared_expr,
                     loc_expr.region,
                     src,
                     line_info,
@@ -1840,6 +1874,13 @@ fn desugar_pattern<'a>(
     }
 }
 
+/// Desugars a `dbg expr` expression into a statement block that prints and returns the
+/// value produced by `expr`. Essentially:
+/// (
+///     tmpVar = expr
+///     LowLevelDbg (Inspect.toStr tmpVar)
+///     tmpVar
+/// )
 fn desugar_dbg_expr<'a>(
     arena: &'a Bump,
     var_store: &mut VarStore,
@@ -1883,6 +1924,33 @@ fn desugar_dbg_expr<'a>(
     arena.alloc(Defs(defs, dbg_stmt))
 }
 
+/// Build a desugared `dbg {}` expression to act as a placeholder when the AST
+/// is invalid.
+fn desugar_invalid_dbg_expr<'a>(
+    arena: &'a Bump,
+    var_store: &mut VarStore,
+    outer_region: Region,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> &'a Expr<'a> {
+    let placeholder_expr = arena.alloc(Loc {
+        value: Record(Collection::empty()),
+        region: outer_region,
+    });
+
+    desugar_dbg_expr(
+        arena,
+        var_store,
+        placeholder_expr,
+        outer_region,
+        src,
+        line_info,
+        module_path,
+    )
+}
+
+/// Desugars a `dbg x` statement into essentially `Inspect.toStr x |> LowLevelDbg`
 fn desugar_dbg_stmt<'a>(
     arena: &'a Bump,
     condition: &'a Loc<Expr<'a>>,
@@ -1893,8 +1961,6 @@ fn desugar_dbg_stmt<'a>(
 ) -> &'a Expr<'a> {
     let region = condition.region;
 
-    // Desugars a `dbg x` statement into essentially
-    // Inspect.toStr x |> LowLevelDbg
     let inspect_fn = Var {
         module_name: ModuleName::INSPECT,
         ident: "toStr",

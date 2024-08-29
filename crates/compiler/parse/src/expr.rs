@@ -187,7 +187,6 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc_expr_in_parens_etc_help(),
         loc(specialize_err(EExpr::If, if_expr_help(options))),
         loc(specialize_err(EExpr::When, when::when_expr_help(options))),
-        loc(specialize_err(EExpr::Dbg, dbg_expr_help(options))),
         loc(specialize_err(EExpr::Str, string_like_literal_help())),
         loc(specialize_err(
             EExpr::Number,
@@ -195,6 +194,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         )),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
         loc(crash_kw()),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -215,8 +215,8 @@ fn loc_term_or_underscore<'a>(
             EExpr::Number,
             positive_number_literal_help()
         )),
-        loc(specialize_err(EExpr::Dbg, dbg_expr_help(options))),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(underscore_expression()),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
@@ -233,8 +233,8 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
             EExpr::Number,
             positive_number_literal_help()
         )),
-        loc(specialize_err(EExpr::Dbg, dbg_expr_help(options))),
         loc(specialize_err(EExpr::Closure, closure_help(options))),
+        loc(specialize_err(EExpr::Dbg, dbg_kw())),
         loc(record_literal_help()),
         loc(specialize_err(EExpr::List, list_literal_help())),
         ident_seq(),
@@ -2173,7 +2173,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::Expect(_, _)
-        | Expr::Dbg(_)
+        | Expr::Dbg
         | Expr::DbgStmt(_, _)
         | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
@@ -2679,26 +2679,14 @@ fn dbg_stmt_help<'a>(
     .trace("dbg_stmt_help")
 }
 
-fn dbg_expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
-    (move |arena: &'a Bump, state: State<'a>, min_indent| {
-        let (_, _, state) =
+fn dbg_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
+    (move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
             parser::keyword(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
 
-        let (_, condition, state) = parse_block(
-            options,
-            arena,
-            state,
-            true,
-            EExpect::IndentCondition,
-            EExpect::Condition,
-        )
-        .map_err(|(_, f)| (MadeProgress, f))?;
-
-        let expr = Expr::Dbg(arena.alloc(condition));
-
-        Ok((MadeProgress, expr, state))
+        Ok((MadeProgress, Expr::Dbg, next_state))
     })
-    .trace("dbg_expr_help")
+    .trace("dbg_kw")
 }
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
@@ -3015,7 +3003,14 @@ fn stmts_to_expr<'a>(
             Stmt::ValueDef(ValueDef::Dbg { condition, .. }) => {
                 // If we parse a `dbg` as the last thing in a series of statements then it's
                 // actually an expression.
-                Expr::Dbg(arena.alloc(condition))
+                Expr::Apply(
+                    arena.alloc(Loc {
+                        value: Expr::Dbg,
+                        region: loc_stmt.region,
+                    }),
+                    arena.alloc([condition]),
+                    CalledVia::Space,
+                )
             }
             Stmt::ValueDef(ValueDef::Expect { .. }) => {
                 return Err(EExpr::Expect(
@@ -3171,7 +3166,14 @@ fn stmts_to_defs<'a>(
                             let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
                             Expr::DbgStmt(arena.alloc(condition), arena.alloc(rest))
                         } else {
-                            Expr::Dbg(arena.alloc(condition))
+                            Expr::Apply(
+                                arena.alloc(Loc {
+                                    value: Expr::Dbg,
+                                    region: sp_stmt.item.region,
+                                }),
+                                arena.alloc([condition]),
+                                CalledVia::Space,
+                            )
                         };
 
                         let e = if sp_stmt.before.is_empty() {
