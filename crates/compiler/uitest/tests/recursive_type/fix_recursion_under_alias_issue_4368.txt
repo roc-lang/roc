@@ -4,10 +4,10 @@ Effect : [
     DoIt {} ({} -> Effect),
 ]
 
-Task := ({} -> Effect) -> Effect
+MockTask := ({} -> Effect) -> Effect
 
-doIt : {} -> Task
+doIt : {} -> MockTask
 doIt = \{} ->
-#^^^^{-1} {} -[[doIt(0)]]-> Task
-    @Task \toNext ->
+#^^^^{-1} {} -[[doIt(0)]]-> MockTask
+    @MockTask \toNext ->
         DoIt {} \{} -> (toNext {})
