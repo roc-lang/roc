@@ -19,9 +19,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: smores56/roc
-          ref: d3732b444014d05f17953d814c5ac19b4f683127
 
       - name: Update PATH to use zig 11
         run: |
@@ -29,9 +26,8 @@ jobs:
 
       - run: zig version
 
-      # TODO uncomment below; skipping tests for now
-      #- name: run tests
-      #  run: cargo test --locked --release
+      - name: run tests
+        run: cargo test --locked --release
 
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
