@@ -305,14 +305,11 @@ impl IterTokens for HostedHeader<'_> {
             name,
             exposes,
             imports,
-            generates: _,
-            generates_with,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(exposes.item.iter_tokens(arena))
             .chain(imports.item.iter_tokens(arena))
-            .chain(generates_with.item.iter_tokens(arena))
             .collect_in(arena)
     }
 }

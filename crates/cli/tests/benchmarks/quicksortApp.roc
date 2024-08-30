@@ -1,11 +1,16 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.Task
+import pf.PlatformTasks
 import Quicksort
 
 main : Task.Task {} []
 main =
-    inputResult = Task.getInt |> Task.result!
+    { value, isError } = PlatformTasks.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->
@@ -19,10 +24,10 @@ main =
 
             sort unsortedList
             |> Quicksort.show
-            |> Task.putLine
+            |> PlatformTasks.putLine
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 sort : List I64 -> List I64
 sort = \list ->

@@ -1,9 +1,16 @@
-module [char]
+module [
+    line,
+    char,
+]
 
-import pf.Effect
-import Task
+import pf.PlatformTasks
 
-# line : Task.Task Str *
-# line = Effect.after Effect.getLine Task.succeed # TODO FIXME Effect.getLine should suffice
-char : Task.Task U8 *
-char = Effect.after Effect.getChar Task.succeed # TODO FIXME Effect.getLine should suffice
+line : {} -> Task Str *
+line = \{} ->
+    PlatformTasks.getLine
+    |> Task.mapErr \_ -> crash "unreachable Stdin.line"
+
+char : {} -> Task U8 *
+char = \{} ->
+    PlatformTasks.getChar
+    |> Task.mapErr \_ -> crash "unreachable Stdin.char"

@@ -2151,7 +2151,7 @@ fn roc_file_no_extension() {
         indoc!(
             r#"
             app "helloWorld"
-                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.14.0/dC5ceT962N_4jmoyoffVdphJ_4GlW3YMhAPyGPr-nU0.tar.br" }
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.15.0-testing/libzR-AkVEn_dTBg2bKuXqMNZ9rYEfz3HSEQU8inoGk.tar.br" }
                 imports [pf.Stdout]
                 provides [main] to pf
 
