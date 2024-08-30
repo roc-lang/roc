@@ -1716,7 +1716,7 @@ define_builtins! {
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_TO_STR: "toStr"
     }
-    16 TASK: "Task" => {
+    15 TASK: "Task" => {
         0 TASK_TASK: "Task" exposed_type=true // the Task.Task opaque type
         1 TASK_FOREVER: "forever"
         2 TASK_LOOP: "loop"
@@ -1733,15 +1733,13 @@ define_builtins! {
         13 TASK_FOR_EACH: "forEach"
         14 TASK_RESULT: "result"
     }
-
-    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
-    15 CRYPT: "Crypt" =>{
-        0 CRYPT_SHA256: "Sha256" exposed_type=true
-        1 CRYPT_EMPTY_STRUCT: "EmptyStruct" exposed_type=true
-        2 CRYPT_DIGEST256: "Digest256" exposed_type=true
-        3 CRYPT_EMPTY_SHA256: "emptySha256"
-        4 CRYPT_ADD_BYTES: "addBytes"
-        5 CRYPT_DIGEST: "digest"
+    16 CRYPT: "Crypt" =>{
+        0 CRYPT_SHA_256: "Sha256" exposed_type=true
+        1 CRYPT_DIGEST_256: "Digest256" exposed_type=true
+        2 CRYPT_EMPTY_SHA_256: "emptySha256"
+        3 CRYPT_ADD_BYTES: "addBytes"
+        4 CRYPT_DIGEST: "digest"
+        5 CRYPT_HASH_SHA_256: "hashSha256"
     }
 
     num_modules: 17 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
