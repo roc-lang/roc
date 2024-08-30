@@ -5,10 +5,10 @@ use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::env::Env;
 use crate::expr::{
-    AnnotatedMark, ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
+    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
 };
 use crate::pattern::{
-    canonicalize_record_destructure, BindingsFromPattern, Pattern, PermitShadows,
+    canonicalize_record_destructs, BindingsFromPattern, Pattern, PermitShadows, RecordDestruct,
 };
 use crate::procedure::References;
 use crate::scope::Scope;
@@ -17,9 +17,9 @@ use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::{HeaderType, ModuleParams};
+use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -137,7 +137,33 @@ pub struct Module {
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
     pub loc_dbgs: VecMap<Symbol, DbgLookup>,
-    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
+    pub module_params: Option<ModuleParams>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleParams {
+    pub region: Region,
+    pub whole_symbol: Symbol,
+    pub whole_var: Variable,
+    pub record_var: Variable,
+    pub record_ext_var: Variable,
+    pub destructs: Vec<Loc<RecordDestruct>>,
+    // used while lowering passed functions
+    pub arity_by_name: VecMap<IdentId, usize>,
+}
+
+impl ModuleParams {
+    pub fn pattern(&self) -> Loc<Pattern> {
+        let record_pattern = Pattern::RecordDestructure {
+            whole_var: self.record_var,
+            ext_var: self.record_ext_var,
+            destructs: self.destructs.clone(),
+        };
+        let loc_record_pattern = Loc::at(self.region, record_pattern);
+
+        let as_pattern = Pattern::As(Box::new(loc_record_pattern), self.whole_symbol);
+        Loc::at(self.region, as_pattern)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -151,7 +177,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
-    pub params_pattern: Option<(Variable, AnnotatedMark, Loc<Pattern>)>,
+    pub module_params: Option<ModuleParams>,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
@@ -301,13 +327,13 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut output = Output::default();
 
-    let params_pattern = header_type.get_params().as_ref().map(
-        |ModuleParams {
+    let module_params = header_type.get_params().as_ref().map(
+        |roc_parse::header::ModuleParams {
              pattern,
              before_arrow: _,
              after_arrow: _,
          }| {
-            let can_pattern = canonicalize_record_destructure(
+            let (destructs, _) = canonicalize_record_destructs(
                 &mut env,
                 var_store,
                 &mut scope,
@@ -318,17 +344,22 @@ pub fn canonicalize_module_defs<'a>(
                 PermitShadows(false),
             );
 
-            let loc_pattern = Loc::at(pattern.region, can_pattern);
+            let whole_symbol = scope.gen_unique_symbol();
+            env.top_level_symbols.insert(whole_symbol);
 
-            for (symbol, _) in BindingsFromPattern::new(&loc_pattern) {
-                env.top_level_symbols.insert(symbol);
+            let whole_var = var_store.fresh();
+
+            env.home_params_record = Some((whole_symbol, whole_var));
+
+            ModuleParams {
+                region: pattern.region,
+                whole_var,
+                whole_symbol,
+                record_var: var_store.fresh(),
+                record_ext_var: var_store.fresh(),
+                destructs,
+                arity_by_name: Default::default(),
             }
-
-            (
-                var_store.fresh(),
-                AnnotatedMark::new(var_store),
-                loc_pattern,
-            )
         },
     );
 
@@ -405,6 +436,11 @@ pub fn canonicalize_module_defs<'a>(
         new_output,
         &exposed_symbols,
     );
+
+    let module_params = module_params.map(|params| ModuleParams {
+        arity_by_name: declarations.take_arity_by_name(),
+        ..params
+    });
 
     debug_assert!(
         output.pending_derives.is_empty(),
@@ -722,7 +758,7 @@ pub fn canonicalize_module_defs<'a>(
         scope,
         aliases,
         rigid_variables,
-        params_pattern,
+        module_params,
         declarations,
         referenced_values,
         exposed_imports: can_exposed_imports,
