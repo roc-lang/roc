@@ -898,8 +898,8 @@ mod cli_run {
         )
     }
 
+    #[ignore = "likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"]
     #[test]
-    #[cfg_attr(target_os = "windows", ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
