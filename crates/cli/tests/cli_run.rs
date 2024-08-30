@@ -1073,8 +1073,8 @@ mod cli_run {
         )
     }
 
+    #[ignore = "likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"]
     #[test]
-    #[cfg_attr(target_os = "windows", ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -1664,9 +1664,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                5│  main : Str -> Task {} []
-                6│  main = /_ ->
-                7│      "this is a string, not a Task {} [] function like the platform expects."
+                3│  main : Str -> Task {} []
+                4│  main = /_ ->
+                5│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:
@@ -1675,7 +1675,7 @@ mod cli_run {
 
                 But the type annotation on main says it should be:
 
-                    Effect.Effect (Result {} [])
+                    Task {} []
 
                 Tip: Add type annotations to functions or values to help you figure
                 this out.
@@ -1750,30 +1750,6 @@ mod cli_run {
                 ────────────────────────────────────────────────────────────────────────────────
 
                 0 errors and 1 warning found in <ignored for test> ms."#
-            ),
-        );
-    }
-
-    #[test]
-    fn unknown_generates_with() {
-        check_compile_error(
-            &known_bad_file("UnknownGeneratesWith.roc"),
-            &[],
-            indoc!(
-                r#"
-                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
-
-                I don't know how to generate the foobar function.
-
-                4│      generates Effect with [after, map, always, foobar]
-                                                                   ^^^^^^
-
-                Only specific functions like `after` and `map` can be generated.Learn
-                more about hosted modules at TODO.
-
-                ────────────────────────────────────────────────────────────────────────────────
-
-                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

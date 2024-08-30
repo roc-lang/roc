@@ -2748,12 +2748,11 @@ pub fn report_unused_imports(
             for (symbol, region) in &import.exposed_symbols {
                 if !references.has_unqualified_type_or_value_lookup(*symbol)
                     && !scope.abilities_store.is_specialization_name(*symbol)
-                    && !import.is_task(env)
                 {
                     env.problem(Problem::UnusedImport(*symbol, *region));
                 }
             }
-        } else if !import.is_task(env) {
+        } else {
             env.problem(Problem::UnusedModuleImport(import.module_id, import.region));
         }
     }
@@ -3035,16 +3034,6 @@ pub struct IntroducedImport {
     module_id: ModuleId,
     region: Region,
     exposed_symbols: Vec<(Symbol, Region)>,
-}
-
-impl IntroducedImport {
-    pub fn is_task(&self, env: &Env<'_>) -> bool {
-        // Temporarily needed for `!` convenience. Can be removed when Task becomes a builtin.
-        match env.qualified_module_ids.get_name(self.module_id) {
-            Some(name) => name.as_inner().as_str() == "Task",
-            None => false,
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

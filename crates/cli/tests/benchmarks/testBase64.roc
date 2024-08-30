@@ -1,18 +1,17 @@
-app "test-base64"
-    packages { pf: "platform/main.roc" }
-    imports [pf.Task, Base64]
-    provides [main] to pf
+app [main] { pf: platform "platform/main.roc" }
 
-IO a : Task.Task a []
+import Base64
+import pf.PlatformTasks
+
+IO a : Task a []
 
 main : IO {}
 main =
     when Base64.fromBytes (Str.toUtf8 "Hello World") is
-        Err _ -> Task.putLine "sadness"
+        Err _ -> PlatformTasks.putLine "sadness"
         Ok encoded ->
-            Task.after
-                (Task.putLine (Str.concat "encoded: " encoded))
-                \_ ->
-                    when Base64.toStr encoded is
-                        Ok decoded -> Task.putLine (Str.concat "decoded: " decoded)
-                        Err _ -> Task.putLine "sadness"
+            PlatformTasks.putLine! (Str.concat "encoded: " encoded)
+
+            when Base64.toStr encoded is
+                Ok decoded -> PlatformTasks.putLine (Str.concat "decoded: " decoded)
+                Err _ -> PlatformTasks.putLine "sadness"
