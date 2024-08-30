@@ -39,7 +39,6 @@ pub enum Problem {
     UnusedImport(Symbol, Region),
     UnusedModuleImport(ModuleId, Region),
     ExposedButNotDefined(Symbol),
-    UnknownGeneratesWith(Loc<Ident>),
     ImportNameConflict {
         name: ModuleName,
         is_alias: bool,
@@ -260,7 +259,6 @@ impl Problem {
             Problem::ImportShadowsSymbol { .. } => RuntimeError,
             Problem::DeprecatedBackpassing(_) => Warning,
             Problem::ExposedButNotDefined(_) => RuntimeError,
-            Problem::UnknownGeneratesWith(_) => RuntimeError,
             Problem::UnusedArgument(_, _, _, _) => Warning,
             Problem::UnusedBranchDef(_, _) => Warning,
             Problem::PrecedenceProblem(_) => RuntimeError,
@@ -343,7 +341,6 @@ impl Problem {
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
             | Problem::DeprecatedBackpassing(region)
-            | Problem::UnknownGeneratesWith(Loc { region, .. })
             | Problem::UnusedArgument(_, _, _, region)
             | Problem::UnusedBranchDef(_, region)
             | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))
