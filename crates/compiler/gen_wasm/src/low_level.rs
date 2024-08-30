@@ -2236,7 +2236,7 @@ impl<'a> LowLevelCall<'a> {
 
             BoxExpr | UnboxExpr => {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
-            },
+            }
 
             Unreachable => match self.ret_storage {
                 StoredValue::Local { value_type, .. } => match value_type {
