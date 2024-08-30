@@ -2216,6 +2216,21 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
             }
 
+            LowLevel::CryptEmptySha256 => {
+                let intrinsic = bitcode::CRYPT_EMPTY_SHA256.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+
+            LowLevel::CryptAddBytes => {
+                let intrinsic = bitcode::CRYPT_ADD_BYTES.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+
+            LowLevel::CryptDigest => {
+                let intrinsic = bitcode::CRYPT_DIGEST.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }

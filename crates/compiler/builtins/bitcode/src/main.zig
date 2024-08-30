@@ -12,12 +12,11 @@ const STR = "str";
 
 // Crypt Module
 const crypt = @import("crypt.zig");
-comptime{
-    exportCryptFn(crypt.emptySha256, "empty_sha256");
-    exportCryptFn(crypt.addBytes, "add_bytes");
+comptime {
+    exportCryptFn(crypt.emptySha256, "emptySha256");
+    exportCryptFn(crypt.addBytes, "addBytes");
     exportCryptFn(crypt.digest, "digest");
 }
-
 
 // Dec Module
 const dec = @import("dec.zig");

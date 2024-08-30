@@ -351,7 +351,7 @@ map_symbol_to_lowlevel! {
     Not <= BOOL_NOT;
     Unreachable <= LIST_UNREACHABLE;
     DictPseudoSeed <= DICT_PSEUDO_SEED;
-    CryptEmptySha256 <= CRYPT_EMPTY_SHA256;
+    CryptEmptySha256 <= CRYPT_EMPTY_SHA_256;
     CryptAddBytes <= CRYPT_ADD_BYTES;
     CryptDigest <= CRYPT_DIGEST;
 }
