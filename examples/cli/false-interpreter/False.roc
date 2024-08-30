@@ -492,7 +492,7 @@ stepExecCtx = \ctx, char ->
 
         0x5E ->
             # `^` read char as int
-            in = Stdin.char!
+            in = Stdin.char! {}
             if in == 255 then
                 # max char sent on EOF. Change to -1
                 Task.ok (Context.pushStack ctx (Number -1))

@@ -3,7 +3,11 @@ module [line, raw]
 import pf.PlatformTasks
 
 line : Str -> Task {} *
-line = PlatformTasks.putLine
+line = \text ->
+    PlatformTasks.putLine text
+    |> Task.mapErr \_ -> crash "unreachable Stdout.line"
 
 raw : Str -> Task {} *
-raw = PlatformTasks.putRaw
+raw = \text ->
+    PlatformTasks.putRaw text
+    |> Task.mapErr \_ -> crash "unreachable Stdout.raw"
