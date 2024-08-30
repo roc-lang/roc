@@ -17,8 +17,8 @@ chunk = \@Handle handle ->
 open : Str -> Task Handle *
 open = \path ->
     PlatformTasks.openFile path
-    |> Task.map @Handle
     |> Task.mapErr \_ -> crash "unreachable File.open"
+    |> Task.map @Handle
 
 close : Handle -> Task.Task {} *
 close = \@Handle handle ->

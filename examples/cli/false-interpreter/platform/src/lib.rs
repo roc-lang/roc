@@ -8,13 +8,13 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-static FILE_ID: AtomicU8 = AtomicU8::new(0);
+static FILE_ID: AtomicU64 = AtomicU64::new(0);
 
-fn file_handles() -> &'static Mutex<HashMap<u8, BufReader<File>>> {
-    static FILE_HANDLES: OnceLock<Mutex<HashMap<u8, BufReader<File>>>> = OnceLock::new();
+fn file_handles() -> &'static Mutex<HashMap<u64, BufReader<File>>> {
+    static FILE_HANDLES: OnceLock<Mutex<HashMap<u64, BufReader<File>>>> = OnceLock::new();
 
     FILE_HANDLES.get_or_init(|| Mutex::new(HashMap::default()))
 }
@@ -196,7 +196,7 @@ pub extern "C" fn roc_fx_putRaw(line: &RocStr) -> RocResult<(), ()> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getFileLine(br_id: u8) -> RocResult<RocStr, ()> {
+pub extern "C" fn roc_fx_getFileLine(br_id: u64) -> RocResult<RocStr, ()> {
     let mut br_map = file_handles().lock().unwrap();
     let br = br_map.get_mut(&br_id).unwrap();
     let mut line1 = String::default();
@@ -208,7 +208,7 @@ pub extern "C" fn roc_fx_getFileLine(br_id: u8) -> RocResult<RocStr, ()> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_getFileBytes(br_id: u8) -> RocResult<RocList<u8>, ()> {
+pub extern "C" fn roc_fx_getFileBytes(br_id: u64) -> RocResult<RocList<u8>, ()> {
     let mut br_map = file_handles().lock().unwrap();
     let br = br_map.get_mut(&br_id).unwrap();
     let mut buffer = [0; 0x10 /* This is intentionally small to ensure correct implementation */];
@@ -221,14 +221,14 @@ pub extern "C" fn roc_fx_getFileBytes(br_id: u8) -> RocResult<RocList<u8>, ()> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_closeFile(br_id: u8) -> RocResult<(), ()> {
+pub extern "C" fn roc_fx_closeFile(br_id: u64) -> RocResult<(), ()> {
     file_handles().lock().unwrap().remove(&br_id);
 
     RocResult::ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_openFile(name: &RocStr) -> RocResult<u8, ()> {
+pub extern "C" fn roc_fx_openFile(name: &RocStr) -> RocResult<u64, ()> {
     let string = name.as_str();
     match File::open(string) {
         Ok(f) => {
