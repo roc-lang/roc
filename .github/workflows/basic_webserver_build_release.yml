@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -10,7 +10,7 @@ concurrency:
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
-  RELEASE_TAG: 0.8.0
+  RELEASE_TAG: 0.9.0
 
 jobs:
   fetch-releases:
