@@ -1,13 +1,18 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.Task
+import pf.PlatformTasks
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
-IO a : Task.Task a []
+IO a : Task a []
 
-main : Task.Task {} []
+main : Task {} []
 main =
-    inputResult = Task.getInt |> Task.result!
+    { value, isError } = PlatformTasks.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->
@@ -21,15 +26,15 @@ main =
             |> Task.map \_ -> {}
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 nestHelp : I64, (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nestHelp = \s, f, m, x ->
     when m is
-        0 -> Task.succeed x
+        0 -> Task.ok x
         _ ->
-            Task.after (f (s - m) x) \w ->
-                nestHelp s f (m - 1) w
+            w = f! (s - m) x
+            nestHelp s f (m - 1) w
 
 nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nest = \f, n, e -> nestHelp n f n e
@@ -162,6 +167,5 @@ deriv = \i, f ->
         Num.toStr (i + 1)
         |> Str.concat " count: "
         |> Str.concat (Num.toStr (count fprime))
-
-    Task.putLine line
-    |> Task.after \_ -> Task.succeed fprime
+    PlatformTasks.putLine! line
+    Task.ok fprime
