@@ -16,6 +16,7 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::module::ModuleParams;
 use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -130,7 +131,7 @@ fn run_help(
         exposed_by_module,
         derived_module,
         function_kind,
-        params_pattern,
+        module_params,
         module_params_vars,
         ..
     } = config;
@@ -184,7 +185,7 @@ fn run_help(
         abilities_store,
         &mut obligation_cache,
         &mut awaiting_specializations,
-        params_pattern,
+        module_params,
         module_params_vars,
     );
 
@@ -243,10 +244,10 @@ fn solve(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
-    params_pattern: Option<roc_can::pattern::Pattern>,
+    module_params: Option<ModuleParams>,
     module_params_vars: VecMap<ModuleId, Variable>,
 ) -> State {
-    let scope = Scope::new(params_pattern);
+    let scope = Scope::new(module_params);
 
     let initial = Work::Constraint {
         scope: &scope.clone(),
