@@ -3683,7 +3683,6 @@ fn apply_expr_access_chain<'a>(
         })
 }
 
-/// todo: @duplicate almost a dup with the `parse_string_like_pattern` in pattern.rs
 fn string_like_literal_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
