@@ -1,24 +1,29 @@
-module [line, Handle, withOpen, chunk]
+module [line, withOpen, chunk, Handle]
 
-import pf.Effect
-import Task exposing [Task]
+import pf.PlatformTasks
 
 Handle := U64
 
-line : Handle -> Task.Task Str *
-line = \@Handle handle -> Effect.after (Effect.getFileLine handle) Task.succeed
+line : Handle -> Task Str *
+line = \@Handle handle ->
+    PlatformTasks.getFileLine handle
+    |> Task.mapErr \_ -> crash "unreachable File.line"
 
-chunk : Handle -> Task.Task (List U8) *
-chunk = \@Handle handle -> Effect.after (Effect.getFileBytes handle) Task.succeed
+chunk : Handle -> Task (List U8) *
+chunk = \@Handle handle ->
+    PlatformTasks.getFileBytes handle
+    |> Task.mapErr \_ -> crash "unreachable File.chunk"
 
-open : Str -> Task.Task Handle *
+open : Str -> Task Handle *
 open = \path ->
-    Effect.openFile path
-    |> Effect.map (\id -> @Handle id)
-    |> Effect.after Task.succeed
+    PlatformTasks.openFile path
+    |> Task.mapErr \_ -> crash "unreachable File.open"
+    |> Task.map @Handle
 
 close : Handle -> Task.Task {} *
-close = \@Handle handle -> Effect.after (Effect.closeFile handle) Task.succeed
+close = \@Handle handle ->
+    PlatformTasks.closeFile handle
+    |> Task.mapErr \_ -> crash "unreachable File.close"
 
 withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->

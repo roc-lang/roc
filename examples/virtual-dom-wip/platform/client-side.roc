@@ -5,7 +5,6 @@ platform "client-side"
     imports [
         Html.Internal.Shared.{ App },
         Html.Internal.Client.{ PlatformState, initClientApp, dispatchEvent },
-        Effect.{ Effect },
     ]
     provides [main]
 
@@ -27,18 +26,18 @@ ToHost state initData : {
 
 # TODO: naming the type variables causes a type 'mismatch'
 # main : FromHost state initData -> Effect (ToHost state initData) where initData implements Decoding & Encoding
-main : FromHost _ _ -> Effect (ToHost _ _)
+main : FromHost _ _ -> Task (ToHost _ _) *
 main = \fromHost ->
     if fromHost.isInitEvent then
         initClientApp fromHost.initJson app
-        |> Effect.map \platformState -> {
+        |> Task.map \platformState -> {
             platformState: Box.box platformState,
             eventPreventDefault: Bool.false,
             eventStopPropagation: Bool.false,
         }
     else
         dispatchEvent (Box.unbox fromHost.eventPlatformState) fromHost.eventJsonList fromHost.eventHandlerId
-        |> Effect.map \jsEventResult -> {
+        |> Task.map \jsEventResult -> {
             platformState: Box.box jsEventResult.platformState,
             eventPreventDefault: jsEventResult.preventDefault,
             eventStopPropagation: jsEventResult.stopPropagation,

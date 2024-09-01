@@ -623,16 +623,29 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        RecordDestructure(patterns) => canonicalize_record_destructure(
-            env,
-            var_store,
-            scope,
-            output,
-            pattern_type,
-            patterns,
-            region,
-            permit_shadows,
-        ),
+        RecordDestructure(patterns) => {
+            let ext_var = var_store.fresh();
+            let whole_var = var_store.fresh();
+
+            let (destructs, opt_erroneous) = canonicalize_record_destructs(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                patterns,
+                region,
+                permit_shadows,
+            );
+
+            // If we encountered an erroneous pattern (e.g. one with shadowing),
+            // use the resulting RuntimeError. Otherwise, return a successful record destructure.
+            opt_erroneous.unwrap_or(Pattern::RecordDestructure {
+                whole_var,
+                ext_var,
+                destructs,
+            })
+        }
 
         RequiredField(_name, _loc_pattern) => {
             unreachable!("should have been handled in RecordDestructure");
@@ -779,7 +792,7 @@ pub fn canonicalize_pattern<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn canonicalize_record_destructure<'a>(
+pub fn canonicalize_record_destructs<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
@@ -788,11 +801,9 @@ pub fn canonicalize_record_destructure<'a>(
     patterns: &ast::Collection<Loc<ast::Pattern<'a>>>,
     region: Region,
     permit_shadows: PermitShadows,
-) -> Pattern {
+) -> (Vec<Loc<RecordDestruct>>, Option<Pattern>) {
     use ast::Pattern::*;
 
-    let ext_var = var_store.fresh();
-    let whole_var = var_store.fresh();
     let mut destructs = Vec::with_capacity(patterns.len());
     let mut opt_erroneous = None;
 
@@ -907,13 +918,7 @@ pub fn canonicalize_record_destructure<'a>(
         }
     }
 
-    // If we encountered an erroneous pattern (e.g. one with shadowing),
-    // use the resulting RuntimeError. Otherwise, return a successful record destructure.
-    opt_erroneous.unwrap_or(Pattern::RecordDestructure {
-        whole_var,
-        ext_var,
-        destructs,
-    })
+    (destructs, opt_erroneous)
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't

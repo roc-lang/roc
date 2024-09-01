@@ -1,11 +1,16 @@
 app [main] { pf: platform "platform/main.roc" }
 
-import pf.Task
+import pf.PlatformTasks
 
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
-main : Task.Task {} []
+main : Task {} []
 main =
-    inputResult = Task.getInt |> Task.result!
+    { value, isError } = PlatformTasks.getInt!
+    inputResult =
+        if isError then
+            Err GetIntError
+        else
+            Ok value
 
     when inputResult is
         Ok n ->
@@ -17,10 +22,10 @@ main =
             |> Num.toStr
             |> Str.concat " & "
             |> Str.concat (Num.toStr optimized)
-            |> Task.putLine
+            |> PlatformTasks.putLine
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+            PlatformTasks.putLine "Error: Failed to get Integer from stdin."
 
 Expr : [
     Add Expr Expr,

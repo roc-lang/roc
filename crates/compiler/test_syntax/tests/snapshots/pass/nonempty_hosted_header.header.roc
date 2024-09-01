@@ -10,9 +10,3 @@ hosted Foo
             Blah,
             Baz.{ stuff, things },
         ]
-    generates Bar with
-        [
-            map,
-            after,
-            loop,
-        ]
