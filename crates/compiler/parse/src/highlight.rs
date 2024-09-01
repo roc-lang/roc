@@ -116,8 +116,11 @@ fn highlight_inner<'a>(
                     }
                 }
                 '"' | '\'' => {
+                    let is_single_quote = b == '\'';
+                    let column = state.column();
+                    state.advance_mut(1);
                     if let Ok((_, item, new_state)) =
-                        parse_str_like_literal().parse(arena, state.clone(), 0)
+                        parse_str_like_literal(is_single_quote, column, arena, state.clone(), 0)
                     {
                         state = new_state;
                         match item {

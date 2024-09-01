@@ -8,7 +8,7 @@ use crate::parser::{
     zero_or_more, EPattern, PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::state::State;
-use crate::string_literal::StrLikeLiteral;
+use crate::string_literal::{parse_str_like_literal, StrLikeLiteral};
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -83,30 +83,44 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
 fn parse_loc_pattern_etc<'a>(
     can_have_arguments: bool,
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    let start = state.pos();
-    match state.bytes().first() {
-        Some(&b'_') => parse_underscore_pattern(arena, state.clone(), min_indent),
-        Some(&b'{') => parse_record_pattern(arena, state.clone(), min_indent),
-        Some(&b'(') => parse_pattern_in_parens(arena, state.clone()),
-        Some(&b'[') => parse_list_pattern(arena, state.clone()),
-        Some(_) => {
-            match parse_number_pattern(state.clone()) {
-                Err((NoProgress, _)) => {}
-                res => return res,
+    if let Some(b) = state.bytes().first() {
+        match b {
+            b'_' => parse_underscore_pattern(arena, state.clone(), min_indent),
+            b'{' => parse_record_pattern(arena, state.clone(), min_indent),
+            b'(' => parse_pattern_in_parens(arena, state.clone()),
+            b'[' => parse_list_pattern(arena, state.clone()),
+            b'"' | &b'\'' => {
+                let start = state.pos();
+                let column = state.column();
+                let is_single_quote = *b == b'\'';
+                state.advance_mut(1);
+                match parse_str_like_literal(is_single_quote, column, arena, state, min_indent) {
+                    Ok((p, literal, state)) => {
+                        let literal = match literal {
+                            StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
+                            StrLikeLiteral::SingleQuote(s) => {
+                                // TODO: preserve the original escaping
+                                Pattern::SingleQuote(s.to_str_in(arena))
+                            }
+                        };
+                        Ok((p, Loc::pos(start, state.pos(), literal), state))
+                    }
+                    Err((p, _)) => Err((p, EPattern::Start(start))),
+                }
             }
-
-            match parse_string_like_pattern(arena, state.clone(), min_indent) {
-                Err((NoProgress, _)) => {}
-                Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-                Err(fail) => return Err(fail),
+            _ => {
+                match parse_number_pattern(state.clone()) {
+                    Err((NoProgress, _)) => {}
+                    res => return res,
+                }
+                parse_ident_pattern(can_have_arguments, arena, state.clone(), min_indent)
             }
-
-            parse_ident_pattern(can_have_arguments, arena, state.clone(), min_indent)
         }
-        None => Err((NoProgress, EPattern::Start(state.pos()))),
+    } else {
+        Err((NoProgress, EPattern::Start(state.pos())))
     }
 }
 
@@ -271,27 +285,6 @@ fn parse_number_pattern<'a>(state: State<'a>) -> ParseResult<'a, Loc<Pattern<'a>
             Ok((p, Loc::pos(start, state.pos(), literal), state))
         }
         Err((p, fail)) => Err((p, EPattern::NumLiteral(fail, start))),
-    }
-}
-
-fn parse_string_like_pattern<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Pattern<'a>, EPattern<'a>> {
-    let start = state.pos();
-    match crate::string_literal::parse_str_like_literal().parse(arena, state, min_indent) {
-        Ok((p, literal, state)) => {
-            let literal = match literal {
-                StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
-                StrLikeLiteral::SingleQuote(s) => {
-                    // TODO: preserve the original escaping
-                    Pattern::SingleQuote(s.to_str_in(arena))
-                }
-            };
-            Ok((p, literal, state))
-        }
-        Err((p, _)) => Err((p, EPattern::Start(start))),
     }
 }
 

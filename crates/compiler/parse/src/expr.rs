@@ -20,11 +20,12 @@ use crate::parser::{
     collection_trailing_sep_e, either, increment_min_indent, loc, map, map_with_arena, optional,
     reset_min_indent, set_min_indent, skip_first, skip_second, specialize_err, specialize_err_ref,
     then, two_bytes, zero_or_more, EClosure, EExpect, EExpr, EIf, EImport, EImportParams,
-    EInParens, EList, EPattern, ERecord, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    EInParens, EList, EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
-use crate::string_literal::{self, StrLikeLiteral};
+use crate::string_literal::{self, parse_str_like_literal, StrLikeLiteral};
 use crate::type_annotation;
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
@@ -3689,7 +3690,14 @@ fn string_like_literal_help<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
-    match crate::string_literal::parse_str_like_literal().parse(arena, state, min_indent) {
+    let column = state.column();
+    let is_single_quote = match state.bytes().first() {
+        Some(&b'"') => false,
+        Some(&b'\'') => true,
+        _ => return Err((NoProgress, EExpr::Str(EString::Open(start), start))),
+    };
+
+    match parse_str_like_literal(is_single_quote, column, arena, state.advance(1), min_indent) {
         Ok((p, literal, state)) => {
             let literal_expr = match literal {
                 StrLikeLiteral::Str(s) => Expr::Str(s),
