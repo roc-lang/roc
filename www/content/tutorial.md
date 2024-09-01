@@ -475,6 +475,7 @@ third = tuple.2 # ["list"]
 # tuple destructuring
 (first, second, third) = ("hello", 42, ["list"])
 ```
+
 <details>
     <summary>Pronouncing Tuple</summary>
     By the way, there are two common ways to pronounce "tuple"—one sounds like "two-pull" and the other rhymes with "supple"—and although no clear consensus has emerged in the programming world, people seem generally accepting when others pronounce it differently than they do.
@@ -1631,7 +1632,7 @@ Stdin.line : Task [Input Str, End] *
 
 Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/tutorial#tags-with-payloads) `[Input Str, End]`. Then we can check whether we got an `End` or some actual `Input`, and print out a message accordingly.
 
-### [Reading values from tasks](#inspect) {#task-input}
+### [Reading values from tasks](#task-input) {#task-input}
 
 Let's change `main` to read a line from `stdin`, and then print what we got:
 
@@ -1645,7 +1646,6 @@ main =
     Stdout.line! "Type in something and press Enter:"
     input = Stdin.line!
     Stdout.line! "Your input was: $(input)"
-
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.
