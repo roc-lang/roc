@@ -3708,98 +3708,6 @@ fn to_header_report<'a>(
         }
 
         EHeader::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
-        EHeader::Generates(_, pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([
-                    alloc.reflow("I am expecting a type name next, like "),
-                    alloc.parser_suggestion("Effect"),
-                    alloc.reflow(". Type names must start with an uppercase letter."),
-                ]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "WEIRD GENERATED TYPE NAME".to_string(),
-                severity,
-            }
-        }
-        EHeader::GeneratesWith(generates_with, pos) => {
-            to_generates_with_report(alloc, lines, filename, generates_with, *pos)
-        }
-    }
-}
-
-fn to_generates_with_report<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    parse_problem: &roc_parse::parser::EGeneratesWith,
-    start: Position,
-) -> Report<'a> {
-    use roc_parse::parser::EGeneratesWith;
-
-    let severity = Severity::RuntimeError;
-
-    match *parse_problem {
-        EGeneratesWith::ListEnd(pos) | // TODO: give this its own error message
-        EGeneratesWith::Identifier(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc
-                    .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like",
-                )]),
-                alloc
-                    .parser_suggestion("provides [Animal, default, tame]")
-                    .indent(4),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "WEIRD GENERATES".to_string(),
-                severity,
-            }
-        }
-
-        EGeneratesWith::With(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([
-                    alloc.reflow("I am expecting the "),
-                    alloc.keyword("with"),
-                    alloc.reflow(" keyword next, like"),
-                ]),
-                alloc
-                    .parser_suggestion("with [after, map]")
-                    .indent(4),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "WEIRD GENERATES".to_string(),
-                severity,
-            }
-        }
-
-        EGeneratesWith::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
-
-        _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
 
@@ -4218,7 +4126,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Effect {}}")
+                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Task {} []}")
                     .indent(4),
             ]);
 
@@ -4247,7 +4155,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } {main : Effect {}}")
+                    .parser_suggestion("requires { Model, Msg } {main : Task {} []}")
                     .indent(4),
             ]);
 

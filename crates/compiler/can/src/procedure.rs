@@ -1,5 +1,5 @@
-use crate::expr::Expr;
 use crate::pattern::Pattern;
+use crate::{expr::Expr, scope::SymbolLookup};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -125,8 +125,18 @@ impl References {
         }
     }
 
-    pub fn insert_value_lookup(&mut self, symbol: Symbol, qualified: QualifiedReference) {
-        self.insert(symbol, qualified.flags(ReferencesBitflags::VALUE_LOOKUP));
+    pub fn insert_value_lookup(&mut self, lookup: SymbolLookup, qualified: QualifiedReference) {
+        self.insert(
+            lookup.symbol,
+            qualified.flags(ReferencesBitflags::VALUE_LOOKUP),
+        );
+
+        if let Some((_, params_symbol)) = lookup.module_params {
+            self.insert(
+                params_symbol,
+                qualified.flags(ReferencesBitflags::VALUE_LOOKUP),
+            );
+        }
     }
 
     pub fn insert_type_lookup(&mut self, symbol: Symbol, qualified: QualifiedReference) {

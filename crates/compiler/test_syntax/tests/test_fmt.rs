@@ -5065,10 +5065,10 @@ mod test_fmt {
     fn single_line_platform() {
         module_formats_same(
             "platform \"folkertdev/foo\" \
-            requires { Model, Msg } { main : Effect {} } \
+            requires { Model, Msg } { main : Task {} [] } \
             exposes [] \
             packages {} \
-            imports [Task.{ Task }] \
+            imports [] \
             provides [mainForHost]",
         );
     }
@@ -5137,7 +5137,7 @@ mod test_fmt {
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r"
-                hosted Foo exposes [] imports [] generates Bar with []"
+                hosted Foo exposes [] imports []"
         ));
     }
 
@@ -5154,11 +5154,6 @@ mod test_fmt {
                     imports [
                         Blah,
                         Baz.{ stuff, things },
-                    ]
-                    generates Bar with [
-                        map,
-                        after,
-                        loop,
                     ]"
         ));
     }

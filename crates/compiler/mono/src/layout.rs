@@ -1027,7 +1027,7 @@ impl<'a> UnionLayout<'a> {
         tags.iter()
             .map(|field_layouts| LayoutRepr::struct_(field_layouts).alignment_bytes(interner))
             .max()
-            .unwrap_or(0)
+            .unwrap_or(1)
     }
 
     pub fn allocation_alignment_bytes<I>(&self, interner: &I) -> u32
@@ -1196,8 +1196,8 @@ impl Discriminant {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
-        self.stack_size()
+    pub fn alignment_bytes(&self) -> u32 {
+        self.stack_size().max(1)
     }
 
     pub const fn layout(&self) -> InLayout<'static> {
@@ -2381,9 +2381,9 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
-pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+pub fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
     match alignment {
-        0 => width,
+        0 => panic!("Alignment invalid: Got 0, but alignment must be at least 1"),
         1 => width,
         _ => {
             if width % alignment > 0 {
@@ -2770,7 +2770,7 @@ impl<'a> LayoutRepr<'a> {
                 .iter()
                 .map(|x| interner.get_repr(*x).alignment_bytes(interner))
                 .max()
-                .unwrap_or(0),
+                .unwrap_or(1),
 
             Union(variant) => {
                 use UnionLayout::*;
