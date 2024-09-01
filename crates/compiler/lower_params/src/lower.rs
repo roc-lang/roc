@@ -184,14 +184,14 @@ impl<'a> LowerParams<'a> {
                                 }
                             }
                         }
-                        Var(symbol, _var) => {
+                        Var(symbol, var) => {
                             if let Some((params, arity)) = self.params_extended_home_symbol(&symbol)
                             {
                                 if arity == 0 {
                                     // Calling the result of a top-level value def in the current module
                                     fun.1.value = self.call_value_def_with_params(
                                         symbol,
-                                        params.whole_var,
+                                        var,
                                         params.whole_symbol,
                                         params.whole_var,
                                     );
