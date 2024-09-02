@@ -220,6 +220,12 @@ pub enum Problem {
     OverAppliedCrash {
         region: Region,
     },
+    UnappliedDbg {
+        region: Region,
+    },
+    OverAppliedDbg {
+        region: Region,
+    },
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -313,6 +319,8 @@ impl Problem {
             // injecting a crash message
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
+            Problem::UnappliedDbg { .. } => RuntimeError,
+            Problem::OverAppliedDbg { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
         }
@@ -477,6 +485,8 @@ impl Problem {
             | Problem::UnnecessaryOutputWildcard { region }
             | Problem::OverAppliedCrash { region }
             | Problem::UnappliedCrash { region }
+            | Problem::OverAppliedDbg { region }
+            | Problem::UnappliedDbg { region }
             | Problem::DefsOnlyUsedInRecursion(_, region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
