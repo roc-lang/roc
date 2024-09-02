@@ -1240,7 +1240,50 @@ fn fmt_closure<'a>(
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
+        let requires_parens = {
+            let mut curr = loc_pattern.value;
+            loop {
+                match curr {
+                    Pattern::SpaceAfter(pattern, _) | Pattern::SpaceBefore(pattern, _) => {
+                        curr = *pattern;
+                    }
+                    Pattern::As(_, _) => {
+                        break true;
+                    }
+                    Pattern::Identifier { .. }
+                    | Pattern::QualifiedIdentifier { .. }
+                    | Pattern::Tag(_)
+                    | Pattern::OpaqueRef(_)
+                    | Pattern::Apply(_, _)
+                    | Pattern::RecordDestructure(_)
+                    | Pattern::Tuple(_)
+                    | Pattern::Underscore(_)
+                    | Pattern::RequiredField(_, _)
+                    | Pattern::OptionalField(_, _)
+                    | Pattern::NumLiteral(_)
+                    | Pattern::NonBase10Literal { .. }
+                    | Pattern::FloatLiteral(_)
+                    | Pattern::StrLiteral(_)
+                    | Pattern::SingleQuote(_)
+                    | Pattern::List(_)
+                    | Pattern::ListRest(_)
+                    | Pattern::Malformed(_)
+                    | Pattern::MalformedIdent(_, _) => {
+                        break false;
+                    }
+                }
+            }
+        };
+
+        if requires_parens {
+            buf.push('(');
+        }
+
         loc_pattern.format(buf, indent);
+
+        if requires_parens {
+            buf.push(')');
+        }
 
         if it.peek().is_some() {
             buf.indent(indent);

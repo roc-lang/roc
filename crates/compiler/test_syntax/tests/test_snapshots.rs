@@ -281,6 +281,7 @@ mod test_snapshots {
         pass/apply_two_args.expr,
         pass/apply_unary_negation.expr,
         pass/apply_unary_not.expr,
+        pass/arg_pattern_as.expr,
         pass/basic_apply.expr,
         pass/basic_docs.expr,
         pass/basic_field.expr,
