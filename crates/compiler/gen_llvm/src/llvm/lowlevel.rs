@@ -1440,6 +1440,15 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             arguments!(sha);
             call_bitcode_fn(env, &[sha], bitcode::CRYPT_DIGEST)
         }
+        CryptDigest256Eq => {
+            arguments!(sha);
+            call_bitcode_fn(env, &[sha], bitcode::CRYPT_DIGEST256_EQ)
+        }
+        CryptDigest256ByteList => {
+            arguments!(sha);
+            call_bitcode_fn(env, &[sha], bitcode::CRYPT_DIGEST256_BYTE_LIST)
+        }
+
 
         ListIncref | ListDecref | SetJmp | LongJmp | SetLongJmpBuffer => {
             unreachable!("only inserted in dev backend codegen")

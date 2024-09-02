@@ -2231,6 +2231,18 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
 
+            LowLevel::CryptDigest256Eq => {
+                let intrinsic = bitcode::CRYPT_DIGEST256_EQ.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+
+            LowLevel::CryptDigest256ByteList => {
+                let intrinsic = bitcode::CRYPT_DIGEST256_BYTE_LIST.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+
+
+
             x => todo!("low level, {:?}", x),
         }
     }

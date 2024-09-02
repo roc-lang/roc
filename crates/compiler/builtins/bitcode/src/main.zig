@@ -16,6 +16,8 @@ comptime {
     exportCryptFn(crypt.emptySha256, "emptySha256");
     exportCryptFn(crypt.addBytes, "addBytes");
     exportCryptFn(crypt.digest, "digest");
+    exportCryptFn(crypt.digest256Eq, "digest256Eq");
+    exportCryptFn(crypt.digest256ByteList, "digest256ByteList");
 }
 
 // Dec Module
