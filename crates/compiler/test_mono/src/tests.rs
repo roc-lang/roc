@@ -658,6 +658,19 @@ fn record_optional_field_function_use_default() {
 }
 
 #[mono_test]
+fn as_pattern_in_closure_arg() {
+    r"
+    g = \{x, y, w, h} -> (x + w, y + h)
+
+    f = \({ x, y } as box) ->
+        (right, bottom) = g box
+        (x, y, right, bottom)
+
+    f { x: 1, y: 2, w: 3, h: 4 }
+    "
+}
+
+#[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r"
