@@ -1703,7 +1703,7 @@ fn to_bad_ident_pattern_report<'b>(
         }
 
         UnderscoreInMiddle(pos) => {
-            let region = Region::from_pos(pos.sub(1));
+            let region = Region::from_pos(pos.prev());
 
             alloc.stack([
                 alloc.reflow("I am trying to parse an identifier here:"),

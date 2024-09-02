@@ -4,7 +4,7 @@ use crate::ast::{
     Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
     StrLiteral, TypeAnnotation,
 };
-use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{parse_space, space0_around_ee, space0_before_e, space0_e};
 use crate::expr::merge_spaces;
 use crate::ident::{self, lowercase_ident, unqualified_ident, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -15,7 +15,7 @@ use crate::parser::{
     EPackages, EParams, EProvides, ERequires, ETypedIdent, Parser, SourceError, SpaceProblem,
     SyntaxError,
 };
-use crate::pattern::record_pattern_fields;
+use crate::pattern::parse_record_pattern_fields;
 use crate::state::State;
 use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
@@ -122,14 +122,35 @@ fn module_header<'a>() -> impl Parser<'a, ModuleHeader<'a>, EHeader<'a>> {
 }
 
 fn module_params<'a>() -> impl Parser<'a, ModuleParams<'a>, EParams<'a>> {
-    record!(ModuleParams {
-        pattern: specialize_err(EParams::Pattern, loc(record_pattern_fields())),
-        before_arrow: skip_second(
-            space0_e(EParams::BeforeArrow),
-            loc(two_bytes(b'-', b'>', EParams::Arrow))
-        ),
-        after_arrow: space0_e(EParams::AfterArrow),
-    })
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
+
+        let (fields, state) = match parse_record_pattern_fields(arena, state) {
+            Ok((_, fields, state)) => (Loc::pos(start, state.pos(), fields), state),
+            Err((p, fail)) => {
+                return Err((p, EParams::Pattern(fail, start)));
+            }
+        };
+
+        let (_, before_arrow, state) = parse_space(EParams::BeforeArrow, arena, state, min_indent)?;
+
+        if !state.bytes().starts_with(b"->") {
+            return Err((MadeProgress, EParams::Arrow(state.pos())));
+        }
+        let state = state.advance(2);
+
+        let (_, after_arrow, state) = parse_space(EParams::AfterArrow, arena, state, min_indent)?;
+
+        Ok((
+            MadeProgress,
+            ModuleParams {
+                pattern: fields,
+                before_arrow,
+                after_arrow,
+            },
+            state,
+        ))
+    }
 }
 
 // TODO does this need to be a macro?

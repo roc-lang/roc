@@ -132,9 +132,9 @@ impl Position {
     }
 
     #[must_use]
-    pub const fn sub(self, count: u32) -> Self {
+    pub const fn prev(self) -> Self {
         Self {
-            offset: self.offset - count,
+            offset: self.offset - 1,
         }
     }
 

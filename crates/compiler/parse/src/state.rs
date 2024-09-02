@@ -81,6 +81,13 @@ impl<'a> State<'a> {
 
     #[must_use]
     #[inline(always)]
+    pub(crate) const fn inc(mut self) -> State<'a> {
+        self.offset += 1;
+        self
+    }
+
+    #[must_use]
+    #[inline(always)]
     pub(crate) const fn advance_newline(mut self) -> State<'a> {
         self.offset += 1;
         self.line_start = self.pos();
