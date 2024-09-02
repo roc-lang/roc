@@ -663,7 +663,7 @@ fn record_as_pattern_in_closure_arg() {
     f = \{x, y, w, h} -> (x + w, y + h)
 
     g = \({ x, y } as box) ->
-        (right, bottom) = g box
+        (right, bottom) = f box
         (x, y, right, bottom)
 
     g { x: 1, y: 2, w: 3, h: 4 }
