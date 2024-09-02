@@ -132,6 +132,8 @@ pub enum LowLevel {
     CryptEmptySha256,
     CryptAddBytes,
     CryptDigest,
+    CryptDigest256Eq,
+    CryptDigest256ByteList
 }
 
 macro_rules! higher_order {
@@ -354,4 +356,7 @@ map_symbol_to_lowlevel! {
     CryptEmptySha256 <= CRYPT_EMPTY_SHA_256;
     CryptAddBytes <= CRYPT_ADD_BYTES;
     CryptDigest <= CRYPT_DIGEST;
+    CryptDigest256Eq <= CRYPT_DIGEST_256_EQ;
+    CryptDigest256ByteList <= CRYPT_DIGEST_256_BYTE_LIST;
+    
 }

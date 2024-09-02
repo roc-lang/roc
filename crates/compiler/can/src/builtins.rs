@@ -213,6 +213,8 @@ map_symbol_to_lowlevel_and_arity! {
     CryptEmptySha256;  CRYPT_EMPTY_SHA_256; 1,
     CryptAddBytes;  CRYPT_ADD_BYTES; 2,
     CryptDigest; CRYPT_DIGEST; 1,
+    CryptDigest256Eq; CRYPT_DIGEST_256_EQ; 2,
+    CryptDigest256ByteList; CRYPT_DIGEST_256_BYTE_LIST; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
