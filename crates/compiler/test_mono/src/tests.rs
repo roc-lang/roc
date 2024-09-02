@@ -658,6 +658,31 @@ fn record_optional_field_function_use_default() {
 }
 
 #[mono_test]
+fn record_as_pattern_in_closure_arg() {
+    r"
+    f = \{x, y, w, h} -> (x + w, y + h)
+
+    g = \({ x, y } as box) ->
+        (right, bottom) = f box
+        (x, y, right, bottom)
+
+    g { x: 1, y: 2, w: 3, h: 4 }
+    "
+}
+
+#[mono_test]
+fn opaque_as_pattern_in_closure_arg() {
+    r"
+    Opaque := U64
+
+    f = \(@Opaque x) -> x * 2
+    g = \(@Opaque x as s) -> (x, f s)
+
+    g (@Opaque 42)
+    "
+}
+
+#[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r"

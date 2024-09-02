@@ -1245,7 +1245,7 @@ fn fmt_closure<'a>(
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
-        loc_pattern.format(buf, indent);
+        loc_pattern.format_with_options(buf, Parens::InAsPattern, Newlines::No, indent);
 
         if it.peek().is_some() {
             buf.indent(indent);
