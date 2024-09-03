@@ -420,8 +420,6 @@ pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling"
 pub const CRYPT_EMPTY_SHA256: &str = "roc_builtins.crypt.emptySha256";
 pub const CRYPT_ADD_BYTES: &str = "roc_builtins.crypt.addBytes";
 pub const CRYPT_DIGEST: &str = "roc_builtins.crypt.digest";
-pub const CRYPT_DIGEST256_EQ: &str = "roc_builtins.crypt.digest256Eq";
-pub const CRYPT_DIGEST256_BYTE_LIST: &str = "roc_builtins.crypt.digest256Eq";
 
 pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";

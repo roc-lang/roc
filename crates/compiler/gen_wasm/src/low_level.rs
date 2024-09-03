@@ -2167,8 +2167,6 @@ impl<'a> LowLevelCall<'a> {
             CryptEmptySha256 => self.load_args_and_call_zig(backend, bitcode::CRYPT_EMPTY_SHA256),
             CryptAddBytes => self.load_args_and_call_zig(backend, bitcode::CRYPT_ADD_BYTES),
             CryptDigest => self.load_args_and_call_zig(backend, bitcode::CRYPT_DIGEST),
-            CryptDigest256Eq => self.load_args_and_call_zig(backend, bitcode::CRYPT_DIGEST256_EQ),
-            CryptDigest256ByteList => self.load_args_and_call_zig(backend, bitcode::CRYPT_DIGEST256_BYTE_LIST),
 
             And => {
                 self.load_args(backend);
