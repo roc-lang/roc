@@ -65,7 +65,7 @@ mod cli_run {
     //             .arg(BUILD_HOST_FLAG)
     //             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
     //             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-    //             .with_valigrind(ALLOW_VALGRIND)
+    //             .with_valgrind(ALLOW_VALGRIND)
     //             .arg(file_from_root("examples/platform-switching", "main.roc").as_path());
 
     //         let out = runner.run();
@@ -87,7 +87,7 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("examples/platform-switching", "rocLovesRust.roc").as_path());
 
         let out = runner.run();
@@ -104,7 +104,7 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("examples/platform-switching", "rocLovesZig.roc").as_path());
 
         let out = runner.run();
@@ -134,7 +134,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .add_args(["--main", "tests/module_imports_pkg/app.roc"])
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
@@ -164,7 +164,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/module_imports_pkg", "Module.roc").as_path());
 
         let out = runner.run();
@@ -196,7 +196,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .add_args(["--main", "tests/module_imports_pkg/app.roc"])
             .arg(
                 file_from_root(
@@ -237,7 +237,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
         let out = runner.run();
@@ -260,7 +260,7 @@ mod cli_run {
         );
         let runner = Run::new_roc()
             .arg(CMD_TEST)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg("--verbose")
             .arg(file_from_root("crates/cli/tests/expects_transitive", "main.roc").as_path());
 
@@ -280,7 +280,7 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/algorithms", "fibonacci.roc").as_path());
 
         let out = runner.run();
@@ -298,7 +298,7 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/algorithms", "quicksort.roc").as_path());
 
         let out = runner.run();
@@ -418,7 +418,7 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/effects", "main.roc").as_path())
             .with_stdin_vals(vec!["hi there!"]);
 
@@ -437,7 +437,7 @@ mod cli_run {
             .arg(BUILD_HOST_FLAG)
             .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/tui", "main.roc").as_path())
             .with_stdin_vals(vec!["foo\n"]);
 
@@ -467,7 +467,7 @@ mod cli_run {
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             .arg(file_from_root("crates/cli/tests/false-interpreter", "False.roc").as_path())
             .add_args([
                 "--",
@@ -629,7 +629,7 @@ mod cli_run {
         let runner = Run::new_roc()
             .arg(CMD_RUN)
             .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-            .with_valigrind(ALLOW_VALGRIND)
+            .with_valgrind(ALLOW_VALGRIND)
             // uses basic-cli release
             .arg(file_from_root("examples", "inspect-logging.roc").as_path());
 
@@ -676,7 +676,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(roc_cli::CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
                 );
@@ -696,7 +696,7 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-str", "Main.roc").as_path(),
                 );
@@ -715,7 +715,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
                         .as_path(),
@@ -739,7 +739,7 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(
                     file_from_root("crates/cli/tests/fixtures/multi-dep-thunk", "Main.roc")
                         .as_path(),
@@ -760,7 +760,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
             let out = runner.run();
@@ -779,7 +779,7 @@ mod cli_run {
                 .arg(CMD_RUN)
                 .arg(OPTIMIZE_FLAG)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/fixtures/packages", "app.roc").as_path());
 
             let out = runner.run();
@@ -801,7 +801,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_path.as_path());
 
             let out = runner.run();
@@ -823,7 +823,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_path.as_path());
 
             let out = runner.run();
@@ -845,7 +845,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_RUN)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_path.as_path());
 
             let out = runner.run();
@@ -884,7 +884,7 @@ mod cli_run {
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_DEV)
                 .add_arg_if(LINKER_FLAG, TEST_LEGACY_LINKER)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             let out = runner.run();
@@ -945,7 +945,7 @@ mod cli_run {
             );
             let runner = cli_utils::helpers::Run::new_roc()
                 .arg(CMD_TEST)
-                .with_valigrind(ALLOW_VALGRIND)
+                .with_valgrind(ALLOW_VALGRIND)
                 .arg(file_from_root("crates/cli/tests/expects", "expects.roc").as_path());
 
             let out = runner.run();
@@ -1002,7 +1002,7 @@ mod cli_run {
                     .arg(roc_cli::CMD_RUN)
                     .add_arg_if(super::LINKER_FLAG, super::TEST_LEGACY_LINKER)
                     .arg(file_path.as_path())
-                    .with_valigrind(matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND)
+                    .with_valgrind(matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND)
                     .with_stdin_vals(stdin);
 
                 let out = runner.run();

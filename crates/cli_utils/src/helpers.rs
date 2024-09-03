@@ -253,7 +253,7 @@ impl Run {
         self
     }
 
-    pub fn with_valigrind(mut self, use_valgrind: bool) -> Self {
+    pub fn with_valgrind(mut self, use_valgrind: bool) -> Self {
         self.run_with_valgrind = use_valgrind;
         self
     }
