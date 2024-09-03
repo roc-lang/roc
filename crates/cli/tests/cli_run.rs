@@ -48,14 +48,6 @@ mod cli_run {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_LEGACY_LINKER: bool = false;
 
-    #[derive(Debug, PartialEq, Eq)]
-    enum Arg<'a> {
-        ExamplePath(&'a str),
-        // allow because we may need PlainText in the future
-        #[allow(dead_code)]
-        PlainText(&'a str),
-    }
-
     // fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
     //     check_compile_error_with(CMD_CHECK, file, flags, expected);
     // }
@@ -454,9 +446,11 @@ mod cli_run {
         out.assert_stdout_and_stderr_ends_with(expected_ending);
     }
 
-    #[ignore = "likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"]
     #[test]
-    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
+    #[cfg_attr(
+        any(target_os = "windows", target_os = "linux"),
+        ignore = "Segfault, likely broken because of alias analysis: https://github.com/roc-lang/roc/issues/6544"
+    )]
     fn false_interpreter() {
         // Test building
         let build_runner = Run::new_roc()
