@@ -46,6 +46,13 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let var = var_store.fresh();
     let qualified_module_ids = PackageModuleIds::default();
 
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -55,7 +62,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // rules multiple times unnecessarily.
     let loc_expr = desugar::desugar_expr(
         arena,
-        &mut var_store,
+        &mut scope,
         &loc_expr,
         expr_str,
         &mut None,
@@ -63,12 +70,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &mut Default::default(),
     );
 
-    let mut scope = Scope::new(
-        home,
-        "TestPath".into(),
-        IdentIds::default(),
-        Default::default(),
-    );
     scope.add_alias(
         Symbol::NUM_INT,
         Region::zero(),

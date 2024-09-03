@@ -161,6 +161,13 @@ pub fn can_expr_with<'a>(
     // ensure the Test module is accessible in our tests
     module_ids.get_or_insert(&PQModuleName::Unqualified("Test".into()));
 
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -170,19 +177,12 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = desugar::desugar_expr(
         arena,
-        &mut var_store,
+        &mut scope,
         &loc_expr,
         expr_str,
         &mut None,
         arena.alloc("TestPath"),
         &mut Default::default(),
-    );
-
-    let mut scope = Scope::new(
-        home,
-        "TestPath".into(),
-        IdentIds::default(),
-        Default::default(),
     );
 
     let dep_idents = IdentIds::exposed_builtins(0);
