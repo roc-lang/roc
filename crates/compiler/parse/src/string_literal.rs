@@ -81,7 +81,7 @@ pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             _ => return Err((NoProgress, EString::Open(start))),
         };
 
-        match parse_str_like_literal(is_single_quote, column, arena, state.advance(1), min_indent) {
+        match parse_rest_of_str_like(is_single_quote, column, arena, state.inc(), min_indent) {
             Ok((p, str_like, state)) => match str_like {
                 StrLikeLiteral::SingleQuote(_) => {
                     Err((p, EString::ExpectedDoubleQuoteGotSingleQuote(start)))
@@ -93,7 +93,7 @@ pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     }
 }
 
-pub fn parse_str_like_literal<'a>(
+pub fn parse_rest_of_str_like<'a>(
     is_single_quote: bool,
     column: u32,
     arena: &'a Bump,

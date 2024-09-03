@@ -20,12 +20,12 @@ use crate::parser::{
     self, and, at_keyword, backtrackable, byte, collection_inner, collection_trailing_sep_e,
     either, increment_min_indent, loc, map, map_with_arena, optional, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
-    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord,
-    EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, EPattern, ERecord, EType, EWhen,
+    Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::parse_closure_param;
 use crate::state::State;
-use crate::string_literal::{self, parse_str_like_literal, StrLikeLiteral};
+use crate::string_literal::{self, parse_rest_of_str_like, StrLikeLiteral};
 use crate::type_annotation;
 use crate::{header, keyword};
 use bumpalo::collections::Vec;
@@ -193,19 +193,26 @@ fn parse_term<'a>(
             b'(' => parse_rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
             b'{' => parse_record_expr(start, arena, state.clone(), min_indent),
             b'[' => parse_rest_of_list_expr(start, arena, state.inc()),
-            _ => {
-                match parse_string_like_literal(arena, state.clone(), min_indent) {
-                    Err((NoProgress, _)) => {}
-                    res => return res,
+            b'"' | b'\'' => {
+                let column = state.column();
+                match parse_rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
+                    Ok((p, literal, state)) => {
+                        let literal_expr = match literal {
+                            StrLikeLiteral::Str(s) => Expr::Str(s),
+                            StrLikeLiteral::SingleQuote(s) => Expr::SingleQuote(s.to_str_in(arena)),
+                        };
+                        Ok((p, Loc::pos(start, state.pos(), literal_expr), state))
+                    }
+                    Err((p, fail)) => Err((p, EExpr::Str(fail, start))),
                 }
-
-                match parse_positive_number_expr(state.clone()) {
-                    Err((NoProgress, _)) => {}
-                    res => return res,
-                }
-
-                parse_ident_seq(arena, state.clone(), min_indent)
             }
+            b'0'..=b'9' => {
+                let (p, literal, state) = parse_number_base(false, state.bytes(), state)
+                    .map_err(|(p, fail)| (p, EExpr::Number(fail, start)))?;
+                let expr = literal_to_expr(literal);
+                Ok((p, Loc::pos(start, state.pos(), expr), state))
+            }
+            _ => parse_ident_seq(arena, state.clone(), min_indent),
         }
     } else {
         Err((NoProgress, EExpr::Start(start)))
@@ -253,26 +260,27 @@ fn parse_if_when_closure<'a>(
     min_indent: u32,
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     let start = state.pos();
-
-    match parse_if_expr(options, arena, state.clone(), min_indent) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, err)) => return Err((MadeProgress, EExpr::If(err, start))),
+    if state.bytes().first() == Some(&b'\\') {
+        match parse_closure(options, arena, state) {
+            Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
+            Err((p, fail)) => Err((p, EExpr::Closure(fail, start))),
+        }
+    } else if at_keyword(keyword::IF, &state) {
+        let state = state.advance(keyword::IF.len());
+        match parse_rest_of_if_expr(options, arena, state, min_indent) {
+            Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
+            Err((p, err)) => Err((p, EExpr::If(err, start))),
+        }
+    } else if at_keyword(keyword::WHEN, &state) {
+        let min_indent = state.line_indent() + 1;
+        let state = state.advance(keyword::WHEN.len());
+        match when::parse_rest_of_when_expr(options, arena, state, min_indent) {
+            Ok((p, expr, state)) => Ok((p, Loc::pos(start, state.pos(), expr), state)),
+            Err((p, err)) => Err((p, EExpr::When(err, start))),
+        }
+    } else {
+        Err((NoProgress, EExpr::Start(start)))
     }
-
-    match when::parse_when_expr(options, arena, state.clone()) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::When(fail, start))),
-    }
-
-    match parse_closure(options, arena, state.clone()) {
-        Err((NoProgress, _)) => {}
-        Ok((p, expr, state)) => return Ok((p, Loc::pos(start, state.pos(), expr), state)),
-        Err((MadeProgress, fail)) => return Err((MadeProgress, EExpr::Closure(fail, start))),
-    }
-
-    Err((NoProgress, EExpr::Start(start)))
 }
 
 fn parse_negative_or_term<'a>(
@@ -301,30 +309,37 @@ fn parse_negative_or_term<'a>(
                         Ok((p, Loc::pos(start, state.pos(), expr), state))
                     }
                     Err((MadeProgress, fail)) => Err((MadeProgress, EExpr::Number(fail, start))),
-                    Err(_) => Err((NoProgress, EExpr::Start(start))),
+                    Err(_) => {
+                        // it may be the case with split arrow `- >` or similar,
+                        // so it should not considered as bad number, let's keep parsing until we find the closest error.
+                        Err((NoProgress, EExpr::Start(start)))
+                    }
                 }
             }
             b'0'..=b'9' => {
                 let (p, literal, state) = parse_number_base(false, state.bytes(), state)
                     .map_err(|(p, fail)| (p, EExpr::Number(fail, start)))?;
-                let pattern = literal_to_expr(literal);
-                Ok((p, Loc::pos(start, state.pos(), pattern), state))
+                let expr = literal_to_expr(literal);
+                Ok((p, Loc::pos(start, state.pos(), expr), state))
             }
             b'!' => parse_rest_of_logical_not(start, options, arena, state.inc(), min_indent),
             b'(' => parse_rest_of_expr_in_parens_etc(start, arena, state.inc(), min_indent),
             b'{' => parse_record_expr(start, arena, state.clone(), min_indent),
             b'[' => parse_rest_of_list_expr(start, arena, state.inc()),
+            b'"' | b'\'' => {
+                let column = state.column();
+                match parse_rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
+                    Ok((p, literal, state)) => {
+                        let literal_expr = match literal {
+                            StrLikeLiteral::Str(s) => Expr::Str(s),
+                            StrLikeLiteral::SingleQuote(s) => Expr::SingleQuote(s.to_str_in(arena)),
+                        };
+                        Ok((p, Loc::pos(start, state.pos(), literal_expr), state))
+                    }
+                    Err((p, fail)) => Err((p, EExpr::Str(fail, start))),
+                }
+            }
             _ => {
-                match parse_string_like_literal(arena, state.clone(), min_indent) {
-                    Err((NoProgress, _)) => {}
-                    res => return res,
-                }
-
-                match parse_positive_number_expr(state.clone()) {
-                    Err((NoProgress, _)) => {}
-                    res => return res,
-                }
-
                 if at_keyword(crate::keyword::CRASH, &state) {
                     let state = state.advance(crate::keyword::CRASH.len());
                     let expr = Loc::pos(start, state.pos(), Expr::Crash);
@@ -1574,29 +1589,27 @@ fn parse_stmt_multi_backpassing<'a>(
     options: ExprParseOptions,
 ) -> ParseResult<'a, Stmt<'a>, EExpr<'a>> {
     // called after parsing the first , in `a, b <- c` (e.g.)
+    let start = state.pos();
+    let delimiter = byte(b',', EPattern::Start);
+    let parser = space0_around_ee(
+        crate::pattern::loc_pattern_help(),
+        EPattern::Start,
+        EPattern::IndentEnd,
+    );
 
-    let (_, mut patterns, state) = specialize_err_ref(
-        EExpr::Pattern,
-        crate::parser::sep_by0(
-            byte(b',', EPattern::Start),
-            space0_around_ee(
-                crate::pattern::loc_pattern_help(),
-                EPattern::Start,
-                EPattern::IndentEnd,
-            ),
-        ),
-    )
-    .parse(arena, state, min_indent)
-    .map_err(|(progress, err)| {
-        // We were expecting the end of an expression, and parsed a comma
-        // therefore we are either on the LHS of backpassing or this is was
-        // in an invalid position.
-        if let EExpr::Pattern(EPattern::IndentEnd(_), pos) = err {
-            (progress, EExpr::UnexpectedComma(pos.prev()))
-        } else {
-            (progress, err)
-        }
-    })?;
+    let (_, mut patterns, state) = crate::parser::sep_by0(delimiter, parser)
+        .parse(arena, state, min_indent)
+        .map_err(|(p, fail)| {
+            // We were expecting the end of an expression, and parsed a comma
+            // therefore we are either on the LHS of backpassing or this is was
+            // in an invalid position.
+
+            if let EPattern::IndentEnd(_) = fail {
+                (p, EExpr::UnexpectedComma(start.prev()))
+            } else {
+                (p, EExpr::Pattern(arena.alloc(fail), start))
+            }
+        })?;
 
     expr_state.consume_spaces(arena);
     let call = to_call(arena, expr_state.arguments, expr_state.expr);
@@ -1614,24 +1627,23 @@ fn parse_stmt_multi_backpassing<'a>(
 
     let line_indent = state.line_indent();
 
-    match two_bytes(b'<', b'-', EExpr::BackpassArrow).parse(arena, state.clone(), min_indent) {
-        Err((_, fail)) => Err((MadeProgress, fail)),
-        Ok((_, _, state)) => {
-            let min_indent = line_indent + 1;
-            let (ps, spaces_before, state) =
-                parse_space(EExpr::IndentEnd, arena, state, min_indent)?;
-
-            let (loc_body, state) = match parse_expr_start(options, arena, state, min_indent) {
-                Ok((_, loc_body, state)) => (loc_body, state),
-                Err((pe, fail)) => return Err((ps.or(pe), fail)),
-            };
-
-            let loc_body = with_spaces_before(loc_body, spaces_before, arena);
-
-            let ret = Stmt::Backpassing(patterns.into_bump_slice(), arena.alloc(loc_body));
-            Ok((MadeProgress, ret, state))
-        }
+    if !state.bytes().starts_with(b"<-") {
+        return Err((MadeProgress, EExpr::BackpassArrow(state.pos())));
     }
+    let state = state.advance(2);
+
+    let min_indent = line_indent + 1;
+    let (ps, spaces_before, state) = parse_space(EExpr::IndentEnd, arena, state, min_indent)?;
+
+    let (loc_body, state) = match parse_expr_start(options, arena, state, min_indent) {
+        Ok((_, loc_body, state)) => (loc_body, state),
+        Err((pe, fail)) => return Err((ps.or(pe), fail)),
+    };
+
+    let loc_body = with_spaces_before(loc_body, spaces_before, arena);
+
+    let ret = Stmt::Backpassing(patterns.into_bump_slice(), arena.alloc(loc_body));
+    Ok((MadeProgress, ret, state))
 }
 
 /// We just saw a unary negation operator, and now we need to parse the expression.
@@ -1866,6 +1878,7 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
         };
 
         let (ps, spaces_before, state) = parse_space(EExpr::IndentEnd, arena, state, min_indent)?;
+
         match parse_expr_start(options, arena, state, min_indent) {
             Ok((_, expr, state)) => {
                 let expr = with_spaces_before(expr, spaces_before, arena);
@@ -2302,28 +2315,22 @@ mod when {
     };
 
     /// If Ok it always returns MadeProgress
-    pub fn parse_when_expr<'a>(
+    pub fn parse_rest_of_when_expr<'a>(
         options: ExprParseOptions,
         arena: &'a Bump,
         state: State<'a>,
+        min_indent: u32,
     ) -> ParseResult<'a, Expr<'a>, EWhen<'a>> {
-        if !at_keyword(keyword::WHEN, &state) {
-            return Err((NoProgress, EWhen::When(state.pos())));
-        }
-
-        let cond_indent = state.line_indent() + 1;
-        let state = state.advance(keyword::WHEN.len());
-
         let (_, spaces_before, state) =
-            parse_space(EWhen::IndentCondition, arena, state, cond_indent)
+            parse_space(EWhen::IndentCondition, arena, state, min_indent)
                 .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         let at_cond = state.pos();
-        let (_, cond, state) = parse_expr_start(options, arena, state, cond_indent)
+        let (_, cond, state) = parse_expr_start(options, arena, state, min_indent)
             .map_err(|(_, fail)| (MadeProgress, EWhen::Condition(arena.alloc(fail), at_cond)))?;
 
         let (_, spaces_after, state) = spaces()
-            .parse(arena, state, cond_indent)
+            .parse(arena, state, min_indent)
             .map_err(|(_, fail)| (MadeProgress, fail))?;
 
         if !at_keyword(keyword::IS, &state) {
@@ -2528,38 +2535,6 @@ mod when {
     }
 }
 
-fn if_branch<'a>() -> impl Parser<'a, (Loc<Expr<'a>>, Loc<Expr<'a>>), EIf<'a>> {
-    let options = ExprParseOptions {
-        accept_multi_backpassing: true,
-        check_for_arrow: true,
-    };
-    skip_second(
-        and(
-            skip_second(
-                space0_around_ee(
-                    specialize_err_ref(EIf::Condition, loc_expr(true)),
-                    EIf::IndentCondition,
-                    EIf::IndentThenToken,
-                ),
-                parser::keyword(keyword::THEN, EIf::Then),
-            ),
-            map_with_arena(
-                space0_after_e(
-                    block(options, false, EIf::IndentThenBranch, EIf::ThenBranch),
-                    EIf::IndentElseToken,
-                ),
-                |arena: &'a Bump, block: Loc<Expr<'a>>| match block.value {
-                    Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) => block.with_value(
-                        Expr::SpaceBefore(arena.alloc(Expr::SpaceAfter(x, after)), before),
-                    ),
-                    _ => block,
-                },
-            ),
-        ),
-        parser::keyword(keyword::ELSE, EIf::Else),
-    )
-}
-
 fn expect_help<'a>(
     options: ExprParseOptions,
     preceding_comment: Region,
@@ -2636,41 +2611,73 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
 }
 
 /// If Ok it always returns MadeProgress
-fn parse_if_expr<'a>(
+fn parse_rest_of_if_expr<'a>(
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
     min_indent: u32,
 ) -> ParseResult<'a, Expr<'a>, EIf<'a>> {
-    if !at_keyword(keyword::IF, &state) {
-        return Err((NoProgress, EIf::If(state.pos())));
-    }
-
-    let state = state.advance(keyword::IF.len());
-
     let mut branches = Vec::with_capacity_in(1, arena);
 
     let mut loop_state = state;
 
-    let state_final_else = loop {
-        let (_, (cond, then_branch), state) = if_branch().parse(arena, loop_state, min_indent)?;
+    let if_branch_options = ExprParseOptions {
+        accept_multi_backpassing: true,
+        check_for_arrow: true,
+    };
 
-        branches.push((cond, then_branch));
+    let cond_parser = space0_around_ee(
+        specialize_err_ref(EIf::Condition, loc_expr(true)),
+        EIf::IndentCondition,
+        EIf::IndentThenToken,
+    );
+
+    let then_parser = space0_after_e(
+        block(
+            if_branch_options,
+            false,
+            EIf::IndentThenBranch,
+            EIf::ThenBranch,
+        ),
+        EIf::IndentElseToken,
+    );
+
+    let state_final_else = loop {
+        let (_, cond, state) = cond_parser.parse(arena, loop_state, min_indent)?;
+
+        if !at_keyword(keyword::THEN, &state) {
+            return Err((NoProgress, EIf::Then(state.pos())));
+        }
+        let state = state.advance(keyword::THEN.len());
+
+        let (mut then_block, state) = match then_parser.parse(arena, state, min_indent) {
+            Ok((_, tb, state)) => (tb, state),
+            Err((_, fail)) => return Err((MadeProgress, fail)),
+        };
+
+        if let Expr::SpaceAfter(&Expr::SpaceBefore(x, before), after) = then_block.value {
+            then_block = then_block.with_value(Expr::SpaceBefore(
+                arena.alloc(Expr::SpaceAfter(x, after)),
+                before,
+            ))
+        };
+
+        if !at_keyword(keyword::ELSE, &state) {
+            return Err((NoProgress, EIf::Else(state.pos())));
+        }
+        let state = state.advance(keyword::ELSE.len());
+
+        branches.push((cond, then_block));
 
         // try to parse another `if`
         // NOTE this drops spaces between the `else` and the `if`
-        let optional_if = and(
-            backtrackable(space0_e(EIf::IndentIf)),
-            parser::keyword(keyword::IF, EIf::If),
-        );
-
-        match optional_if.parse(arena, state.clone(), min_indent) {
-            Err((_, _)) => break state,
-            Ok((_, _, state)) => {
-                loop_state = state;
+        if let Ok((_, _, state)) = parse_space(EIf::IndentIf, arena, state.clone(), min_indent) {
+            if at_keyword(keyword::IF, &state) {
+                loop_state = state.advance(keyword::IF.len());
                 continue;
             }
         }
+        break state;
     };
 
     let (_, else_branch, state) = parse_block(
@@ -3700,47 +3707,6 @@ fn apply_expr_access_chain<'a>(
                 expr: arena.alloc(value),
             },
         })
-}
-
-fn parse_string_like_literal<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    min_indent: u32,
-) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let start = state.pos();
-    let column = state.column();
-    let is_single_quote = match state.bytes().first() {
-        Some(&b'"') => false,
-        Some(&b'\'') => true,
-        _ => return Err((NoProgress, EExpr::Str(EString::Open(start), start))),
-    };
-
-    match parse_str_like_literal(is_single_quote, column, arena, state.advance(1), min_indent) {
-        Ok((p, literal, state)) => {
-            let literal_expr = match literal {
-                StrLikeLiteral::Str(s) => Expr::Str(s),
-                StrLikeLiteral::SingleQuote(s) => {
-                    // TODO: preserve the original escaping
-                    Expr::SingleQuote(s.to_str_in(arena))
-                }
-            };
-            Ok((p, Loc::pos(start, state.pos(), literal_expr), state))
-        }
-        Err((p, fail)) => Err((p, EExpr::Str(fail, start))),
-    }
-}
-
-fn parse_positive_number_expr<'a>(state: State<'a>) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    let start = state.pos();
-    match state.bytes().first() {
-        Some(b) if (*b as char).is_ascii_digit() => {
-            let (p, literal, state) = parse_number_base(false, state.bytes(), state)
-                .map_err(|(p, fail)| (p, EExpr::Number(fail, start)))?;
-            let expr = literal_to_expr(literal);
-            Ok((p, Loc::pos(start, state.pos(), expr), state))
-        }
-        _ => Err((Progress::NoProgress, EExpr::Number(ENumber::End, start))),
-    }
 }
 
 /// A minus is unary if:

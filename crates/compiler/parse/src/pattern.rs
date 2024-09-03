@@ -9,7 +9,7 @@ use crate::parser::{
     zero_or_more, EPattern, PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::state::State;
-use crate::string_literal::{parse_str_like_literal, StrLikeLiteral};
+use crate::string_literal::{parse_rest_of_str_like, StrLikeLiteral};
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -101,9 +101,9 @@ fn parse_loc_pattern_etc<'a>(
             b'{' => parse_rest_of_record_pattern(start, arena, state.inc()),
             b'(' => parse_rest_of_pattern_in_parens(start, arena, state.inc()),
             b'[' => parse_rest_of_list_pattern(start, arena, state.inc()),
-            b'"' | &b'\'' => {
+            b'"' | b'\'' => {
                 let column = state.column();
-                match parse_str_like_literal(*b == b'\'', column, arena, state.inc(), min_indent) {
+                match parse_rest_of_str_like(*b == b'\'', column, arena, state.inc(), min_indent) {
                     Ok((p, literal, state)) => {
                         let literal = match literal {
                             StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
@@ -129,7 +129,11 @@ fn parse_loc_pattern_etc<'a>(
                     Ok((p, Loc::pos(start, state.pos(), pattern), state))
                 }
                 Err((MadeProgress, fail)) => Err((MadeProgress, EPattern::NumLiteral(fail, start))),
-                Err(_) => Err((NoProgress, EPattern::Start(start))),
+                Err(_) => {
+                    // it may be the case with split arrow `- >` or similar,
+                    // so it should not considered as bad number, let's keep parsing until we find the closest error.
+                    Err((NoProgress, EPattern::Start(start)))
+                }
             },
             _ => parse_ident_pattern(start, can_have_arguments, arena, state.clone(), min_indent),
         }

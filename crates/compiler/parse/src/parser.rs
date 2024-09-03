@@ -1085,7 +1085,6 @@ where
                                 Ok((element_progress, next_output, next_state)) => {
                                     // in practice, we want elements to make progress
                                     debug_assert_eq!(element_progress, MadeProgress);
-
                                     state = next_state;
                                     buf.push(next_output);
                                 }
@@ -1096,22 +1095,17 @@ where
                                         start_bytes_len,
                                         next_state.bytes().len(),
                                     );
-
                                     return Err((progress, fail));
                                 }
                             }
                         }
-                        Err((delim_progress, fail)) => match delim_progress {
-                            MadeProgress => return Err((MadeProgress, fail)),
-                            NoProgress => return Ok((NoProgress, buf, state)),
-                        },
+                        Err((NoProgress, _)) => return Ok((NoProgress, buf, state)),
+                        Err(fail) => return Err(fail),
                     }
                 }
             }
-            Err((element_progress, fail)) => match element_progress {
-                MadeProgress => Err((MadeProgress, fail)),
-                NoProgress => Ok((NoProgress, Vec::new_in(arena), original_state)),
-            },
+            Err((NoProgress, _)) => Ok((NoProgress, Vec::new_in(arena), original_state)),
+            Err(fail) => Err(fail),
         }
     }
 }

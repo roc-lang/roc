@@ -11,7 +11,7 @@ use crate::{
     number_literal::parse_number_base,
     parser::{EExpr, ParseResult, Parser},
     state::State,
-    string_literal::{parse_str_like_literal, StrLikeLiteral},
+    string_literal::{parse_rest_of_str_like, StrLikeLiteral},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,25 +116,18 @@ fn highlight_inner<'a>(
                     }
                 }
                 '"' | '\'' => {
-                    let is_single_quote = b == '\'';
                     let column = state.column();
                     state.advance_mut(1);
                     if let Ok((_, item, new_state)) =
-                        parse_str_like_literal(is_single_quote, column, arena, state.clone(), 0)
+                        parse_rest_of_str_like(b == '\'', column, arena, state.clone(), 0)
                     {
                         state = new_state;
                         match item {
                             StrLikeLiteral::SingleQuote(_) => {
-                                tokens.push(Loc::at(
-                                    Region::between(start, state.pos()),
-                                    Token::SingleQuote,
-                                ));
+                                tokens.push(Loc::pos(start, state.pos(), Token::SingleQuote));
                             }
                             StrLikeLiteral::Str(_) => {
-                                tokens.push(Loc::at(
-                                    Region::between(start, state.pos()),
-                                    Token::String,
-                                ));
+                                tokens.push(Loc::pos(start, state.pos(), Token::String));
                             }
                         }
                     } else {
@@ -174,7 +167,7 @@ fn highlight_inner<'a>(
                 }
                 '.' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Decimal));
+                    tokens.push(Loc::pos(start, state.pos(), Token::Decimal));
                 }
                 '0'..='9' => {
                     if let Ok((_, _, new_state)) =
