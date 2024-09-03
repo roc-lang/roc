@@ -168,6 +168,17 @@ pub fn can_expr_with<'a>(
         Default::default(),
     );
 
+    let dep_idents = IdentIds::exposed_builtins(0);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &module_ids,
+        None,
+    );
+
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -175,25 +186,8 @@ pub fn can_expr_with<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = desugar::desugar_expr(
-        arena,
-        &mut scope,
-        &loc_expr,
-        expr_str,
-        &mut None,
-        arena.alloc("TestPath"),
-        &mut Default::default(),
-    );
+    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
 
-    let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(
-        arena,
-        home,
-        Path::new("Test.roc"),
-        &dep_idents,
-        &module_ids,
-        None,
-    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

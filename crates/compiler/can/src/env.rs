@@ -7,7 +7,7 @@ use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIdsByModule, ModuleId, PQModuleName, PackageModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::{Loc, Region};
+use roc_region::all::{LineInfo, Loc, Region};
 use roc_types::subs::Variable;
 
 /// The canonicalization environment for a particular module.
@@ -44,11 +44,16 @@ pub struct Env<'a> {
     pub arena: &'a Bump,
 
     pub opt_shorthand: Option<&'a str>,
+
+    pub src: &'a str,
+
+    line_info: &'a mut Option<LineInfo>,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
         arena: &'a Bump,
+        src: &'a str,
         home: ModuleId,
         module_path: &'a Path,
         dep_idents: &'a IdentIdsByModule,
@@ -57,6 +62,7 @@ impl<'a> Env<'a> {
     ) -> Env<'a> {
         Env {
             arena,
+            src,
             home,
             module_path,
             dep_idents,
@@ -69,6 +75,7 @@ impl<'a> Env<'a> {
             top_level_symbols: VecSet::default(),
             home_params_record: None,
             opt_shorthand,
+            line_info: arena.alloc(None),
         }
     }
 
@@ -218,5 +225,15 @@ impl<'a> Env<'a> {
 
     pub fn problem(&mut self, problem: Problem) {
         self.problems.push(problem)
+    }
+
+    /// Lazily calculate line_info only if required. This way it there are no
+    /// `dbg` statements, we never pay the cast of scanning the source an extra
+    /// time.
+    pub fn line_info(&mut self) -> &LineInfo {
+        if self.line_info.is_none() {
+            *self.line_info = Some(LineInfo::new(self.src));
+        }
+        self.line_info.as_ref().unwrap()
     }
 }
